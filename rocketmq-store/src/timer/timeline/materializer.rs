@@ -845,9 +845,9 @@ pub(crate) enum TimelineMaterializerError {
     #[error("invalid Extended Timeline configuration: {0}")]
     Config(#[from] crate::config::timer_store_config::TimerStoreConfigError),
     #[error("payload store failure: {0}")]
-    Payload(#[from] rocketmq_store_local::timer::payload_store::TimerPayloadStoreError),
+    Payload(#[from] crate::store_error::StoreError),
     #[error("payload record failure: {0}")]
-    PayloadRecord(#[from] rocketmq_store_local::timer::payload_record::TimerPayloadRecordError),
+    PayloadRecord(#[from] rocketmq_store_local::timer::payload_record::TimerPayloadRecordViolation),
     #[error("Timeline store failure: {0}")]
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error("Timeline index migration failure: {0}")]

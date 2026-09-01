@@ -17,9 +17,9 @@
 use std::fs;
 use std::sync::Arc;
 
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::MappedFile;
 use cheetah_string::CheetahString;
-use rocketmq_store_local::mapped_file::DefaultMappedFile;
-use rocketmq_store_local::mapped_file::MappedFile;
 
 #[test]
 fn unlink_does_not_invalidate_a_live_owner_bound_read_lease() {

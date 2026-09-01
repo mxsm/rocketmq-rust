@@ -16,11 +16,11 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::Barrier;
 
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::MappedFile;
+use crate::mapped_file::MappedFileError;
+use crate::mapped_file::MappedWriteLease;
 use cheetah_string::CheetahString;
-use rocketmq_store_local::mapped_file::DefaultMappedFile;
-use rocketmq_store_local::mapped_file::MappedFile;
-use rocketmq_store_local::mapped_file::MappedFileError;
-use rocketmq_store_local::mapped_file::MappedWriteLease;
 use tempfile::TempDir;
 
 fn mapped_file(size: u64) -> (TempDir, DefaultMappedFile) {
@@ -109,8 +109,8 @@ fn oversized_commit_is_rejected_without_partial_publication() {
     let error = lease.commit(3, None).expect_err("oversized commit must fail");
 
     assert!(matches!(
-        error,
-        MappedFileError::InvalidWriteCommit { reserved: 2, actual: 3 }
+        std::error::Error::source(&error).and_then(|source| source.downcast_ref::<MappedFileError>()),
+        Some(MappedFileError::InvalidWriteCommit { reserved: 2, actual: 3 })
     ));
     assert_eq!(file.get_wrote_position(), 6);
     assert_eq!(file.get_bytes(6, 2).as_deref(), Some(&[0; 2][..]));

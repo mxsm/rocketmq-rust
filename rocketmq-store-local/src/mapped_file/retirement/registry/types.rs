@@ -24,7 +24,7 @@ use super::super::codec::RetirementReason;
 #[cfg(test)]
 use super::super::codec::COMMIT_SEAL_LENGTH;
 use super::super::identity::FileIncarnationId;
-use super::super::identity::IdentityError;
+use super::super::identity::IdentityViolation;
 use super::super::identity::PhysicalFileKey;
 use super::super::identity::StoreRelativePath;
 use super::super::identity::TicketId;
@@ -91,13 +91,13 @@ impl<O> PublishedFileRegistration<O> {
         expected_length: u64,
         owner: Arc<O>,
         queue_identity: QueueIdentity,
-    ) -> Result<Self, RegistryError> {
+    ) -> Result<Self, RegistryViolation> {
         if expected_length == 0 {
-            return Err(RegistryError::ZeroExpectedLength);
+            return Err(RegistryViolation::ZeroExpectedLength);
         }
         canonical_path
             .validate_segment_binding(segment_offset)
-            .map_err(RegistryError::InvalidCanonicalPathBinding)?;
+            .map_err(RegistryViolation::InvalidCanonicalPathBinding)?;
         Ok(Self {
             incarnation,
             physical_key,
@@ -138,19 +138,19 @@ impl RetirementOperation {
         retirement_nonce: [u8; 16],
         target_key: PhysicalFileKey,
         canonical_path: StoreRelativePath,
-    ) -> Result<Self, RegistryError> {
+    ) -> Result<Self, RegistryViolation> {
         if mapping_generation == 0 {
-            return Err(RegistryError::ZeroMappingGeneration);
+            return Err(RegistryViolation::ZeroMappingGeneration);
         }
         if expected_length == 0 {
-            return Err(RegistryError::ZeroExpectedLength);
+            return Err(RegistryViolation::ZeroExpectedLength);
         }
         if retirement_nonce == [0; 16] {
-            return Err(RegistryError::ZeroRetirementNonce);
+            return Err(RegistryViolation::ZeroRetirementNonce);
         }
         canonical_path
             .validate_segment_binding(segment_offset)
-            .map_err(RegistryError::InvalidCanonicalPathBinding)?;
+            .map_err(RegistryViolation::InvalidCanonicalPathBinding)?;
         Ok(Self {
             incarnation,
             reason,
@@ -255,7 +255,7 @@ impl RetirementIntentBinding {
         }
     }
 
-    pub(super) fn from_record(record: LedgerRecord) -> Result<Self, RegistryError> {
+    pub(super) fn from_record(record: LedgerRecord) -> Result<Self, RegistryViolation> {
         let LedgerRecord::RetirementIntent {
             ticket_id,
             incarnation,
@@ -268,7 +268,7 @@ impl RetirementIntentBinding {
             canonical_path,
         } = record
         else {
-            return Err(RegistryError::EvidenceIsNotRetirementIntent);
+            return Err(RegistryViolation::EvidenceIsNotRetirementIntent);
         };
         let operation = RetirementOperation::new(
             incarnation,
@@ -308,15 +308,15 @@ impl DurabilityCoordinates {
         frame_start_offset: u64,
         frame_end_offset: u64,
         sealed_log_length: u64,
-    ) -> Result<Self, RegistryError> {
+    ) -> Result<Self, RegistryViolation> {
         if sequence == 0 || acknowledgement_epoch == 0 || frame_end_offset <= frame_start_offset {
-            return Err(RegistryError::InvalidDurabilityCoordinates);
+            return Err(RegistryViolation::InvalidDurabilityCoordinates);
         }
         let expected_sealed_length = frame_end_offset
             .checked_add(super::super::codec::COMMIT_SEAL_LENGTH as u64)
-            .ok_or(RegistryError::InvalidDurabilityCoordinates)?;
+            .ok_or(RegistryViolation::InvalidDurabilityCoordinates)?;
         if sealed_log_length != expected_sealed_length {
-            return Err(RegistryError::InvalidDurabilityCoordinates);
+            return Err(RegistryViolation::InvalidDurabilityCoordinates);
         }
         Ok(Self {
             ledger_generation,
@@ -334,16 +334,16 @@ impl DurabilityCoordinates {
         sequence: u64,
         acknowledgement_epoch: u64,
         frame_start_offset: u64,
-    ) -> Result<Self, RegistryError> {
+    ) -> Result<Self, RegistryViolation> {
         if sequence == 0 || acknowledgement_epoch == 0 {
-            return Err(RegistryError::InvalidDurabilityCoordinates);
+            return Err(RegistryViolation::InvalidDurabilityCoordinates);
         }
         let frame_end_offset = frame_start_offset
             .checked_add(100)
-            .ok_or(RegistryError::InvalidDurabilityCoordinates)?;
+            .ok_or(RegistryViolation::InvalidDurabilityCoordinates)?;
         let sealed_log_length = frame_end_offset
             .checked_add(COMMIT_SEAL_LENGTH as u64)
-            .ok_or(RegistryError::InvalidDurabilityCoordinates)?;
+            .ok_or(RegistryViolation::InvalidDurabilityCoordinates)?;
         Self::verified(
             ledger_generation,
             sequence,
@@ -386,9 +386,9 @@ impl DurableStagePosition {
         Self::WriterVerified(coordinates)
     }
 
-    pub(super) fn replayed(sequence: u64) -> Result<Self, RegistryError> {
+    pub(super) fn replayed(sequence: u64) -> Result<Self, RegistryViolation> {
         if sequence == 0 {
-            return Err(RegistryError::InvalidDurabilityCoordinates);
+            return Err(RegistryViolation::InvalidDurabilityCoordinates);
         }
         Ok(Self::Replayed { sequence })
     }
@@ -428,7 +428,7 @@ impl DurableIntentEvidence {
         sequence: u64,
         acknowledgement_epoch: u64,
         frame_start_offset: u64,
-    ) -> Result<Self, RegistryError> {
+    ) -> Result<Self, RegistryViolation> {
         Self::verified_for_test(
             record,
             ledger_generation,
@@ -446,7 +446,7 @@ impl DurableIntentEvidence {
         sequence: u64,
         acknowledgement_epoch: u64,
         frame_start_offset: u64,
-    ) -> Result<Self, RegistryError> {
+    ) -> Result<Self, RegistryViolation> {
         Self::verified_for_test(
             record,
             ledger_generation,
@@ -465,7 +465,7 @@ impl DurableIntentEvidence {
         acknowledgement_epoch: u64,
         frame_start_offset: u64,
         source: DurableEvidenceSource,
-    ) -> Result<Self, RegistryError> {
+    ) -> Result<Self, RegistryViolation> {
         Ok(Self {
             binding: RetirementIntentBinding::from_record(record)?,
             durability: DurabilityCoordinates::verified_for_test(
@@ -675,9 +675,9 @@ impl CompletedRetirementReceipt {
 
 /// Typed fail-closed outcomes from registry reservation and capability transitions.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub(crate) enum RegistryError {
+pub(crate) enum RegistryViolation {
     #[error("canonical segment path is not bound to its offset: {0}")]
-    InvalidCanonicalPathBinding(IdentityError),
+    InvalidCanonicalPathBinding(IdentityViolation),
     #[error("expected file length must be non-zero")]
     ZeroExpectedLength,
     #[error("mapping generation must be non-zero")]

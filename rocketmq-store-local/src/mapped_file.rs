@@ -58,14 +58,10 @@ pub(crate) mod retirement;
 
 #[doc(hidden)]
 pub use retirement::activation::{
-    prepare_managed_lifecycle_activation, ManagedLifecycleActivationError, ManagedLifecycleActivationErrorKind,
-    ManagedQueueDescriptor, PreparedManagedLifecycleActivation,
+    prepare_managed_lifecycle_activation, ManagedQueueDescriptor, PreparedManagedLifecycleActivation,
 };
 #[doc(hidden)]
-pub use retirement::bootstrap::{
-    bootstrap_managed_lifecycle_under_exclusive_lock, InitialBootstrapCompletion, ManagedLifecycleBootstrapError,
-    ManagedLifecycleBootstrapErrorKind,
-};
+pub use retirement::bootstrap::{bootstrap_managed_lifecycle_under_exclusive_lock, InitialBootstrapCompletion};
 #[doc(hidden)]
 pub use retirement::registry::ManagedMappedFileQueueGeneration;
 #[doc(hidden)]
@@ -75,21 +71,17 @@ pub use retirement::registry::MappedFileQueueSnapshot;
 #[doc(hidden)]
 pub use retirement::replay::{
     inspect_managed_lifecycle_read_only, inspect_managed_lifecycle_read_only_with_limits,
-    inspect_managed_lifecycle_under_exclusive_lock, LockedManagedLifecycleInspection, ManagedLifecycleReadError,
-    ManagedLifecycleReadErrorKind, ManagedLifecycleReadLimits, ManagedLifecycleReadOutcome,
-    ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
+    inspect_managed_lifecycle_under_exclusive_lock, LockedManagedLifecycleInspection, ManagedLifecycleReadLimits,
+    ManagedLifecycleReadOutcome, ManagedLifecycleRecoveryReason, ManagedLifecycleSession,
 };
 #[doc(hidden)]
 pub use retirement::service::{
-    ManagedIncarnationCreateRequest, ManagedIncarnationCreation, ManagedIncarnationCreationError,
-    ManagedIncarnationCreationErrorKind, ManagedLifecycleRuntime, ManagedRetirementBatchReport,
-    ManagedRetirementReason, ManagedRetirementStage, ManagedRetirementSubmission, ManagedRetirementSubmissionError,
-    ManagedRetirementSubmissionErrorKind,
+    ManagedIncarnationCreateRequest, ManagedIncarnationCreation, ManagedLifecycleRuntime, ManagedRetirementBatchReport,
+    ManagedRetirementReason, ManagedRetirementStage, ManagedRetirementSubmission,
 };
 #[doc(hidden)]
 pub use retirement::state::reconciliation::{
-    ManagedReconciliationDisposition, ManagedReconciliationError, ManagedReconciliationErrorKind,
-    ManagedReconciliationLimits, ManagedRecoverySession, ManagedSegmentClaimError, ReconciledLifecycleSession,
+    ManagedReconciliationDisposition, ManagedReconciliationLimits, ManagedRecoverySession, ReconciledLifecycleSession,
     ReconciledSegmentFile,
 };
 
@@ -111,7 +103,7 @@ pub use default_mapped_file::LazyMmapStats;
 pub use default_mapped_file::OS_PAGE_SIZE;
 pub use direct_io::DirectIoBuffer;
 pub use direct_io::DirectIoRequest;
-pub use direct_io::DirectIoValidationError;
+pub use direct_io::DirectIoValidationViolation;
 pub use flush_strategy::FlushStrategy;
 pub use generation::MappedReadLease;
 pub use generation::MappingGenerationId;
@@ -123,16 +115,15 @@ pub use lifecycle::MappedFileOperation;
 pub use lifecycle_outcome::MappedFileDestroyOutcome;
 pub use lifecycle_outcome::MappedFileDetachOutcome;
 pub use mapped_buffer::MappedBuffer;
-pub use mapped_file_error::MappedFileError;
-pub use mapped_file_error::MappedFileResult;
+pub(crate) use mapped_file_error::MappedFileError;
 pub use memory::MappedMemory;
-pub use memory::MmapRangeError;
+pub use memory::MmapRangeViolation;
 pub use memory::NativeMappedMemory;
 pub use memory::NativeReadOnlyMappedMemory;
 pub use memory::ReadOnlyMappedMemory;
 /// Legacy type name for the new owner-bound native read-only mapped lease.
 ///
-/// Construction intentionally moved to [`DefaultMappedFile::try_mapped_read_lease`]; the former
+/// Construction intentionally moved to `DefaultMappedFile::try_mapped_read_lease`; the former
 /// raw writable-mmap constructor is not retained.
 pub type MmapRegionSlice = MappedReadLease<NativeReadOnlyMappedMemory>;
 pub use metrics::MappedFileMetrics;
@@ -141,3 +132,33 @@ pub use read_range::MappedReadRange;
 pub use select_result::SelectMappedBufferCacheState;
 pub use select_result::SelectMappedBufferResult;
 pub use select_result::SelectMappedBufferSourceKind;
+
+#[cfg(test)]
+mod kernel_scenarios;
+
+#[cfg(test)]
+mod platform_delete_unix_tests;
+
+#[cfg(test)]
+mod queue_lifecycle_scenarios;
+
+#[cfg(test)]
+mod write_lease_miri_tests;
+
+#[cfg(test)]
+mod write_lease_scenarios;
+
+#[cfg(test)]
+mod mmap_region_bounds_tests;
+
+#[cfg(test)]
+mod physical_owner_scenarios;
+
+#[cfg(test)]
+mod read_range_scenarios;
+
+#[cfg(test)]
+mod mapping_scenarios;
+
+#[cfg(test)]
+mod admission_scenarios;

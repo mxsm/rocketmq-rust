@@ -17,7 +17,7 @@
 use super::recovery::AbnormalRecoveryAction;
 use super::recovery::AbnormalRecoveryDispatchGate;
 use super::recovery::AbnormalRecoveryEvent;
-use super::recovery::AbnormalRecoveryOffsetError;
+use super::recovery::AbnormalRecoveryOffsetViolation;
 use super::recovery::AbnormalRecoveryState;
 
 /// One adapter-produced record consumed by abnormal segment recovery.
@@ -78,7 +78,7 @@ pub enum AbnormalRecoverySegmentOutcome<E> {
     /// The record adapter failed with its original error.
     AdapterFailed(E),
     /// The offset state machine rejected an event.
-    StateFailed(AbnormalRecoveryOffsetError),
+    StateFailed(AbnormalRecoveryOffsetViolation),
     /// The state machine returned an action that is invalid for the current record kind.
     UnexpectedAction(AbnormalRecoveryAction),
 }

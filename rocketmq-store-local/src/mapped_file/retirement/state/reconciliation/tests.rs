@@ -88,7 +88,7 @@ fn active_segment_claim_preflights_every_binding_before_consuming_handles() {
     );
     assert!(matches!(
         ready.take_active_segments_in_directory("commitlog", 1_024),
-        Err(ManagedSegmentClaimError::MissingRetainedHandle)
+        Err(ManagedSegmentClaimViolation::MissingRetainedHandle)
     ));
     assert_eq!(ready.active_count(), 2);
     assert_eq!(ready.retained_files.len(), 1);
@@ -99,7 +99,7 @@ fn active_segment_claim_preflights_every_binding_before_consuming_handles() {
     );
     assert!(matches!(
         ready.take_active_segments_in_directory("commitlog", 2_048),
-        Err(ManagedSegmentClaimError::ConfiguredLengthMismatch {
+        Err(ManagedSegmentClaimViolation::ConfiguredLengthMismatch {
             expected: 1_024,
             configured: 2_048,
         })
@@ -275,7 +275,7 @@ fn completed_ticket_rejects_the_original_target_reappearing() {
 
     assert!(matches!(
         reconcile(recovered, inventory),
-        Err(ReconciliationError::CompletedTargetReappeared { .. })
+        Err(ReconciliationViolation::CompletedTargetReappeared { .. })
     ));
 }
 
@@ -293,7 +293,7 @@ fn wrong_key_wrong_length_unknown_entry_and_incomplete_parent_fail_closed() {
             recovered(vec![SnapshotEntry::Incarnation(incarnation.clone())]),
             wrong_key
         ),
-        Err(ReconciliationError::PhysicalKeyMismatch { .. })
+        Err(ReconciliationViolation::PhysicalKeyMismatch { .. })
     ));
 
     let wrong_length = inventory([file(
@@ -306,7 +306,7 @@ fn wrong_key_wrong_length_unknown_entry_and_incomplete_parent_fail_closed() {
             recovered(vec![SnapshotEntry::Incarnation(incarnation.clone())]),
             wrong_length
         ),
-        Err(ReconciliationError::LengthMismatch { .. })
+        Err(ReconciliationViolation::LengthMismatch { .. })
     ));
 
     let unknown = inventory([
@@ -326,13 +326,13 @@ fn wrong_key_wrong_length_unknown_entry_and_incomplete_parent_fail_closed() {
             recovered(vec![SnapshotEntry::Incarnation(incarnation.clone())]),
             unknown
         ),
-        Err(ReconciliationError::UntrackedNamespaceEntry { .. })
+        Err(ReconciliationViolation::UntrackedNamespaceEntry { .. })
     ));
 
     let incomplete = StableNamespaceInventory::for_test(store_uuid(), [], []);
     assert!(matches!(
         reconcile(recovered(vec![SnapshotEntry::Incarnation(incarnation)]), incomplete),
-        Err(ReconciliationError::IncompleteDirectoryInventory { .. })
+        Err(ReconciliationViolation::IncompleteDirectoryInventory { .. })
     ));
 }
 

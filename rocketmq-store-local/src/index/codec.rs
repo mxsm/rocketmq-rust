@@ -156,7 +156,7 @@ impl IndexEntry {
 
 /// Cause of an invalid or overflowing index-file layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IndexLayoutError {
+pub enum IndexLayoutViolation {
     ZeroHashSlots,
     ZeroIndexEntries,
     HashSlotSectionOverflow,
@@ -165,25 +165,25 @@ pub enum IndexLayoutError {
 }
 
 /// Calculates the complete file size using checked arithmetic.
-pub fn index_file_total_size(hash_slot_num: usize, index_num: usize) -> Result<usize, IndexLayoutError> {
+pub fn index_file_total_size(hash_slot_num: usize, index_num: usize) -> Result<usize, IndexLayoutViolation> {
     if hash_slot_num == 0 {
-        return Err(IndexLayoutError::ZeroHashSlots);
+        return Err(IndexLayoutViolation::ZeroHashSlots);
     }
     if index_num == 0 {
-        return Err(IndexLayoutError::ZeroIndexEntries);
+        return Err(IndexLayoutViolation::ZeroIndexEntries);
     }
 
     let hash_slots_size = hash_slot_num
         .checked_mul(INDEX_HASH_SLOT_SIZE)
-        .ok_or(IndexLayoutError::HashSlotSectionOverflow)?;
+        .ok_or(IndexLayoutViolation::HashSlotSectionOverflow)?;
     let indexes_size = index_num
         .checked_mul(INDEX_ENTRY_SIZE)
-        .ok_or(IndexLayoutError::IndexEntrySectionOverflow)?;
+        .ok_or(IndexLayoutViolation::IndexEntrySectionOverflow)?;
 
     INDEX_HEADER_SIZE
         .checked_add(hash_slots_size)
         .and_then(|size| size.checked_add(indexes_size))
-        .ok_or(IndexLayoutError::TotalSizeOverflow)
+        .ok_or(IndexLayoutViolation::TotalSizeOverflow)
 }
 
 /// Calculates the absolute byte position of one hash slot.

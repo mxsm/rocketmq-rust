@@ -14,12 +14,12 @@
 
 use thiserror::Error;
 
-use super::super::codec::CodecError;
-use super::super::sidecar::SidecarError;
-use super::super::state::StateError;
+use super::super::codec::CodecViolation;
+use super::super::sidecar::SidecarViolation;
+use super::super::state::StateViolation;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub(crate) enum ReplayError {
+pub(crate) enum ReplayViolation {
     #[error("replay limit {limit} exceeded: actual {actual}, maximum {maximum}")]
     LimitExceeded {
         limit: &'static str,
@@ -27,7 +27,7 @@ pub(crate) enum ReplayError {
         maximum: usize,
     },
     #[error("acknowledgement slot {slot_index} is torn or structurally invalid: {source}")]
-    InvalidAcknowledgementSlot { slot_index: u8, source: CodecError },
+    InvalidAcknowledgementSlot { slot_index: u8, source: CodecViolation },
     #[error("acknowledgement slot {slot_index} is invalid nonzero and has no unique adjacent seal proof")]
     UnreconstructableAcknowledgementSlot { slot_index: u8 },
     #[error("acknowledgement slot {slot_index} has {candidates} adjacent seal candidates")]
@@ -54,7 +54,7 @@ pub(crate) enum ReplayError {
     InvalidLog {
         generation: u64,
         offset: u64,
-        source: CodecError,
+        source: CodecViolation,
     },
     #[error("generation {generation} has an invalid frame/seal sequence")]
     BrokenSealChain { generation: u64 },
@@ -63,9 +63,9 @@ pub(crate) enum ReplayError {
     #[error("unacknowledged suffix length {length} must be in 1..{maximum}")]
     InvalidUnacknowledgedSuffixLength { length: usize, maximum: usize },
     #[error("snapshot is invalid: {0}")]
-    Snapshot(SidecarError),
+    Snapshot(SidecarViolation),
     #[error("enabled marker is invalid: {0}")]
-    Marker(SidecarError),
+    Marker(SidecarViolation),
     #[error("replayed state is invalid: {0}")]
-    State(StateError),
+    State(StateViolation),
 }

@@ -93,9 +93,9 @@ impl PreparedPayload {
     ///
     /// # Errors
     ///
-    /// Returns [`PreparedPayloadError`] when the payload is malformed, contains multiple frames,
+    /// Returns [`PreparedPayloadViolation`] when the payload is malformed, contains multiple frames,
     /// or cannot safely accommodate the runtime fields and configured checksum trailer.
-    pub fn try_single(bytes: Bytes, crc_trailer_bytes: usize) -> Result<Self, PreparedPayloadError> {
+    pub fn try_single(bytes: Bytes, crc_trailer_bytes: usize) -> Result<Self, PreparedPayloadViolation> {
         Self::try_from_encoded(bytes, PreparedPayloadKind::Single, crc_trailer_bytes)
     }
 
@@ -103,9 +103,9 @@ impl PreparedPayload {
     ///
     /// # Errors
     ///
-    /// Returns [`PreparedPayloadError`] when any frame is malformed, the frame partition is not
+    /// Returns [`PreparedPayloadViolation`] when any frame is malformed, the frame partition is not
     /// exact, or a runtime field/checksum trailer would be out of bounds.
-    pub fn try_batch(bytes: Bytes, crc_trailer_bytes: usize) -> Result<Self, PreparedPayloadError> {
+    pub fn try_batch(bytes: Bytes, crc_trailer_bytes: usize) -> Result<Self, PreparedPayloadViolation> {
         Self::try_from_encoded(bytes, PreparedPayloadKind::Batch, crc_trailer_bytes)
     }
 
@@ -113,12 +113,12 @@ impl PreparedPayload {
         bytes: Bytes,
         kind: PreparedPayloadKind,
         crc_trailer_bytes: usize,
-    ) -> Result<Self, PreparedPayloadError> {
+    ) -> Result<Self, PreparedPayloadViolation> {
         if bytes.is_empty() {
-            return Err(PreparedPayloadError::Empty);
+            return Err(PreparedPayloadViolation::Empty);
         }
         if bytes.len() > i32::MAX as usize {
-            return Err(PreparedPayloadError::PayloadTooLarge { len: bytes.len() });
+            return Err(PreparedPayloadViolation::PayloadTooLarge { len: bytes.len() });
         }
 
         let mut frames = Vec::new();
@@ -126,45 +126,47 @@ impl PreparedPayload {
         while start < bytes.len() {
             let prefix_end = start
                 .checked_add(LENGTH_PREFIX_BYTES)
-                .ok_or(PreparedPayloadError::FrameRangeOverflow { start })?;
+                .ok_or(PreparedPayloadViolation::FrameRangeOverflow { start })?;
             let prefix = bytes
                 .get(start..prefix_end)
-                .ok_or(PreparedPayloadError::MissingLengthPrefix {
+                .ok_or(PreparedPayloadViolation::MissingLengthPrefix {
                     start,
                     remaining: bytes.len().saturating_sub(start),
                 })?;
             let declared_len = AppendFrameKernel::declared_frame_length(prefix);
             let len = usize::try_from(declared_len)
-                .map_err(|_| PreparedPayloadError::NonPositiveFrameLength { start, declared_len })?;
+                .map_err(|_| PreparedPayloadViolation::NonPositiveFrameLength { start, declared_len })?;
             if len == 0 {
-                return Err(PreparedPayloadError::NonPositiveFrameLength { start, declared_len });
+                return Err(PreparedPayloadViolation::NonPositiveFrameLength { start, declared_len });
             }
             let end = start
                 .checked_add(len)
-                .ok_or(PreparedPayloadError::FrameRangeOverflow { start })?;
-            let frame = bytes.get(start..end).ok_or(PreparedPayloadError::FrameOutOfBounds {
-                start,
-                declared_len,
-                payload_len: bytes.len(),
-            })?;
+                .ok_or(PreparedPayloadViolation::FrameRangeOverflow { start })?;
+            let frame = bytes
+                .get(start..end)
+                .ok_or(PreparedPayloadViolation::FrameOutOfBounds {
+                    start,
+                    declared_len,
+                    payload_len: bytes.len(),
+                })?;
             let sys_flag_bytes = frame
                 .get(SYS_FLAG_POSITION..SYS_FLAG_END)
-                .ok_or(PreparedPayloadError::FixedHeaderTooShort { start, frame_len: len })?;
+                .ok_or(PreparedPayloadViolation::FixedHeaderTooShort { start, frame_len: len })?;
             let sys_flag = i32::from_be_bytes(
                 sys_flag_bytes
                     .try_into()
-                    .map_err(|_| PreparedPayloadError::FixedHeaderTooShort { start, frame_len: len })?,
+                    .map_err(|_| PreparedPayloadViolation::FixedHeaderTooShort { start, frame_len: len })?,
             );
             let born_host_width = HostWidth::born(sys_flag);
             let timestamp_end = born_host_width
                 .store_timestamp_position()
                 .checked_add(size_of::<i64>())
-                .ok_or(PreparedPayloadError::FrameRangeOverflow { start })?;
+                .ok_or(PreparedPayloadViolation::FrameRangeOverflow { start })?;
             if timestamp_end > len {
-                return Err(PreparedPayloadError::FixedHeaderTooShort { start, frame_len: len });
+                return Err(PreparedPayloadViolation::FixedHeaderTooShort { start, frame_len: len });
             }
             if crc_trailer_bytes > len {
-                return Err(PreparedPayloadError::CrcTrailerOutOfBounds {
+                return Err(PreparedPayloadViolation::CrcTrailerOutOfBounds {
                     start,
                     frame_len: len,
                     crc_trailer_bytes,
@@ -181,12 +183,12 @@ impl PreparedPayload {
         match (kind, frames.len()) {
             (PreparedPayloadKind::Single, 1) | (PreparedPayloadKind::Batch, 1..) => {}
             (PreparedPayloadKind::Single, actual) => {
-                return Err(PreparedPayloadError::SingleFrameCount { actual });
+                return Err(PreparedPayloadViolation::SingleFrameCount { actual });
             }
-            (PreparedPayloadKind::Batch, 0) => return Err(PreparedPayloadError::EmptyBatch),
+            (PreparedPayloadKind::Batch, 0) => return Err(PreparedPayloadViolation::EmptyBatch),
         }
-        let message_count =
-            i16::try_from(frames.len()).map_err(|_| PreparedPayloadError::TooManyFrames { actual: frames.len() })?;
+        let message_count = i16::try_from(frames.len())
+            .map_err(|_| PreparedPayloadViolation::TooManyFrames { actual: frames.len() })?;
 
         Ok(Self {
             bytes,
@@ -248,7 +250,7 @@ impl PreparedPayload {
 
 /// Structural validation failure for encoded CommitLog bytes.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum PreparedPayloadError {
+pub enum PreparedPayloadViolation {
     /// No frame bytes were supplied.
     #[error("prepared CommitLog payload is empty")]
     Empty,
@@ -330,7 +332,7 @@ mod tests {
 
         let error = PreparedPayload::try_single(Bytes::from(frame), 0).expect_err("truncated frame");
 
-        assert!(matches!(error, PreparedPayloadError::FrameOutOfBounds { .. }));
+        assert!(matches!(error, PreparedPayloadViolation::FrameOutOfBounds { .. }));
     }
 
     #[test]
@@ -343,6 +345,6 @@ mod tests {
 
         let error = PreparedPayload::try_single(batch.freeze(), 0).expect_err("multiple frames");
 
-        assert_eq!(error, PreparedPayloadError::SingleFrameCount { actual: 2 });
+        assert_eq!(error, PreparedPayloadViolation::SingleFrameCount { actual: 2 });
     }
 }

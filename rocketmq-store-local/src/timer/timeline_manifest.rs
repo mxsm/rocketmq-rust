@@ -64,7 +64,7 @@ impl Default for TimelineManifestV1 {
 
 impl TimelineManifestV1 {
     /// Loads the newest valid A/B copy. A damaged newest copy falls back to the other copy.
-    pub fn load(root: &Path) -> Result<Self, TimelineManifestError> {
+    pub(crate) fn load(root: &Path) -> Result<Self, TimelineManifestError> {
         let mut manifests = Vec::with_capacity(2);
         let mut copies_found = 0usize;
         for name in [CURRENT_A, CURRENT_B] {
@@ -89,7 +89,7 @@ impl TimelineManifestV1 {
     }
 
     /// Publishes this candidate as the next A/B generation and returns the durable value.
-    pub fn publish_next(&self, root: &Path) -> Result<Self, TimelineManifestError> {
+    pub(crate) fn publish_next(&self, root: &Path) -> Result<Self, TimelineManifestError> {
         let mut next = self.clone();
         next.generation = self
             .generation
@@ -114,7 +114,7 @@ impl TimelineManifestV1 {
     }
 
     /// Persists an immutable generation copy used by cross-media snapshots.
-    pub fn archive(&self, root: &Path) -> Result<(), TimelineManifestError> {
+    pub(crate) fn archive(&self, root: &Path) -> Result<(), TimelineManifestError> {
         if self.generation == 0 {
             return Err(TimelineManifestError::InvalidRecord);
         }
@@ -140,7 +140,7 @@ impl TimelineManifestV1 {
     }
 
     /// Loads one immutable generation copy.
-    pub fn load_archive(root: &Path, generation: u64) -> Result<Self, TimelineManifestError> {
+    pub(crate) fn load_archive(root: &Path, generation: u64) -> Result<Self, TimelineManifestError> {
         Self::decode(&std::fs::read(
             root.join(ARCHIVE_DIRECTORY).join(format!("{generation:020}.manifest")),
         )?)
@@ -165,7 +165,7 @@ impl TimelineManifestV1 {
     }
 
     /// Stable checksum used to pair this native generation with a RocksDB overlay sequence.
-    pub fn checksum(&self) -> Result<u32, TimelineManifestError> {
+    pub(crate) fn checksum(&self) -> Result<u32, TimelineManifestError> {
         let encoded = self.encode()?;
         read_u32(&encoded, encoded.len().saturating_sub(MANIFEST_TRAILER_SIZE))
     }
@@ -430,7 +430,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, TimelineManifestError> {
 
 /// A/B native Timeline manifest failure.
 #[derive(Debug, Error)]
-pub enum TimelineManifestError {
+pub(crate) enum TimelineManifestError {
     /// Underlying filesystem operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),

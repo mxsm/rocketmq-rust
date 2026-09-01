@@ -780,7 +780,6 @@ mod tests {
 
     use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 
-    use crate::log_file::mapped_file::MappedFileError;
     use crate::store::running_flags::RunningFlags;
 
     fn health_recorder() -> StoreHealthRecorder {
@@ -1030,7 +1029,7 @@ mod tests {
             forced_flush_error: Some(Arc::new(
                 StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Flush)
                     .in_component(StoreComponent::MappedFile)
-                    .with_source(MappedFileError::ReferenceUnavailable),
+                    .with_detail("forced flush failure for test injection"),
             )),
         };
         let store_health_recorder = service.store_health_recorder.clone();

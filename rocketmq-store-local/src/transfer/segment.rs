@@ -20,6 +20,9 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
+
 use crate::mapped_file::file::FileOwner;
 use crate::mapped_file::lifecycle::MappedFileLease;
 #[cfg(test)]
@@ -160,12 +163,33 @@ pub type FileRange = FileRangeLease;
 
 /// Failure to construct or split a checked file-range capability.
 #[derive(Debug)]
-pub enum FileRangeError {
+pub(crate) enum FileRangeError {
     LengthOverflow { len: usize },
     EndOverflow { position: u64, len: usize },
     OutOfBounds { position: u64, len: usize, file_len: u64 },
     InvalidSplit { at: usize, len: usize },
     Metadata(io::Error),
+}
+
+impl FileRangeError {
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Metadata faults keep their typed I/O source; range violations are
+    /// invalid requests.
+    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
+        let descriptor = match &self {
+            Self::Metadata(_) => &rocketmq_error::STORAGE_IO_FAILED,
+            _ => &rocketmq_error::STORAGE_REQUEST_INVALID,
+        };
+        let component = if matches!(operation, StoreOperation::Replicate) {
+            rocketmq_store_api::StoreComponent::HighAvailability
+        } else {
+            rocketmq_store_api::StoreComponent::CommitLog
+        };
+        StoreError::new(descriptor, operation)
+            .in_component(component)
+            .with_source(self)
+    }
 }
 
 impl fmt::Display for FileRangeError {
@@ -239,6 +263,18 @@ impl SegmentLease {
     /// production paths must use the internal `try_from_file_owner_range` constructor so the range carries
     /// the mapped file's owned operation admission.
     pub fn try_from_file_range(
+        global_offset: i64,
+        file_offset: u64,
+        position_in_file: u64,
+        len: usize,
+        file: Arc<File>,
+        cache_state: TransferCacheState,
+    ) -> Result<Self, StoreError> {
+        Self::try_from_file_range_typed(global_offset, file_offset, position_in_file, len, file, cache_state)
+            .map_err(|error| error.into_store_error(StoreOperation::Replicate))
+    }
+
+    fn try_from_file_range_typed(
         global_offset: i64,
         file_offset: u64,
         position_in_file: u64,
@@ -553,7 +589,8 @@ impl FileRangeLease {
     ///
     /// Both returned ranges share the same physical owner and admission. The operation admission
     /// is released once after the final derived range drops.
-    pub fn split_at(mut self, at: usize) -> Result<(Self, Self), FileRangeError> {
+    #[allow(dead_code, reason = "exercised by the in-crate transfer scenarios")]
+    pub(crate) fn split_at(mut self, at: usize) -> Result<(Self, Self), FileRangeError> {
         let len = self.len();
         if at > len {
             return Err(FileRangeError::InvalidSplit { at, len });
@@ -629,7 +666,7 @@ impl MappedReadRange<NativeReadOnlyMappedMemory> {
     ///
     /// The returned capability retains this range's generation and read admission, so native
     /// transfer cannot outlive the mapped-file lifecycle protection.
-    pub fn try_into_file_range(self) -> Result<FileRangeLease, FileRangeError> {
+    pub(crate) fn try_into_file_range(self) -> Result<FileRangeLease, FileRangeError> {
         let owner = self.file_owner();
         let position = self.file_offset();
         let len = self.len();
@@ -782,11 +819,11 @@ mod tests {
         let file = Arc::new(file);
 
         assert!(matches!(
-            SegmentLease::try_from_file_range(0, 0, 3, 2, Arc::clone(&file), TransferCacheState::Cold,),
+            SegmentLease::try_from_file_range_typed(0, 0, 3, 2, Arc::clone(&file), TransferCacheState::Cold),
             Err(FileRangeError::OutOfBounds { .. })
         ));
         assert!(matches!(
-            SegmentLease::try_from_file_range(0, 0, u64::MAX, 2, file, TransferCacheState::Cold,),
+            SegmentLease::try_from_file_range_typed(0, 0, u64::MAX, 2, file, TransferCacheState::Cold),
             Err(FileRangeError::EndOverflow { .. })
         ));
     }

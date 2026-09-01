@@ -16,12 +16,15 @@ use std::cell::Cell;
 use std::io;
 use std::sync::Arc;
 
+use crate::store_error::StoreComponent;
+use crate::store_error::StoreError;
+use crate::store_error::StoreOperation;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use parking_lot::RwLockReadGuard;
 use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use rocketmq_store_local::index::codec::index_file_total_size as local_index_file_total_size;
-use rocketmq_store_local::index::codec::IndexLayoutError;
+use rocketmq_store_local::index::codec::IndexLayoutViolation;
 use rocketmq_store_local::index::codec::INDEX_ENTRY_SIZE;
 use rocketmq_store_local::index::codec::INDEX_HASH_SLOT_SIZE;
 use rocketmq_store_local::index::file::drive_index_put;
@@ -33,9 +36,7 @@ use rocketmq_store_local::index::file::IndexHeaderUpdate;
 use rocketmq_store_local::index::file::IndexPutOutcome;
 use rocketmq_store_local::mapped_file::MappedFileAdmissionState;
 use rocketmq_store_local::mapped_file::MappedFileDestroyOutcome;
-use rocketmq_store_local::mapped_file::MappedFileError;
 use rocketmq_store_local::mapped_file::MappedFileOperation;
-use rocketmq_store_local::mapped_file::MappedFileResult;
 use tracing::info;
 use tracing::warn;
 
@@ -230,11 +231,11 @@ impl IndexFile {
         }
     }
 
-    fn try_flush(&self) -> MappedFileResult<i32> {
+    fn try_flush(&self) -> Result<i32, StoreError> {
         self.try_flush_with_header_update(|| self.index_header.try_update_byte_buffer())
     }
 
-    fn try_flush_with_header_update<F>(&self, update_header: F) -> MappedFileResult<i32>
+    fn try_flush_with_header_update<F>(&self, update_header: F) -> Result<i32, StoreError>
     where
         F: FnOnce() -> bool,
     {
@@ -244,14 +245,16 @@ impl IndexFile {
         self.flush_header_and_mapping(update_header)
     }
 
-    fn flush_header_and_mapping<F>(&self, update_header: F) -> MappedFileResult<i32>
+    fn flush_header_and_mapping<F>(&self, update_header: F) -> Result<i32, StoreError>
     where
         F: FnOnce() -> bool,
     {
         if !update_header() {
-            return Err(MappedFileError::Custom(
-                "failed to publish the index header before flush".to_string(),
-            ));
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Flush)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_detail("failed to publish the index header before flush"),
+            );
         }
         self.mapped_file.try_flush(0)
     }
@@ -452,22 +455,24 @@ impl IndexFile {
         self.mapped_file.try_destroy(interval_forcibly)
     }
 
-    fn closing_error(operation: MappedFileOperation) -> MappedFileError {
-        MappedFileError::Unavailable {
-            state: MappedFileAdmissionState::Closing,
-            operation,
-        }
+    fn closing_error(operation: MappedFileOperation) -> StoreError {
+        StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Flush)
+            .in_component(StoreComponent::MappedFile)
+            .with_detail(format!(
+                "index mapped file is closing and rejected a {operation:?} operation in state {:?}",
+                MappedFileAdmissionState::Closing
+            ))
     }
 }
 
 fn index_file_total_size(hash_slot_num: usize, index_num: usize) -> io::Result<usize> {
     local_index_file_total_size(hash_slot_num, index_num).map_err(|error| {
         let message = match error {
-            IndexLayoutError::ZeroHashSlots => "index hash slot number must be positive",
-            IndexLayoutError::ZeroIndexEntries => "index entry number must be positive",
-            IndexLayoutError::HashSlotSectionOverflow => "index hash slot section size overflow",
-            IndexLayoutError::IndexEntrySectionOverflow => "index entry section size overflow",
-            IndexLayoutError::TotalSizeOverflow => "index file total size overflow",
+            IndexLayoutViolation::ZeroHashSlots => "index hash slot number must be positive",
+            IndexLayoutViolation::ZeroIndexEntries => "index entry number must be positive",
+            IndexLayoutViolation::HashSlotSectionOverflow => "index hash slot section size overflow",
+            IndexLayoutViolation::IndexEntrySectionOverflow => "index entry section size overflow",
+            IndexLayoutViolation::TotalSizeOverflow => "index file total size overflow",
         };
         io::Error::new(io::ErrorKind::InvalidInput, message)
     })

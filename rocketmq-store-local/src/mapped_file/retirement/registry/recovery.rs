@@ -21,18 +21,18 @@ impl<O> RetirementRegistry<O> {
     /// Reconstructs every durable retirement only after namespace reconciliation succeeded.
     pub(in crate::mapped_file::retirement) fn from_reconciled_state(
         reconciled: &ReconciledLedgerState,
-    ) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryError> {
+    ) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryViolation> {
         Self::rebuild(reconciled.recovered())
     }
 
     #[cfg(test)]
     pub(super) fn from_recovered_state(
         recovered: &RecoveredLedgerState,
-    ) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryError> {
+    ) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryViolation> {
         Self::rebuild(recovered)
     }
 
-    fn rebuild(recovered: &RecoveredLedgerState) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryError> {
+    fn rebuild(recovered: &RecoveredLedgerState) -> Result<(Self, Vec<RecoveredRetirementWork<O>>), RegistryViolation> {
         let registry = Self::new(recovered.store_uuid(), recovered.ticket_high_water());
         let mut rebuilt = RegistryState {
             ticket_high_water: recovered.ticket_high_water(),
@@ -46,12 +46,12 @@ impl<O> RetirementRegistry<O> {
         };
         let mut work = Vec::new();
         work.try_reserve_exact(recovered.retirement_count())
-            .map_err(|_| RegistryError::RecoveryAllocationFailed)?;
+            .map_err(|_| RegistryViolation::RecoveryAllocationFailed)?;
 
         let replay_frontier = DurableStagePosition::replayed(recovered.last_sequence())?;
         for (entry, observed_replacement_key) in recovered.retirement_entries() {
             if entry.incarnation.store_uuid() != recovered.store_uuid() {
-                return Err(RegistryError::StoreUuidMismatch);
+                return Err(RegistryViolation::StoreUuidMismatch);
             }
             let operation = RetirementOperation::new(
                 entry.incarnation,
@@ -107,7 +107,7 @@ impl<O> RetirementRegistry<O> {
                         entry
                             .tombstone_path
                             .clone()
-                            .ok_or(RegistryError::InvalidRecoveredRetirement {
+                            .ok_or(RegistryViolation::InvalidRecoveredRetirement {
                                 ticket_id: entry.ticket_id,
                             })?;
                     let phase = RegistryEntryPhase::Tombstoned {
@@ -182,12 +182,12 @@ fn reserve_recovered_identity<O>(
     state: &mut RegistryState<O>,
     entry: &crate::mapped_file::retirement::sidecar::RetirementTicketSnapshotEntry,
     binding: &RetirementIntentBinding,
-) -> Result<(), RegistryError> {
+) -> Result<(), RegistryViolation> {
     if entry.incarnation.store_uuid() != binding.incarnation().store_uuid() {
-        return Err(RegistryError::StoreUuidMismatch);
+        return Err(RegistryViolation::StoreUuidMismatch);
     }
     if state.entries.contains_key(&entry.incarnation) {
-        return Err(RegistryError::DuplicateIncarnation {
+        return Err(RegistryViolation::DuplicateIncarnation {
             incarnation: entry.incarnation,
         });
     }
@@ -195,13 +195,13 @@ fn reserve_recovered_identity<O>(
         .incarnation_by_path
         .insert(entry.canonical_path.clone(), entry.incarnation)
     {
-        return Err(RegistryError::CanonicalPathReserved {
+        return Err(RegistryViolation::CanonicalPathReserved {
             path: entry.canonical_path.clone(),
             incumbent,
         });
     }
     if let Some(incumbent) = state.incarnation_by_key.insert(entry.target_key, entry.incarnation) {
-        return Err(RegistryError::PhysicalKeyReserved {
+        return Err(RegistryViolation::PhysicalKeyReserved {
             physical_key: entry.target_key,
             incumbent,
         });
@@ -211,7 +211,7 @@ fn reserve_recovered_identity<O>(
         .insert(entry.ticket_id, entry.incarnation)
         .is_some()
     {
-        return Err(RegistryError::DuplicateTicket {
+        return Err(RegistryViolation::DuplicateTicket {
             ticket_id: entry.ticket_id,
         });
     }

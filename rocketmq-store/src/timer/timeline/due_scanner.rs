@@ -520,7 +520,7 @@ pub(crate) enum TimelineDueScannerError {
     #[error("Timeline continuation belongs to a different index backend")]
     CursorBackendMismatch,
     #[error("native Timeline failure: {0}")]
-    Native(#[from] rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError),
+    Native(#[from] crate::store_error::StoreError),
 }
 
 fn native_entry(record: TimelineSegmentRecord) -> TimelineIndexEntry {

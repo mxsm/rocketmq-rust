@@ -53,18 +53,18 @@ fn foreign_and_wrong_tokens_are_returned_and_cas_conflict_can_retry() {
         .prepare_handoff(token_a, &binding_a, &queue)
         .expect_err("a foreign registry cannot consume the token")
         .into_parts();
-    assert_eq!(error, RegistryError::ForeignToken);
+    assert_eq!(error, RegistryViolation::ForeignToken);
     let wrong_queue = QueueIdentity::allocate();
     let (token_a, error) = registry
         .prepare_handoff(token_a, &binding_a, &wrong_queue)
         .expect_err("a wrong queue identity cannot consume the token")
         .into_parts();
-    assert!(matches!(error, RegistryError::TokenQueueIdentityMismatch { .. }));
+    assert!(matches!(error, RegistryViolation::TokenQueueIdentityMismatch { .. }));
     let (token_a, error) = registry
         .prepare_handoff(token_a, &binding_b, &queue)
         .expect_err("a wrong binding cannot consume the token")
         .into_parts();
-    assert!(matches!(error, RegistryError::TokenBindingMismatch { .. }));
+    assert!(matches!(error, RegistryViolation::TokenBindingMismatch { .. }));
 
     let prepared = registry
         .prepare_handoff(token_a, &binding_a, &queue)

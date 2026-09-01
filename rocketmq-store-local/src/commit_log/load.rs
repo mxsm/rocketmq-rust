@@ -101,7 +101,7 @@ pub enum CommitLogFileLoadDecision {
     "{} length {actual} not matched expected size {expected}, please check it manually",
     path.display()
 )]
-pub struct CommitLogFileValidationError {
+pub struct CommitLogFileValidationViolation {
     /// Filesystem path of the invalid CommitLog segment.
     pub path: PathBuf,
     /// Observed segment length in bytes.
@@ -115,12 +115,12 @@ pub fn validate_commit_log_file(
     metadata: &CommitLogFileMetadata,
     expected: u64,
     is_last: bool,
-) -> Result<CommitLogFileLoadDecision, CommitLogFileValidationError> {
+) -> Result<CommitLogFileLoadDecision, CommitLogFileValidationViolation> {
     if metadata.size == 0 && is_last {
         return Ok(CommitLogFileLoadDecision::RemoveEmptyLast);
     }
     if metadata.size != expected {
-        return Err(CommitLogFileValidationError {
+        return Err(CommitLogFileValidationViolation {
             path: metadata.path.clone(),
             actual: metadata.size,
             expected,

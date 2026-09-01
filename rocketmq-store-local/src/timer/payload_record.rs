@@ -53,12 +53,12 @@ impl TimerPayloadRecordV1 {
     /// # Errors
     ///
     /// Returns an error when the deadline predates the Unix epoch or the day exceeds V1 range.
-    pub fn due_day_utc(&self) -> Result<i32, TimerPayloadRecordError> {
+    pub fn due_day_utc(&self) -> Result<i32, TimerPayloadRecordViolation> {
         if self.due_time_ms < 0 {
-            return Err(TimerPayloadRecordError::InvalidDeadline(self.due_time_ms));
+            return Err(TimerPayloadRecordViolation::InvalidDeadline(self.due_time_ms));
         }
         i32::try_from(self.due_time_ms.div_euclid(86_400_000))
-            .map_err(|_| TimerPayloadRecordError::InvalidDeadline(self.due_time_ms))
+            .map_err(|_| TimerPayloadRecordViolation::InvalidDeadline(self.due_time_ms))
     }
 
     /// Returns the encoded record length.
@@ -66,7 +66,7 @@ impl TimerPayloadRecordV1 {
     /// # Errors
     ///
     /// Returns an error when variable fields cannot fit the V1 length fields.
-    pub fn encoded_len(&self) -> Result<usize, TimerPayloadRecordError> {
+    pub fn encoded_len(&self) -> Result<usize, TimerPayloadRecordViolation> {
         validate(self)?;
         Ok(PAYLOAD_HEADER_SIZE
             .saturating_add(self.real_topic.len())
@@ -79,13 +79,14 @@ impl TimerPayloadRecordV1 {
     /// # Errors
     ///
     /// Returns an error for invalid metadata or oversized variable fields.
-    pub fn encode(&self) -> Result<Vec<u8>, TimerPayloadRecordError> {
+    pub fn encode(&self) -> Result<Vec<u8>, TimerPayloadRecordViolation> {
         let total_len = self.encoded_len()?;
-        let total_len_u32 = u32::try_from(total_len).map_err(|_| TimerPayloadRecordError::RecordTooLarge(total_len))?;
+        let total_len_u32 =
+            u32::try_from(total_len).map_err(|_| TimerPayloadRecordViolation::RecordTooLarge(total_len))?;
         let topic_len = u16::try_from(self.real_topic.len())
-            .map_err(|_| TimerPayloadRecordError::TopicTooLong(self.real_topic.len()))?;
-        let frame_len =
-            u32::try_from(self.frame.len()).map_err(|_| TimerPayloadRecordError::RecordTooLarge(self.frame.len()))?;
+            .map_err(|_| TimerPayloadRecordViolation::TopicTooLong(self.real_topic.len()))?;
+        let frame_len = u32::try_from(self.frame.len())
+            .map_err(|_| TimerPayloadRecordViolation::RecordTooLarge(self.frame.len()))?;
         let mut output = Vec::with_capacity(total_len);
         output.extend_from_slice(&PAYLOAD_MAGIC.to_be_bytes());
         output.extend_from_slice(&PAYLOAD_VERSION.to_be_bytes());
@@ -113,42 +114,42 @@ impl TimerPayloadRecordV1 {
     /// # Errors
     ///
     /// Returns an error for unknown versions, length damage, UTF-8 damage, or CRC mismatch.
-    pub fn decode(bytes: &[u8]) -> Result<Self, TimerPayloadRecordError> {
+    pub fn decode(bytes: &[u8]) -> Result<Self, TimerPayloadRecordViolation> {
         if bytes.len() < PAYLOAD_HEADER_SIZE + PAYLOAD_TRAILER_SIZE {
-            return Err(TimerPayloadRecordError::Truncated);
+            return Err(TimerPayloadRecordViolation::Truncated);
         }
         if read_u32(bytes, 0)? != PAYLOAD_MAGIC {
-            return Err(TimerPayloadRecordError::BadMagic);
+            return Err(TimerPayloadRecordViolation::BadMagic);
         }
         if read_u16(bytes, 4)? != PAYLOAD_VERSION {
-            return Err(TimerPayloadRecordError::UnsupportedVersion(read_u16(bytes, 4)?));
+            return Err(TimerPayloadRecordViolation::UnsupportedVersion(read_u16(bytes, 4)?));
         }
         if usize::from(read_u16(bytes, 6)?) != PAYLOAD_HEADER_SIZE {
-            return Err(TimerPayloadRecordError::InvalidHeaderLength);
+            return Err(TimerPayloadRecordViolation::InvalidHeaderLength);
         }
-        let total_len = usize::try_from(read_u32(bytes, 8)?).map_err(|_| TimerPayloadRecordError::Truncated)?;
+        let total_len = usize::try_from(read_u32(bytes, 8)?).map_err(|_| TimerPayloadRecordViolation::Truncated)?;
         if total_len != bytes.len() {
-            return Err(TimerPayloadRecordError::InvalidRecordLength {
+            return Err(TimerPayloadRecordViolation::InvalidRecordLength {
                 expected: total_len,
                 actual: bytes.len(),
             });
         }
         if crc32c(&bytes[..bytes.len() - PAYLOAD_TRAILER_SIZE]) != read_u32(bytes, bytes.len() - PAYLOAD_TRAILER_SIZE)?
         {
-            return Err(TimerPayloadRecordError::ChecksumMismatch);
+            return Err(TimerPayloadRecordViolation::ChecksumMismatch);
         }
         let topic_len = usize::from(read_u16(bytes, 66)?);
-        let frame_len = usize::try_from(read_u32(bytes, 68)?).map_err(|_| TimerPayloadRecordError::Truncated)?;
+        let frame_len = usize::try_from(read_u32(bytes, 68)?).map_err(|_| TimerPayloadRecordViolation::Truncated)?;
         let topic_end = PAYLOAD_HEADER_SIZE.saturating_add(topic_len);
         let frame_end = topic_end.saturating_add(frame_len);
         if topic_len == 0 || frame_len == 0 || frame_end.saturating_add(PAYLOAD_TRAILER_SIZE) != bytes.len() {
-            return Err(TimerPayloadRecordError::Truncated);
+            return Err(TimerPayloadRecordViolation::Truncated);
         }
         let due_time_ms = read_i64(bytes, 12)?;
         let source_cq_offset = read_i64(bytes, 46)?;
         let source_physical_offset = read_i64(bytes, 54)?;
         if due_time_ms < 0 || source_cq_offset < 0 || source_physical_offset < 0 {
-            return Err(TimerPayloadRecordError::InvalidIdentity);
+            return Err(TimerPayloadRecordViolation::InvalidIdentity);
         }
         Ok(Self {
             due_time_ms,
@@ -159,80 +160,80 @@ impl TimerPayloadRecordV1 {
             source_physical_offset,
             real_queue_id: read_i32(bytes, 62)?,
             real_topic: std::str::from_utf8(&bytes[PAYLOAD_HEADER_SIZE..topic_end])
-                .map_err(|_| TimerPayloadRecordError::InvalidTopicUtf8)?
+                .map_err(|_| TimerPayloadRecordViolation::InvalidTopicUtf8)?
                 .to_owned(),
             frame: bytes[topic_end..frame_end].to_vec(),
         })
     }
 
     /// Reads the declared total length from a V1 header.
-    pub(crate) fn declared_len(header: &[u8]) -> Result<usize, TimerPayloadRecordError> {
+    pub(crate) fn declared_len(header: &[u8]) -> Result<usize, TimerPayloadRecordViolation> {
         if header.len() < PAYLOAD_HEADER_SIZE || read_u32(header, 0)? != PAYLOAD_MAGIC {
-            return Err(TimerPayloadRecordError::BadMagic);
+            return Err(TimerPayloadRecordViolation::BadMagic);
         }
-        usize::try_from(read_u32(header, 8)?).map_err(|_| TimerPayloadRecordError::Truncated)
+        usize::try_from(read_u32(header, 8)?).map_err(|_| TimerPayloadRecordViolation::Truncated)
     }
 
     pub(crate) const fn header_size() -> usize {
         PAYLOAD_HEADER_SIZE
     }
 
-    pub(crate) fn checksum(bytes: &[u8]) -> Result<u32, TimerPayloadRecordError> {
+    pub(crate) fn checksum(bytes: &[u8]) -> Result<u32, TimerPayloadRecordViolation> {
         if bytes.len() < PAYLOAD_TRAILER_SIZE {
-            return Err(TimerPayloadRecordError::Truncated);
+            return Err(TimerPayloadRecordViolation::Truncated);
         }
         read_u32(bytes, bytes.len() - PAYLOAD_TRAILER_SIZE)
     }
 }
 
-fn validate(record: &TimerPayloadRecordV1) -> Result<(), TimerPayloadRecordError> {
+fn validate(record: &TimerPayloadRecordV1) -> Result<(), TimerPayloadRecordViolation> {
     record.due_day_utc()?;
     if record.source_cq_offset.get() < 0 || record.source_physical_offset < 0 {
-        return Err(TimerPayloadRecordError::InvalidIdentity);
+        return Err(TimerPayloadRecordViolation::InvalidIdentity);
     }
     if record.real_topic.is_empty() {
-        return Err(TimerPayloadRecordError::EmptyTopic);
+        return Err(TimerPayloadRecordViolation::EmptyTopic);
     }
     if record.frame.is_empty() {
-        return Err(TimerPayloadRecordError::EmptyFrame);
+        return Err(TimerPayloadRecordViolation::EmptyFrame);
     }
     Ok(())
 }
 
-fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], TimerPayloadRecordError> {
+fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], TimerPayloadRecordViolation> {
     bytes
         .get(offset..offset.saturating_add(N))
         .and_then(|value| value.try_into().ok())
-        .ok_or(TimerPayloadRecordError::Truncated)
+        .ok_or(TimerPayloadRecordViolation::Truncated)
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, TimerPayloadRecordError> {
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, TimerPayloadRecordViolation> {
     Ok(u16::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, TimerPayloadRecordError> {
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, TimerPayloadRecordViolation> {
     Ok(u32::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, TimerPayloadRecordError> {
+fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, TimerPayloadRecordViolation> {
     Ok(i32::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, TimerPayloadRecordError> {
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, TimerPayloadRecordViolation> {
     Ok(u64::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, TimerPayloadRecordError> {
+fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, TimerPayloadRecordViolation> {
     Ok(i64::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, TimerPayloadRecordError> {
+fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, TimerPayloadRecordViolation> {
     Ok(u128::from_be_bytes(read_array(bytes, offset)?))
 }
 
 /// Payload record codec error.
 #[derive(Debug, Error)]
-pub enum TimerPayloadRecordError {
+pub enum TimerPayloadRecordViolation {
     /// Original deadline cannot map to a V1 UTC-day partition.
     #[error("invalid timer payload deadline: {0}")]
     InvalidDeadline(i64),

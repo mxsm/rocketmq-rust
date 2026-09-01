@@ -17,7 +17,7 @@ use crate::mapped_file::retirement::codec::crc32;
 use crate::mapped_file::retirement::codec::encode_acknowledgement_slot;
 use crate::mapped_file::retirement::codec::encode_commit_seal;
 use crate::mapped_file::retirement::codec::encode_ledger_frame;
-use crate::mapped_file::retirement::codec::CodecError;
+use crate::mapped_file::retirement::codec::CodecViolation;
 use crate::mapped_file::retirement::codec::CommitSeal;
 use crate::mapped_file::retirement::codec::LedgerRecord;
 use crate::mapped_file::retirement::identity::StoreUuid;
@@ -55,7 +55,7 @@ fn all_zero_acknowledgement_slots_fail_when_marker_is_present() {
     let mut input = fixture.input();
     input.acknowledgement_slots = [&zero, &zero];
 
-    assert_eq!(replay(input), Err(ReplayError::NoAcknowledgedFrame));
+    assert_eq!(replay(input), Err(ReplayViolation::NoAcknowledgedFrame));
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn replay_limits_fail_before_unbounded_generation_or_unit_collection() {
     generation_limited.limits.max_generations = 0;
     assert_eq!(
         replay(generation_limited),
-        Err(ReplayError::LimitExceeded {
+        Err(ReplayViolation::LimitExceeded {
             limit: "generations",
             actual: 1,
             maximum: 0,
@@ -76,7 +76,7 @@ fn replay_limits_fail_before_unbounded_generation_or_unit_collection() {
     unit_limited.limits.max_sealed_units = 2;
     assert_eq!(
         replay(unit_limited),
-        Err(ReplayError::LimitExceeded {
+        Err(ReplayViolation::LimitExceeded {
             limit: "sealed_units",
             actual: 3,
             maximum: 2,
@@ -105,14 +105,14 @@ fn torn_slot_without_candidate_and_with_multiple_candidates_fails_closed() {
 
     assert_eq!(
         resolve_acknowledgement([&torn, &fixture.slot1], &fixture.evidence[1..2]),
-        Err(ReplayError::UnreconstructableAcknowledgementSlot { slot_index: 0 })
+        Err(ReplayViolation::UnreconstructableAcknowledgementSlot { slot_index: 0 })
     );
 
     let mut ambiguous = fixture.evidence.clone();
     ambiguous.push(fixture.evidence[2].clone());
     assert_eq!(
         resolve_acknowledgement([&torn, &fixture.slot1], &ambiguous),
-        Err(ReplayError::AmbiguousAcknowledgementSlot {
+        Err(ReplayViolation::AmbiguousAcknowledgementSlot {
             slot_index: 0,
             candidates: 2,
         })
@@ -136,14 +136,14 @@ fn every_populated_acknowledgement_slot_requires_one_exact_seal() {
     let fixture = BootstrapFixture::new();
     assert_eq!(
         resolve_acknowledgement([&fixture.slot0, &fixture.slot1], &fixture.evidence[2..]),
-        Err(ReplayError::MissingAcknowledgementSealEvidence { slot_index: 1 })
+        Err(ReplayViolation::MissingAcknowledgementSealEvidence { slot_index: 1 })
     );
 
     let mut duplicate = fixture.evidence.clone();
     duplicate.push(fixture.evidence[1].clone());
     assert_eq!(
         resolve_acknowledgement([&fixture.slot0, &fixture.slot1], &duplicate),
-        Err(ReplayError::AmbiguousAcknowledgementSealEvidence {
+        Err(ReplayViolation::AmbiguousAcknowledgementSealEvidence {
             slot_index: 1,
             candidates: 2,
         })
@@ -158,7 +158,8 @@ fn acknowledgement_sequence_or_epoch_break_fails_closed() {
 
     assert!(matches!(
         replay(input),
-        Err(ReplayError::BrokenSealChain { generation: 0 }) | Err(ReplayError::InvalidLog { generation: 0, .. })
+        Err(ReplayViolation::BrokenSealChain { generation: 0 })
+            | Err(ReplayViolation::InvalidLog { generation: 0, .. })
     ));
 }
 
@@ -245,9 +246,9 @@ fn complete_invalid_seal_after_old_watermark_is_corruption_not_tail_repair() {
 
     assert!(matches!(
         replay(fixture.input()),
-        Err(ReplayError::InvalidLog {
+        Err(ReplayViolation::InvalidLog {
             generation: 0,
-            source: CodecError::InvalidCommitSealMagic { .. },
+            source: CodecViolation::InvalidCommitSealMagic { .. },
             ..
         })
     ));
@@ -267,7 +268,7 @@ fn every_sealed_unit_must_obey_activation_phase() {
 
     assert_eq!(
         validation::validate_all_sealed_units(&parsed, &evidence),
-        Err(ReplayError::BrokenSealChain { generation: 0 })
+        Err(ReplayViolation::BrokenSealChain { generation: 0 })
     );
 }
 
@@ -333,15 +334,15 @@ fn invalid_generation_prepared_never_reaches_resume_decision() {
         match (open_reason, result) {
             (
                 crate::mapped_file::retirement::codec::OpenReason::Compaction,
-                Err(ReplayError::InvalidLog {
-                    source: CodecError::InvalidGenerationRelationship { .. },
+                Err(ReplayViolation::InvalidLog {
+                    source: CodecViolation::InvalidGenerationRelationship { .. },
                     ..
                 }),
             )
             | (
                 crate::mapped_file::retirement::codec::OpenReason::TailRepair,
-                Err(ReplayError::InvalidLog {
-                    source: CodecError::InvalidEnvelopeRelationship { .. },
+                Err(ReplayViolation::InvalidLog {
+                    source: CodecViolation::InvalidEnvelopeRelationship { .. },
                     ..
                 }),
             ) => {}
@@ -372,7 +373,7 @@ fn early_tail_decision_cannot_bypass_semantically_invalid_sealed_record() {
 
     assert_eq!(
         replay(fixture.input()),
-        Err(ReplayError::State(StateError::IllegalGenerationAdministration))
+        Err(ReplayViolation::State(StateViolation::IllegalGenerationAdministration))
     );
 }
 
@@ -485,21 +486,21 @@ fn newer_selected_marker_with_predecessor_ack_returns_anchor_acknowledgement_dat
             ],
             limits: ReplayLimits::default(),
         }),
-        Err(ReplayError::Marker(
-            crate::mapped_file::retirement::sidecar::SidecarError::InvalidMarkerSlotHistory
+        Err(ReplayViolation::Marker(
+            crate::mapped_file::retirement::sidecar::SidecarViolation::InvalidMarkerSlotHistory
         ))
     );
 
     for (invalid_target_log, source) in [
         (
             compaction_target_log(&fixture, &target_snapshot, 3, 0, 0),
-            CodecError::InvalidEnvelopeRelationship {
+            CodecViolation::InvalidEnvelopeRelationship {
                 detail: "LogOpened must be the first sequence after its snapshot base",
             },
         ),
         (
             compaction_target_log(&fixture, &target_snapshot, 4, 0, 1),
-            CodecError::InvalidTailRepairFields,
+            CodecViolation::InvalidTailRepairFields,
         ),
     ] {
         let mut invalid_marker = marker.clone();
@@ -524,7 +525,7 @@ fn newer_selected_marker_with_predecessor_ack_returns_anchor_acknowledgement_dat
                 ],
                 limits: ReplayLimits::default(),
             }),
-            Err(ReplayError::InvalidLog {
+            Err(ReplayViolation::InvalidLog {
                 generation: 1,
                 offset: 0,
                 source,
@@ -556,7 +557,7 @@ fn selected_ordinary_compaction_requires_exact_terminal_generation_prepared() {
             ],
             limits: ReplayLimits::default(),
         }),
-        Err(ReplayError::GenerationBindingMismatch)
+        Err(ReplayViolation::GenerationBindingMismatch)
     );
 
     let mut prepared = BootstrapFixture::new();
@@ -710,7 +711,7 @@ fn bytes_after_terminal_generation_prepared_never_become_generic_tail_repair() {
     fixture.rebuild(&[1, 2, 3, 4]);
     fixture.log.extend_from_slice(b"RMLC");
 
-    assert_eq!(replay(fixture.input()), Err(ReplayError::GenerationBindingMismatch));
+    assert_eq!(replay(fixture.input()), Err(ReplayViolation::GenerationBindingMismatch));
 }
 
 #[test]
@@ -720,7 +721,7 @@ fn corrupt_partial_acknowledged_seal_fails_closed() {
     let final_byte = fixture.log.len() - 1;
     fixture.log[final_byte] ^= 1;
 
-    assert_eq!(replay(fixture.input()), Err(ReplayError::PartialSealMismatch));
+    assert_eq!(replay(fixture.input()), Err(ReplayViolation::PartialSealMismatch));
 }
 
 #[test]
@@ -731,7 +732,7 @@ fn unacknowledged_tail_boundary_is_strictly_less_than_one_sealed_unit() {
     );
     assert_eq!(
         validate_unacknowledged_suffix_length(super::super::codec::MAX_SEALED_RECORD_UNIT_LENGTH),
-        Err(ReplayError::InvalidUnacknowledgedSuffixLength {
+        Err(ReplayViolation::InvalidUnacknowledgedSuffixLength {
             length: super::super::codec::MAX_SEALED_RECORD_UNIT_LENGTH,
             maximum: super::super::codec::MAX_SEALED_RECORD_UNIT_LENGTH,
         })
@@ -749,7 +750,7 @@ fn marker_and_generation_mismatch_fails_closed() {
     let mut input = fixture.input();
     input.generations = vec![wrong];
 
-    assert_eq!(replay(input), Err(ReplayError::GenerationBindingMismatch));
+    assert_eq!(replay(input), Err(ReplayViolation::GenerationBindingMismatch));
 }
 
 #[test]
@@ -802,7 +803,7 @@ fn snapshot_semantics_and_marker_epoch_relation_are_validated_before_decisions()
     let parsed = BTreeMap::from([(0, parsed_generation)]);
     assert_eq!(
         validation::validate_all_snapshot_states(&parsed),
-        Err(ReplayError::State(StateError::InvalidSnapshotState))
+        Err(ReplayViolation::State(StateViolation::InvalidSnapshotState))
     );
 
     let mut impossible_epoch = fixture.marker.slots[0].clone().expect("marker exists");
@@ -813,7 +814,7 @@ fn snapshot_semantics_and_marker_epoch_relation_are_validated_before_decisions()
             .expect("fixture parses");
     assert_eq!(
         validation::validate_marker_binding(&impossible_epoch, &fixture.meta, &valid_generation),
-        Err(ReplayError::GenerationBindingMismatch)
+        Err(ReplayViolation::GenerationBindingMismatch)
     );
 }
 
@@ -833,7 +834,7 @@ fn gc_backlog_reconstructs_canonical_marker_and_exact_second_frame() {
     evidence[2].encoded_frame[48] ^= 1;
     assert_eq!(
         validation::validate_gc_backlog_markers(&no_marker_references, &fixture.meta, 1, &parsed, &evidence,),
-        Err(ReplayError::GenerationBindingMismatch)
+        Err(ReplayViolation::GenerationBindingMismatch)
     );
 }
 
@@ -842,11 +843,11 @@ fn switch_headroom_reserves_anchor_witness_and_following_cursor() {
     assert_eq!(require_recovery_headroom(u64::MAX - 3, u64::MAX - 3, 3), Ok(()));
     assert_eq!(
         require_recovery_headroom(u64::MAX - 2, u64::MAX - 3, 3),
-        Err(ReplayError::State(StateError::SequenceOverflow))
+        Err(ReplayViolation::State(StateViolation::SequenceOverflow))
     );
     assert_eq!(
         require_recovery_headroom(u64::MAX - 3, u64::MAX - 2, 3),
-        Err(ReplayError::BrokenAcknowledgementChain)
+        Err(ReplayViolation::BrokenAcknowledgementChain)
     );
 }
 
@@ -857,9 +858,9 @@ fn unknown_critical_record_fails_closed_before_state_application() {
 
     assert!(matches!(
         replay(fixture.input()),
-        Err(ReplayError::InvalidLog {
+        Err(ReplayViolation::InvalidLog {
             generation: 0,
-            source: CodecError::UnknownCriticalRecordType { record_type: 0x7777 },
+            source: CodecViolation::UnknownCriticalRecordType { record_type: 0x7777 },
             ..
         })
     ));

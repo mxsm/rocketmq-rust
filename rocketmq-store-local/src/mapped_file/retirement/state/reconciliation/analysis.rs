@@ -18,10 +18,10 @@ use super::*;
 pub(crate) fn reconcile(
     needs_reconciliation: NeedsReconciliation,
     mut inventory: StableNamespaceInventory,
-) -> Result<ReconciliationDisposition, ReconciliationError> {
+) -> Result<ReconciliationDisposition, ReconciliationViolation> {
     let (recovered, writer_frontier) = needs_reconciliation.into_parts();
     if recovered.store_uuid != inventory.store_uuid {
-        return Err(ReconciliationError::StoreUuidMismatch);
+        return Err(ReconciliationViolation::StoreUuidMismatch);
     }
 
     let known_paths = collect_known_paths(&recovered)?;
@@ -87,7 +87,7 @@ pub(crate) fn reconcile(
     if inventory.requires_retained_files {
         for path in active.keys().chain(retired_paths.iter()) {
             if inventory.entries.contains_key(path) && !inventory.retained_files.contains_key(path) {
-                return Err(ReconciliationError::UnsafeNamespaceEntry { path: path.clone() });
+                return Err(ReconciliationViolation::UnsafeNamespaceEntry { path: path.clone() });
             }
         }
     }
@@ -117,9 +117,9 @@ fn reconcile_allocated(
     inventory: &StableNamespaceInventory,
     incarnation: &IncarnationSnapshotEntry,
     actions: &mut Vec<ReconciliationAction>,
-) -> Result<(), ReconciliationError> {
+) -> Result<(), ReconciliationViolation> {
     if inventory.observe(&incarnation.canonical_path)?.is_some() {
-        return Err(ReconciliationError::AllocatedCanonicalPresent {
+        return Err(ReconciliationViolation::AllocatedCanonicalPresent {
             incarnation: incarnation.incarnation,
         });
     }
@@ -131,12 +131,12 @@ fn reconcile_allocated(
         physical_key, length, ..
     } = object
     else {
-        return Err(ReconciliationError::UnsafeNamespaceEntry {
+        return Err(ReconciliationViolation::UnsafeNamespaceEntry {
             path: incarnation.create_file_path.clone(),
         });
     };
     if *length != incarnation.expected_file_length {
-        return Err(ReconciliationError::LengthMismatch {
+        return Err(ReconciliationViolation::LengthMismatch {
             path: incarnation.create_file_path.clone(),
             expected: incarnation.expected_file_length,
             actual: *length,
@@ -154,7 +154,7 @@ fn reconcile_bound(
     inventory: &StableNamespaceInventory,
     incarnation: &IncarnationSnapshotEntry,
     actions: &mut Vec<ReconciliationAction>,
-) -> Result<(), ReconciliationError> {
+) -> Result<(), ReconciliationViolation> {
     let expected_key = incarnation
         .physical_key
         .expect("validated bound snapshot entry has a physical key");
@@ -178,26 +178,26 @@ fn reconcile_bound(
             actions.push(ReconciliationAction::RecordPublished(incarnation.incarnation));
         }
         (ObservedExpected::Missing, ObservedExpected::Missing) => {
-            return Err(ReconciliationError::BoundIncarnationMissing {
+            return Err(ReconciliationViolation::BoundIncarnationMissing {
                 incarnation: incarnation.incarnation,
             });
         }
         (ObservedExpected::Other(actual), _) => {
-            return Err(ReconciliationError::PhysicalKeyMismatch {
+            return Err(ReconciliationViolation::PhysicalKeyMismatch {
                 path: incarnation.create_file_path.clone(),
                 expected: expected_key,
                 actual,
             });
         }
         (_, ObservedExpected::Other(actual)) => {
-            return Err(ReconciliationError::PhysicalKeyMismatch {
+            return Err(ReconciliationViolation::PhysicalKeyMismatch {
                 path: incarnation.canonical_path.clone(),
                 expected: expected_key,
                 actual,
             });
         }
         (ObservedExpected::Expected, ObservedExpected::Expected) => {
-            return Err(ReconciliationError::DuplicatePhysicalIdentity {
+            return Err(ReconciliationViolation::DuplicatePhysicalIdentity {
                 physical_key: expected_key,
                 first: incarnation.create_file_path.clone(),
                 second: incarnation.canonical_path.clone(),
@@ -209,7 +209,7 @@ fn reconcile_bound(
 
 pub(super) fn collect_known_paths(
     state: &RecoveredLedgerState,
-) -> Result<BTreeSet<StoreRelativePath>, ReconciliationError> {
+) -> Result<BTreeSet<StoreRelativePath>, ReconciliationViolation> {
     let mut known = BTreeSet::new();
     for incarnation in state.incarnations.values() {
         known.insert(incarnation.canonical_path.clone());
@@ -220,7 +220,7 @@ pub(super) fn collect_known_paths(
         let expected = expected_tombstone_path(&ticket.entry)?;
         if let Some(persisted) = &ticket.entry.tombstone_path {
             if persisted != &expected {
-                return Err(ReconciliationError::TombstonePathMismatch {
+                return Err(ReconciliationViolation::TombstonePathMismatch {
                     ticket_id: ticket.entry.ticket_id,
                 });
             }
@@ -239,26 +239,26 @@ pub(super) fn collect_known_paths(
 fn validate_inventory_coverage(
     inventory: &StableNamespaceInventory,
     known_paths: &BTreeSet<StoreRelativePath>,
-) -> Result<(), ReconciliationError> {
+) -> Result<(), ReconciliationViolation> {
     for path in known_paths {
         let _ = inventory.observe(path)?;
     }
     for path in inventory.entries.keys() {
         if !known_paths.contains(path) {
-            return Err(ReconciliationError::UntrackedNamespaceEntry { path: path.clone() });
+            return Err(ReconciliationViolation::UntrackedNamespaceEntry { path: path.clone() });
         }
     }
     Ok(())
 }
 
-fn validate_unique_physical_identity(inventory: &StableNamespaceInventory) -> Result<(), ReconciliationError> {
+fn validate_unique_physical_identity(inventory: &StableNamespaceInventory) -> Result<(), ReconciliationViolation> {
     let mut paths_by_key = BTreeMap::new();
     for (path, object) in &inventory.entries {
         let NamespaceObject::RegularFile { physical_key, .. } = object else {
             continue;
         };
         if let Some(first) = paths_by_key.insert(*physical_key, path.clone()) {
-            return Err(ReconciliationError::DuplicatePhysicalIdentity {
+            return Err(ReconciliationViolation::DuplicatePhysicalIdentity {
                 physical_key: *physical_key,
                 first,
                 second: path.clone(),
@@ -271,9 +271,9 @@ fn validate_unique_physical_identity(inventory: &StableNamespaceInventory) -> Re
 fn validate_create_artifact(
     inventory: &StableNamespaceInventory,
     incarnation: &IncarnationSnapshotEntry,
-) -> Result<(), ReconciliationError> {
+) -> Result<(), ReconciliationViolation> {
     if incarnation.phase == IncarnationPhase::Published && inventory.observe(&incarnation.create_file_path)?.is_some() {
-        return Err(ReconciliationError::UnexpectedCreateArtifact {
+        return Err(ReconciliationViolation::UnexpectedCreateArtifact {
             path: incarnation.create_file_path.clone(),
         });
     }
@@ -284,7 +284,7 @@ fn analyze_retirement(
     inventory: &StableNamespaceInventory,
     ticket: &RetirementTicketSnapshotEntry,
     actions: &mut Vec<ReconciliationAction>,
-) -> Result<(), ReconciliationError> {
+) -> Result<(), ReconciliationViolation> {
     let canonical = observe_expected(
         inventory,
         &ticket.canonical_path,
@@ -299,12 +299,12 @@ fn analyze_retirement(
         ticket.expected_file_length,
     )?;
     if let ObservedExpected::Other(_) = tombstone {
-        return Err(ReconciliationError::TombstoneCollision {
+        return Err(ReconciliationViolation::TombstoneCollision {
             ticket_id: ticket.ticket_id,
         });
     }
     if canonical == ObservedExpected::Expected && tombstone == ObservedExpected::Expected {
-        return Err(ReconciliationError::TombstoneCollision {
+        return Err(ReconciliationViolation::TombstoneCollision {
             ticket_id: ticket.ticket_id,
         });
     }
@@ -334,7 +334,7 @@ fn analyze_retirement(
                 push_absence_and_completion(actions, ticket.ticket_id, replacement_key);
             }
             _ => {
-                return Err(ReconciliationError::DurableStageContradiction {
+                return Err(ReconciliationViolation::DurableStageContradiction {
                     ticket_id: ticket.ticket_id,
                 })
             }
@@ -348,7 +348,7 @@ fn analyze_retirement(
                 push_absence_and_completion(actions, ticket.ticket_id, replacement_key);
             }
             _ => {
-                return Err(ReconciliationError::DurableStageContradiction {
+                return Err(ReconciliationViolation::DurableStageContradiction {
                     ticket_id: ticket.ticket_id,
                 })
             }
@@ -359,7 +359,7 @@ fn analyze_retirement(
                 push_absence_and_completion(actions, ticket.ticket_id, replacement_key);
             }
             _ => {
-                return Err(ReconciliationError::DurableStageContradiction {
+                return Err(ReconciliationViolation::DurableStageContradiction {
                     ticket_id: ticket.ticket_id,
                 })
             }
@@ -369,21 +369,21 @@ fn analyze_retirement(
                 actions.push(ReconciliationAction::RecordCompleted(ticket.ticket_id));
             }
             _ => {
-                return Err(ReconciliationError::DurableStageContradiction {
+                return Err(ReconciliationViolation::DurableStageContradiction {
                     ticket_id: ticket.ticket_id,
                 })
             }
         },
         RetirementStage::CompletedRetained => match (canonical, tombstone) {
             (ObservedExpected::Expected, _) => {
-                return Err(ReconciliationError::CompletedTargetReappeared {
+                return Err(ReconciliationViolation::CompletedTargetReappeared {
                     ticket_id: ticket.ticket_id,
                     path: ticket.canonical_path.clone(),
                 });
             }
             (ObservedExpected::Missing | ObservedExpected::Other(_), ObservedExpected::Missing) => {}
             _ => {
-                return Err(ReconciliationError::DurableStageContradiction {
+                return Err(ReconciliationViolation::DurableStageContradiction {
                     ticket_id: ticket.ticket_id,
                 })
             }
@@ -407,15 +407,15 @@ fn push_absence_and_completion(
 fn validate_quarantine(
     inventory: &StableNamespaceInventory,
     quarantine: &QuarantineSnapshotEntry,
-) -> Result<(), ReconciliationError> {
+) -> Result<(), ReconciliationViolation> {
     let path = quarantine.destination_path.as_ref().unwrap_or(&quarantine.source_path);
     if quarantine.destination_path.is_some() && inventory.observe(&quarantine.source_path)?.is_some() {
-        return Err(ReconciliationError::QuarantineMismatch {
+        return Err(ReconciliationViolation::QuarantineMismatch {
             path: quarantine.source_path.clone(),
         });
     }
     let Some(object) = inventory.observe(path)? else {
-        return Err(ReconciliationError::QuarantineMismatch { path: path.clone() });
+        return Err(ReconciliationViolation::QuarantineMismatch { path: path.clone() });
     };
     let NamespaceObject::RegularFile {
         physical_key,
@@ -423,7 +423,7 @@ fn validate_quarantine(
         ..
     } = object
     else {
-        return Err(ReconciliationError::UnsafeNamespaceEntry { path: path.clone() });
+        return Err(ReconciliationViolation::UnsafeNamespaceEntry { path: path.clone() });
     };
     if quarantine
         .physical_key
@@ -432,7 +432,7 @@ fn validate_quarantine(
             .content_fingerprint
             .is_some_and(|expected| Some(expected) != *content_fingerprint)
     {
-        return Err(ReconciliationError::QuarantineMismatch { path: path.clone() });
+        return Err(ReconciliationViolation::QuarantineMismatch { path: path.clone() });
     }
     Ok(())
 }
@@ -449,7 +449,7 @@ fn observe_expected(
     path: &StoreRelativePath,
     expected_key: PhysicalFileKey,
     expected_length: u64,
-) -> Result<ObservedExpected, ReconciliationError> {
+) -> Result<ObservedExpected, ReconciliationViolation> {
     let Some(object) = inventory.observe(path)? else {
         return Ok(ObservedExpected::Missing);
     };
@@ -457,13 +457,13 @@ fn observe_expected(
         physical_key, length, ..
     } = object
     else {
-        return Err(ReconciliationError::UnsafeNamespaceEntry { path: path.clone() });
+        return Err(ReconciliationViolation::UnsafeNamespaceEntry { path: path.clone() });
     };
     if *physical_key != expected_key {
         return Ok(ObservedExpected::Other(*physical_key));
     }
     if *length != expected_length {
-        return Err(ReconciliationError::LengthMismatch {
+        return Err(ReconciliationViolation::LengthMismatch {
             path: path.clone(),
             expected: expected_length,
             actual: *length,
@@ -477,11 +477,11 @@ fn require_exact_file(
     path: &StoreRelativePath,
     expected_key: PhysicalFileKey,
     expected_length: u64,
-) -> Result<(), ReconciliationError> {
+) -> Result<(), ReconciliationViolation> {
     match observe_expected(inventory, path, expected_key, expected_length)? {
         ObservedExpected::Expected => Ok(()),
-        ObservedExpected::Missing => Err(ReconciliationError::MissingPublishedFile { path: path.clone() }),
-        ObservedExpected::Other(actual) => Err(ReconciliationError::PhysicalKeyMismatch {
+        ObservedExpected::Missing => Err(ReconciliationViolation::MissingPublishedFile { path: path.clone() }),
+        ObservedExpected::Other(actual) => Err(ReconciliationViolation::PhysicalKeyMismatch {
             path: path.clone(),
             expected: expected_key,
             actual,
@@ -489,7 +489,9 @@ fn require_exact_file(
     }
 }
 
-fn expected_tombstone_path(ticket: &RetirementTicketSnapshotEntry) -> Result<StoreRelativePath, ReconciliationError> {
+fn expected_tombstone_path(
+    ticket: &RetirementTicketSnapshotEntry,
+) -> Result<StoreRelativePath, ReconciliationViolation> {
     ticket
         .canonical_path
         .tombstone_path(
@@ -499,7 +501,7 @@ fn expected_tombstone_path(ticket: &RetirementTicketSnapshotEntry) -> Result<Sto
             ticket.mapping_generation,
             &ticket.retirement_nonce,
         )
-        .map_err(|_| ReconciliationError::TombstonePathMismatch {
+        .map_err(|_| ReconciliationViolation::TombstonePathMismatch {
             ticket_id: ticket.ticket_id,
         })
 }

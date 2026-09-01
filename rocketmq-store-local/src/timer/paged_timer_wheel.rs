@@ -62,7 +62,7 @@ struct PagedTimerWheelState {
 }
 
 impl PagedTimerWheel {
-    pub fn new(
+    pub(crate) fn new(
         directory: impl AsRef<Path>,
         slots_total: usize,
         page_size: usize,
@@ -91,7 +91,7 @@ impl PagedTimerWheel {
         })
     }
 
-    pub fn load(&self, committed_generation: u64) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn load(&self, committed_generation: u64) -> Result<(), PagedTimerWheelError> {
         std::fs::create_dir_all(&self.directory)?;
         if !self.directory.join(FORMAT_MARKER).exists() {
             self.initialize_files()?;
@@ -125,7 +125,7 @@ impl PagedTimerWheel {
         Ok(())
     }
 
-    pub fn import_legacy_slots(&self, slots: &[Slot]) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn import_legacy_slots(&self, slots: &[Slot]) -> Result<(), PagedTimerWheelError> {
         if slots.len() != self.slots_total {
             return Err(PagedTimerWheelError::InvalidSlotCount {
                 actual: slots.len(),
@@ -144,7 +144,7 @@ impl PagedTimerWheel {
         Ok(())
     }
 
-    pub fn reset_for_repair(&self, committed_generation: u64) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn reset_for_repair(&self, committed_generation: u64) -> Result<(), PagedTimerWheelError> {
         std::fs::create_dir_all(&self.directory)?;
         if !self.directory.join(FORMAT_MARKER).exists() {
             self.initialize_files()?;
@@ -171,7 +171,7 @@ impl PagedTimerWheel {
         self.state.lock().slots.get(index).copied()
     }
 
-    pub fn put_slot(&self, index: usize, slot: Slot) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn put_slot(&self, index: usize, slot: Slot) -> Result<(), PagedTimerWheelError> {
         let page_id = index / self.slots_per_page;
         let mut state = self.state.lock();
         let current = state
@@ -210,7 +210,7 @@ impl PagedTimerWheel {
         self.metrics.set_dirty_pages(state.dirty_pages.len() as u64);
     }
 
-    pub fn flush_dirty(&self) -> Result<u64, PagedTimerWheelError> {
+    pub(crate) fn flush_dirty(&self) -> Result<u64, PagedTimerWheelError> {
         let (generation, pages) = {
             let state = self.state.lock();
             if state.dirty_pages.is_empty() {
@@ -262,7 +262,7 @@ impl PagedTimerWheel {
         Ok(generation)
     }
 
-    pub fn commit_generation(&self, generation: u64) -> Result<(), PagedTimerWheelError> {
+    pub(crate) fn commit_generation(&self, generation: u64) -> Result<(), PagedTimerWheelError> {
         let mut state = self.state.lock();
         if generation > state.max_generation {
             return Err(PagedTimerWheelError::GenerationNotWritten(generation));
@@ -517,7 +517,7 @@ struct DecodedPage {
 }
 
 #[derive(Debug, Error)]
-pub enum PagedTimerWheelError {
+pub(crate) enum PagedTimerWheelError {
     #[error("timer wheel I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("timer wheel page size {0} is invalid")]

@@ -51,7 +51,7 @@ fn publication_failure_returns_the_exact_receipt_and_owner_for_recovery() {
         .expect_err("zero mapping generation is rejected before publication");
     let (receipt, returned_owner, error) = failure.into_parts();
     assert!(Arc::ptr_eq(&returned_owner, &owner));
-    assert_eq!(error, RegistryError::ZeroMappingGeneration);
+    assert_eq!(error, RegistryViolation::ZeroMappingGeneration);
     assert!(queue.snapshot().is_empty());
     assert!(!registry.contains_incarnation(incarnation(1)));
 
@@ -85,7 +85,7 @@ fn a_reserved_canonical_path_rejects_a_second_durable_incarnation_without_partia
         .expect_err("canonical path is already reserved");
     let (_receipt, returned_owner, error) = failure.into_parts();
     assert!(Arc::ptr_eq(&returned_owner, &second_owner));
-    assert!(matches!(error, RegistryError::CanonicalPathReserved { .. }));
+    assert!(matches!(error, RegistryViolation::CanonicalPathReserved { .. }));
     assert_eq!(queue.snapshot().len(), 1);
     assert!(!registry.contains_incarnation(incarnation(2)));
 }

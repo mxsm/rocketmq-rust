@@ -17,7 +17,7 @@ use rocketmq_store_local::index::codec::index_entry_position;
 use rocketmq_store_local::index::codec::index_file_total_size;
 use rocketmq_store_local::index::codec::IndexEntry;
 use rocketmq_store_local::index::codec::IndexHeaderRecord;
-use rocketmq_store_local::index::codec::IndexLayoutError;
+use rocketmq_store_local::index::codec::IndexLayoutViolation;
 use rocketmq_store_local::index::codec::IndexSlot;
 use rocketmq_store_local::index::codec::INDEX_ENTRY_SIZE;
 use rocketmq_store_local::index::codec::INDEX_HASH_SLOT_SIZE;
@@ -88,19 +88,19 @@ fn checked_layout_matches_the_persisted_sections() {
 
 #[test]
 fn checked_layout_rejects_zero_dimensions_and_overflow() {
-    assert_eq!(index_file_total_size(0, 1), Err(IndexLayoutError::ZeroHashSlots));
-    assert_eq!(index_file_total_size(1, 0), Err(IndexLayoutError::ZeroIndexEntries));
+    assert_eq!(index_file_total_size(0, 1), Err(IndexLayoutViolation::ZeroHashSlots));
+    assert_eq!(index_file_total_size(1, 0), Err(IndexLayoutViolation::ZeroIndexEntries));
     assert_eq!(
         index_file_total_size(usize::MAX, 1),
-        Err(IndexLayoutError::HashSlotSectionOverflow)
+        Err(IndexLayoutViolation::HashSlotSectionOverflow)
     );
     assert_eq!(
         index_file_total_size(1, usize::MAX),
-        Err(IndexLayoutError::IndexEntrySectionOverflow)
+        Err(IndexLayoutViolation::IndexEntrySectionOverflow)
     );
     assert_eq!(
         index_file_total_size(1, usize::MAX / INDEX_ENTRY_SIZE),
-        Err(IndexLayoutError::TotalSizeOverflow)
+        Err(IndexLayoutViolation::TotalSizeOverflow)
     );
     assert_eq!(hash_slot_position(usize::MAX), None);
     assert_eq!(index_entry_position(usize::MAX, 1), None);

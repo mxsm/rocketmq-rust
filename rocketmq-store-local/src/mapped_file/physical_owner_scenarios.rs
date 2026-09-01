@@ -21,18 +21,18 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use std::sync::OnceLock;
 
+use crate::mapped_file::kernel::ReferenceResource;
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::MappedFile;
+use crate::mapped_file::MappedFileAdmissionState;
+use crate::mapped_file::MappedFileError;
+use crate::mapped_file::MappedMemory;
+use crate::mapped_file::MappedWriteLease;
+use crate::mapped_file::NativeMappedMemory;
+use crate::mapped_file::ReadOnlyMappedMemory;
 use cheetah_string::CheetahString;
 use memmap2::Mmap;
 use memmap2::MmapMut;
-use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
-use rocketmq_store_local::mapped_file::DefaultMappedFile;
-use rocketmq_store_local::mapped_file::MappedFile;
-use rocketmq_store_local::mapped_file::MappedFileAdmissionState;
-use rocketmq_store_local::mapped_file::MappedFileError;
-use rocketmq_store_local::mapped_file::MappedMemory;
-use rocketmq_store_local::mapped_file::MappedWriteLease;
-use rocketmq_store_local::mapped_file::NativeMappedMemory;
-use rocketmq_store_local::mapped_file::ReadOnlyMappedMemory;
 
 fn mapped_path(directory: &tempfile::TempDir) -> CheetahString {
     CheetahString::from(
@@ -182,9 +182,13 @@ fn seal_waits_for_admitted_writer_then_rejects_new_writes() {
         assert!(sealed_rx.recv().expect("seal worker completes").expect("seal succeeds"));
     });
 
+    let write_error = match mapped_file.reserve_write(1) {
+        Ok(_) => panic!("sealed or closing lifecycle rejects writers"),
+        Err(error) => error,
+    };
     assert!(matches!(
-        mapped_file.reserve_write(1),
-        Err(MappedFileError::Unavailable {
+        std::error::Error::source(&write_error).and_then(|source| source.downcast_ref::<MappedFileError>()),
+        Some(MappedFileError::Unavailable {
             state: MappedFileAdmissionState::SealedReadable,
             ..
         })

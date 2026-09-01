@@ -44,7 +44,7 @@ use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::io::FileLedgerIo;
 use crate::mapped_file::retirement::io::LedgerIoError;
 use crate::mapped_file::retirement::sidecar::LifecycleSnapshot;
-use crate::mapped_file::retirement::sidecar::SidecarError;
+use crate::mapped_file::retirement::sidecar::SidecarViolation;
 use crate::mapped_file::retirement::sidecar::StoreMeta;
 
 #[cfg(target_os = "linux")]
@@ -57,22 +57,15 @@ mod native;
 #[path = "platform/unsupported.rs"]
 mod native;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::mapped_file::retirement::bootstrap) enum InitialBootstrapFoundationErrorKind {
-    UnsupportedPlatform,
-    InvalidArtifact,
-    Inventory,
-    Io,
-}
-
+/// Bootstrap-foundation failure with its former kind folded in.
 #[derive(Debug, Error)]
-enum InitialBootstrapFoundationSource {
+pub(in crate::mapped_file::retirement::bootstrap) enum InitialBootstrapFoundationError {
     #[error("managed lifecycle bootstrap is unsupported on this platform: {0}")]
     UnsupportedPlatform(&'static str),
     #[error("bootstrap artifact is not the exact resumable prefix: {0}")]
     InvalidArtifact(&'static str),
     #[error("bootstrap sidecar validation failed")]
-    Sidecar(#[source] SidecarError),
+    Sidecar(#[source] SidecarViolation),
     #[error("bootstrap ledger handle validation failed")]
     Ledger(#[source] LedgerIoError),
     #[error("bootstrap frame/acknowledgement/seal transition failed")]
@@ -83,66 +76,33 @@ enum InitialBootstrapFoundationSource {
     Io(#[source] io::Error),
 }
 
-#[derive(Debug, Error)]
-#[error("initial bootstrap foundation failed ({kind:?}): {source}")]
-pub(in crate::mapped_file::retirement::bootstrap) struct InitialBootstrapFoundationError {
-    kind: InitialBootstrapFoundationErrorKind,
-    #[source]
-    source: InitialBootstrapFoundationSource,
-}
-
 impl InitialBootstrapFoundationError {
-    pub(in crate::mapped_file::retirement::bootstrap) const fn kind(&self) -> InitialBootstrapFoundationErrorKind {
-        self.kind
-    }
-
     fn unsupported(reason: &'static str) -> Self {
-        Self {
-            kind: InitialBootstrapFoundationErrorKind::UnsupportedPlatform,
-            source: InitialBootstrapFoundationSource::UnsupportedPlatform(reason),
-        }
+        Self::UnsupportedPlatform(reason)
     }
 
     fn invalid(detail: &'static str) -> Self {
-        Self {
-            kind: InitialBootstrapFoundationErrorKind::InvalidArtifact,
-            source: InitialBootstrapFoundationSource::InvalidArtifact(detail),
-        }
+        Self::InvalidArtifact(detail)
     }
 
-    fn sidecar(source: SidecarError) -> Self {
-        Self {
-            kind: InitialBootstrapFoundationErrorKind::InvalidArtifact,
-            source: InitialBootstrapFoundationSource::Sidecar(source),
-        }
+    fn sidecar(source: SidecarViolation) -> Self {
+        Self::Sidecar(source)
     }
 
     fn ledger(source: LedgerIoError) -> Self {
-        Self {
-            kind: InitialBootstrapFoundationErrorKind::InvalidArtifact,
-            source: InitialBootstrapFoundationSource::Ledger(source),
-        }
+        Self::Ledger(source)
     }
 
     fn durable_unit(source: DurableUnitError) -> Self {
-        Self {
-            kind: InitialBootstrapFoundationErrorKind::InvalidArtifact,
-            source: InitialBootstrapFoundationSource::DurableUnit(source),
-        }
+        Self::DurableUnit(source)
     }
 
     fn inventory(source: BootstrapInventoryError) -> Self {
-        Self {
-            kind: InitialBootstrapFoundationErrorKind::Inventory,
-            source: InitialBootstrapFoundationSource::Inventory(source),
-        }
+        Self::Inventory(source)
     }
 
     fn io(source: io::Error) -> Self {
-        Self {
-            kind: InitialBootstrapFoundationErrorKind::Io,
-            source: InitialBootstrapFoundationSource::Io(source),
-        }
+        Self::Io(source)
     }
 }
 

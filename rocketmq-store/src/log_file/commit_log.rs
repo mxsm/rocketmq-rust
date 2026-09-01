@@ -118,7 +118,6 @@ use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
-use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
 use crate::utils::ffi::MemoryAdvice;
 
@@ -126,7 +125,7 @@ use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObserva
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
 use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
-use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicyError;
+use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicyViolation;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendStatus;
 use rocketmq_store_local::commit_log::load_orchestration::drive_commit_log_load;
@@ -144,11 +143,11 @@ use rocketmq_store_local::commit_log::record::read_declared_frame;
 use rocketmq_store_local::commit_log::record_parser::decode_commit_log_record;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
-use rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind;
 use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
+use rocketmq_store_local::commit_log::record_parser::CommitLogRecordViolation;
 use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;
 use rocketmq_store_local::commit_log::recovery::plan_normal_recovery_file_window;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryConfirmCandidateError;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryConfirmCandidateViolation;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
@@ -169,7 +168,7 @@ pub use rocketmq_store_local::commit_log::record::BLANK_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::record::MESSAGE_MAGIC_CODE;
 pub use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockRuntimeInfo;
 
-fn micro_batch_policy_store_error(error: MicroBatchPolicyError) -> StoreError {
+fn micro_batch_policy_store_error(error: MicroBatchPolicyViolation) -> StoreError {
     StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::Start)
         .in_component(StoreComponent::Configuration)
         .with_detail("invalid CommitLog micro-batch policy")
@@ -189,7 +188,7 @@ enum NormalRecoveryAdapterError {
 
 #[derive(Debug)]
 enum AbnormalRecoveryAdapterError {
-    ConfirmCandidate(AbnormalRecoveryConfirmCandidateError),
+    ConfirmCandidate(AbnormalRecoveryConfirmCandidateViolation),
     ConfirmLimitConversion(std::num::TryFromIntError),
     FramePositionOverflow { position: usize, size: usize },
     RelativeOffsetConversion(std::num::TryFromIntError),
@@ -2480,7 +2479,7 @@ impl CommitLog {
         offset: i64,
         max_bytes: usize,
         allow_cross_file: bool,
-    ) -> TransferResult<Vec<SegmentLease>> {
+    ) -> Result<Vec<SegmentLease>, StoreError> {
         self.read_handle().select_segments(offset, max_bytes, allow_cross_file)
     }
 
@@ -2640,24 +2639,25 @@ pub fn check_message_and_return_size(
         }
         Ok(CommitLogRecordOutcome::Message(record)) => record,
         Err(error) => {
-            match error.kind {
-                CommitLogRecordErrorKind::IllegalMagic { magic_code } => {
+            match error {
+                CommitLogRecordViolation::IllegalMagic { magic_code, .. } => {
                     warn!("found a illegal magic code 0x{}", format!("{:X}", magic_code));
                 }
-                CommitLogRecordErrorKind::BodyCrcMismatch { computed, stored } => {
+                CommitLogRecordViolation::BodyCrcMismatch { computed, stored, .. } => {
                     warn!("CRC check failed. bodyCRC={}, currentCRC={}", computed, stored);
                 }
-                CommitLogRecordErrorKind::Truncated {
+                CommitLogRecordViolation::Truncated {
                     field,
                     needed,
                     remaining,
+                    ..
                 } => {
                     warn!(
                         "truncated commitlog record at {:?}: needed={}, remaining={}",
                         field, needed, remaining
                     );
                 }
-                CommitLogRecordErrorKind::NegativeLength { field, value } => {
+                CommitLogRecordViolation::NegativeLength { field, value, .. } => {
                     warn!("negative commitlog record length at {:?}: value={}", field, value);
                 }
             }
@@ -2920,13 +2920,13 @@ mod tests {
 
     #[test]
     fn micro_batch_policy_promotion_preserves_typed_source() {
-        let error = micro_batch_policy_store_error(MicroBatchPolicyError::ZeroMaxItems);
+        let error = micro_batch_policy_store_error(MicroBatchPolicyViolation::ZeroMaxItems);
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
         assert_eq!(error.operation(), StoreOperation::Start);
         assert_eq!(error.component(), StoreComponent::Configuration);
         assert!(std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<MicroBatchPolicyError>())
+            .and_then(|source| source.downcast_ref::<MicroBatchPolicyViolation>())
             .is_some());
         assert!(!error.to_string().contains("max-items"));
     }

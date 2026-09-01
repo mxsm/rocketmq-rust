@@ -19,13 +19,13 @@ pub(super) fn parse_generation<'a>(
     meta: &StoreMeta,
     limits: ReplayLimits,
     evidence: &mut Vec<SealEvidence>,
-) -> Result<ParsedGeneration<'a>, ReplayError> {
-    let snapshot = decode_snapshot(bytes.snapshot).map_err(ReplayError::Snapshot)?;
+) -> Result<ParsedGeneration<'a>, ReplayViolation> {
+    let snapshot = decode_snapshot(bytes.snapshot).map_err(ReplayViolation::Snapshot)?;
     if bytes.generation != snapshot.generation
         || snapshot.log_generation != bytes.generation
         || snapshot.store_uuid != meta.store_uuid
     {
-        return Err(ReplayError::GenerationBindingMismatch);
+        return Err(ReplayViolation::GenerationBindingMismatch);
     }
     let evidence_start = evidence.len();
     let mut offset = 0_usize;
@@ -35,16 +35,16 @@ pub(super) fn parse_generation<'a>(
         snapshot
             .base_sequence
             .checked_add(1)
-            .ok_or(ReplayError::GenerationBindingMismatch)?
+            .ok_or(ReplayViolation::GenerationBindingMismatch)?
     };
     let mut tail = None;
 
     while offset < bytes.log.len() {
-        let suffix = bytes.log.get(offset..).ok_or(ReplayError::BrokenSealChain {
+        let suffix = bytes.log.get(offset..).ok_or(ReplayViolation::BrokenSealChain {
             generation: bytes.generation,
         })?;
         let outcome = decode_next_frame(suffix, expected_sequence, bytes.generation).map_err(|source| {
-            ReplayError::InvalidLog {
+            ReplayViolation::InvalidLog {
                 generation: bytes.generation,
                 offset: offset as u64,
                 source,
@@ -64,17 +64,22 @@ pub(super) fn parse_generation<'a>(
             DecodeOutcome::Frame(frame) => frame,
         };
         let frame_length = frame.encoded_len();
-        let frame_end = offset.checked_add(frame_length).ok_or(ReplayError::BrokenSealChain {
-            generation: bytes.generation,
-        })?;
-        let encoded_frame = bytes.log.get(offset..frame_end).ok_or(ReplayError::BrokenSealChain {
-            generation: bytes.generation,
-        })?;
-        let after_frame = bytes.log.get(frame_end..).ok_or(ReplayError::BrokenSealChain {
+        let frame_end = offset
+            .checked_add(frame_length)
+            .ok_or(ReplayViolation::BrokenSealChain {
+                generation: bytes.generation,
+            })?;
+        let encoded_frame = bytes
+            .log
+            .get(offset..frame_end)
+            .ok_or(ReplayViolation::BrokenSealChain {
+                generation: bytes.generation,
+            })?;
+        let after_frame = bytes.log.get(frame_end..).ok_or(ReplayViolation::BrokenSealChain {
             generation: bytes.generation,
         })?;
         if after_frame.len() < super::super::codec::COMMIT_SEAL_LENGTH {
-            let record = frame.decode_record().map_err(|source| ReplayError::InvalidLog {
+            let record = frame.decode_record().map_err(|source| ReplayViolation::InvalidLog {
                 generation: bytes.generation,
                 offset: offset as u64,
                 source,
@@ -90,38 +95,38 @@ pub(super) fn parse_generation<'a>(
             break;
         }
         let encoded_seal = &after_frame[..super::super::codec::COMMIT_SEAL_LENGTH];
-        let seal = decode_commit_seal(encoded_seal).map_err(|source| ReplayError::InvalidLog {
+        let seal = decode_commit_seal(encoded_seal).map_err(|source| ReplayViolation::InvalidLog {
             generation: bytes.generation,
             offset: frame_end as u64,
             source,
         })?;
         if evidence.len() >= limits.max_sealed_units {
-            return Err(ReplayError::LimitExceeded {
+            return Err(ReplayViolation::LimitExceeded {
                 limit: "sealed_units",
                 actual: evidence.len().saturating_add(1),
                 maximum: limits.max_sealed_units,
             });
         }
-        let record = frame.decode_record().map_err(|source| ReplayError::InvalidLog {
+        let record = frame.decode_record().map_err(|source| ReplayViolation::InvalidLog {
             generation: bytes.generation,
             offset: offset as u64,
             source,
         })?;
         let slot = slot_from_seal(&seal, meta)?;
-        let encoded_slot = encode_acknowledgement_slot(&slot).map_err(|source| ReplayError::InvalidLog {
+        let encoded_slot = encode_acknowledgement_slot(&slot).map_err(|source| ReplayViolation::InvalidLog {
             generation: bytes.generation,
             offset: frame_end as u64,
             source,
         })?;
         validate_acknowledged_frame(&frame, encoded_frame, offset as u64, &slot, &seal, &encoded_slot).map_err(
-            |source| ReplayError::InvalidLog {
+            |source| ReplayViolation::InvalidLog {
                 generation: bytes.generation,
                 offset: frame_end as u64,
                 source,
             },
         )?;
         validate_seal_progression(bytes.generation, record.as_ref(), evidence, evidence_start, &slot)?;
-        let sealed_log_length = slot.sealed_log_length().map_err(|source| ReplayError::InvalidLog {
+        let sealed_log_length = slot.sealed_log_length().map_err(|source| ReplayViolation::InvalidLog {
             generation: bytes.generation,
             offset: frame_end as u64,
             source,
@@ -138,12 +143,14 @@ pub(super) fn parse_generation<'a>(
         offset =
             frame_end
                 .checked_add(super::super::codec::COMMIT_SEAL_LENGTH)
-                .ok_or(ReplayError::BrokenSealChain {
+                .ok_or(ReplayViolation::BrokenSealChain {
                     generation: bytes.generation,
                 })?;
-        expected_sequence = expected_sequence.checked_add(1).ok_or(ReplayError::BrokenSealChain {
-            generation: bytes.generation,
-        })?;
+        expected_sequence = expected_sequence
+            .checked_add(1)
+            .ok_or(ReplayViolation::BrokenSealChain {
+                generation: bytes.generation,
+            })?;
     }
     Ok(ParsedGeneration {
         bytes,
@@ -160,8 +167,10 @@ fn complete_frame_tail(
     record: Option<LedgerRecord>,
     following: &[u8],
     log: &[u8],
-) -> Result<LogTail, ReplayError> {
-    let suffix = log.get(frame_start..).ok_or(ReplayError::AuthoritativeFrameMissing)?;
+) -> Result<LogTail, ReplayViolation> {
+    let suffix = log
+        .get(frame_start..)
+        .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
     validate_unacknowledged_suffix_length(suffix.len())?;
     Ok(LogTail {
         offset: frame_start as u64,
@@ -176,16 +185,16 @@ fn complete_frame_tail(
     })
 }
 
-fn record_sequence(encoded_frame: &[u8]) -> Result<u64, ReplayError> {
+fn record_sequence(encoded_frame: &[u8]) -> Result<u64, ReplayViolation> {
     let bytes: [u8; 8] = encoded_frame
         .get(20..28)
-        .ok_or(ReplayError::AuthoritativeFrameMissing)?
+        .ok_or(ReplayViolation::AuthoritativeFrameMissing)?
         .try_into()
-        .map_err(|_| ReplayError::AuthoritativeFrameMissing)?;
+        .map_err(|_| ReplayViolation::AuthoritativeFrameMissing)?;
     Ok(u64::from_le_bytes(bytes))
 }
 
-fn slot_from_seal(seal: &CommitSeal, meta: &StoreMeta) -> Result<AcknowledgementSlot, ReplayError> {
+fn slot_from_seal(seal: &CommitSeal, meta: &StoreMeta) -> Result<AcknowledgementSlot, ReplayViolation> {
     let slot = AcknowledgementSlot {
         slot_index: seal.acknowledgement_slot_index,
         activated: seal.activated,
@@ -198,19 +207,19 @@ fn slot_from_seal(seal: &CommitSeal, meta: &StoreMeta) -> Result<Acknowledgement
         frame_end_offset: seal.frame_end_offset,
         frame_crc32: seal.frame_crc32,
     };
-    let encoded = encode_acknowledgement_slot(&slot).map_err(|source| ReplayError::InvalidLog {
+    let encoded = encode_acknowledgement_slot(&slot).map_err(|source| ReplayViolation::InvalidLog {
         generation: seal.log_generation,
         offset: seal.frame_end_offset,
         source,
     })?;
     let expected =
-        CommitSeal::from_acknowledgement_slot(&slot, &encoded).map_err(|source| ReplayError::InvalidLog {
+        CommitSeal::from_acknowledgement_slot(&slot, &encoded).map_err(|source| ReplayViolation::InvalidLog {
             generation: seal.log_generation,
             offset: seal.frame_end_offset,
             source,
         })?;
     if &expected != seal {
-        return Err(ReplayError::BrokenSealChain {
+        return Err(ReplayViolation::BrokenSealChain {
             generation: seal.log_generation,
         });
     }
@@ -223,18 +232,18 @@ fn validate_seal_progression(
     evidence: &[SealEvidence],
     generation_start: usize,
     slot: &AcknowledgementSlot,
-) -> Result<(), ReplayError> {
+) -> Result<(), ReplayViolation> {
     if let Some(previous) = evidence.get(generation_start..).and_then(|items| items.last()) {
         if previous.slot.acknowledgement_epoch.checked_add(1) != Some(slot.acknowledgement_epoch)
             || previous.slot.frame_sequence.checked_add(1) != Some(slot.frame_sequence)
         {
-            return Err(ReplayError::BrokenSealChain { generation });
+            return Err(ReplayViolation::BrokenSealChain { generation });
         }
         return Ok(());
     }
     if generation == 0 {
         if slot.acknowledgement_epoch != 1 || slot.frame_sequence != 1 {
-            return Err(ReplayError::BrokenSealChain { generation });
+            return Err(ReplayViolation::BrokenSealChain { generation });
         }
         return Ok(());
     }
@@ -243,10 +252,10 @@ fn validate_seal_progression(
         ..
     }) = first_record
     else {
-        return Err(ReplayError::BrokenSealChain { generation });
+        return Err(ReplayViolation::BrokenSealChain { generation });
     };
     if predecessor_acknowledgement_epoch.checked_add(1) != Some(slot.acknowledgement_epoch) {
-        return Err(ReplayError::BrokenSealChain { generation });
+        return Err(ReplayViolation::BrokenSealChain { generation });
     }
     Ok(())
 }

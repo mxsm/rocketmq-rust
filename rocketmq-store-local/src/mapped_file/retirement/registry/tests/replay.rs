@@ -30,7 +30,7 @@ fn writer_proof_rejected_by_replay_restore_recovery_fences_the_current_store() {
         .expect("writer evidence is valid");
     assert!(matches!(
         registry.restore_replayed_intent(writer_evidence, &owner, &queue),
-        Err(RegistryError::ReplayEvidenceRequired)
+        Err(RegistryViolation::ReplayEvidenceRequired)
     ));
     assert!(registry.needs_recovery());
 }
@@ -61,7 +61,7 @@ fn replay_proof_restores_a_durable_intent_and_duplicate_proof_recovery_fences() 
         .expect("duplicate proof is independently well formed");
     assert!(matches!(
         registry.restore_replayed_intent(duplicate_evidence, &owner, &queue),
-        Err(RegistryError::DuplicateTicket { ticket_id }) if ticket_id.get() == 7
+        Err(RegistryViolation::DuplicateTicket { ticket_id }) if ticket_id.get() == 7
     ));
     assert!(registry.needs_recovery());
 }
@@ -85,7 +85,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &owner,
             &queue,
-            RegistryError::IntentReservationBusy,
+            RegistryViolation::IntentReservationBusy,
         );
     }
     {
@@ -98,7 +98,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &owner,
             &queue,
-            RegistryError::ReplayedTicketAboveHighWater {
+            RegistryViolation::ReplayedTicketAboveHighWater {
                 ticket_id: crate::mapped_file::retirement::identity::TicketId::new(2).expect("test ticket is nonzero"),
                 high_water: 1,
             },
@@ -124,7 +124,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &owner,
             &queue,
-            RegistryError::UnknownIncarnation {
+            RegistryViolation::UnknownIncarnation {
                 incarnation: incarnation(2),
             },
         );
@@ -139,7 +139,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &owner,
             &queue,
-            RegistryError::PhysicalKeyMismatch {
+            RegistryViolation::PhysicalKeyMismatch {
                 incarnation: incarnation(1),
             },
         );
@@ -162,7 +162,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &owner,
             &queue,
-            RegistryError::SegmentOffsetMismatch {
+            RegistryViolation::SegmentOffsetMismatch {
                 incarnation: incarnation(1),
             },
         );
@@ -186,7 +186,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &owner,
             &queue,
-            RegistryError::CanonicalPathMismatch {
+            RegistryViolation::CanonicalPathMismatch {
                 incarnation: incarnation(1),
             },
         );
@@ -201,7 +201,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &owner,
             &queue,
-            RegistryError::ExpectedLengthMismatch {
+            RegistryViolation::ExpectedLengthMismatch {
                 incarnation: incarnation(1),
             },
         );
@@ -217,7 +217,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &other_owner,
             &queue,
-            RegistryError::OwnerIdentityMismatch {
+            RegistryViolation::OwnerIdentityMismatch {
                 incarnation: incarnation(1),
             },
         );
@@ -233,7 +233,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &owner,
             &other_queue,
-            RegistryError::QueueIdentityMismatch {
+            RegistryViolation::QueueIdentityMismatch {
                 incarnation: incarnation(1),
             },
         );
@@ -255,7 +255,7 @@ fn every_current_store_replay_rejection_recovery_fences() {
             ),
             &owner,
             &queue,
-            RegistryError::IncarnationNotActive {
+            RegistryViolation::IncarnationNotActive {
                 incarnation: incarnation(1),
             },
         );
@@ -285,7 +285,7 @@ fn foreign_store_replay_evidence_is_rejected_without_fencing() {
         registry
             .restore_replayed_intent(replay_evidence, &owner, &queue)
             .expect_err("foreign evidence is rejected"),
-        RegistryError::StoreUuidMismatch
+        RegistryViolation::StoreUuidMismatch
     );
     assert!(!registry.needs_recovery());
     let writer_evidence = DurableIntentEvidence::writer_verified_for_test(foreign_record, 3, 71, 72, 1_100)
@@ -294,7 +294,7 @@ fn foreign_store_replay_evidence_is_rejected_without_fencing() {
         registry
             .restore_replayed_intent(writer_evidence, &owner, &queue)
             .expect_err("foreign writer evidence is rejected before source validation"),
-        RegistryError::StoreUuidMismatch
+        RegistryViolation::StoreUuidMismatch
     );
     assert!(!registry.needs_recovery());
     registry
@@ -322,7 +322,7 @@ fn ticket_high_water_overflow_is_typed_and_retains_the_active_identity() {
             &owner,
             &queue,
         ),
-        Err(RegistryError::TicketHighWaterExhausted)
+        Err(RegistryViolation::TicketHighWaterExhausted)
     ));
     assert_eq!(registry.ticket_high_water(), u64::MAX);
     assert!(registry.contains_incarnation(incarnation(1)));

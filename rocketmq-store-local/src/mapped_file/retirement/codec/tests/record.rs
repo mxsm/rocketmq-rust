@@ -42,11 +42,11 @@ fn log_opened_uses_frozen_offsets_and_predecessor_acknowledgement_epoch() {
 fn log_opened_rejects_zero_or_exhausted_predecessor_acknowledgement_epoch() {
     assert_eq!(
         encode_ledger_frame(&log_opened(OpenReason::Compaction, 0, 0, 0), 21, 3),
-        Err(CodecError::ZeroAcknowledgementEpoch)
+        Err(CodecViolation::ZeroAcknowledgementEpoch)
     );
     assert_eq!(
         encode_ledger_frame(&log_opened(OpenReason::Compaction, 0, 0, u64::MAX), 21, 3,),
-        Err(CodecError::AcknowledgementEpochOverflow)
+        Err(CodecViolation::AcknowledgementEpochOverflow)
     );
 }
 
@@ -66,7 +66,7 @@ fn bootstrap_and_marker_envelopes_are_exact_and_marker_slots_alternate() {
     assert!(encode_ledger_frame(&bootstrap, 2, 0).is_ok());
     assert!(matches!(
         encode_ledger_frame(&bootstrap, 3, 0),
-        Err(CodecError::InvalidEnvelopeRelationship { .. })
+        Err(CodecViolation::InvalidEnvelopeRelationship { .. })
     ));
 
     let wrong_marker_slot = LedgerRecord::MarkerCommitted {
@@ -80,7 +80,7 @@ fn bootstrap_and_marker_envelopes_are_exact_and_marker_slots_alternate() {
     };
     assert_eq!(
         encode_ledger_frame(&wrong_marker_slot, 21, 1),
-        Err(CodecError::MarkerSlotParityMismatch {
+        Err(CodecViolation::MarkerSlotParityMismatch {
             marker_epoch: 2,
             expected_slot_index: 1,
             actual_slot_index: 0,
@@ -199,7 +199,7 @@ fn mapped_file_records_reject_zero_expected_length_and_mapping_generation() {
         *expected_length = 0;
         assert_eq!(
             encode_ledger_frame(&record, sequence, generation),
-            Err(CodecError::ZeroExpectedFileLength)
+            Err(CodecViolation::ZeroExpectedFileLength)
         );
     }
 
@@ -210,7 +210,7 @@ fn mapped_file_records_reject_zero_expected_length_and_mapping_generation() {
     *mapping_generation = 0;
     assert_eq!(
         encode_ledger_frame(&intent, 100, 3),
-        Err(CodecError::ZeroMappingGeneration)
+        Err(CodecViolation::ZeroMappingGeneration)
     );
 }
 
@@ -250,13 +250,15 @@ fn round_trip(record: LedgerRecord, sequence: u64, generation: u64) -> LedgerRec
     decode_typed(&encoded, sequence, generation).expect("record decodes")
 }
 
-fn decode_typed(frame: &[u8], sequence: u64, generation: u64) -> Result<LedgerRecord, CodecError> {
+fn decode_typed(frame: &[u8], sequence: u64, generation: u64) -> Result<LedgerRecord, CodecViolation> {
     let DecodeOutcome::Frame(frame) = decode_next_frame(frame, sequence, generation)? else {
-        return Err(CodecError::InvalidEnvelopeRelationship {
+        return Err(CodecViolation::InvalidEnvelopeRelationship {
             detail: "test expected a complete frame",
         });
     };
-    frame.decode_record()?.ok_or(CodecError::InvalidEnvelopeRelationship {
-        detail: "test expected a known record",
-    })
+    frame
+        .decode_record()?
+        .ok_or(CodecViolation::InvalidEnvelopeRelationship {
+            detail: "test expected a known record",
+        })
 }

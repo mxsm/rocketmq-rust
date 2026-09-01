@@ -17,7 +17,7 @@ use super::super::codec::encode_acknowledgement_slot;
 use super::super::codec::encode_commit_seal;
 use super::super::codec::encode_ledger_frame;
 use super::super::codec::AcknowledgementSlot;
-use super::super::codec::CodecError;
+use super::super::codec::CodecViolation;
 use super::super::codec::CommitSeal;
 use super::super::codec::LedgerRecord;
 use super::super::codec::COMMIT_SEAL_LENGTH;
@@ -26,7 +26,7 @@ use super::super::sidecar::encode_enabled_marker_file;
 use super::super::sidecar::encode_enabled_marker_slot;
 use super::super::sidecar::EnabledMarkerFile;
 use super::super::sidecar::EnabledMarkerSlot;
-use super::super::sidecar::SidecarError;
+use super::super::sidecar::SidecarViolation;
 use super::super::sidecar::StoreMeta;
 use super::proof::BootstrapFoundationEvidence;
 use super::proof::BootstrapInventoryEvidence;
@@ -37,7 +37,7 @@ use super::types::BootstrapCheckpoint;
 use super::types::BootstrapCrashBoundary;
 use super::types::BootstrapDecision;
 use super::types::BootstrapFlow;
-use super::types::BootstrapPlanError;
+use super::types::BootstrapPlanViolation;
 use super::types::BootstrapRecord;
 use super::types::BootstrapRecoveryReason;
 use super::types::DurableUnitProgress;
@@ -75,7 +75,7 @@ pub(super) struct InitialBootstrapPlan {
 }
 
 impl InitialBootstrapPlan {
-    pub(super) fn new(foundation: BootstrapFoundationEvidence) -> Result<Self, BootstrapPlanError> {
+    pub(super) fn new(foundation: BootstrapFoundationEvidence) -> Result<Self, BootstrapPlanViolation> {
         let meta = validate_canonical_store_meta(&foundation.store_meta)?;
         let record = LedgerRecord::StoreInitialized {
             store_uuid: meta.store_uuid,
@@ -101,9 +101,9 @@ impl InitialBootstrapPlan {
         self,
         store_initialized: DurableUnitProgress,
         inventory: BootstrapInventoryEvidence,
-    ) -> Result<InitialBootstrapInventoryPlan, BootstrapPlanError> {
+    ) -> Result<InitialBootstrapInventoryPlan, BootstrapPlanViolation> {
         if store_initialized != DurableUnitProgress::Committed {
-            return Err(BootstrapPlanError::StoreInitializedNotDurable);
+            return Err(BootstrapPlanViolation::StoreInitializedNotDurable);
         }
         let meta = validate_canonical_store_meta(&self.foundation.store_meta)?;
         validate_initial_inventory(&inventory, meta)?;
@@ -225,7 +225,7 @@ pub(super) struct GenerationSwitchPlan {
 }
 
 impl GenerationSwitchPlan {
-    pub(super) fn new(foundation: GenerationSwitchFoundationEvidence) -> Result<Self, BootstrapPlanError> {
+    pub(super) fn new(foundation: GenerationSwitchFoundationEvidence) -> Result<Self, BootstrapPlanViolation> {
         validate_generation_foundation(&foundation)?;
         let common = foundation.common();
         let meta = &common.store_meta.meta;
@@ -234,16 +234,14 @@ impl GenerationSwitchPlan {
             common
                 .predecessor_terminal_sequence
                 .checked_add(1)
-                .ok_or(BootstrapPlanError::ArithmeticOverflow {
+                .ok_or(BootstrapPlanViolation::ArithmeticOverflow {
                     field: "LogOpened sequence",
                 })?;
-        let anchor_acknowledgement_epoch =
-            common
-                .predecessor_acknowledgement_epoch
-                .checked_add(1)
-                .ok_or(BootstrapPlanError::ArithmeticOverflow {
-                    field: "LogOpened acknowledgement epoch",
-                })?;
+        let anchor_acknowledgement_epoch = common.predecessor_acknowledgement_epoch.checked_add(1).ok_or(
+            BootstrapPlanViolation::ArithmeticOverflow {
+                field: "LogOpened acknowledgement epoch",
+            },
+        )?;
         let log_opened = plan_existing_frame_unit(
             meta,
             common.log_opened_record.clone(),
@@ -266,13 +264,13 @@ impl GenerationSwitchPlan {
         )?;
         let witness_sequence = anchor_sequence
             .checked_add(1)
-            .ok_or(BootstrapPlanError::ArithmeticOverflow {
+            .ok_or(BootstrapPlanViolation::ArithmeticOverflow {
                 field: "MarkerCommitted sequence",
             })?;
         let witness_acknowledgement_epoch =
             anchor_acknowledgement_epoch
                 .checked_add(1)
-                .ok_or(BootstrapPlanError::ArithmeticOverflow {
+                .ok_or(BootstrapPlanViolation::ArithmeticOverflow {
                     field: "MarkerCommitted acknowledgement epoch",
                 })?;
         let marker_committed = plan_unit(
@@ -370,8 +368,8 @@ pub(super) const fn decision_after_failure(
     needs_recovery(flow, checkpoint, BootstrapRecoveryReason::OperationFailed(boundary))
 }
 
-fn snapshot_length(snapshot: &PlannedSnapshot) -> Result<u64, BootstrapPlanError> {
-    u64::try_from(snapshot.encoded.len()).map_err(|_| BootstrapPlanError::ArithmeticOverflow {
+fn snapshot_length(snapshot: &PlannedSnapshot) -> Result<u64, BootstrapPlanViolation> {
+    u64::try_from(snapshot.encoded.len()).map_err(|_| BootstrapPlanViolation::ArithmeticOverflow {
         field: "snapshot file length",
     })
 }
@@ -389,7 +387,7 @@ fn plan_unit(
     acknowledgement_epoch: u64,
     activated: bool,
     marker_epoch: u64,
-) -> Result<PlannedAcknowledgedUnit, BootstrapPlanError> {
+) -> Result<PlannedAcknowledgedUnit, BootstrapPlanViolation> {
     let frame = encode_ledger_frame(&record, sequence, log_generation)?;
     plan_unit_from_frame(
         meta,
@@ -418,7 +416,7 @@ fn plan_existing_frame_unit(
     acknowledgement_epoch: u64,
     activated: bool,
     marker_epoch: u64,
-) -> Result<PlannedAcknowledgedUnit, BootstrapPlanError> {
+) -> Result<PlannedAcknowledgedUnit, BootstrapPlanViolation> {
     if encode_ledger_frame(&record, sequence, log_generation)? != frame {
         return Err(invalid_switch("published LogOpened frame differs from its record"));
     }
@@ -449,18 +447,18 @@ fn plan_unit_from_frame(
     acknowledgement_epoch: u64,
     activated: bool,
     marker_epoch: u64,
-) -> Result<PlannedAcknowledgedUnit, BootstrapPlanError> {
+) -> Result<PlannedAcknowledgedUnit, BootstrapPlanViolation> {
     let frame_length =
-        u64::try_from(frame.len()).map_err(|_| BootstrapPlanError::ArithmeticOverflow { field: "frame length" })?;
+        u64::try_from(frame.len()).map_err(|_| BootstrapPlanViolation::ArithmeticOverflow { field: "frame length" })?;
     let frame_end_offset =
         frame_start_offset
             .checked_add(frame_length)
-            .ok_or(BootstrapPlanError::ArithmeticOverflow {
+            .ok_or(BootstrapPlanViolation::ArithmeticOverflow {
                 field: "frame end offset",
             })?;
     let slot_index = ((acknowledgement_epoch
         .checked_sub(1)
-        .ok_or(CodecError::ZeroAcknowledgementEpoch)?)
+        .ok_or(CodecViolation::ZeroAcknowledgementEpoch)?)
         & 1) as u8;
     let slot = AcknowledgementSlot {
         slot_index,
@@ -480,7 +478,7 @@ fn plan_unit_from_frame(
     let sealed_log_length =
         frame_end_offset
             .checked_add(COMMIT_SEAL_LENGTH as u64)
-            .ok_or(BootstrapPlanError::ArithmeticOverflow {
+            .ok_or(BootstrapPlanViolation::ArithmeticOverflow {
                 field: "sealed log length",
             })?;
     Ok(PlannedAcknowledgedUnit {
@@ -508,8 +506,8 @@ fn plan_marker(
     snapshot_file_length: u64,
     snapshot_file_crc32: u32,
     anchor_frame_crc32: u32,
-) -> Result<PlannedMarkerSlot, BootstrapPlanError> {
-    let slot_index = ((marker_epoch.checked_sub(1).ok_or(SidecarError::ZeroMarkerEpoch)?) & 1) as u8;
+) -> Result<PlannedMarkerSlot, BootstrapPlanViolation> {
+    let slot_index = ((marker_epoch.checked_sub(1).ok_or(SidecarViolation::ZeroMarkerEpoch)?) & 1) as u8;
     let slot = EnabledMarkerSlot {
         slot_index,
         store_uuid: meta.store_uuid,
@@ -537,7 +535,7 @@ fn plan_initial_marker(
     snapshot_file_length: u64,
     snapshot_file_crc32: u32,
     anchor_frame_crc32: u32,
-) -> Result<PlannedInitialMarker, BootstrapPlanError> {
+) -> Result<PlannedInitialMarker, BootstrapPlanViolation> {
     let planned_slot = plan_marker(
         meta,
         1,

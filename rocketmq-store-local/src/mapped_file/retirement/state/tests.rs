@@ -75,7 +75,7 @@ fn create_and_ticket_high_water_overflow_fail_closed() {
         .expect("maximum high-water snapshot is representable");
     assert_eq!(
         create_state.apply(11, Some(allocate_record(u64::MAX))),
-        Err(StateError::HighWaterOverflow {
+        Err(StateViolation::HighWaterOverflow {
             field: "create_high_water"
         })
     );
@@ -90,7 +90,7 @@ fn create_and_ticket_high_water_overflow_fail_closed() {
     .expect("maximum ticket high-water snapshot is representable");
     assert_eq!(
         ticket_state.apply(11, Some(intent_record(u64::MAX, &incarnation))),
-        Err(StateError::HighWaterOverflow {
+        Err(StateViolation::HighWaterOverflow {
             field: "ticket_high_water"
         })
     );
@@ -108,7 +108,7 @@ fn reverse_identity_indexes_reject_aliases_and_failed_allocate_is_atomic() {
             0,
             vec![SnapshotEntry::Incarnation(first), SnapshotEntry::Incarnation(aliased),],
         )),
-        Err(StateError::InvalidSnapshotState)
+        Err(StateViolation::InvalidSnapshotState)
     ));
 
     let mut state =
@@ -118,7 +118,7 @@ fn reverse_identity_indexes_reject_aliases_and_failed_allocate_is_atomic() {
         .expect("first canonical owner is indexed");
     assert_eq!(
         state.apply(12, Some(allocate_record(9))),
-        Err(StateError::RecordIdentityMismatch)
+        Err(StateViolation::RecordIdentityMismatch)
     );
     let recovered = state.finish(11, 3, 1).expect("failed indexed insert is atomic");
     assert_eq!(recovered.create_high_water(), 8);
@@ -143,7 +143,7 @@ fn retirement_reverse_index_rejects_two_tickets_for_one_incarnation() {
                 SnapshotEntry::RetirementTicket(second),
             ],
         )),
-        Err(StateError::InvalidSnapshotState)
+        Err(StateViolation::InvalidSnapshotState)
     ));
 }
 
@@ -195,7 +195,7 @@ fn successor_projection_only_omits_completed_ticket_and_its_sole_reference() {
     .expect("incomplete source snapshot is valid");
     assert_eq!(
         incomplete_source.validate_successor_projection(&omitted),
-        Err(StateError::InvalidSnapshotState)
+        Err(StateViolation::InvalidSnapshotState)
     );
 }
 
@@ -223,7 +223,7 @@ fn successor_projection_rejects_ticket_only_completed_omission() {
 
     assert_eq!(
         source.validate_successor_projection(&ticket_only_omission),
-        Err(StateError::InvalidSnapshotState)
+        Err(StateViolation::InvalidSnapshotState)
     );
 }
 
@@ -239,14 +239,14 @@ fn successor_projection_rejects_additions_changes_and_high_water_drift() {
     .expect("successor addition is structurally valid");
     assert_eq!(
         source.validate_successor_projection(&addition),
-        Err(StateError::InvalidSnapshotState)
+        Err(StateViolation::InvalidSnapshotState)
     );
 
     let high_water_drift = LedgerStateMachine::from_snapshot(successor_snapshot(10, 8, 0, Vec::new()))
         .expect("high-water-only snapshot is structurally valid");
     assert_eq!(
         source.validate_successor_projection(&high_water_drift),
-        Err(StateError::InvalidSnapshotState)
+        Err(StateViolation::InvalidSnapshotState)
     );
 }
 
@@ -259,7 +259,7 @@ fn incarnation_state_machine_rejects_skips_and_identity_changes() {
 
     assert!(matches!(
         state.apply(12, Some(publish_record(8))),
-        Err(StateError::InvalidIncarnationTransition {
+        Err(StateViolation::InvalidIncarnationTransition {
             from: Some(IncarnationPhase::Allocated),
             to: IncarnationPhase::Published,
         })
@@ -272,7 +272,7 @@ fn incarnation_state_machine_rejects_skips_and_identity_changes() {
     *expected_length += 1;
     assert_eq!(
         state.apply(12, Some(changed)),
-        Err(StateError::IdentityChangingDuplicate { entity: "incarnation" })
+        Err(StateViolation::IdentityChangingDuplicate { entity: "incarnation" })
     );
 }
 
@@ -293,7 +293,7 @@ fn direct_retirement_chain_requires_every_prerequisite_and_preserves_ticket() {
         .expect("intent starts retirement");
     assert!(matches!(
         state.apply(12, Some(completed_record(ticket, incarnation.incarnation, 11))),
-        Err(StateError::InvalidRetirementTransition {
+        Err(StateViolation::InvalidRetirementTransition {
             from: Some(RetirementStage::IntentDurable),
             to: RetirementStage::CompletedRetained,
         })
@@ -333,7 +333,7 @@ fn generation_prepared_is_an_append_barrier_until_exact_abort() {
 
     assert_eq!(
         state.apply(12, Some(allocate_record(8))),
-        Err(StateError::AppendAfterGenerationPrepared)
+        Err(StateViolation::AppendAfterGenerationPrepared)
     );
     state
         .apply(
@@ -407,7 +407,7 @@ fn quarantine_is_idempotent_only_for_the_exact_persisted_payload() {
                 Some(path("quarantine/.unknown")),
             )),
         ),
-        Err(StateError::IdentityChangingDuplicate { entity: "quarantine" })
+        Err(StateViolation::IdentityChangingDuplicate { entity: "quarantine" })
     );
     assert_eq!(
         state
@@ -435,7 +435,7 @@ fn generation_administration_records_are_bound_to_the_selected_generation() {
                 slot_crc32: 1,
             }),
         ),
-        Err(StateError::IllegalGenerationAdministration)
+        Err(StateViolation::IllegalGenerationAdministration)
     );
     state
         .apply(
@@ -485,7 +485,7 @@ fn generation_administration_records_are_bound_to_the_selected_generation() {
                 slot_crc32: 1,
             }),
         ),
-        Err(StateError::IllegalGenerationAdministration)
+        Err(StateViolation::IllegalGenerationAdministration)
     );
 }
 
@@ -514,7 +514,7 @@ fn generation_preparation_reserves_a_representable_target_marker_epoch() {
                 open_reason: OpenReason::Compaction,
             }),
         ),
-        Err(StateError::IllegalGenerationAdministration)
+        Err(StateViolation::IllegalGenerationAdministration)
     );
 }
 

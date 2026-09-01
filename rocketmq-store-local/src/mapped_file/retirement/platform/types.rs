@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::mapped_file::retirement::codec::RetirementReason;
 use crate::mapped_file::retirement::identity::FileIncarnationId;
-use crate::mapped_file::retirement::identity::IdentityError;
+use crate::mapped_file::retirement::identity::IdentityViolation;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::identity::StoreUuid;
@@ -43,15 +43,15 @@ impl NamespaceTicketBinding {
         mapping_generation: u64,
         expected_length: u64,
         retirement_nonce: [u8; 16],
-    ) -> Result<Self, NamespaceRequestError> {
+    ) -> Result<Self, NamespaceRequestViolation> {
         if mapping_generation == 0 {
-            return Err(NamespaceRequestError::ZeroMappingGeneration);
+            return Err(NamespaceRequestViolation::ZeroMappingGeneration);
         }
         if expected_length == 0 {
-            return Err(NamespaceRequestError::ZeroExpectedLength);
+            return Err(NamespaceRequestViolation::ZeroExpectedLength);
         }
         if retirement_nonce == [0; 16] {
-            return Err(NamespaceRequestError::ZeroRetirementNonce);
+            return Err(NamespaceRequestViolation::ZeroRetirementNonce);
         }
         Ok(Self {
             ticket_id,
@@ -109,7 +109,7 @@ impl NamespaceRetirementRequest {
         physical_key: PhysicalFileKey,
         canonical_path: StoreRelativePath,
         tombstone_path: StoreRelativePath,
-    ) -> Result<Self, NamespaceRequestError> {
+    ) -> Result<Self, NamespaceRequestViolation> {
         canonical_path.validate_tombstone_binding(
             &tombstone_path,
             ticket.ticket_id,
@@ -158,7 +158,7 @@ impl NamespaceRetirementRequest {
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub(crate) enum NamespaceRequestError {
+pub(crate) enum NamespaceRequestViolation {
     #[error("retirement mapping generation must be non-zero")]
     ZeroMappingGeneration,
     #[error("retirement expected length must be non-zero")]
@@ -168,7 +168,7 @@ pub(crate) enum NamespaceRequestError {
     #[error("RemoveTombstone requires a durable Tombstoned capability")]
     TombstoneStageRequired,
     #[error(transparent)]
-    InvalidIdentity(#[from] IdentityError),
+    InvalidIdentity(#[from] IdentityViolation),
 }
 
 /// One ledger-ordered namespace transition.
@@ -356,36 +356,6 @@ pub(crate) enum NamespaceTransitionOutcome {
         reason: &'static str,
     },
 }
-
-/// Failure while constructing an unforgeable root or path reservation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum NamespaceVerificationError {
-    Retryable(NamespaceFailure),
-    Failed(NamespaceFailure),
-    Rejected(NamespacePolicyViolation),
-    Unsupported {
-        platform: &'static str,
-        reason: &'static str,
-    },
-}
-
-impl std::fmt::Display for NamespaceVerificationError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Retryable(failure) => write!(formatter, "retryable namespace verification failure: {failure:?}"),
-            Self::Failed(failure) => write!(formatter, "namespace verification failed: {failure:?}"),
-            Self::Rejected(violation) => write!(formatter, "namespace verification rejected: {violation:?}"),
-            Self::Unsupported { platform, reason } => {
-                write!(
-                    formatter,
-                    "namespace verification is unsupported on {platform}: {reason}"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for NamespaceVerificationError {}
 
 mod private {
     #[derive(Debug)]

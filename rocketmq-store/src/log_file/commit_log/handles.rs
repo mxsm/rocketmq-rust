@@ -39,8 +39,6 @@ use crate::message_store::runtime_state::StoreRuntimeState;
 use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
-use crate::transfer::error::TransferError;
-use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
 
 use super::append_sequencer::CommitLogAppendPort;
@@ -50,6 +48,13 @@ use super::CommitLogStoreContext;
 #[derive(Clone)]
 pub(crate) struct CommitLogCleanupHandle {
     pub(super) mapped_file_queue: MappedFileQueueCleanupHandle,
+}
+
+/// Builds the invalid-request storage error for one replication selection input violation.
+pub(super) fn replication_input_error(detail: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::Replicate)
+        .in_component(StoreComponent::HighAvailability)
+        .with_detail(detail)
 }
 
 impl CommitLogCleanupHandle {
@@ -183,9 +188,9 @@ impl CommitLogReadHandle {
         offset: i64,
         max_bytes: usize,
         allow_cross_file: bool,
-    ) -> TransferResult<Vec<SegmentLease>> {
+    ) -> Result<Vec<SegmentLease>, StoreError> {
         if offset < 0 {
-            return Err(TransferError::InvalidInput(format!(
+            return Err(replication_input_error(format!(
                 "offset must be non-negative: {offset}"
             )));
         }
@@ -194,8 +199,8 @@ impl CommitLogReadHandle {
         }
         let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
         if mapped_file_size == 0 {
-            return Err(TransferError::InvalidInput(
-                "mapped_file_size_commit_log must be greater than zero".to_string(),
+            return Err(replication_input_error(
+                "mapped_file_size_commit_log must be greater than zero",
             ));
         }
 
@@ -314,7 +319,7 @@ impl CommitLogReplicaHandle {
         offset: i64,
         max_bytes: usize,
         allow_cross_file: bool,
-    ) -> TransferResult<Vec<SegmentLease>> {
+    ) -> Result<Vec<SegmentLease>, StoreError> {
         self.read.select_segments(offset, max_bytes, allow_cross_file)
     }
 

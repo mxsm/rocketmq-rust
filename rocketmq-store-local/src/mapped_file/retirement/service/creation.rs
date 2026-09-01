@@ -23,7 +23,7 @@ use super::ManagedLifecycleRuntime;
 use super::ManagedRetirementCore;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::mapped_file::retirement::identity::FileIncarnationId;
-use crate::mapped_file::retirement::identity::IdentityError;
+use crate::mapped_file::retirement::identity::IdentityViolation;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::identity::StoreUuid;
 use crate::mapped_file::retirement::io::LedgerIo;
@@ -31,7 +31,7 @@ use crate::mapped_file::retirement::platform::IncarnationCreationError;
 use crate::mapped_file::retirement::platform::VerifiedNamespaceRoot;
 use crate::mapped_file::retirement::registry::CreationPublicationFailure;
 use crate::mapped_file::retirement::registry::ManagedMappedFileQueueGeneration;
-use crate::mapped_file::retirement::registry::RegistryError;
+use crate::mapped_file::retirement::registry::RegistryViolation;
 use crate::mapped_file::retirement::writer::IncarnationAllocationPlan;
 use crate::mapped_file::retirement::writer::IncarnationWriteError;
 use crate::mapped_file::DefaultMappedFile;
@@ -60,7 +60,11 @@ impl fmt::Debug for ManagedIncarnationCreateRequest {
 
 impl ManagedIncarnationCreateRequest {
     /// Validates namespace-independent creation fields before any ledger I/O.
-    pub fn new(
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
+    pub(crate) fn new(
         directory: &str,
         segment_offset: u64,
         expected_length: u64,
@@ -123,32 +127,9 @@ impl ManagedIncarnationCreation {
     }
 }
 
-/// Stable category for one managed creation failure.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManagedIncarnationCreationErrorKind {
-    Preflight,
-    AdmissionClosed,
-    RecoveryRequired,
-    SequenceExhausted,
-    Writer,
-    Namespace,
-    Mapping,
-    Registry,
-}
-
-/// Typed creation failure retaining its protocol or OS source.
-#[doc(hidden)]
+/// Private incarnation-creation orchestration leaf with its former kind folded in.
 #[derive(Debug, Error)]
-#[error("managed incarnation creation failed ({kind:?}): {source}")]
-pub struct ManagedIncarnationCreationError {
-    kind: ManagedIncarnationCreationErrorKind,
-    #[source]
-    source: ManagedIncarnationCreationErrorSource,
-}
-
-#[derive(Debug, Error)]
-enum ManagedIncarnationCreationErrorSource {
+pub(crate) enum ManagedIncarnationCreationError {
     #[error("{0}")]
     Preflight(&'static str),
     #[error("managed lifecycle admission is closed")]
@@ -158,7 +139,7 @@ enum ManagedIncarnationCreationErrorSource {
     #[error("managed create sequence domain is exhausted")]
     SequenceExhausted,
     #[error(transparent)]
-    Identity(#[from] IdentityError),
+    Identity(#[from] IdentityViolation),
     #[error(transparent)]
     Writer(#[from] IncarnationWriteError),
     #[error(transparent)]
@@ -166,34 +147,20 @@ enum ManagedIncarnationCreationErrorSource {
     #[error("managed mapping construction failed: {0}")]
     Mapping(#[source] io::Error),
     #[error(transparent)]
-    Registry(#[from] RegistryError),
+    Registry(#[from] RegistryViolation),
 }
 
 impl ManagedIncarnationCreationError {
-    pub const fn kind(&self) -> ManagedIncarnationCreationErrorKind {
-        self.kind
-    }
-
-    fn new(kind: ManagedIncarnationCreationErrorKind, source: ManagedIncarnationCreationErrorSource) -> Self {
-        Self { kind, source }
-    }
-
     fn preflight(reason: &'static str) -> Self {
-        Self::new(
-            ManagedIncarnationCreationErrorKind::Preflight,
-            ManagedIncarnationCreationErrorSource::Preflight(reason),
-        )
+        Self::Preflight(reason)
     }
 
-    fn identity(source: IdentityError) -> Self {
-        Self::new(ManagedIncarnationCreationErrorKind::Preflight, source.into())
+    fn identity(source: IdentityViolation) -> Self {
+        Self::Identity(source)
     }
 
     fn recovery_required() -> Self {
-        Self::new(
-            ManagedIncarnationCreationErrorKind::RecoveryRequired,
-            ManagedIncarnationCreationErrorSource::RecoveryRequired,
-        )
+        Self::RecoveryRequired
     }
 }
 
@@ -208,17 +175,18 @@ impl ManagedLifecycleRuntime {
     ///
     /// This method performs blocking ledger and filesystem I/O. Store code must execute it through
     /// the storage `BlockingExecutor`, exactly like retirement submission and reaper batches.
-    pub fn create_mapped_file(
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
+    pub(crate) fn create_mapped_file(
         &self,
         queue: &ManagedMappedFileQueueGeneration<DefaultMappedFile>,
         request: ManagedIncarnationCreateRequest,
     ) -> Result<ManagedIncarnationCreation, ManagedIncarnationCreationError> {
         let mut inner = self.inner.lock();
         if inner.admission != super::RuntimeAdmission::Running {
-            return Err(ManagedIncarnationCreationError::new(
-                ManagedIncarnationCreationErrorKind::AdmissionClosed,
-                ManagedIncarnationCreationErrorSource::AdmissionClosed,
-            ));
+            return Err(ManagedIncarnationCreationError::AdmissionClosed);
         }
         inner.core.create_mapped_file(queue, request)
     }
@@ -233,6 +201,10 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
         });
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     fn create_mapped_file(
         &mut self,
         queue: &ManagedMappedFileQueueGeneration<DefaultMappedFile>,
@@ -252,12 +224,9 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
                 )
             })
             .ok_or_else(|| ManagedIncarnationCreationError::preflight("managed creation context is not configured"))?;
-        let next_create_sequence = create_high_water.checked_add(1).ok_or_else(|| {
-            ManagedIncarnationCreationError::new(
-                ManagedIncarnationCreationErrorKind::SequenceExhausted,
-                ManagedIncarnationCreationErrorSource::SequenceExhausted,
-            )
-        })?;
+        let next_create_sequence = create_high_water
+            .checked_add(1)
+            .ok_or(ManagedIncarnationCreationError::SequenceExhausted)?;
         let incarnation = FileIncarnationId::new(store_uuid, next_create_sequence)
             .map_err(ManagedIncarnationCreationError::identity)?;
         let canonical_path = StoreRelativePath::new(&format!(
@@ -277,13 +246,11 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
             canonical_path.clone(),
             create_file_path,
         )
-        .map_err(|source| {
-            ManagedIncarnationCreationError::new(ManagedIncarnationCreationErrorKind::Preflight, source.into())
-        })?;
+        .map_err(ManagedIncarnationCreationError::Writer)?;
 
         let allocated = self.writer.append_allocate_incarnation(plan).map_err(|source| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::new(ManagedIncarnationCreationErrorKind::Writer, source.into())
+            ManagedIncarnationCreationError::Writer(source)
         })?;
         let Some(context) = self.creation.as_mut() else {
             self.recovery_required = true;
@@ -293,7 +260,7 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
 
         let created = self.namespace.create_incarnation_temp(&allocated).map_err(|source| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::new(ManagedIncarnationCreationErrorKind::Namespace, source.into())
+            ManagedIncarnationCreationError::Namespace(source)
         })?;
         let physical_key = created.physical_key();
         let bound = self
@@ -301,18 +268,18 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
             .append_bind_incarnation(allocated, physical_key)
             .map_err(|source| {
                 self.recovery_required = true;
-                ManagedIncarnationCreationError::new(ManagedIncarnationCreationErrorKind::Writer, source.into())
+                ManagedIncarnationCreationError::Writer(source)
             })?;
         let verified = self
             .namespace
             .publish_bound_incarnation(created, &bound)
             .map_err(|source| {
                 self.recovery_required = true;
-                ManagedIncarnationCreationError::new(ManagedIncarnationCreationErrorKind::Namespace, source.into())
+                ManagedIncarnationCreationError::Namespace(source)
             })?;
         let published = self.writer.append_publish_incarnation(bound).map_err(|source| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::new(ManagedIncarnationCreationErrorKind::Writer, source.into())
+            ManagedIncarnationCreationError::Writer(source)
         })?;
 
         let mapped_file = DefaultMappedFile::try_new_managed_created(
@@ -326,19 +293,13 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
         .map(Arc::new)
         .map_err(|source| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::new(
-                ManagedIncarnationCreationErrorKind::Mapping,
-                ManagedIncarnationCreationErrorSource::Mapping(source),
-            )
+            ManagedIncarnationCreationError::Mapping(source)
         })?;
         let mapping_generation = mapped_file.current_mapping_generation_id().ok_or_else(|| {
             self.recovery_required = true;
-            ManagedIncarnationCreationError::new(
-                ManagedIncarnationCreationErrorKind::Mapping,
-                ManagedIncarnationCreationErrorSource::Mapping(io::Error::other(
-                    "new managed mapped file has no published mapping generation",
-                )),
-            )
+            ManagedIncarnationCreationError::Mapping(io::Error::other(
+                "new managed mapped file has no published mapping generation",
+            ))
         })?;
         let returned_owner = Arc::clone(&mapped_file);
         queue
@@ -356,7 +317,7 @@ impl<I: LedgerIo> ManagedRetirementCore<I, VerifiedNamespaceRoot, DefaultMappedF
     ) -> ManagedIncarnationCreationError {
         self.recovery_required = true;
         let (_receipt, _owner, source) = failure.into_parts();
-        ManagedIncarnationCreationError::new(ManagedIncarnationCreationErrorKind::Registry, source.into())
+        ManagedIncarnationCreationError::Registry(source)
     }
 
     #[cfg(test)]
@@ -379,7 +340,6 @@ mod tests {
     use crate::mapped_file::retirement::registry::ManagedMappedFileQueueGeneration;
     use crate::mapped_file::retirement::registry::RetirementRegistry;
     use crate::mapped_file::retirement::service::ManagedIncarnationCreateRequest;
-    use crate::mapped_file::retirement::service::ManagedIncarnationCreationErrorKind;
     use crate::mapped_file::retirement::writer::model_io::ModelLedgerIo;
     use crate::mapped_file::retirement::writer::ManagedLedgerWriter;
     use crate::mapped_file::DefaultMappedFile;
@@ -435,7 +395,7 @@ mod tests {
         let first = core
             .create_mapped_file(&queue, request)
             .expect_err("namespace collision follows durable Allocate");
-        assert_eq!(first.kind(), ManagedIncarnationCreationErrorKind::Namespace);
+        assert!(matches!(first, super::ManagedIncarnationCreationError::Namespace(_)));
         assert_eq!(core.creation_high_water_for_test(), Some(1));
         assert!(core.report(std::time::Instant::now(), 0, 0).recovery_required());
         assert!(queue.snapshot().is_empty());
@@ -446,7 +406,10 @@ mod tests {
         let error = core
             .create_mapped_file(&queue, retry)
             .expect_err("replay fence rejects a second allocation");
-        assert_eq!(error.kind(), ManagedIncarnationCreationErrorKind::RecoveryRequired);
+        assert!(matches!(
+            error,
+            super::ManagedIncarnationCreationError::RecoveryRequired
+        ));
     }
 
     struct Fixture {

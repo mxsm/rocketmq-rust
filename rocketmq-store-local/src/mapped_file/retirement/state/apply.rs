@@ -19,10 +19,10 @@ impl LedgerStateMachine {
         &self,
         sequence: u64,
         record: Option<&LedgerRecord>,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         let Some(prepared) = &self.prepared_generation else {
             if matches!(record, Some(LedgerRecord::GenerationAborted { .. })) {
-                return Err(StateError::IllegalGenerationAdministration);
+                return Err(StateViolation::IllegalGenerationAdministration);
             }
             return Ok(());
         };
@@ -41,8 +41,8 @@ impl LedgerStateMachine {
             {
                 Ok(())
             }
-            Some(LedgerRecord::GenerationAborted { .. }) => Err(StateError::IllegalGenerationAdministration),
-            _ => Err(StateError::AppendAfterGenerationPrepared),
+            Some(LedgerRecord::GenerationAborted { .. }) => Err(StateViolation::IllegalGenerationAdministration),
+            _ => Err(StateViolation::AppendAfterGenerationPrepared),
         }
     }
 
@@ -50,7 +50,7 @@ impl LedgerStateMachine {
         clippy::too_many_lines,
         reason = "the exhaustive persisted-record transition table is kept auditable in one match"
     )]
-    pub(super) fn apply_record(&mut self, sequence: u64, record: Option<LedgerRecord>) -> Result<(), StateError> {
+    pub(super) fn apply_record(&mut self, sequence: u64, record: Option<LedgerRecord>) -> Result<(), StateViolation> {
         let Some(record) = record else {
             return Ok(());
         };
@@ -58,7 +58,7 @@ impl LedgerStateMachine {
             LedgerRecord::StoreInitialized { store_uuid, .. } => {
                 self.require_store(store_uuid)?;
                 if self.generation != 0 || sequence != 1 {
-                    return Err(StateError::IllegalGenerationAdministration);
+                    return Err(StateViolation::IllegalGenerationAdministration);
                 }
             }
             LedgerRecord::BootstrapInstalled {
@@ -81,7 +81,7 @@ impl LedgerStateMachine {
                     || ticket_high_water != self.ticket_high_water
                     || !inventory_matches
                 {
-                    return Err(StateError::IllegalGenerationAdministration);
+                    return Err(StateViolation::IllegalGenerationAdministration);
                 }
             }
             LedgerRecord::LogOpened {
@@ -112,7 +112,7 @@ impl LedgerStateMachine {
                     != self
                         .snapshot_base_sequence
                         .checked_add(1)
-                        .ok_or(StateError::SequenceOverflow)?
+                        .ok_or(StateViolation::SequenceOverflow)?
                     || generation != self.generation
                     || snapshot_generation != self.generation
                     || self.generation.checked_sub(1) != Some(predecessor_log_generation)
@@ -121,7 +121,7 @@ impl LedgerStateMachine {
                     || predecessor_acknowledgement_epoch == 0
                     || !suffix_is_valid
                 {
-                    return Err(StateError::IllegalGenerationAdministration);
+                    return Err(StateViolation::IllegalGenerationAdministration);
                 }
             }
             LedgerRecord::GenerationPrepared {
@@ -135,14 +135,14 @@ impl LedgerStateMachine {
                 let expected_target = self
                     .generation
                     .checked_add(1)
-                    .ok_or(StateError::IllegalGenerationAdministration)?;
+                    .ok_or(StateViolation::IllegalGenerationAdministration)?;
                 if source_generation != self.generation
                     || target_generation != expected_target
                     || target_snapshot_generation != expected_target
                     || expected_target.checked_add(1).is_none()
                     || open_reason != super::super::codec::OpenReason::Compaction
                 {
-                    return Err(StateError::IllegalGenerationAdministration);
+                    return Err(StateViolation::IllegalGenerationAdministration);
                 }
                 self.prepared_generation = Some(PreparedGeneration {
                     sequence,
@@ -163,11 +163,11 @@ impl LedgerStateMachine {
                 let expected_marker_epoch = self
                     .generation
                     .checked_add(1)
-                    .ok_or(StateError::IllegalGenerationAdministration)?;
+                    .ok_or(StateViolation::IllegalGenerationAdministration)?;
                 let expected_anchor = self
                     .snapshot_base_sequence
                     .checked_add(1)
-                    .ok_or(StateError::SequenceOverflow)?;
+                    .ok_or(StateViolation::SequenceOverflow)?;
                 if marker_epoch != expected_marker_epoch
                     || snapshot_generation != self.generation
                     || log_generation != self.generation
@@ -176,7 +176,7 @@ impl LedgerStateMachine {
                     || slot_index > 1
                     || slot_index != ((marker_epoch - 1) & 1) as u8
                 {
-                    return Err(StateError::IllegalGenerationAdministration);
+                    return Err(StateViolation::IllegalGenerationAdministration);
                 }
             }
             LedgerRecord::AllocateIncarnation {
@@ -317,7 +317,7 @@ impl LedgerStateMachine {
                 destination_path,
             } => {
                 if sequence_at_observation == 0 || sequence_at_observation > sequence {
-                    return Err(StateError::RecordIdentityMismatch);
+                    return Err(StateViolation::RecordIdentityMismatch);
                 }
                 let entry = QuarantineSnapshotEntry {
                     entity_kind,
@@ -330,7 +330,7 @@ impl LedgerStateMachine {
                 };
                 if let Some(existing) = self.quarantines.get(&source_path) {
                     if existing != &entry {
-                        return Err(StateError::IdentityChangingDuplicate { entity: "quarantine" });
+                        return Err(StateViolation::IdentityChangingDuplicate { entity: "quarantine" });
                     }
                 } else {
                     self.quarantines.insert(source_path, entry);
@@ -352,7 +352,7 @@ impl LedgerStateMachine {
         create_nonce: [u8; 16],
         canonical_path: StoreRelativePath,
         create_file_path: StoreRelativePath,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         self.require_store(incarnation.store_uuid())?;
         let candidate = IncarnationSnapshotEntry {
             incarnation,
@@ -366,24 +366,24 @@ impl LedgerStateMachine {
         };
         if let Some(existing) = self.incarnations.get(&incarnation) {
             if existing.phase != IncarnationPhase::Allocated {
-                return Err(StateError::InvalidIncarnationTransition {
+                return Err(StateViolation::InvalidIncarnationTransition {
                     from: Some(existing.phase),
                     to: IncarnationPhase::Allocated,
                 });
             }
             if existing != &candidate {
-                return Err(StateError::IdentityChangingDuplicate { entity: "incarnation" });
+                return Err(StateViolation::IdentityChangingDuplicate { entity: "incarnation" });
             }
             return Ok(());
         }
         let expected = self
             .create_high_water
             .checked_add(1)
-            .ok_or(StateError::HighWaterOverflow {
+            .ok_or(StateViolation::HighWaterOverflow {
                 field: "create_high_water",
             })?;
         if incarnation.create_seq() != expected {
-            return Err(StateError::HighWaterMismatch {
+            return Err(StateViolation::HighWaterMismatch {
                 field: "create_high_water",
                 previous: self.create_high_water,
                 expected,
@@ -408,7 +408,7 @@ impl LedgerStateMachine {
                 .incarnation_by_create_path
                 .contains_key(&candidate.create_file_path)
         {
-            return Err(StateError::RecordIdentityMismatch);
+            return Err(StateViolation::RecordIdentityMismatch);
         }
         let canonical_path = candidate.canonical_path.clone();
         let create_file_path = candidate.create_file_path.clone();
@@ -426,16 +426,16 @@ impl LedgerStateMachine {
         physical_key: PhysicalFileKey,
         canonical_path: StoreRelativePath,
         create_file_path: StoreRelativePath,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         self.require_store(incarnation.store_uuid())?;
         let Some(existing) = self.incarnations.get_mut(&incarnation) else {
-            return Err(StateError::MissingIncarnation);
+            return Err(StateViolation::MissingIncarnation);
         };
         if expected_length != existing.expected_file_length
             || canonical_path != existing.canonical_path
             || create_file_path != existing.create_file_path
         {
-            return Err(StateError::IdentityChangingDuplicate { entity: "incarnation" });
+            return Err(StateViolation::IdentityChangingDuplicate { entity: "incarnation" });
         }
         match existing.phase {
             IncarnationPhase::Allocated => {
@@ -444,10 +444,10 @@ impl LedgerStateMachine {
             }
             IncarnationPhase::Bound if existing.physical_key == Some(physical_key) => {}
             IncarnationPhase::Bound => {
-                return Err(StateError::IdentityChangingDuplicate { entity: "incarnation" });
+                return Err(StateViolation::IdentityChangingDuplicate { entity: "incarnation" });
             }
             IncarnationPhase::Published => {
-                return Err(StateError::InvalidIncarnationTransition {
+                return Err(StateViolation::InvalidIncarnationTransition {
                     from: Some(IncarnationPhase::Published),
                     to: IncarnationPhase::Bound,
                 });
@@ -463,13 +463,13 @@ impl LedgerStateMachine {
         physical_key: PhysicalFileKey,
         canonical_path: StoreRelativePath,
         create_file_path: StoreRelativePath,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         self.require_store(incarnation.store_uuid())?;
         let Some(existing) = self.incarnations.get_mut(&incarnation) else {
-            return Err(StateError::MissingIncarnation);
+            return Err(StateViolation::MissingIncarnation);
         };
         if existing.phase == IncarnationPhase::Allocated {
-            return Err(StateError::InvalidIncarnationTransition {
+            return Err(StateViolation::InvalidIncarnationTransition {
                 from: Some(IncarnationPhase::Allocated),
                 to: IncarnationPhase::Published,
             });
@@ -479,7 +479,7 @@ impl LedgerStateMachine {
             || canonical_path != existing.canonical_path
             || create_file_path != existing.create_file_path
         {
-            return Err(StateError::IdentityChangingDuplicate { entity: "incarnation" });
+            return Err(StateViolation::IdentityChangingDuplicate { entity: "incarnation" });
         }
         if existing.phase == IncarnationPhase::Bound {
             existing.phase = IncarnationPhase::Published;
@@ -487,9 +487,9 @@ impl LedgerStateMachine {
         Ok(())
     }
 
-    pub(super) fn require_store(&self, store_uuid: StoreUuid) -> Result<(), StateError> {
+    pub(super) fn require_store(&self, store_uuid: StoreUuid) -> Result<(), StateViolation> {
         if store_uuid != self.store_uuid {
-            return Err(StateError::StoreUuidMismatch);
+            return Err(StateViolation::StoreUuidMismatch);
         }
         Ok(())
     }

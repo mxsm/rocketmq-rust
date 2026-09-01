@@ -2218,9 +2218,7 @@ impl TimerMessageStore {
         )
     }
 
-    fn timer_storage_fingerprint(
-        &self,
-    ) -> Result<TimerStorageFingerprint, rocketmq_store_local::timer::storage_format::TimerStorageFormatError> {
+    fn timer_storage_fingerprint(&self) -> Result<TimerStorageFingerprint, crate::store_error::StoreError> {
         TimerStorageFingerprint {
             precision_ms: self.message_store_config.timer_precision_ms,
             wheel_slots: (TIMER_WHEEL_TTL_DAY as u64) * (DAY_SECS as u64) * 2,

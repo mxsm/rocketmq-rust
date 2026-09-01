@@ -87,8 +87,8 @@ use crate::log_file::commit_log_path_set::StoreFaultPoint;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
-use crate::log_file::mapped_file::MappedFileResult;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
+use crate::store_error::StoreError;
 
 enum MappedFileGenerationState {
     Legacy(MappedFileQueueGeneration<DefaultMappedFile>),
@@ -866,7 +866,7 @@ impl MappedFileQueueFlushHandle {
         self.runtime_state.store_timestamp()
     }
 
-    pub(crate) fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<FlushProgress> {
+    pub(crate) fn try_flush(&self, flush_least_pages: i32) -> Result<FlushProgress, StoreError> {
         let durable_before = self.runtime_state.flushed_where();
         let progress = try_flush_mapped_file_queue(
             self.get_max_offset(),
@@ -1961,7 +1961,7 @@ impl MappedFileQueue {
         }
     }
 
-    pub fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<FlushProgress> {
+    pub fn try_flush(&self, flush_least_pages: i32) -> Result<FlushProgress, StoreError> {
         self.flush_handle().try_flush(flush_least_pages)
     }
 

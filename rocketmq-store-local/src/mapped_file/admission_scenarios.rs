@@ -15,14 +15,14 @@
 use std::sync::Arc;
 use std::sync::Barrier;
 
+use crate::config::FlushDiskType;
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::MappedFile;
+use crate::mapped_file::MappedFileAdmissionState;
+use crate::mapped_file::MappedFileError;
+use crate::mapped_file::MappedFileOperation;
+use crate::mapped_file::MappedWriteLease;
 use cheetah_string::CheetahString;
-use rocketmq_store_local::config::FlushDiskType;
-use rocketmq_store_local::mapped_file::DefaultMappedFile;
-use rocketmq_store_local::mapped_file::MappedFile;
-use rocketmq_store_local::mapped_file::MappedFileAdmissionState;
-use rocketmq_store_local::mapped_file::MappedFileError;
-use rocketmq_store_local::mapped_file::MappedFileOperation;
-use rocketmq_store_local::mapped_file::MappedWriteLease;
 use tempfile::TempDir;
 
 fn mapped_file(size: u64) -> (TempDir, DefaultMappedFile) {
@@ -42,21 +42,33 @@ fn lazy_mapped_file(size: u64) -> (TempDir, DefaultMappedFile) {
     (directory, mapped_file)
 }
 
-fn assert_unavailable(error: MappedFileError, operation: MappedFileOperation) {
+fn assert_unavailable(error: rocketmq_store_api::StoreError, operation: MappedFileOperation) {
     assert_unavailable_in_state(error, MappedFileAdmissionState::Closing, operation);
 }
 
 fn assert_unavailable_in_state(
-    error: MappedFileError,
+    error: rocketmq_store_api::StoreError,
     state: MappedFileAdmissionState,
     operation: MappedFileOperation,
 ) {
+    assert_eq!(error.code().as_str(), "storage.backend.unavailable");
+    let source = std::error::Error::source(&error).and_then(|source| source.downcast_ref::<MappedFileError>());
+    assert!(matches!(
+        source,
+        Some(MappedFileError::Unavailable {
+            state: observed_state,
+            operation: observed,
+        }) if *observed_state == state && *observed == operation
+    ));
+}
+
+fn assert_unavailable_typed(error: MappedFileError, operation: MappedFileOperation) {
     assert!(matches!(
         error,
         MappedFileError::Unavailable {
-            state: observed_state,
+            state: MappedFileAdmissionState::Closing,
             operation: observed,
-        } if observed_state == state && observed == operation
+        } if observed == operation
     ));
 }
 
@@ -114,7 +126,7 @@ fn closing_rejects_new_read_write_and_maintenance_operations() {
         mapped_file.try_commit(0).expect_err("commit must be rejected"),
         MappedFileOperation::Maintenance,
     );
-    assert_unavailable(
+    assert_unavailable_typed(
         mapped_file
             .try_flush_range(8, 1)
             .expect_err("invalid flush range must still observe closing"),

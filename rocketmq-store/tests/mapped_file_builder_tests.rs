@@ -15,7 +15,6 @@
 use rocketmq_store::FlushStrategy;
 use rocketmq_store::MappedFile;
 use rocketmq_store::MappedFileBuilder;
-use rocketmq_store::MappedFileError;
 use tempfile::TempDir;
 
 #[test]
@@ -50,7 +49,10 @@ fn builder_rejects_offset_mismatch_before_creating_the_file() {
         mapped_file.destroy(0);
     }
 
-    assert!(matches!(result, Err(MappedFileError::Configuration(_))));
+    match result {
+        Ok(_) => panic!("expected invalid configuration"),
+        Err(error) => assert_eq!(error.code().as_str(), "storage.request.invalid"),
+    }
     assert!(!path.exists());
 }
 
@@ -72,7 +74,10 @@ fn builder_rejects_invalid_sizes_and_file_names_before_creation() {
     ];
 
     for (path, builder) in cases {
-        assert!(matches!(builder.build(), Err(MappedFileError::Configuration(_))));
+        match builder.build() {
+            Ok(_) => panic!("expected invalid configuration"),
+            Err(error) => assert_eq!(error.code().as_str(), "storage.request.invalid"),
+        }
         assert!(!path.exists());
     }
 }
@@ -112,7 +117,10 @@ fn builder_rejects_unsupported_options_without_filesystem_side_effects() {
         if let Ok(mapped_file) = &result {
             mapped_file.destroy(0);
         }
-        assert!(matches!(result, Err(MappedFileError::Configuration(_))));
+        match result {
+            Ok(_) => panic!("expected invalid configuration"),
+            Err(error) => assert_eq!(error.code().as_str(), "storage.request.invalid"),
+        }
         assert!(!path.exists());
     }
     assert_eq!(
@@ -132,6 +140,9 @@ fn builder_preserves_parent_path_io_failures() {
 
     let result = MappedFileBuilder::new(&path).size(4096).build();
 
-    assert!(matches!(result, Err(MappedFileError::Io(_))));
+    match result {
+        Ok(_) => panic!("expected io failure"),
+        Err(error) => assert_eq!(error.code().as_str(), "storage.io.failed"),
+    }
     assert!(!path.exists());
 }

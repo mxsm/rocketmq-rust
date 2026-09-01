@@ -20,7 +20,7 @@ use std::ptr::NonNull;
 use std::slice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DirectIoValidationError {
+pub enum DirectIoValidationViolation {
     InvalidAlignment { alignment: usize },
     ZeroLength,
     UnalignedLength { len: usize, alignment: usize },
@@ -28,25 +28,25 @@ pub enum DirectIoValidationError {
     AllocationFailed { len: usize, alignment: usize },
 }
 
-impl fmt::Display for DirectIoValidationError {
+impl fmt::Display for DirectIoValidationViolation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DirectIoValidationError::InvalidAlignment { alignment } => {
+            DirectIoValidationViolation::InvalidAlignment { alignment } => {
                 write!(
                     formatter,
                     "direct I/O alignment must be a non-zero power of two: {alignment}"
                 )
             }
-            DirectIoValidationError::ZeroLength => write!(formatter, "direct I/O buffer length must be non-zero"),
-            DirectIoValidationError::UnalignedLength { len, alignment } => write!(
+            DirectIoValidationViolation::ZeroLength => write!(formatter, "direct I/O buffer length must be non-zero"),
+            DirectIoValidationViolation::UnalignedLength { len, alignment } => write!(
                 formatter,
                 "direct I/O buffer length must be aligned: len={len}, alignment={alignment}"
             ),
-            DirectIoValidationError::UnalignedFileOffset { offset, alignment } => write!(
+            DirectIoValidationViolation::UnalignedFileOffset { offset, alignment } => write!(
                 formatter,
                 "direct I/O file offset must be aligned: offset={offset}, alignment={alignment}"
             ),
-            DirectIoValidationError::AllocationFailed { len, alignment } => write!(
+            DirectIoValidationViolation::AllocationFailed { len, alignment } => write!(
                 formatter,
                 "failed to allocate direct I/O buffer: len={len}, alignment={alignment}"
             ),
@@ -54,7 +54,7 @@ impl fmt::Display for DirectIoValidationError {
     }
 }
 
-impl std::error::Error for DirectIoValidationError {}
+impl std::error::Error for DirectIoValidationViolation {}
 
 #[derive(Debug)]
 pub struct DirectIoBuffer {
@@ -64,15 +64,15 @@ pub struct DirectIoBuffer {
 }
 
 impl DirectIoBuffer {
-    pub fn new(len: usize, alignment: usize) -> Result<Self, DirectIoValidationError> {
+    pub fn new(len: usize, alignment: usize) -> Result<Self, DirectIoValidationViolation> {
         validate_alignment(alignment)?;
         validate_len(len, alignment)?;
 
         let layout = Layout::from_size_align(len, alignment)
-            .map_err(|_| DirectIoValidationError::InvalidAlignment { alignment })?;
+            .map_err(|_| DirectIoValidationViolation::InvalidAlignment { alignment })?;
         // SAFETY: `layout` has a non-zero size and a validated power-of-two alignment.
         let ptr = unsafe { alloc_zeroed(layout) };
-        let ptr = NonNull::new(ptr).ok_or(DirectIoValidationError::AllocationFailed { len, alignment })?;
+        let ptr = NonNull::new(ptr).ok_or(DirectIoValidationViolation::AllocationFailed { len, alignment })?;
 
         Ok(Self { ptr, len, alignment })
     }
@@ -133,10 +133,10 @@ pub struct DirectIoRequest {
 }
 
 impl DirectIoRequest {
-    pub fn new(file_offset: u64, buffer: DirectIoBuffer) -> Result<Self, DirectIoValidationError> {
+    pub fn new(file_offset: u64, buffer: DirectIoBuffer) -> Result<Self, DirectIoValidationViolation> {
         let alignment = buffer.alignment();
         if !file_offset.is_multiple_of(alignment as u64) {
-            return Err(DirectIoValidationError::UnalignedFileOffset {
+            return Err(DirectIoValidationViolation::UnalignedFileOffset {
                 offset: file_offset,
                 alignment,
             });
@@ -176,19 +176,19 @@ impl DirectIoRequest {
     }
 }
 
-fn validate_alignment(alignment: usize) -> Result<(), DirectIoValidationError> {
+fn validate_alignment(alignment: usize) -> Result<(), DirectIoValidationViolation> {
     if alignment == 0 || !alignment.is_power_of_two() {
-        Err(DirectIoValidationError::InvalidAlignment { alignment })
+        Err(DirectIoValidationViolation::InvalidAlignment { alignment })
     } else {
         Ok(())
     }
 }
 
-fn validate_len(len: usize, alignment: usize) -> Result<(), DirectIoValidationError> {
+fn validate_len(len: usize, alignment: usize) -> Result<(), DirectIoValidationViolation> {
     if len == 0 {
-        Err(DirectIoValidationError::ZeroLength)
+        Err(DirectIoValidationViolation::ZeroLength)
     } else if !len.is_multiple_of(alignment) {
-        Err(DirectIoValidationError::UnalignedLength { len, alignment })
+        Err(DirectIoValidationViolation::UnalignedLength { len, alignment })
     } else {
         Ok(())
     }
@@ -212,11 +212,11 @@ mod tests {
     fn direct_io_buffer_rejects_invalid_alignment_and_length() {
         assert_eq!(
             DirectIoBuffer::new(4096, 1000).expect_err("alignment must be power of two"),
-            DirectIoValidationError::InvalidAlignment { alignment: 1000 }
+            DirectIoValidationViolation::InvalidAlignment { alignment: 1000 }
         );
         assert_eq!(
             DirectIoBuffer::new(4097, 4096).expect_err("length must be aligned"),
-            DirectIoValidationError::UnalignedLength {
+            DirectIoValidationViolation::UnalignedLength {
                 len: 4097,
                 alignment: 4096,
             }
@@ -234,7 +234,7 @@ mod tests {
         let buffer = DirectIoBuffer::new(4096, 4096).expect("aligned buffer");
         assert_eq!(
             DirectIoRequest::new(1, buffer).expect_err("file offset must be aligned"),
-            DirectIoValidationError::UnalignedFileOffset {
+            DirectIoValidationViolation::UnalignedFileOffset {
                 offset: 1,
                 alignment: 4096,
             }

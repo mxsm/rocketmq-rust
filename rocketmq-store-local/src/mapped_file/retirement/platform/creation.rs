@@ -18,7 +18,7 @@ use std::io;
 use thiserror::Error;
 
 use super::native;
-use super::NamespaceVerificationError;
+use super::NamespaceTransitionOutcome;
 use super::VerifiedNamespaceRoot;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 use crate::mapped_file::retirement::writer::{AllocatedIncarnationReceipt, BoundIncarnationReceipt};
@@ -45,7 +45,7 @@ pub(in crate::mapped_file::retirement) enum IncarnationCreationStage {
 /// Handle-relative creation failure that never loses the underlying OS error.
 #[derive(Debug, Error)]
 #[error("managed incarnation creation failed during {stage:?}: {source}")]
-pub(in crate::mapped_file::retirement) struct IncarnationCreationError {
+pub(crate) struct IncarnationCreationError {
     stage: IncarnationCreationStage,
     #[source]
     source: IncarnationCreationErrorSource,
@@ -55,8 +55,9 @@ pub(in crate::mapped_file::retirement) struct IncarnationCreationError {
 enum IncarnationCreationErrorSource {
     #[error(transparent)]
     Io(#[from] io::Error),
-    #[error(transparent)]
-    Namespace(#[from] NamespaceVerificationError),
+    #[error("namespace verification failed: {0:?}")]
+    #[allow(dead_code, reason = "constructed by the platform-gated namespace engines")]
+    Namespace(NamespaceTransitionOutcome),
     #[error("{0}")]
     Policy(&'static str),
     #[allow(
@@ -71,6 +72,7 @@ enum IncarnationCreationErrorSource {
 }
 
 impl IncarnationCreationError {
+    #[allow(dead_code, reason = "constructed only by the platform-gated namespace engines")]
     pub(super) fn io(stage: IncarnationCreationStage, source: io::Error) -> Self {
         Self {
             stage,
@@ -85,7 +87,8 @@ impl IncarnationCreationError {
         }
     }
 
-    pub(super) fn namespace(stage: IncarnationCreationStage, source: NamespaceVerificationError) -> Self {
+    #[allow(dead_code, reason = "constructed only by the platform-gated namespace engines")]
+    pub(super) fn namespace(stage: IncarnationCreationStage, source: NamespaceTransitionOutcome) -> Self {
         Self {
             stage,
             source: IncarnationCreationErrorSource::Namespace(source),
@@ -146,6 +149,10 @@ impl VerifiedCreatedIncarnation {
 
 impl VerifiedNamespaceRoot {
     /// Creates, sizes, syncs, and key-binds the unique create-file name.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(in crate::mapped_file::retirement) fn create_incarnation_temp(
         &self,
         allocated: &AllocatedIncarnationReceipt,
@@ -162,6 +169,10 @@ impl VerifiedNamespaceRoot {
     }
 
     /// Publishes the exact bound temp file and returns a reopened canonical handle.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(in crate::mapped_file::retirement) fn publish_bound_incarnation(
         &self,
         created: CreatedIncarnationTemp,

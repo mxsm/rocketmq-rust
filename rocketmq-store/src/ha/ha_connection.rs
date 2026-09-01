@@ -18,14 +18,14 @@ use tokio::net::TcpStream;
 use uuid::Uuid;
 
 use crate::ha::ha_connection_state::HAConnectionState;
-use crate::ha::HAConnectionError;
+use crate::store_error::StoreError;
 
 #[trait_variant::make(HAConnection: Send)]
 pub trait RocketmqHAConnection: Sync {
     /// Start the HA connection
     ///
     /// This initiates the connection threads and begins processing.
-    async fn start(&mut self) -> Result<(), HAConnectionError>;
+    async fn start(&mut self) -> Result<(), StoreError>;
 
     /// Shutdown the HA connection gracefully
     ///

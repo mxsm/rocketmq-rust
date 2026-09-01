@@ -14,12 +14,12 @@
 
 use std::sync::Arc;
 
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::MappedFile;
+use crate::mapped_file::NativeMappedMemory;
+use crate::mapped_file::SelectMappedBufferSourceKind;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_store_local::mapped_file::DefaultMappedFile;
-use rocketmq_store_local::mapped_file::MappedFile;
-use rocketmq_store_local::mapped_file::NativeMappedMemory;
-use rocketmq_store_local::mapped_file::SelectMappedBufferSourceKind;
 
 type NativeMappedFile = DefaultMappedFile<NativeMappedMemory>;
 

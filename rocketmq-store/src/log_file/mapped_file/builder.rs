@@ -18,8 +18,16 @@ use cheetah_string::CheetahString;
 
 use super::default_mapped_file_impl::DefaultMappedFile;
 use super::FlushStrategy;
-use super::MappedFileError;
-use super::MappedFileResult;
+use crate::store_error::StoreComponent;
+use crate::store_error::StoreError;
+use crate::store_error::StoreOperation;
+
+/// Builds the invalid-request storage error for one builder configuration violation.
+fn mapped_file_configuration_error(detail: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::Load)
+        .in_component(StoreComponent::MappedFile)
+        .with_detail(detail)
+}
 
 /// Builder for configuring and creating mapped file instances.
 ///
@@ -287,60 +295,56 @@ impl MappedFileBuilder {
     /// # Returns
     ///
     /// `Ok(())` if configuration is valid, `Err` otherwise
-    fn validate(&self) -> MappedFileResult<()> {
+    fn validate(&self) -> Result<(), StoreError> {
         let Some(size) = self.file_size else {
-            return Err(MappedFileError::Configuration(
-                "file size must be specified".to_string(),
-            ));
+            return Err(mapped_file_configuration_error("file size must be specified"));
         };
         if size == 0 {
-            return Err(MappedFileError::Configuration(
-                "file size must be greater than zero".to_string(),
-            ));
+            return Err(mapped_file_configuration_error("file size must be greater than zero"));
         }
 
         // Validate size is reasonable (not too large to cause issues)
         const MAX_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GB
         if size > MAX_FILE_SIZE {
-            return Err(MappedFileError::Configuration(format!(
+            return Err(mapped_file_configuration_error(format!(
                 "file size {} exceeds maximum {} bytes",
                 size, MAX_FILE_SIZE
             )));
         }
 
         if self.flush_strategy != FlushStrategy::Async {
-            return Err(MappedFileError::Configuration(
-                "mapped file builder only supports the async flush strategy".to_string(),
+            return Err(mapped_file_configuration_error(
+                "mapped file builder only supports the async flush strategy",
             ));
         }
         if self.use_transient_store_pool {
-            return Err(MappedFileError::Configuration(
-                "mapped file builder does not support transient store pool allocation".to_string(),
+            return Err(mapped_file_configuration_error(
+                "mapped file builder does not support transient store pool allocation",
             ));
         }
         if !self.enable_metrics {
-            return Err(MappedFileError::Configuration(
-                "mapped file builder does not support disabling mapped-file metrics".to_string(),
+            return Err(mapped_file_configuration_error(
+                "mapped file builder does not support disabling mapped-file metrics",
             ));
         }
         if self.warmup {
-            return Err(MappedFileError::Configuration(
-                "mapped file builder does not support eager mapped-file warmup".to_string(),
+            return Err(mapped_file_configuration_error(
+                "mapped file builder does not support eager mapped-file warmup",
             ));
         }
 
         let file_name = Path::new(&self.file_path)
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| MappedFileError::Configuration("mapped file name is missing".to_string()))?;
+            .ok_or_else(|| mapped_file_configuration_error("mapped file name is missing"))?;
         let parsed_offset = file_name.parse::<u64>().map_err(|_| {
-            MappedFileError::Configuration(format!(
+            mapped_file_configuration_error(format!(
                 "mapped file name must be a numeric starting offset: {file_name}"
             ))
         })?;
         match self.file_from_offset {
             Some(configured_offset) if configured_offset != parsed_offset => {
-                return Err(MappedFileError::Configuration(format!(
+                return Err(mapped_file_configuration_error(format!(
                     "configured starting offset does not match mapped file name: configured={configured_offset}, \
                      parsed={parsed_offset}"
                 )));
@@ -362,9 +366,8 @@ impl MappedFileBuilder {
     ///
     /// # Errors
     ///
-    /// Returns `MappedFileError::Configuration` if validation fails.
-    /// Returns `MappedFileError::Io` if file operations fail.
-    /// Returns `MappedFileError::MmapFailed` if memory mapping fails.
+    /// Returns `STORAGE_REQUEST_INVALID` if validation fails and
+    /// `STORAGE_IO_FAILED` if file creation or memory mapping fails.
     ///
     /// # Examples
     ///
@@ -373,12 +376,16 @@ impl MappedFileBuilder {
     ///     .size_mb(1024)
     ///     .build()?;
     /// ```
-    pub fn build(self) -> MappedFileResult<DefaultMappedFile> {
+    pub fn build(self) -> Result<DefaultMappedFile, StoreError> {
         self.validate()?;
         let file_size = self
             .file_size
-            .ok_or_else(|| MappedFileError::Configuration("file size must be specified".to_string()))?;
-        DefaultMappedFile::try_new(CheetahString::from_string(self.file_path), file_size).map_err(MappedFileError::from)
+            .ok_or_else(|| mapped_file_configuration_error("file size must be specified"))?;
+        DefaultMappedFile::try_new(CheetahString::from_string(self.file_path), file_size).map_err(|source| {
+            StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Load)
+                .in_component(StoreComponent::MappedFile)
+                .with_source(source)
+        })
     }
 
     /// Returns the configured file size in bytes.

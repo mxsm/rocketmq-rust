@@ -15,7 +15,10 @@
 use super::*;
 
 impl LedgerStateMachine {
-    pub(super) fn insert_snapshot_incarnation(&mut self, entry: IncarnationSnapshotEntry) -> Result<(), StateError> {
+    pub(super) fn insert_snapshot_incarnation(
+        &mut self,
+        entry: IncarnationSnapshotEntry,
+    ) -> Result<(), StateViolation> {
         if entry.incarnation.store_uuid() != self.store_uuid
             || entry.incarnation.create_seq() > self.create_high_water
             || entry.expected_file_length == 0
@@ -31,13 +34,13 @@ impl LedgerStateMachine {
                 )
                 .is_err()
         {
-            return Err(StateError::InvalidSnapshotState);
+            return Err(StateViolation::InvalidSnapshotState);
         }
         if self.incarnations.contains_key(&entry.incarnation)
             || self.incarnation_by_canonical_path.contains_key(&entry.canonical_path)
             || self.incarnation_by_create_path.contains_key(&entry.create_file_path)
         {
-            return Err(StateError::InvalidSnapshotState);
+            return Err(StateViolation::InvalidSnapshotState);
         }
         let incarnation = entry.incarnation;
         let canonical_path = entry.canonical_path.clone();
@@ -51,9 +54,9 @@ impl LedgerStateMachine {
     pub(super) fn insert_snapshot_retirement(
         &mut self,
         entry: RetirementTicketSnapshotEntry,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), StateViolation> {
         let Some(incarnation) = self.incarnations.get(&entry.incarnation) else {
-            return Err(StateError::InvalidSnapshotState);
+            return Err(StateViolation::InvalidSnapshotState);
         };
         let stage_and_tombstone_are_consistent = match entry.stage {
             RetirementStage::IntentDurable | RetirementStage::LogicalRemoved => entry.tombstone_path.is_none(),
@@ -86,7 +89,7 @@ impl LedgerStateMachine {
             || self.ticket_by_incarnation.contains_key(&entry.incarnation)
             || self.retirements.contains_key(&entry.ticket_id)
         {
-            return Err(StateError::InvalidSnapshotState);
+            return Err(StateViolation::InvalidSnapshotState);
         }
         let completed_retained_eligibility = (entry.stage == RetirementStage::CompletedRetained)
             .then_some(CompletedRetainedEligibility::RequiresCleanStartRevalidation);
@@ -103,18 +106,18 @@ impl LedgerStateMachine {
         Ok(())
     }
 
-    pub(super) fn insert_snapshot_quarantine(&mut self, entry: QuarantineSnapshotEntry) -> Result<(), StateError> {
+    pub(super) fn insert_snapshot_quarantine(&mut self, entry: QuarantineSnapshotEntry) -> Result<(), StateViolation> {
         if entry.sequence_at_observation == 0 || entry.sequence_at_observation > self.snapshot_base_sequence {
-            return Err(StateError::InvalidSnapshotState);
+            return Err(StateViolation::InvalidSnapshotState);
         }
         if self.quarantines.insert(entry.source_path.clone(), entry).is_some() {
-            return Err(StateError::InvalidSnapshotState);
+            return Err(StateViolation::InvalidSnapshotState);
         }
         Ok(())
     }
 }
 
-pub(super) fn validate_snapshot_header(snapshot: &LifecycleSnapshot) -> Result<(), StateError> {
+pub(super) fn validate_snapshot_header(snapshot: &LifecycleSnapshot) -> Result<(), StateViolation> {
     let expected_predecessor = snapshot.generation.checked_sub(1).unwrap_or(u64::MAX);
     let mode_matches = match snapshot.mode {
         SnapshotMode::BootstrapInventory => snapshot.generation == 0,
@@ -125,7 +128,7 @@ pub(super) fn validate_snapshot_header(snapshot: &LifecycleSnapshot) -> Result<(
         || snapshot.base_sequence == 0
         || !mode_matches
     {
-        return Err(StateError::InvalidSnapshotState);
+        return Err(StateViolation::InvalidSnapshotState);
     }
     Ok(())
 }

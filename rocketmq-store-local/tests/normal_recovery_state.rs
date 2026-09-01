@@ -14,7 +14,7 @@
 
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryAction;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryEvent;
-use rocketmq_store_local::commit_log::recovery::NormalRecoveryOffsetError;
+use rocketmq_store_local::commit_log::recovery::NormalRecoveryOffsetViolation;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::NormalRecoveryState;
 use rocketmq_store_local::commit_log::recovery::NormalRecoverySummary;
@@ -30,7 +30,7 @@ fn constructor_rejects_offsets_above_i64_and_accepts_the_upper_bound() {
     for policy in [NormalRecoveryPolicy::Standard, NormalRecoveryPolicy::Optimized] {
         assert_eq!(
             NormalRecoveryState::try_new(I64_MAX_U64 + 1, policy),
-            Err(NormalRecoveryOffsetError::OffsetExceedsI64 {
+            Err(NormalRecoveryOffsetViolation::OffsetExceedsI64 {
                 offset: I64_MAX_U64 + 1,
             })
         );
@@ -339,7 +339,7 @@ fn checked_offset_errors_are_transactional_for_both_policies() {
                     relative_start: 1,
                     size: 0,
                 },
-                NormalRecoveryOffsetError::BaseRelativeOverflow {
+                NormalRecoveryOffsetViolation::BaseRelativeOverflow {
                     base_offset: u64::MAX,
                     relative_start: 1,
                 },
@@ -350,7 +350,7 @@ fn checked_offset_errors_are_transactional_for_both_policies() {
                     relative_start: u64::MAX,
                     size: 1,
                 },
-                NormalRecoveryOffsetError::MessageEndOverflow {
+                NormalRecoveryOffsetViolation::MessageEndOverflow {
                     start_offset: u64::MAX,
                     size: 1,
                 },
@@ -361,7 +361,7 @@ fn checked_offset_errors_are_transactional_for_both_policies() {
                     relative_start: 0,
                     size: 1,
                 },
-                NormalRecoveryOffsetError::OffsetExceedsI64 {
+                NormalRecoveryOffsetViolation::OffsetExceedsI64 {
                     offset: I64_MAX_U64 + 1,
                 },
             ),

@@ -795,9 +795,7 @@ pub(crate) enum IndexMigrationError {
     #[error(transparent)]
     Rocks(#[from] rocketmq_error::RocketMQError),
     #[error(transparent)]
-    Native(#[from] rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError),
-    #[error(transparent)]
-    Segment(#[from] rocketmq_store_local::timer::timeline_segment::TimelineSegmentError),
+    Store(#[from] crate::store_error::StoreError),
     #[error(transparent)]
     Commit(#[from] SegmentedCommitError),
     #[error(transparent)]

@@ -24,9 +24,9 @@ pub(crate) struct StoreUuid([u8; 16]);
 
 impl StoreUuid {
     /// Validates an opaque 128-bit store UUID.
-    pub(crate) fn new(bytes: [u8; 16]) -> Result<Self, IdentityError> {
+    pub(crate) fn new(bytes: [u8; 16]) -> Result<Self, IdentityViolation> {
         if bytes == [0; 16] {
-            return Err(IdentityError::ZeroStoreUuid);
+            return Err(IdentityViolation::ZeroStoreUuid);
         }
         Ok(Self(bytes))
     }
@@ -46,8 +46,8 @@ pub(crate) struct FileIncarnationId {
 
 impl FileIncarnationId {
     /// Creates an incarnation from its store UUID and monotonic creation sequence.
-    pub(crate) fn new(store_uuid: StoreUuid, create_seq: u64) -> Result<Self, IdentityError> {
-        let create_seq = NonZeroU64::new(create_seq).ok_or(IdentityError::ZeroCreateSequence)?;
+    pub(crate) fn new(store_uuid: StoreUuid, create_seq: u64) -> Result<Self, IdentityViolation> {
+        let create_seq = NonZeroU64::new(create_seq).ok_or(IdentityViolation::ZeroCreateSequence)?;
         Ok(Self { store_uuid, create_seq })
     }
 
@@ -68,8 +68,8 @@ pub(crate) struct TicketId(NonZeroU64);
 
 impl TicketId {
     /// Validates a ticket identifier.
-    pub(crate) fn new(value: u64) -> Result<Self, IdentityError> {
-        NonZeroU64::new(value).map(Self).ok_or(IdentityError::ZeroTicketId)
+    pub(crate) fn new(value: u64) -> Result<Self, IdentityViolation> {
+        NonZeroU64::new(value).map(Self).ok_or(IdentityViolation::ZeroTicketId)
     }
 
     /// Returns the ticket's non-zero wire value.
@@ -152,51 +152,51 @@ impl StoreRelativePath {
     pub(crate) const MAX_COMPONENT_BYTES: usize = 255;
 
     /// Validates and owns a store-root-relative path.
-    pub(crate) fn new(value: &str) -> Result<Self, IdentityError> {
+    pub(crate) fn new(value: &str) -> Result<Self, IdentityViolation> {
         if value.is_empty() {
-            return Err(IdentityError::EmptyStoreRelativePath);
+            return Err(IdentityViolation::EmptyStoreRelativePath);
         }
         if value.len() > Self::MAX_BYTES {
-            return Err(IdentityError::StoreRelativePathTooLong {
+            return Err(IdentityViolation::StoreRelativePathTooLong {
                 length: value.len(),
                 maximum: Self::MAX_BYTES,
             });
         }
         if value.starts_with('/') {
-            return Err(IdentityError::AbsoluteStoreRelativePath);
+            return Err(IdentityViolation::AbsoluteStoreRelativePath);
         }
         if value.contains('\\') {
-            return Err(IdentityError::StoreRelativePathContainsBackslash);
+            return Err(IdentityViolation::StoreRelativePathContainsBackslash);
         }
         if value.contains('\0') {
-            return Err(IdentityError::StoreRelativePathContainsNul);
+            return Err(IdentityViolation::StoreRelativePathContainsNul);
         }
         if value.contains(':') {
-            return Err(IdentityError::StoreRelativePathContainsColon);
+            return Err(IdentityViolation::StoreRelativePathContainsColon);
         }
         if value.chars().any(|character| character.is_ascii_control()) {
-            return Err(IdentityError::StoreRelativePathContainsAsciiControl);
+            return Err(IdentityViolation::StoreRelativePathContainsAsciiControl);
         }
 
         for segment in value.split('/') {
             match segment {
-                "" => return Err(IdentityError::EmptyStoreRelativePathSegment),
-                "." => return Err(IdentityError::CurrentStoreRelativePathSegment),
-                ".." => return Err(IdentityError::ParentStoreRelativePathSegment),
+                "" => return Err(IdentityViolation::EmptyStoreRelativePathSegment),
+                "." => return Err(IdentityViolation::CurrentStoreRelativePathSegment),
+                ".." => return Err(IdentityViolation::ParentStoreRelativePathSegment),
                 _ => {}
             }
             if segment.len() > Self::MAX_COMPONENT_BYTES {
-                return Err(IdentityError::StoreRelativePathComponentTooLong {
+                return Err(IdentityViolation::StoreRelativePathComponentTooLong {
                     length: segment.len(),
                     maximum: Self::MAX_COMPONENT_BYTES,
                 });
             }
             if segment.ends_with('.') || segment.ends_with(' ') {
-                return Err(IdentityError::StoreRelativePathComponentHasWindowsTrimSuffix);
+                return Err(IdentityViolation::StoreRelativePathComponentHasWindowsTrimSuffix);
             }
             let device_stem = segment.split('.').next().unwrap_or(segment);
             if is_windows_reserved_device_name(device_stem) {
-                return Err(IdentityError::WindowsReservedStoreRelativePathComponent);
+                return Err(IdentityViolation::WindowsReservedStoreRelativePathComponent);
             }
         }
 
@@ -214,10 +214,10 @@ impl StoreRelativePath {
     }
 
     /// Verifies that the final path component is the v1 numeric segment name.
-    pub(crate) fn validate_segment_binding(&self, segment_offset: u64) -> Result<(), IdentityError> {
+    pub(crate) fn validate_segment_binding(&self, segment_offset: u64) -> Result<(), IdentityViolation> {
         let expected = format!("{segment_offset:020}");
         if self.basename() != expected {
-            return Err(IdentityError::CanonicalSegmentPathIdentityMismatch);
+            return Err(IdentityViolation::CanonicalSegmentPathIdentityMismatch);
         }
         Ok(())
     }
@@ -229,7 +229,7 @@ impl StoreRelativePath {
         incarnation: FileIncarnationId,
         segment_offset: u64,
         create_nonce: &[u8; 16],
-    ) -> Result<(), IdentityError> {
+    ) -> Result<(), IdentityViolation> {
         self.validate_segment_binding(segment_offset)?;
         let nonce = encode_lower_hex(create_nonce);
         let expected = format!(
@@ -237,7 +237,7 @@ impl StoreRelativePath {
             incarnation.create_seq()
         );
         if !self.is_sibling_named(create_file_path, &expected) {
-            return Err(IdentityError::CreateFilePathIdentityMismatch);
+            return Err(IdentityViolation::CreateFilePathIdentityMismatch);
         }
         Ok(())
     }
@@ -248,7 +248,7 @@ impl StoreRelativePath {
         incarnation: FileIncarnationId,
         segment_offset: u64,
         create_nonce: &[u8; 16],
-    ) -> Result<Self, IdentityError> {
+    ) -> Result<Self, IdentityViolation> {
         self.validate_segment_binding(segment_offset)?;
         let nonce = encode_lower_hex(create_nonce);
         let basename = format!(
@@ -271,7 +271,7 @@ impl StoreRelativePath {
         segment_offset: u64,
         mapping_generation: u64,
         retirement_nonce: &[u8; 16],
-    ) -> Result<(), IdentityError> {
+    ) -> Result<(), IdentityViolation> {
         self.validate_segment_binding(segment_offset)?;
         let expected = tombstone_basename(
             ticket_id,
@@ -281,7 +281,7 @@ impl StoreRelativePath {
             retirement_nonce,
         );
         if !self.is_sibling_named(tombstone_path, &expected) {
-            return Err(IdentityError::TombstonePathIdentityMismatch);
+            return Err(IdentityViolation::TombstonePathIdentityMismatch);
         }
         Ok(())
     }
@@ -294,7 +294,7 @@ impl StoreRelativePath {
         segment_offset: u64,
         mapping_generation: u64,
         retirement_nonce: &[u8; 16],
-    ) -> Result<Self, IdentityError> {
+    ) -> Result<Self, IdentityViolation> {
         self.validate_segment_binding(segment_offset)?;
         let basename = tombstone_basename(
             ticket_id,
@@ -382,7 +382,7 @@ fn is_windows_reserved_device_name(component: &str) -> bool {
 
 /// Validation failure for a retirement identity value.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub(crate) enum IdentityError {
+pub(crate) enum IdentityViolation {
     /// Store UUID was the reserved all-zero value.
     #[error("store UUID must not be all zero")]
     ZeroStoreUuid,
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn store_uuid_rejects_zero_and_preserves_opaque_bytes() {
-        assert_eq!(StoreUuid::new([0; 16]), Err(IdentityError::ZeroStoreUuid));
+        assert_eq!(StoreUuid::new([0; 16]), Err(IdentityViolation::ZeroStoreUuid));
 
         let expected = [
             0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
@@ -487,7 +487,10 @@ mod tests {
     #[test]
     fn file_incarnation_rejects_zero_sequence_and_has_value_semantics() {
         let uuid = store_uuid(1);
-        assert_eq!(FileIncarnationId::new(uuid, 0), Err(IdentityError::ZeroCreateSequence));
+        assert_eq!(
+            FileIncarnationId::new(uuid, 0),
+            Err(IdentityViolation::ZeroCreateSequence)
+        );
 
         let first = FileIncarnationId::new(uuid, 1).expect("positive sequence is valid");
         let same = FileIncarnationId::new(uuid, 1).expect("positive sequence is valid");
@@ -502,7 +505,7 @@ mod tests {
 
     #[test]
     fn ticket_id_rejects_zero_and_accepts_full_nonzero_range() {
-        assert_eq!(TicketId::new(0), Err(IdentityError::ZeroTicketId));
+        assert_eq!(TicketId::new(0), Err(IdentityViolation::ZeroTicketId));
 
         let first = TicketId::new(1).expect("one is valid");
         let max = TicketId::new(u64::MAX).expect("maximum non-zero value is valid");
@@ -565,7 +568,7 @@ mod tests {
         assert!(StoreRelativePath::new(&maximum).is_ok());
         assert_eq!(
             StoreRelativePath::new(&too_long),
-            Err(IdentityError::StoreRelativePathTooLong {
+            Err(IdentityViolation::StoreRelativePathTooLong {
                 length: StoreRelativePath::MAX_BYTES + 1,
                 maximum: StoreRelativePath::MAX_BYTES,
             })
@@ -577,7 +580,7 @@ mod tests {
         let too_long_component = format!("{maximum_component}界");
         assert_eq!(
             StoreRelativePath::new(&too_long_component),
-            Err(IdentityError::StoreRelativePathComponentTooLong {
+            Err(IdentityViolation::StoreRelativePathComponentTooLong {
                 length: 258,
                 maximum: StoreRelativePath::MAX_COMPONENT_BYTES,
             })
@@ -587,44 +590,44 @@ mod tests {
     #[test]
     fn store_relative_path_rejects_noncanonical_or_unsafe_forms() {
         let invalid = [
-            ("", IdentityError::EmptyStoreRelativePath),
-            ("/commitlog/1", IdentityError::AbsoluteStoreRelativePath),
-            ("//server/share", IdentityError::AbsoluteStoreRelativePath),
-            ("\\server\\share", IdentityError::StoreRelativePathContainsBackslash),
-            ("commitlog\\1", IdentityError::StoreRelativePathContainsBackslash),
-            ("commit\0log/1", IdentityError::StoreRelativePathContainsNul),
-            ("C:/store/file", IdentityError::StoreRelativePathContainsColon),
-            ("c:store/file", IdentityError::StoreRelativePathContainsColon),
-            ("stream:name", IdentityError::StoreRelativePathContainsColon),
+            ("", IdentityViolation::EmptyStoreRelativePath),
+            ("/commitlog/1", IdentityViolation::AbsoluteStoreRelativePath),
+            ("//server/share", IdentityViolation::AbsoluteStoreRelativePath),
+            ("\\server\\share", IdentityViolation::StoreRelativePathContainsBackslash),
+            ("commitlog\\1", IdentityViolation::StoreRelativePathContainsBackslash),
+            ("commit\0log/1", IdentityViolation::StoreRelativePathContainsNul),
+            ("C:/store/file", IdentityViolation::StoreRelativePathContainsColon),
+            ("c:store/file", IdentityViolation::StoreRelativePathContainsColon),
+            ("stream:name", IdentityViolation::StoreRelativePathContainsColon),
             (
                 "commitlog/line\nfeed",
-                IdentityError::StoreRelativePathContainsAsciiControl,
+                IdentityViolation::StoreRelativePathContainsAsciiControl,
             ),
-            ("commitlog//1", IdentityError::EmptyStoreRelativePathSegment),
-            ("commitlog/", IdentityError::EmptyStoreRelativePathSegment),
-            (".", IdentityError::CurrentStoreRelativePathSegment),
-            ("commitlog/./1", IdentityError::CurrentStoreRelativePathSegment),
-            ("..", IdentityError::ParentStoreRelativePathSegment),
-            ("commitlog/../1", IdentityError::ParentStoreRelativePathSegment),
+            ("commitlog//1", IdentityViolation::EmptyStoreRelativePathSegment),
+            ("commitlog/", IdentityViolation::EmptyStoreRelativePathSegment),
+            (".", IdentityViolation::CurrentStoreRelativePathSegment),
+            ("commitlog/./1", IdentityViolation::CurrentStoreRelativePathSegment),
+            ("..", IdentityViolation::ParentStoreRelativePathSegment),
+            ("commitlog/../1", IdentityViolation::ParentStoreRelativePathSegment),
             (
                 "commitlog/trailing.",
-                IdentityError::StoreRelativePathComponentHasWindowsTrimSuffix,
+                IdentityViolation::StoreRelativePathComponentHasWindowsTrimSuffix,
             ),
             (
                 "commitlog/trailing ",
-                IdentityError::StoreRelativePathComponentHasWindowsTrimSuffix,
+                IdentityViolation::StoreRelativePathComponentHasWindowsTrimSuffix,
             ),
             (
                 "commitlog/CON",
-                IdentityError::WindowsReservedStoreRelativePathComponent,
+                IdentityViolation::WindowsReservedStoreRelativePathComponent,
             ),
             (
                 "commitlog/com1.bin",
-                IdentityError::WindowsReservedStoreRelativePathComponent,
+                IdentityViolation::WindowsReservedStoreRelativePathComponent,
             ),
             (
                 "commitlog/Lpt9",
-                IdentityError::WindowsReservedStoreRelativePathComponent,
+                IdentityViolation::WindowsReservedStoreRelativePathComponent,
             ),
         ];
 
@@ -708,15 +711,15 @@ mod tests {
         .expect("wrong-directory path is still lexically valid");
         assert_eq!(
             canonical.validate_create_binding(&wrong_directory, incarnation, 0, &create_nonce),
-            Err(IdentityError::CreateFilePathIdentityMismatch)
+            Err(IdentityViolation::CreateFilePathIdentityMismatch)
         );
         assert_eq!(
             canonical.validate_segment_binding(1),
-            Err(IdentityError::CanonicalSegmentPathIdentityMismatch)
+            Err(IdentityViolation::CanonicalSegmentPathIdentityMismatch)
         );
         assert_eq!(
             canonical.validate_tombstone_binding(&tombstone, ticket, incarnation, 0, 4, &retirement_nonce),
-            Err(IdentityError::TombstonePathIdentityMismatch)
+            Err(IdentityViolation::TombstonePathIdentityMismatch)
         );
     }
 }

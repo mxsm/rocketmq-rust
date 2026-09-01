@@ -14,7 +14,7 @@
 
 /// Checked-arithmetic failure while deriving an abnormal-recovery confirm candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum AbnormalRecoveryConfirmCandidateError {
+pub enum AbnormalRecoveryConfirmCandidateViolation {
     /// The decoded CommitLog offset was negative.
     #[error("commitlog offset {offset} is negative")]
     NegativeCommitLogOffset {
@@ -41,23 +41,23 @@ pub enum AbnormalRecoveryConfirmCandidateError {
 ///
 /// # Errors
 ///
-/// Returns [`AbnormalRecoveryConfirmCandidateError`] when the decoded offset is negative, the raw
+/// Returns [`AbnormalRecoveryConfirmCandidateViolation`] when the decoded offset is negative, the raw
 /// input-frame size cannot be represented by `i64`, or their sum overflows `i64`.
 pub fn abnormal_confirm_candidate_end(
     commit_log_offset: i64,
     input_size: usize,
-) -> Result<i64, AbnormalRecoveryConfirmCandidateError> {
+) -> Result<i64, AbnormalRecoveryConfirmCandidateViolation> {
     if commit_log_offset < 0 {
-        return Err(AbnormalRecoveryConfirmCandidateError::NegativeCommitLogOffset {
+        return Err(AbnormalRecoveryConfirmCandidateViolation::NegativeCommitLogOffset {
             offset: commit_log_offset,
         });
     }
     let input_size = i64::try_from(input_size)
-        .map_err(|_| AbnormalRecoveryConfirmCandidateError::InputSizeExceedsI64 { size: input_size })?;
-    commit_log_offset
-        .checked_add(input_size)
-        .ok_or(AbnormalRecoveryConfirmCandidateError::ConfirmCandidateOverflow {
+        .map_err(|_| AbnormalRecoveryConfirmCandidateViolation::InputSizeExceedsI64 { size: input_size })?;
+    commit_log_offset.checked_add(input_size).ok_or(
+        AbnormalRecoveryConfirmCandidateViolation::ConfirmCandidateOverflow {
             offset: commit_log_offset,
             size: input_size,
-        })
+        },
+    )
 }

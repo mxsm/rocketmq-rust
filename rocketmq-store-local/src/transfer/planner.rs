@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
+
 use crate::transfer::batch::TransferBatch;
 use crate::transfer::batch::TransferPlan;
 use crate::transfer::error::TransferError;
-use crate::transfer::error::TransferResult;
 use crate::transfer::segment::SegmentLease;
 
 pub const DEFAULT_TRANSFER_BATCH_SIZE: usize = 256 * 1024;
@@ -35,14 +37,22 @@ pub struct TransferPlanInput {
 pub struct TransferPlanner;
 
 impl TransferPlanner {
-    pub fn plan<F>(input: TransferPlanInput, select_segments: F) -> TransferResult<TransferPlan>
+    /// Plans one replication batch from the caller-provided segment selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STORAGE_REQUEST_INVALID` for invalid planner input or a
+    /// selection that exceeds its planned budget, and forwards the caller's
+    /// selection error unchanged.
+    pub fn plan<F>(input: TransferPlanInput, select_segments: F) -> Result<TransferPlan, StoreError>
     where
-        F: FnOnce(i64, usize, bool) -> TransferResult<Vec<SegmentLease>>,
+        F: FnOnce(i64, usize, bool) -> Result<Vec<SegmentLease>, StoreError>,
     {
         if input.mapped_file_size == 0 {
-            return Err(TransferError::InvalidInput(
-                "mapped_file_size must be greater than zero".to_string(),
-            ));
+            return Err(
+                TransferError::InvalidInput("mapped_file_size must be greater than zero".to_string())
+                    .into_store_error(StoreOperation::Replicate),
+            );
         }
 
         let next_offset = Self::resolve_next_offset(input);
@@ -71,7 +81,8 @@ impl TransferPlanner {
             return Err(TransferError::SegmentSelection(format!(
                 "selected {} bytes exceeds planned max {} bytes",
                 total_body_len, max_body_bytes
-            )));
+            ))
+            .into_store_error(StoreOperation::Replicate));
         }
 
         Ok(TransferPlan::Data(TransferBatch::data(next_offset, segments)))

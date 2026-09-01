@@ -28,9 +28,9 @@ use rocketmq_runtime::ResourcePermit;
 use thiserror::Error;
 
 use crate::base::transient_store_pool::TransientStorePool;
+use crate::mapped_file::retirement::service::ManagedIncarnationCreationError;
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::ManagedIncarnationCreateRequest;
-use crate::mapped_file::ManagedIncarnationCreationError;
 use crate::mapped_file::ManagedLifecycleRuntime;
 use crate::mapped_file::ManagedMappedFileQueueGeneration;
 
@@ -49,7 +49,7 @@ impl ManagedAllocationContext {
 /// Failure returned by the Store-owned managed allocation worker.
 #[doc(hidden)]
 #[derive(Debug, Error)]
-pub enum ManagedMappedFileAllocationError {
+pub(crate) enum ManagedMappedFileAllocationError {
     #[error("managed lifecycle allocation worker is not running")]
     WorkerUnavailable,
     #[error("managed lifecycle authority is not installed on the allocation worker")]
@@ -66,6 +66,32 @@ pub enum ManagedMappedFileAllocationError {
     Creation(#[from] ManagedIncarnationCreationError),
 }
 
+impl ManagedMappedFileAllocationError {
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Invalid sizes and paths are invalid requests, missing worker or
+    /// lifecycle authority and an exhausted allocation budget are backend
+    /// unavailability, and creation faults are write failures. The complete
+    /// leaf is preserved as the typed source.
+    pub(crate) fn into_store_error(self) -> rocketmq_store_api::StoreError {
+        use rocketmq_store_api::StoreComponent;
+        use rocketmq_store_api::StoreError;
+        use rocketmq_store_api::StoreOperation;
+        let descriptor = match &self {
+            Self::InvalidFileSize(_) | Self::QueueOutsideStoreRoot | Self::InvalidQueuePath => {
+                &rocketmq_error::STORAGE_REQUEST_INVALID
+            }
+            Self::WorkerUnavailable | Self::LifecycleUnavailable | Self::Budget(_) => {
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
+            }
+            Self::Creation(_) => &rocketmq_error::STORAGE_WRITE_FAILED,
+        };
+        StoreError::new(descriptor, StoreOperation::Append)
+            .in_component(StoreComponent::MappedFile)
+            .with_source(self)
+    }
+}
+
 pub(super) struct ManagedAllocationRequest {
     runtime: ManagedLifecycleRuntime,
     queue: ManagedMappedFileQueueGeneration<DefaultMappedFile>,
@@ -79,6 +105,10 @@ impl ManagedAllocationRequest {
     #[allow(
         clippy::too_many_arguments,
         reason = "the worker request binds one exact queue, lifecycle runtime, segment, nonce, pool, and budget permit"
+    )]
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
     )]
     pub(super) fn new(
         context: ManagedAllocationContext,
@@ -127,6 +157,10 @@ impl ManagedAllocationRequest {
         self.complete(Err(ManagedMappedFileAllocationError::WorkerUnavailable));
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
     pub(super) fn wait(
         &self,
         worker_completed: &AtomicBool,
@@ -156,6 +190,10 @@ impl ManagedAllocationRequest {
     }
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+)]
 fn relative_directory(store_root: &Path, queue_path: &Path) -> Result<String, ManagedMappedFileAllocationError> {
     let relative = queue_path
         .strip_prefix(store_root)

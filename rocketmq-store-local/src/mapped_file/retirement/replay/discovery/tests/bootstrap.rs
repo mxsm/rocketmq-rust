@@ -22,8 +22,9 @@ fn marker_absent_managed_artifacts_require_bootstrap_recovery() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("activated acknowledgement without marker is corruption")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 
     let preactivation = DiskFixture::preactivation();
@@ -60,8 +61,9 @@ fn marker_absent_rejects_noncanonical_bootstrap_frontiers() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("a log cannot precede the fixed acknowledgement file")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 
     let zero_acknowledgement = DiskFixture::preactivation();
@@ -73,8 +75,9 @@ fn marker_absent_rejects_noncanonical_bootstrap_frontiers() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("a sealed unit cannot coexist with zero acknowledgement slots")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 
     let wrong_first_record = DiskFixture::preactivation();
@@ -99,8 +102,9 @@ fn marker_absent_rejects_noncanonical_bootstrap_frontiers() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("StoreInitialized must match immutable store.meta byte-for-byte")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 }
 
@@ -115,8 +119,9 @@ fn marker_absent_requires_store_initialized_before_the_bootstrap_snapshot() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("snapshot publication cannot precede durable StoreInitialized")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 }
 
@@ -186,7 +191,8 @@ fn marker_absent_rejects_any_marker_committed_prefix() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("marker witness bytes prove missing activation state")
-            .kind(),
-        ManagedLifecycleReadErrorKind::Corruption
+            .code()
+            .as_str(),
+        "storage.state.corrupted"
     );
 }

@@ -23,7 +23,7 @@ use super::snapshot_payload::kind_payload_max;
 use super::types::LifecycleSnapshot;
 use super::types::SnapshotEntry;
 use super::types::SnapshotMode;
-use super::SidecarError;
+use super::SidecarViolation;
 use super::MAX_SNAPSHOT_BODY_LENGTH;
 use super::MAX_SNAPSHOT_ENTRY_COUNT;
 use super::MAX_SNAPSHOT_ENTRY_PAYLOAD_LENGTH;
@@ -38,7 +38,7 @@ const ENTRY_HEADER_LENGTH: usize = 8;
 const ENTRY_CRC_LENGTH: usize = 4;
 const MIN_FRAMED_ENTRY_LENGTH: usize = ENTRY_HEADER_LENGTH + ENTRY_CRC_LENGTH;
 
-pub(crate) fn encode_snapshot(snapshot: &LifecycleSnapshot) -> Result<Vec<u8>, SidecarError> {
+pub(crate) fn encode_snapshot(snapshot: &LifecycleSnapshot) -> Result<Vec<u8>, SidecarViolation> {
     validate_header_relationships(snapshot)?;
     let entry_count = validate_entry_count(snapshot.entries.len())?;
 
@@ -52,19 +52,20 @@ pub(crate) fn encode_snapshot(snapshot: &LifecycleSnapshot) -> Result<Vec<u8>, S
         let kind = entry_kind(entry);
         let payload = encode_payload(entry, snapshot.store_uuid, snapshot.base_sequence)?;
         validate_payload_length(kind, payload.len())?;
-        let payload_length = u32::try_from(payload.len()).map_err(|_| SidecarError::SnapshotEntryPayloadTooLarge {
-            kind,
-            length: payload.len(),
-            maximum: MAX_SNAPSHOT_ENTRY_PAYLOAD_LENGTH,
-        })?;
+        let payload_length =
+            u32::try_from(payload.len()).map_err(|_| SidecarViolation::SnapshotEntryPayloadTooLarge {
+                kind,
+                length: payload.len(),
+                maximum: MAX_SNAPSHOT_ENTRY_PAYLOAD_LENGTH,
+            })?;
         let entry_length = ENTRY_HEADER_LENGTH
             .checked_add(payload.len())
             .and_then(|value| value.checked_add(ENTRY_CRC_LENGTH))
-            .ok_or(SidecarError::SnapshotLengthOverflow)?;
+            .ok_or(SidecarViolation::SnapshotLengthOverflow)?;
         let prospective_body_length = body
             .len()
             .checked_add(entry_length)
-            .ok_or(SidecarError::SnapshotLengthOverflow)?;
+            .ok_or(SidecarViolation::SnapshotLengthOverflow)?;
         validate_body_length(prospective_body_length as u64)?;
 
         let entry_start = body.len();
@@ -78,9 +79,9 @@ pub(crate) fn encode_snapshot(snapshot: &LifecycleSnapshot) -> Result<Vec<u8>, S
 
     let total_length = MIN_SNAPSHOT_FILE_LENGTH
         .checked_add(body.len())
-        .ok_or(SidecarError::SnapshotLengthOverflow)?;
-    let total_length_u64 = u64::try_from(total_length).map_err(|_| SidecarError::SnapshotLengthOverflow)?;
-    let body_length_u64 = u64::try_from(body.len()).map_err(|_| SidecarError::SnapshotLengthOverflow)?;
+        .ok_or(SidecarViolation::SnapshotLengthOverflow)?;
+    let total_length_u64 = u64::try_from(total_length).map_err(|_| SidecarViolation::SnapshotLengthOverflow)?;
+    let body_length_u64 = u64::try_from(body.len()).map_err(|_| SidecarViolation::SnapshotLengthOverflow)?;
 
     let mut output = Vec::with_capacity(total_length);
     output.extend_from_slice(&SNAPSHOT_MAGIC);
@@ -106,16 +107,16 @@ pub(crate) fn encode_snapshot(snapshot: &LifecycleSnapshot) -> Result<Vec<u8>, S
     Ok(output)
 }
 
-pub(crate) fn decode_snapshot(input: &[u8]) -> Result<LifecycleSnapshot, SidecarError> {
+pub(crate) fn decode_snapshot(input: &[u8]) -> Result<LifecycleSnapshot, SidecarViolation> {
     if input.len() < MIN_SNAPSHOT_FILE_LENGTH {
-        return Err(SidecarError::SnapshotTooShort {
+        return Err(SidecarViolation::SnapshotTooShort {
             actual: input.len(),
             minimum: MIN_SNAPSHOT_FILE_LENGTH,
         });
     }
     let magic = read_array::<4>(input, 0)?;
     if magic != SNAPSHOT_MAGIC {
-        return Err(SidecarError::InvalidMagic {
+        return Err(SidecarViolation::InvalidMagic {
             structure: "snapshot",
             found: magic,
         });
@@ -123,7 +124,7 @@ pub(crate) fn decode_snapshot(input: &[u8]) -> Result<LifecycleSnapshot, Sidecar
     let major = read_u16(input, 4)?;
     let minor = read_u16(input, 6)?;
     if (major, minor) != (FORMAT_MAJOR, FORMAT_MINOR) {
-        return Err(SidecarError::UnsupportedVersion {
+        return Err(SidecarViolation::UnsupportedVersion {
             structure: "snapshot",
             major,
             minor,
@@ -131,7 +132,7 @@ pub(crate) fn decode_snapshot(input: &[u8]) -> Result<LifecycleSnapshot, Sidecar
     }
     let header_length = read_u16(input, 8)?;
     if usize::from(header_length) != SNAPSHOT_HEADER_LENGTH {
-        return Err(SidecarError::InvalidLengthField {
+        return Err(SidecarViolation::InvalidLengthField {
             structure: "snapshot header",
             expected: SNAPSHOT_HEADER_LENGTH as u64,
             actual: u64::from(header_length),
@@ -143,23 +144,23 @@ pub(crate) fn decode_snapshot(input: &[u8]) -> Result<LifecycleSnapshot, Sidecar
     validate_body_length(body_length)?;
     let entry_count = read_u32(input, 84)?;
     if entry_count > MAX_SNAPSHOT_ENTRY_COUNT {
-        return Err(SidecarError::SnapshotEntryCountTooLarge {
+        return Err(SidecarViolation::SnapshotEntryCountTooLarge {
             count: u64::from(entry_count),
             maximum: u64::from(MAX_SNAPSHOT_ENTRY_COUNT),
         });
     }
     let minimum_body_length = u64::from(entry_count)
         .checked_mul(MIN_FRAMED_ENTRY_LENGTH as u64)
-        .ok_or(SidecarError::SnapshotLengthOverflow)?;
+        .ok_or(SidecarViolation::SnapshotLengthOverflow)?;
     if minimum_body_length > body_length {
-        return Err(SidecarError::SnapshotEntryCountExceedsBody {
+        return Err(SidecarViolation::SnapshotEntryCountExceedsBody {
             count: u64::from(entry_count),
             body_length,
         });
     }
     let reserved = read_u32(input, 96)?;
     if reserved != 0 {
-        return Err(SidecarError::NonZeroReserved {
+        return Err(SidecarViolation::NonZeroReserved {
             field: "snapshot_header.reserved",
             value: u64::from(reserved),
         });
@@ -168,24 +169,24 @@ pub(crate) fn decode_snapshot(input: &[u8]) -> Result<LifecycleSnapshot, Sidecar
 
     let expected_total = (MIN_SNAPSHOT_FILE_LENGTH as u64)
         .checked_add(body_length)
-        .ok_or(SidecarError::SnapshotLengthOverflow)?;
+        .ok_or(SidecarViolation::SnapshotLengthOverflow)?;
     if total_length != expected_total {
-        return Err(SidecarError::InvalidLengthField {
+        return Err(SidecarViolation::InvalidLengthField {
             structure: "snapshot total",
             expected: expected_total,
             actual: total_length,
         });
     }
-    let expected_usize = usize::try_from(total_length).map_err(|_| SidecarError::SnapshotLengthOverflow)?;
+    let expected_usize = usize::try_from(total_length).map_err(|_| SidecarViolation::SnapshotLengthOverflow)?;
     if input.len() != expected_usize {
-        return Err(SidecarError::InvalidLength {
+        return Err(SidecarViolation::InvalidLength {
             structure: "snapshot",
             expected: expected_usize,
             actual: input.len(),
         });
     }
 
-    let store_uuid = StoreUuid::new(read_array(input, 20)?).map_err(|source| SidecarError::InvalidIdentity {
+    let store_uuid = StoreUuid::new(read_array(input, 20)?).map_err(|source| SidecarViolation::InvalidIdentity {
         field: "store_uuid",
         source,
     })?;
@@ -202,17 +203,17 @@ pub(crate) fn decode_snapshot(input: &[u8]) -> Result<LifecycleSnapshot, Sidecar
     };
     validate_header_relationships(&snapshot)?;
 
-    let body_length_usize = usize::try_from(body_length).map_err(|_| SidecarError::SnapshotLengthOverflow)?;
+    let body_length_usize = usize::try_from(body_length).map_err(|_| SidecarViolation::SnapshotLengthOverflow)?;
     let body_end = SNAPSHOT_HEADER_LENGTH
         .checked_add(body_length_usize)
-        .ok_or(SidecarError::SnapshotLengthOverflow)?;
+        .ok_or(SidecarViolation::SnapshotLengthOverflow)?;
     let body = input
         .get(SNAPSHOT_HEADER_LENGTH..body_end)
-        .ok_or(SidecarError::SnapshotLengthOverflow)?;
+        .ok_or(SidecarViolation::SnapshotLengthOverflow)?;
     let expected_body_crc = read_u32(input, body_end)?;
     let actual_body_crc = crc32(body);
     if expected_body_crc != actual_body_crc {
-        return Err(SidecarError::SnapshotBodyChecksumMismatch {
+        return Err(SidecarViolation::SnapshotBodyChecksumMismatch {
             expected: expected_body_crc,
             actual: actual_body_crc,
         });
@@ -228,13 +229,13 @@ fn decode_entries(
     entry_count: u32,
     store_uuid: StoreUuid,
     base_sequence: u64,
-) -> Result<Vec<SnapshotEntry>, SidecarError> {
+) -> Result<Vec<SnapshotEntry>, SidecarViolation> {
     let mut entries = Vec::new();
     let mut offset = 0_usize;
     for _ in 0..entry_count {
         let remaining = body.len().saturating_sub(offset);
         if remaining < ENTRY_HEADER_LENGTH {
-            return Err(SidecarError::TruncatedSnapshotEntry {
+            return Err(SidecarViolation::TruncatedSnapshotEntry {
                 kind: 0,
                 offset,
                 needed: ENTRY_HEADER_LENGTH,
@@ -243,22 +244,22 @@ fn decode_entries(
         }
         let kind = read_u16(body, offset)?;
         if kind_payload_max(kind).is_none() {
-            return Err(SidecarError::InvalidSnapshotEntryKind { kind });
+            return Err(SidecarViolation::InvalidSnapshotEntryKind { kind });
         }
         let version = read_u16(body, offset + 2)?;
         if version != ENTRY_VERSION {
-            return Err(SidecarError::UnsupportedSnapshotEntryVersion { kind, version });
+            return Err(SidecarViolation::UnsupportedSnapshotEntryVersion { kind, version });
         }
         let payload_length =
-            usize::try_from(read_u32(body, offset + 4)?).map_err(|_| SidecarError::SnapshotLengthOverflow)?;
+            usize::try_from(read_u32(body, offset + 4)?).map_err(|_| SidecarViolation::SnapshotLengthOverflow)?;
         validate_payload_length(kind, payload_length)?;
         let entry_end = offset
             .checked_add(ENTRY_HEADER_LENGTH)
             .and_then(|value| value.checked_add(payload_length))
             .and_then(|value| value.checked_add(ENTRY_CRC_LENGTH))
-            .ok_or(SidecarError::SnapshotLengthOverflow)?;
+            .ok_or(SidecarViolation::SnapshotLengthOverflow)?;
         if entry_end > body.len() {
-            return Err(SidecarError::TruncatedSnapshotEntry {
+            return Err(SidecarViolation::TruncatedSnapshotEntry {
                 kind,
                 offset,
                 needed: entry_end - offset,
@@ -269,7 +270,7 @@ fn decode_entries(
         let expected_crc = read_u32(body, crc_offset)?;
         let actual_crc = crc32(&body[offset..crc_offset]);
         if expected_crc != actual_crc {
-            return Err(SidecarError::SnapshotEntryChecksumMismatch {
+            return Err(SidecarViolation::SnapshotEntryChecksumMismatch {
                 kind,
                 expected: expected_crc,
                 actual: actual_crc,
@@ -279,8 +280,8 @@ fn decode_entries(
         let entry = decode_payload(kind, &body[payload_start..crc_offset], store_uuid, base_sequence)?;
         if let Some(previous) = entries.last() {
             match compare_entries(previous, &entry) {
-                Ordering::Greater => return Err(SidecarError::NonCanonicalSnapshotOrder),
-                Ordering::Equal => return Err(SidecarError::DuplicateSnapshotEntry { kind }),
+                Ordering::Greater => return Err(SidecarViolation::NonCanonicalSnapshotOrder),
+                Ordering::Equal => return Err(SidecarViolation::DuplicateSnapshotEntry { kind }),
                 Ordering::Less => {}
             }
         }
@@ -288,16 +289,16 @@ fn decode_entries(
         offset = entry_end;
     }
     if offset != body.len() {
-        return Err(SidecarError::TrailingSnapshotBody {
+        return Err(SidecarViolation::TrailingSnapshotBody {
             remaining: body.len() - offset,
         });
     }
     Ok(entries)
 }
 
-fn validate_header_relationships(snapshot: &LifecycleSnapshot) -> Result<(), SidecarError> {
+fn validate_header_relationships(snapshot: &LifecycleSnapshot) -> Result<(), SidecarViolation> {
     if snapshot.generation != snapshot.log_generation {
-        return Err(SidecarError::SnapshotGenerationMismatch {
+        return Err(SidecarViolation::SnapshotGenerationMismatch {
             snapshot: snapshot.generation,
             log: snapshot.log_generation,
         });
@@ -308,7 +309,7 @@ fn validate_header_relationships(snapshot: &LifecycleSnapshot) -> Result<(), Sid
         snapshot.generation - 1
     };
     if snapshot.predecessor_log_generation != expected_predecessor {
-        return Err(SidecarError::InvalidSnapshotPredecessor {
+        return Err(SidecarViolation::InvalidSnapshotPredecessor {
             generation: snapshot.generation,
             predecessor: snapshot.predecessor_log_generation,
         });
@@ -318,33 +319,33 @@ fn validate_header_relationships(snapshot: &LifecycleSnapshot) -> Result<(), Sid
         SnapshotMode::OrdinaryCompaction | SnapshotMode::TailRepair => snapshot.generation > 0,
     };
     if !valid_mode_generation {
-        return Err(SidecarError::SnapshotModeGenerationMismatch {
+        return Err(SidecarViolation::SnapshotModeGenerationMismatch {
             mode: mode_name(snapshot.mode),
             generation: snapshot.generation,
         });
     }
     if snapshot.base_sequence == 0 {
-        return Err(SidecarError::ZeroSnapshotBaseSequence);
+        return Err(SidecarViolation::ZeroSnapshotBaseSequence);
     }
     Ok(())
 }
 
-fn validate_entry_count(length: usize) -> Result<u32, SidecarError> {
+fn validate_entry_count(length: usize) -> Result<u32, SidecarViolation> {
     if length > MAX_SNAPSHOT_ENTRY_COUNT as usize {
-        return Err(SidecarError::SnapshotEntryCountTooLarge {
+        return Err(SidecarViolation::SnapshotEntryCountTooLarge {
             count: u64::try_from(length).unwrap_or(u64::MAX),
             maximum: u64::from(MAX_SNAPSHOT_ENTRY_COUNT),
         });
     }
-    u32::try_from(length).map_err(|_| SidecarError::SnapshotEntryCountTooLarge {
+    u32::try_from(length).map_err(|_| SidecarViolation::SnapshotEntryCountTooLarge {
         count: u64::MAX,
         maximum: u64::from(MAX_SNAPSHOT_ENTRY_COUNT),
     })
 }
 
-fn validate_body_length(length: u64) -> Result<(), SidecarError> {
+fn validate_body_length(length: u64) -> Result<(), SidecarViolation> {
     if length > MAX_SNAPSHOT_BODY_LENGTH as u64 {
-        return Err(SidecarError::SnapshotBodyTooLarge {
+        return Err(SidecarViolation::SnapshotBodyTooLarge {
             length,
             maximum: MAX_SNAPSHOT_BODY_LENGTH as u64,
         });
@@ -352,25 +353,25 @@ fn validate_body_length(length: u64) -> Result<(), SidecarError> {
     Ok(())
 }
 
-fn validate_payload_length(kind: u16, length: usize) -> Result<(), SidecarError> {
+fn validate_payload_length(kind: u16, length: usize) -> Result<(), SidecarViolation> {
     if length > MAX_SNAPSHOT_ENTRY_PAYLOAD_LENGTH {
-        return Err(SidecarError::SnapshotEntryPayloadTooLarge {
+        return Err(SidecarViolation::SnapshotEntryPayloadTooLarge {
             kind,
             length,
             maximum: MAX_SNAPSHOT_ENTRY_PAYLOAD_LENGTH,
         });
     }
-    let maximum = kind_payload_max(kind).ok_or(SidecarError::InvalidSnapshotEntryKind { kind })?;
+    let maximum = kind_payload_max(kind).ok_or(SidecarViolation::InvalidSnapshotEntryKind { kind })?;
     if length > maximum {
-        return Err(SidecarError::SnapshotEntryPayloadTooLarge { kind, length, maximum });
+        return Err(SidecarViolation::SnapshotEntryPayloadTooLarge { kind, length, maximum });
     }
     Ok(())
 }
 
-fn validate_canonical_entries(entries: &[SnapshotEntry]) -> Result<(), SidecarError> {
+fn validate_canonical_entries(entries: &[SnapshotEntry]) -> Result<(), SidecarViolation> {
     for pair in entries.windows(2) {
         if compare_entries(&pair[0], &pair[1]) == Ordering::Equal {
-            return Err(SidecarError::DuplicateSnapshotEntry {
+            return Err(SidecarViolation::DuplicateSnapshotEntry {
                 kind: entry_kind(&pair[0]),
             });
         }
@@ -378,7 +379,7 @@ fn validate_canonical_entries(entries: &[SnapshotEntry]) -> Result<(), SidecarEr
     Ok(())
 }
 
-fn validate_high_waters(snapshot: &LifecycleSnapshot, entries: &[SnapshotEntry]) -> Result<(), SidecarError> {
+fn validate_high_waters(snapshot: &LifecycleSnapshot, entries: &[SnapshotEntry]) -> Result<(), SidecarViolation> {
     for entry in entries {
         match entry {
             SnapshotEntry::Incarnation(entry) => {
@@ -402,9 +403,9 @@ fn validate_high_waters(snapshot: &LifecycleSnapshot, entries: &[SnapshotEntry])
     Ok(())
 }
 
-fn require_high_water(field: &'static str, high_water: u64, represented: u64) -> Result<(), SidecarError> {
+fn require_high_water(field: &'static str, high_water: u64, represented: u64) -> Result<(), SidecarViolation> {
     if high_water < represented {
-        return Err(SidecarError::HighWaterBelowRepresented {
+        return Err(SidecarViolation::HighWaterBelowRepresented {
             field,
             high_water,
             represented,
@@ -452,22 +453,22 @@ const fn mode_name(mode: SnapshotMode) -> &'static str {
     }
 }
 
-fn mode_from_flags(flags: u16) -> Result<SnapshotMode, SidecarError> {
+fn mode_from_flags(flags: u16) -> Result<SnapshotMode, SidecarViolation> {
     match flags {
         0 => Ok(SnapshotMode::OrdinaryCompaction),
         1 => Ok(SnapshotMode::BootstrapInventory),
         2 => Ok(SnapshotMode::TailRepair),
-        value => Err(SidecarError::InvalidFlags {
+        value => Err(SidecarViolation::InvalidFlags {
             field: "snapshot_header",
             value: u64::from(value),
         }),
     }
 }
 
-fn require_crc(structure: &'static str, covered: &[u8], expected: u32) -> Result<(), SidecarError> {
+fn require_crc(structure: &'static str, covered: &[u8], expected: u32) -> Result<(), SidecarViolation> {
     let actual = crc32(covered);
     if actual != expected {
-        return Err(SidecarError::ChecksumMismatch {
+        return Err(SidecarViolation::ChecksumMismatch {
             structure,
             expected,
             actual,
@@ -476,24 +477,24 @@ fn require_crc(structure: &'static str, covered: &[u8], expected: u32) -> Result
     Ok(())
 }
 
-fn read_array<const N: usize>(input: &[u8], offset: usize) -> Result<[u8; N], SidecarError> {
-    let end = offset.checked_add(N).ok_or(SidecarError::SnapshotLengthOverflow)?;
+fn read_array<const N: usize>(input: &[u8], offset: usize) -> Result<[u8; N], SidecarViolation> {
+    let end = offset.checked_add(N).ok_or(SidecarViolation::SnapshotLengthOverflow)?;
     input
         .get(offset..end)
-        .ok_or(SidecarError::SnapshotLengthOverflow)?
+        .ok_or(SidecarViolation::SnapshotLengthOverflow)?
         .try_into()
-        .map_err(|_| SidecarError::SnapshotLengthOverflow)
+        .map_err(|_| SidecarViolation::SnapshotLengthOverflow)
 }
 
-fn read_u16(input: &[u8], offset: usize) -> Result<u16, SidecarError> {
+fn read_u16(input: &[u8], offset: usize) -> Result<u16, SidecarViolation> {
     Ok(u16::from_le_bytes(read_array(input, offset)?))
 }
 
-fn read_u32(input: &[u8], offset: usize) -> Result<u32, SidecarError> {
+fn read_u32(input: &[u8], offset: usize) -> Result<u32, SidecarViolation> {
     Ok(u32::from_le_bytes(read_array(input, offset)?))
 }
 
-fn read_u64(input: &[u8], offset: usize) -> Result<u64, SidecarError> {
+fn read_u64(input: &[u8], offset: usize) -> Result<u64, SidecarViolation> {
     Ok(u64::from_le_bytes(read_array(input, offset)?))
 }
 

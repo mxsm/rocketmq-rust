@@ -26,7 +26,7 @@ enum RawSlot {
 pub(super) fn resolve_acknowledgement(
     raw_slots: [&[u8]; 2],
     seal_evidence: &[SealEvidence],
-) -> Result<ResolvedAcknowledgement, ReplayError> {
+) -> Result<ResolvedAcknowledgement, ReplayViolation> {
     let mut slots = [classify(raw_slots[0], 0), classify(raw_slots[1], 1)];
     let first_invalid = matches!(&slots[0], RawSlot::Invalid);
     let second_invalid = matches!(&slots[1], RawSlot::Invalid);
@@ -39,15 +39,15 @@ pub(super) fn resolve_acknowledgement(
         let replacement = reconstruct_one(1, &slots[0], seal_evidence)?;
         slots[1] = replacement;
     } else if matches!(&slots[0], RawSlot::Unused) && matches!(&slots[1], RawSlot::Unused) {
-        return Err(ReplayError::NoAcknowledgedFrame);
+        return Err(ReplayViolation::NoAcknowledgedFrame);
     }
 
     let encoded = materialize_file(&slots)?;
-    let decoded = decode_acknowledgement_file(&encoded).map_err(|_| ReplayError::BrokenAcknowledgementChain)?;
+    let decoded = decode_acknowledgement_file(&encoded).map_err(|_| ReplayViolation::BrokenAcknowledgementChain)?;
     let authoritative = decoded
         .authoritative()
         .cloned()
-        .ok_or(ReplayError::NoAcknowledgedFrame)?;
+        .ok_or(ReplayViolation::NoAcknowledgedFrame)?;
     for (physical_index, state) in decoded.slots().iter().enumerate() {
         let AcknowledgementSlotState::Populated(slot) = state else {
             continue;
@@ -56,7 +56,7 @@ pub(super) fn resolve_acknowledgement(
         let encoded_slot: [u8; super::super::codec::ACKNOWLEDGEMENT_SLOT_LENGTH] = encoded
             [start..start + super::super::codec::ACKNOWLEDGEMENT_SLOT_LENGTH]
             .try_into()
-            .map_err(|_| ReplayError::BrokenAcknowledgementChain)?;
+            .map_err(|_| ReplayViolation::BrokenAcknowledgementChain)?;
         let candidates = seal_evidence
             .iter()
             .filter(|evidence| {
@@ -66,13 +66,13 @@ pub(super) fn resolve_acknowledgement(
             })
             .count();
         if candidates > 1 {
-            return Err(ReplayError::AmbiguousAcknowledgementSealEvidence {
+            return Err(ReplayViolation::AmbiguousAcknowledgementSealEvidence {
                 slot_index: slot.slot_index,
                 candidates,
             });
         }
         if candidates == 0 && slot.slot_index != authoritative.slot_index {
-            return Err(ReplayError::MissingAcknowledgementSealEvidence {
+            return Err(ReplayViolation::MissingAcknowledgementSealEvidence {
                 slot_index: slot.slot_index,
             });
         }
@@ -80,14 +80,14 @@ pub(super) fn resolve_acknowledgement(
     let start = usize::from(authoritative.slot_index) * super::super::codec::ACKNOWLEDGEMENT_SLOT_LENGTH;
     let encoded_authoritative = encoded[start..start + super::super::codec::ACKNOWLEDGEMENT_SLOT_LENGTH]
         .try_into()
-        .map_err(|_| ReplayError::BrokenAcknowledgementChain)?;
+        .map_err(|_| ReplayViolation::BrokenAcknowledgementChain)?;
 
     if seal_evidence.iter().any(|evidence| {
         evidence.slot.acknowledgement_epoch > authoritative.acknowledgement_epoch
             && evidence.slot.store_uuid == authoritative.store_uuid
             && evidence.slot.bootstrap_id == authoritative.bootstrap_id
     }) {
-        return Err(ReplayError::BrokenAcknowledgementChain);
+        return Err(ReplayViolation::BrokenAcknowledgementChain);
     }
     Ok(ResolvedAcknowledgement {
         authoritative,
@@ -95,14 +95,14 @@ pub(super) fn resolve_acknowledgement(
     })
 }
 
-pub(super) fn validate_unacknowledged_suffix_length(length: usize) -> Result<u32, ReplayError> {
+pub(super) fn validate_unacknowledged_suffix_length(length: usize) -> Result<u32, ReplayViolation> {
     if length == 0 || length >= super::super::codec::MAX_SEALED_RECORD_UNIT_LENGTH {
-        return Err(ReplayError::InvalidUnacknowledgedSuffixLength {
+        return Err(ReplayViolation::InvalidUnacknowledgedSuffixLength {
             length,
             maximum: super::super::codec::MAX_SEALED_RECORD_UNIT_LENGTH,
         });
     }
-    u32::try_from(length).map_err(|_| ReplayError::InvalidUnacknowledgedSuffixLength {
+    u32::try_from(length).map_err(|_| ReplayViolation::InvalidUnacknowledgedSuffixLength {
         length,
         maximum: super::super::codec::MAX_SEALED_RECORD_UNIT_LENGTH,
     })
@@ -121,7 +121,7 @@ fn classify(raw: &[u8], physical_index: u8) -> RawSlot {
     }
 }
 
-fn reconstruct_one(physical_index: u8, other: &RawSlot, evidence: &[SealEvidence]) -> Result<RawSlot, ReplayError> {
+fn reconstruct_one(physical_index: u8, other: &RawSlot, evidence: &[SealEvidence]) -> Result<RawSlot, ReplayViolation> {
     let mut candidate = None;
     let mut candidates = 0_usize;
     let mut highest_chain_epoch = 0_u64;
@@ -165,21 +165,21 @@ fn reconstruct_one(physical_index: u8, other: &RawSlot, evidence: &[SealEvidence
         }
     }
     match (candidates, candidate) {
-        (0, _) => Err(ReplayError::UnreconstructableAcknowledgementSlot {
+        (0, _) => Err(ReplayViolation::UnreconstructableAcknowledgementSlot {
             slot_index: physical_index,
         }),
         (1, Some(candidate)) => Ok(RawSlot::Valid {
             slot: candidate.slot.clone(),
             encoded: candidate.encoded_slot,
         }),
-        _ => Err(ReplayError::AmbiguousAcknowledgementSlot {
+        _ => Err(ReplayViolation::AmbiguousAcknowledgementSlot {
             slot_index: physical_index,
             candidates,
         }),
     }
 }
 
-fn reconstruct_pair(slots: &mut [RawSlot; 2], evidence: &[SealEvidence]) -> Result<(), ReplayError> {
+fn reconstruct_pair(slots: &mut [RawSlot; 2], evidence: &[SealEvidence]) -> Result<(), ReplayViolation> {
     let mut by_epoch = BTreeMap::<u64, Vec<&SealEvidence>>::new();
     for current in evidence {
         by_epoch
@@ -214,10 +214,10 @@ fn reconstruct_pair(slots: &mut [RawSlot; 2], evidence: &[SealEvidence]) -> Resu
         }
     }
     let Some((older, newer)) = selected else {
-        return Err(ReplayError::UnreconstructableAcknowledgementSlot { slot_index: 0 });
+        return Err(ReplayViolation::UnreconstructableAcknowledgementSlot { slot_index: 0 });
     };
     if candidates != 1 {
-        return Err(ReplayError::AmbiguousAcknowledgementSlot {
+        return Err(ReplayViolation::AmbiguousAcknowledgementSlot {
             slot_index: 0,
             candidates,
         });
@@ -233,7 +233,7 @@ fn reconstruct_pair(slots: &mut [RawSlot; 2], evidence: &[SealEvidence]) -> Resu
 
 fn materialize_file(
     slots: &[RawSlot; 2],
-) -> Result<[u8; super::super::codec::ACKNOWLEDGEMENT_FILE_LENGTH], ReplayError> {
+) -> Result<[u8; super::super::codec::ACKNOWLEDGEMENT_FILE_LENGTH], ReplayViolation> {
     let mut encoded = [0; super::super::codec::ACKNOWLEDGEMENT_FILE_LENGTH];
     for (index, slot) in slots.iter().enumerate() {
         match slot {
@@ -243,7 +243,7 @@ fn materialize_file(
                 encoded[start..start + super::super::codec::ACKNOWLEDGEMENT_SLOT_LENGTH].copy_from_slice(slot);
             }
             RawSlot::Invalid => {
-                return Err(ReplayError::UnreconstructableAcknowledgementSlot {
+                return Err(ReplayViolation::UnreconstructableAcknowledgementSlot {
                     slot_index: index as u8,
                 });
             }

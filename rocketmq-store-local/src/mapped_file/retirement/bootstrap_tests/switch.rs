@@ -163,7 +163,7 @@ fn generation_switch_marker_ack_seal_witness_and_final_fence_cover_every_frontie
 
 #[test]
 fn generation_switch_constructor_surface_requires_an_opaque_foundation() {
-    let constructor: fn(GenerationSwitchFoundationEvidence) -> Result<GenerationSwitchPlan, BootstrapPlanError> =
+    let constructor: fn(GenerationSwitchFoundationEvidence) -> Result<GenerationSwitchPlan, BootstrapPlanViolation> =
         GenerationSwitchPlan::new;
     assert!(constructor(compaction_proof()).is_ok());
 }
@@ -174,7 +174,7 @@ fn compaction_proof_rejects_discontinuous_or_forged_authoritative_predecessor_fi
     discontinuous.common_mut_for_test().predecessor_acknowledgement_epoch = 19;
     assert!(matches!(
         GenerationSwitchPlan::new(discontinuous),
-        Err(BootstrapPlanError::InvalidGenerationSwitch { .. })
+        Err(BootstrapPlanViolation::InvalidGenerationSwitch { .. })
     ));
 
     let mut forged_prepared = compaction_proof();
@@ -184,14 +184,14 @@ fn compaction_proof_rejects_discontinuous_or_forged_authoritative_predecessor_fi
     evidence.prepared.sealed_log_length = 4095;
     assert!(matches!(
         GenerationSwitchPlan::new(forged_prepared),
-        Err(BootstrapPlanError::InvalidGenerationSwitch { .. })
+        Err(BootstrapPlanViolation::InvalidGenerationSwitch { .. })
     ));
 
     let mut forged_frame = compaction_proof();
     forged_frame.common_mut_for_test().canonical_log_opened_frame[0] ^= 1;
     assert!(matches!(
         GenerationSwitchPlan::new(forged_frame),
-        Err(BootstrapPlanError::InvalidGenerationSwitch { .. })
+        Err(BootstrapPlanViolation::InvalidGenerationSwitch { .. })
     ));
 }
 
@@ -217,6 +217,6 @@ fn tail_repair_proof_binds_the_exact_suffix_and_rejects_tampering() {
     evidence.tail.suffix[0] ^= 1;
     assert!(matches!(
         GenerationSwitchPlan::new(forged),
-        Err(BootstrapPlanError::InvalidGenerationSwitch { .. })
+        Err(BootstrapPlanViolation::InvalidGenerationSwitch { .. })
     ));
 }

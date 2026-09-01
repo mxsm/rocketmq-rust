@@ -22,14 +22,10 @@ use rocketmq_model::common::attribute::cq_type::CQType;
 use rocketmq_store_local::mapped_file::prepare_managed_lifecycle_activation;
 use rocketmq_store_local::mapped_file::DefaultMappedFile;
 use rocketmq_store_local::mapped_file::LockedManagedLifecycleInspection;
-use rocketmq_store_local::mapped_file::ManagedLifecycleActivationError;
-use rocketmq_store_local::mapped_file::ManagedLifecycleActivationErrorKind;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRuntime;
 use rocketmq_store_local::mapped_file::ManagedMappedFileQueueGeneration;
 use rocketmq_store_local::mapped_file::ManagedQueueDescriptor;
 use rocketmq_store_local::mapped_file::ManagedReconciliationDisposition;
-use rocketmq_store_local::mapped_file::ManagedReconciliationError;
-use rocketmq_store_local::mapped_file::ManagedReconciliationErrorKind;
 use rocketmq_store_local::mapped_file::ManagedReconciliationLimits;
 use rocketmq_store_local::mapped_file::ManagedRecoverySession;
 use rocketmq_store_local::mapped_file::PreparedManagedLifecycleActivation;
@@ -160,12 +156,10 @@ pub(super) fn stage_and_activate_managed_queues(
             .with_detail("failed to reserve managed queue staging inventory")
     })?;
     for route in routes {
-        let generation = activation
-            .stage_queue(store_root, &route.directory, route.expected_file_length)
-            .map_err(managed_activation_error)?;
+        let generation = activation.stage_queue(store_root, &route.directory, route.expected_file_length)?;
         queues.push(StagedManagedQueue { route, generation });
     }
-    let runtime = activation.activate().map_err(managed_activation_error)?;
+    let runtime = activation.activate()?;
     Ok(ActivatedManagedQueues { runtime, queues })
 }
 
@@ -311,7 +305,7 @@ impl LocalFileMessageStore {
                 "managed Store has no reconciled lifecycle activation candidate",
             ));
         };
-        let descriptors = activation.queue_descriptors().map_err(managed_activation_error)?;
+        let descriptors = activation.queue_descriptors()?;
         let routes = plan_managed_queue_routes(&descriptors, &self.message_store_config)?;
 
         for route in &routes {
@@ -476,13 +470,10 @@ pub(super) fn inspect_and_reconcile_managed_root(
         );
     };
 
-    match session
-        .reconcile(ManagedReconciliationLimits::default())
-        .map_err(managed_reconciliation_error)?
-    {
-        ManagedReconciliationDisposition::Ready(reconciled) => prepare_managed_lifecycle_activation(reconciled)
-            .map(ManagedReadOnlyDisposition::Ready)
-            .map_err(managed_activation_error),
+    match session.reconcile(ManagedReconciliationLimits::default())? {
+        ManagedReconciliationDisposition::Ready(reconciled) => {
+            prepare_managed_lifecycle_activation(reconciled).map(ManagedReadOnlyDisposition::Ready)
+        }
         ManagedReconciliationDisposition::RecoveryRequired(recovery) => {
             Ok(ManagedReadOnlyDisposition::RecoveryRequired(recovery))
         }
@@ -523,38 +514,6 @@ pub(super) fn require_wave_b_ready(
             recovery.required_action_count(),
         ))),
     }
-}
-
-fn managed_activation_error(error: ManagedLifecycleActivationError) -> StoreError {
-    let descriptor = match error.kind() {
-        ManagedLifecycleActivationErrorKind::QueueLoad | ManagedLifecycleActivationErrorKind::SegmentClaim => {
-            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
-        }
-        ManagedLifecycleActivationErrorKind::Registry
-        | ManagedLifecycleActivationErrorKind::DuplicateQueue
-        | ManagedLifecycleActivationErrorKind::StagingFailed
-        | ManagedLifecycleActivationErrorKind::UnclaimedSegments => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-        ManagedLifecycleActivationErrorKind::Writer | ManagedLifecycleActivationErrorKind::Namespace => {
-            &rocketmq_error::STORAGE_WRITE_FAILED
-        }
-    };
-    StoreError::new(descriptor, StoreOperation::Load)
-        .in_component(StoreComponent::MappedFile)
-        .with_detail("managed lifecycle activation staging failed before Store construction")
-        .with_source(error)
-}
-
-fn managed_reconciliation_error(error: ManagedReconciliationError) -> StoreError {
-    let descriptor = match error.kind() {
-        ManagedReconciliationErrorKind::Inventory => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-        ManagedReconciliationErrorKind::ReplayRecoveryRequired
-        | ManagedReconciliationErrorKind::MissingStoreUuid
-        | ManagedReconciliationErrorKind::State => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-    };
-    StoreError::new(descriptor, StoreOperation::Load)
-        .in_component(StoreComponent::MappedFile)
-        .with_detail("managed replay and namespace reconciliation failed before Store construction")
-        .with_source(error)
 }
 
 #[cfg(test)]

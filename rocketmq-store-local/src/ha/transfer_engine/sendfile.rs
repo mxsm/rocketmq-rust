@@ -38,12 +38,13 @@ use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferStats;
 #[cfg(unix)]
 use crate::transfer::batch::TransferBatch;
-#[cfg(unix)]
 use crate::transfer::error::TransferError;
 #[cfg(unix)]
-use crate::transfer::error::TransferResult;
 #[cfg(unix)]
 use crate::transfer::segment::FileRange;
+#[cfg(unix)]
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 #[cfg(unix)]
 /// Legacy injectable sendfile seam for explicitly standalone/unmanaged file ranges.
@@ -143,10 +144,22 @@ where
     W: AsyncWrite + SendfileWriteTarget + Unpin,
     O: SendfileOperation,
 {
-    pub async fn send_batch(&mut self, batch: &TransferBatch) -> TransferResult<TransferStats> {
+    /// Sends one framed batch, reporting failures through the storage facade.
+    ///
+    /// # Errors
+    ///
+    /// Returns `STORAGE_IO_FAILED` for replication write failures and
+    /// `STORAGE_REQUEST_INVALID` for malformed batches.
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<TransferStats, StoreError> {
+        self.send_batch_typed(batch)
+            .await
+            .map_err(|error| error.into_store_error(StoreOperation::Replicate))
+    }
+
+    pub(crate) async fn send_batch_typed(&mut self, batch: &TransferBatch) -> Result<TransferStats, TransferError> {
         let Some(file_ranges) = batch_file_ranges(batch) else {
             let mut fallback = VectoredTransferEngine::new(&mut self.writer);
-            let mut stats = fallback.send_batch(batch).await?;
+            let mut stats = fallback.send_batch_typed(batch).await?;
             stats.fallback_bytes = stats.body_bytes;
             return Ok(stats);
         };

@@ -20,10 +20,10 @@ mod replay;
 pub use owner::CheckpointPersistence;
 pub use owner::DerivedCommitOutcome;
 pub use owner::DerivedCursorOwner;
-pub use owner::DerivedCursorOwnerError;
-pub use replay::replay_derived;
 pub use replay::DerivedReplayApply;
-pub use replay::DerivedReplayError;
 pub use replay::DerivedReplayReport;
 pub use replay::DerivedReplaySink;
 pub use replay::DerivedReplayStop;
+
+#[cfg(test)]
+mod replay_harness_tests;

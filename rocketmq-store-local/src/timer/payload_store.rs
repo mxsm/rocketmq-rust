@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -35,8 +37,8 @@ use crate::timer::partition_manifest::PartitionManifestError;
 use crate::timer::partition_manifest::TimerPayloadPartitionKey;
 use crate::timer::partition_manifest::TimerPayloadPartitionManifest;
 use crate::timer::partition_manifest::TimerPayloadPartitionState;
-use crate::timer::payload_record::TimerPayloadRecordError;
 use crate::timer::payload_record::TimerPayloadRecordV1;
+use crate::timer::payload_record::TimerPayloadRecordViolation;
 
 const SEGMENT_NAME_WIDTH: usize = 20;
 
@@ -115,7 +117,12 @@ impl TimerPayloadStore {
     /// # Errors
     ///
     /// Returns an error when capacity limits are inconsistent.
-    pub fn new(config: TimerPayloadStoreConfig) -> Result<Self, TimerPayloadStoreError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn new(config: TimerPayloadStoreConfig) -> Result<Self, StoreError> {
+        Self::new_typed(config).map_err(|error| error.into_store_error(StoreOperation::Load))
+    }
+
+    fn new_typed(config: TimerPayloadStoreConfig) -> Result<Self, TimerPayloadStoreError> {
         config.validate()?;
         Ok(Self {
             config,
@@ -124,7 +131,13 @@ impl TimerPayloadStore {
     }
 
     /// Recovers every existing partition and truncates only incomplete active tails.
-    pub fn load(&self) -> Result<(), TimerPayloadStoreError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn load(&self) -> Result<(), StoreError> {
+        self.load_typed()
+            .map_err(|error| error.into_store_error(StoreOperation::Load))
+    }
+
+    fn load_typed(&self) -> Result<(), TimerPayloadStoreError> {
         std::fs::create_dir_all(&self.config.root)?;
         let mut discovered = Vec::new();
         for day_entry in std::fs::read_dir(&self.config.root)? {
@@ -173,7 +186,13 @@ impl TimerPayloadStore {
     ///
     /// A failure may leave unreferenced payload records. Replaying the source is idempotent at the
     /// Timeline layer, and orphan GC removes records not referenced by any non-terminal state.
-    pub fn append_batch(
+    /// Reports failures through the canonical storage facade.
+    pub fn append_batch(&self, records: &[TimerPayloadRecordV1]) -> Result<Vec<TimerPayloadStoreLocator>, StoreError> {
+        self.append_batch_typed(records)
+            .map_err(|error| error.into_store_error(StoreOperation::Append))
+    }
+
+    fn append_batch_typed(
         &self,
         records: &[TimerPayloadRecordV1],
     ) -> Result<Vec<TimerPayloadStoreLocator>, TimerPayloadStoreError> {
@@ -277,7 +296,13 @@ impl TimerPayloadStore {
     }
 
     /// Reads and verifies one durable payload locator.
-    pub fn read(&self, locator: TimerPayloadStoreLocator) -> Result<TimerPayloadRecordV1, TimerPayloadStoreError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn read(&self, locator: TimerPayloadStoreLocator) -> Result<TimerPayloadRecordV1, StoreError> {
+        self.read_typed(locator)
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    fn read_typed(&self, locator: TimerPayloadStoreLocator) -> Result<TimerPayloadRecordV1, TimerPayloadStoreError> {
         let partition = TimerPayloadPartitionKey {
             due_day_utc: locator.due_day_utc(),
             lane: locator.lane(),
@@ -298,7 +323,13 @@ impl TimerPayloadStore {
     }
 
     /// Seals one partition after its UTC day is closed for new materialization.
-    pub fn seal_partition(&self, key: TimerPayloadPartitionKey) -> Result<(), TimerPayloadStoreError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn seal_partition(&self, key: TimerPayloadPartitionKey) -> Result<(), StoreError> {
+        self.seal_partition_typed(key)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    fn seal_partition_typed(&self, key: TimerPayloadPartitionKey) -> Result<(), TimerPayloadStoreError> {
         self.transition_partition(
             key,
             TimerPayloadPartitionState::Open,
@@ -307,7 +338,13 @@ impl TimerPayloadStore {
     }
 
     /// Marks a sealed partition eligible for whole-partition GC.
-    pub fn mark_gc_eligible(&self, key: TimerPayloadPartitionKey) -> Result<(), TimerPayloadStoreError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn mark_gc_eligible(&self, key: TimerPayloadPartitionKey) -> Result<(), StoreError> {
+        self.mark_gc_eligible_typed(key)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    fn mark_gc_eligible_typed(&self, key: TimerPayloadPartitionKey) -> Result<(), TimerPayloadStoreError> {
         self.transition_partition(
             key,
             TimerPayloadPartitionState::Sealed,
@@ -316,7 +353,19 @@ impl TimerPayloadStore {
     }
 
     /// Deletes a GC-eligible partition only after state, snapshot, and replication fences agree.
+    /// Reports failures through the canonical storage facade.
     pub fn gc_partition(
+        &self,
+        key: TimerPayloadPartitionKey,
+        no_live_timeline_references: bool,
+        snapshot_safe: bool,
+        replication_safe: bool,
+    ) -> Result<bool, StoreError> {
+        self.gc_partition_typed(key, no_live_timeline_references, snapshot_safe, replication_safe)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    fn gc_partition_typed(
         &self,
         key: TimerPayloadPartitionKey,
         no_live_timeline_references: bool,
@@ -387,7 +436,17 @@ impl TimerPayloadStore {
     ///
     /// Only one artifact generation may be active at a time. A failed copy intentionally leaves
     /// its durable pins in place so GC cannot invalidate a partially published artifact.
+    /// Reports failures through the canonical storage facade.
     pub fn create_snapshot_files(
+        &self,
+        target_root: &Path,
+        generation: u64,
+    ) -> Result<Vec<TimerSnapshotFile>, StoreError> {
+        self.create_snapshot_files_typed(target_root, generation)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    fn create_snapshot_files_typed(
         &self,
         target_root: &Path,
         generation: u64,
@@ -453,7 +512,13 @@ impl TimerPayloadStore {
     }
 
     /// Releases one successfully copied snapshot generation from every partition.
-    pub fn release_snapshot_pin(&self, generation: u64) -> Result<(), TimerPayloadStoreError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn release_snapshot_pin(&self, generation: u64) -> Result<(), StoreError> {
+        self.release_snapshot_pin_typed(generation)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    fn release_snapshot_pin_typed(&self, generation: u64) -> Result<(), TimerPayloadStoreError> {
         let mut state = self.state.lock();
         for runtime in state.partitions.values_mut() {
             if runtime.manifest.snapshot_pin_generation == generation {
@@ -721,13 +786,13 @@ pub struct TimerPayloadStoreMetrics {
 
 /// Long-horizon payload-store error.
 #[derive(Debug, Error)]
-pub enum TimerPayloadStoreError {
+pub(crate) enum TimerPayloadStoreError {
     /// Underlying filesystem operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
     /// Record codec failed.
     #[error(transparent)]
-    Record(#[from] TimerPayloadRecordError),
+    Record(#[from] TimerPayloadRecordViolation),
     /// Partition manifest failed.
     #[error(transparent)]
     Manifest(#[from] PartitionManifestError),
@@ -783,4 +848,27 @@ pub enum TimerPayloadStoreError {
     /// Recursive GC target escaped the configured payload root.
     #[error("refusing unsafe timer payload GC path")]
     UnsafeGcPath,
+}
+
+impl TimerPayloadStoreError {
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Filesystem faults keep their typed I/O source, nested codec or
+    /// manifest evidence is corrupted state, and the remaining typed failures
+    /// follow the owning operation. The complete leaf is preserved as the
+    /// typed source.
+    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
+        let descriptor = match (&self, operation) {
+            (Self::Io(_), _) => &rocketmq_error::STORAGE_IO_FAILED,
+            (Self::Record(_) | Self::Manifest(_), _) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+            (_, StoreOperation::Load | StoreOperation::Read | StoreOperation::QueryOffset) => {
+                &rocketmq_error::STORAGE_READ_FAILED
+            }
+            (_, StoreOperation::Append | StoreOperation::Flush | StoreOperation::AppendDerived) => {
+                &rocketmq_error::STORAGE_WRITE_FAILED
+            }
+            _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+        };
+        StoreError::new(descriptor, operation).with_source(self)
+    }
 }

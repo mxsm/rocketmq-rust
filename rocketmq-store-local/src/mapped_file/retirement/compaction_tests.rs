@@ -145,7 +145,7 @@ fn canonical_store_meta_and_authoritative_inventory_are_bound_before_planning() 
     let parts = verified_source_parts(Vec::new());
     assert!(matches!(
         VerifiedCompactionSource::verified_for_test(changed, canonical, parts),
-        Err(CompactionPlanError::InvalidFoundation { .. })
+        Err(CompactionPlanViolation::InvalidFoundation { .. })
     ));
 
     let plan = standard_plan();
@@ -178,7 +178,7 @@ fn free_space_preflight_counts_both_copies_both_old_pairs_and_margin() {
     };
     assert!(matches!(
         build_plan(Vec::new(), one_short),
-        Err(CompactionPlanError::InsufficientSpace {
+        Err(CompactionPlanViolation::InsufficientSpace {
             required,
             available
         }) if required == expected && available == expected - 1
@@ -267,7 +267,7 @@ fn completed_retained_omission_consumes_an_exact_store_frontier_and_entry_proof(
         .expect("prepared receipt remains exact");
     assert!(matches!(
         CompactionPlan::from_prepared(foundation),
-        Err(CompactionPlanError::InvalidOmissionEvidence { .. })
+        Err(CompactionPlanViolation::InvalidOmissionEvidence { .. })
     ));
 }
 
@@ -279,7 +279,7 @@ fn completed_retained_omission_rejects_an_incarnation_referenced_by_another_tick
 
     assert!(matches!(
         build_plan(vec![evidence], ample_space()),
-        Err(CompactionPlanError::InvalidOmissionEvidence { .. })
+        Err(CompactionPlanViolation::InvalidOmissionEvidence { .. })
     ));
 }
 
@@ -518,7 +518,7 @@ fn standard_plan() -> CompactionPlan {
 fn build_plan(
     omissions: Vec<CleanStartOmissionEvidence>,
     space: CompactionSpace,
-) -> Result<CompactionPlan, CompactionPlanError> {
+) -> Result<CompactionPlan, CompactionPlanViolation> {
     build_plan_from_parts(VerifiedSourcePartsForTest {
         space,
         omission_evidence: omissions,
@@ -526,7 +526,7 @@ fn build_plan(
     })
 }
 
-fn build_plan_from_parts(parts: VerifiedSourcePartsForTest) -> Result<CompactionPlan, CompactionPlanError> {
+fn build_plan_from_parts(parts: VerifiedSourcePartsForTest) -> Result<CompactionPlan, CompactionPlanViolation> {
     let source = VerifiedCompactionSource::verified_for_test(store_meta(), encode_store_meta(&store_meta())?, parts)?;
     let preparation = CompactionPreparationPlan::from_verified_source(source)?;
     let receipt = preparation.prepared_receipt_for_test(0x89ab_cdef);
@@ -536,7 +536,7 @@ fn build_plan_from_parts(parts: VerifiedSourcePartsForTest) -> Result<Compaction
 
 fn preparation_plan(
     omissions: Vec<CleanStartOmissionEvidence>,
-) -> Result<CompactionPreparationPlan, CompactionPlanError> {
+) -> Result<CompactionPreparationPlan, CompactionPlanViolation> {
     let source = VerifiedCompactionSource::verified_for_test(
         store_meta(),
         encode_store_meta(&store_meta())?,

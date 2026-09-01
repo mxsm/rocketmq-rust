@@ -57,7 +57,7 @@ mod managed;
 
 use managed::ManagedAllocationContext;
 use managed::ManagedAllocationRequest;
-pub use managed::ManagedMappedFileAllocationError;
+pub(crate) use managed::ManagedMappedFileAllocationError;
 
 /// Timeout for waiting on file allocation (matches Java: 5 seconds)
 const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1404,6 +1404,21 @@ impl AllocateMappedFileService {
     /// namespace failure recovery-fences the lifecycle runtime and is returned to the caller.
     #[doc(hidden)]
     pub fn put_managed_request_and_return_mapped_file_blocking(
+        &self,
+        queue: crate::mapped_file::ManagedMappedFileQueueGeneration<DefaultMappedFile>,
+        queue_path: &Path,
+        segment_offset: u64,
+        file_size: u64,
+    ) -> Result<Arc<DefaultMappedFile>, rocketmq_store_api::StoreError> {
+        self.put_managed_request_blocking_typed(queue, queue_path, segment_offset, file_size)
+            .map_err(ManagedMappedFileAllocationError::into_store_error)
+    }
+
+    #[allow(
+        clippy::result_large_err,
+        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
+    )]
+    fn put_managed_request_blocking_typed(
         &self,
         queue: crate::mapped_file::ManagedMappedFileQueueGeneration<DefaultMappedFile>,
         queue_path: &Path,

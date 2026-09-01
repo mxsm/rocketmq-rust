@@ -94,11 +94,16 @@ pub enum CommitLogRecordField {
     Record,
 }
 
-/// Structural or body-checksum decoding failure.
+/// Structural or body-checksum decoding contract violation.
+///
+/// Every variant retains the declared record size when the four-byte size
+/// prefix was available, together with the specific decoding evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CommitLogRecordErrorKind {
+pub enum CommitLogRecordViolation {
     /// A bounded field did not fit in the declared record frame.
     Truncated {
+        /// Declared size when the four-byte size prefix was available.
+        declared_size: Option<i32>,
         /// Field whose bytes were unavailable.
         field: CommitLogRecordField,
         /// Number of bytes required by the field.
@@ -108,6 +113,8 @@ pub enum CommitLogRecordErrorKind {
     },
     /// A signed length was negative and therefore rejected before conversion.
     NegativeLength {
+        /// Declared size when the four-byte size prefix was available.
+        declared_size: Option<i32>,
         /// Length field that was negative.
         field: CommitLogRecordField,
         /// Original signed value.
@@ -115,11 +122,15 @@ pub enum CommitLogRecordErrorKind {
     },
     /// The magic code is neither a supported message nor blank marker.
     IllegalMagic {
+        /// Declared size when the four-byte size prefix was available.
+        declared_size: Option<i32>,
         /// Unsupported magic value.
         magic_code: i32,
     },
     /// A requested non-empty body checksum verification failed.
     BodyCrcMismatch {
+        /// Declared size when the four-byte size prefix was available.
+        declared_size: Option<i32>,
         /// Checksum computed from the bounded body.
         computed: u32,
         /// Checksum stored in the record header.
@@ -127,13 +138,38 @@ pub enum CommitLogRecordErrorKind {
     },
 }
 
-/// Failed record decoding with an optional declared size.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommitLogRecordError {
-    /// Declared size when the four-byte size prefix was available.
-    pub declared_size: Option<i32>,
-    /// Specific decoding failure.
-    pub kind: CommitLogRecordErrorKind,
+impl CommitLogRecordViolation {
+    /// Records the declared size once the size prefix has been decoded.
+    fn with_declared_size(self, size: i32) -> Self {
+        let declared = Some(size);
+        match self {
+            Self::Truncated {
+                field,
+                needed,
+                remaining,
+                ..
+            } => Self::Truncated {
+                declared_size: declared,
+                field,
+                needed,
+                remaining,
+            },
+            Self::NegativeLength { field, value, .. } => Self::NegativeLength {
+                declared_size: declared,
+                field,
+                value,
+            },
+            Self::IllegalMagic { magic_code, .. } => Self::IllegalMagic {
+                declared_size: declared,
+                magic_code,
+            },
+            Self::BodyCrcMismatch { computed, stored, .. } => Self::BodyCrcMismatch {
+                declared_size: declared,
+                computed,
+                stored,
+            },
+        }
+    }
 }
 
 /// Fully decoded, runtime-neutral CommitLog message record.
@@ -225,7 +261,7 @@ impl RecordReader {
         self.frame.len() - self.index
     }
 
-    fn take(&mut self, len: usize, field: CommitLogRecordField) -> Result<Bytes, CommitLogRecordError> {
+    fn take(&mut self, len: usize, field: CommitLogRecordField) -> Result<Bytes, CommitLogRecordViolation> {
         let remaining = self.remaining();
         let Some(end) = self.index.checked_add(len) else {
             return Err(self.truncated(field, len, remaining));
@@ -238,32 +274,30 @@ impl RecordReader {
         Ok(bytes)
     }
 
-    fn truncated(&self, field: CommitLogRecordField, needed: usize, remaining: usize) -> CommitLogRecordError {
-        CommitLogRecordError {
+    fn truncated(&self, field: CommitLogRecordField, needed: usize, remaining: usize) -> CommitLogRecordViolation {
+        CommitLogRecordViolation::Truncated {
             declared_size: Some(self.declared_size),
-            kind: CommitLogRecordErrorKind::Truncated {
-                field,
-                needed,
-                remaining,
-            },
+            field,
+            needed,
+            remaining,
         }
     }
 
-    fn read_i16(&mut self, field: CommitLogRecordField) -> Result<i16, CommitLogRecordError> {
+    fn read_i16(&mut self, field: CommitLogRecordField) -> Result<i16, CommitLogRecordViolation> {
         let bytes = self.take(2, field)?;
         Ok(i16::from_be_bytes([bytes[0], bytes[1]]))
     }
 
-    fn read_u8(&mut self, field: CommitLogRecordField) -> Result<u8, CommitLogRecordError> {
+    fn read_u8(&mut self, field: CommitLogRecordField) -> Result<u8, CommitLogRecordViolation> {
         Ok(self.take(1, field)?[0])
     }
 
-    fn read_i32(&mut self, field: CommitLogRecordField) -> Result<i32, CommitLogRecordError> {
+    fn read_i32(&mut self, field: CommitLogRecordField) -> Result<i32, CommitLogRecordViolation> {
         let bytes = self.take(4, field)?;
         Ok(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    fn read_i64(&mut self, field: CommitLogRecordField) -> Result<i64, CommitLogRecordError> {
+    fn read_i64(&mut self, field: CommitLogRecordField) -> Result<i64, CommitLogRecordViolation> {
         let bytes = self.take(8, field)?;
         Ok(i64::from_be_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -271,26 +305,22 @@ impl RecordReader {
     }
 }
 
-fn top_level_i32(input: &Bytes, offset: usize, field: CommitLogRecordField) -> Result<i32, CommitLogRecordError> {
+fn top_level_i32(input: &Bytes, offset: usize, field: CommitLogRecordField) -> Result<i32, CommitLogRecordViolation> {
     let remaining = input.len().saturating_sub(offset);
     let Some(end) = offset.checked_add(4) else {
-        return Err(CommitLogRecordError {
+        return Err(CommitLogRecordViolation::Truncated {
             declared_size: None,
-            kind: CommitLogRecordErrorKind::Truncated {
-                field,
-                needed: 4,
-                remaining,
-            },
+            field,
+            needed: 4,
+            remaining,
         });
     };
     let Some(bytes) = input.get(offset..end) else {
-        return Err(CommitLogRecordError {
+        return Err(CommitLogRecordViolation::Truncated {
             declared_size: None,
-            kind: CommitLogRecordErrorKind::Truncated {
-                field,
-                needed: 4,
-                remaining,
-            },
+            field,
+            needed: 4,
+            remaining,
         });
     };
     Ok(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
@@ -304,42 +334,36 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
     input: &Bytes,
     body_mode: CommitLogRecordBodyMode,
     checksum: &C,
-) -> Result<CommitLogRecordOutcome, CommitLogRecordError> {
+) -> Result<CommitLogRecordOutcome, CommitLogRecordViolation> {
     let declared_size = top_level_i32(input, 0, CommitLogRecordField::TotalSize)?;
     if declared_size < 8 {
-        return Err(CommitLogRecordError {
+        return Err(CommitLogRecordViolation::NegativeLength {
             declared_size: Some(declared_size),
-            kind: CommitLogRecordErrorKind::NegativeLength {
-                field: CommitLogRecordField::TotalSize,
-                value: i64::from(declared_size),
-            },
+            field: CommitLogRecordField::TotalSize,
+            value: i64::from(declared_size),
         });
     }
     let declared_len = declared_size as usize;
-    let magic_code = top_level_i32(input, 4, CommitLogRecordField::MagicCode).map_err(|mut error| {
-        error.declared_size = Some(declared_size);
-        error
-    })?;
+    let magic_code = top_level_i32(input, 4, CommitLogRecordField::MagicCode)
+        .map_err(|error| error.with_declared_size(declared_size))?;
     if magic_code == BLANK_MAGIC_CODE {
         return Ok(CommitLogRecordOutcome::Blank { declared_size });
     }
     if input.len() < declared_len {
-        return Err(CommitLogRecordError {
+        return Err(CommitLogRecordViolation::Truncated {
             declared_size: Some(declared_size),
-            kind: CommitLogRecordErrorKind::Truncated {
-                field: CommitLogRecordField::Record,
-                needed: declared_len,
-                remaining: input.len(),
-            },
+            field: CommitLogRecordField::Record,
+            needed: declared_len,
+            remaining: input.len(),
         });
     }
     let version = match magic_code {
         MESSAGE_MAGIC_CODE => CommitLogRecordVersion::V1,
         MESSAGE_MAGIC_CODE_V2 => CommitLogRecordVersion::V2,
         _ => {
-            return Err(CommitLogRecordError {
+            return Err(CommitLogRecordViolation::IllegalMagic {
                 declared_size: Some(declared_size),
-                kind: CommitLogRecordErrorKind::IllegalMagic { magic_code },
+                magic_code,
             });
         }
     };
@@ -361,12 +385,10 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
     let prepared_transaction_offset = reader.read_i64(CommitLogRecordField::PreparedTransactionOffset)?;
     let body_len = reader.read_i32(CommitLogRecordField::BodyLength)?;
     if body_len < 0 {
-        return Err(CommitLogRecordError {
+        return Err(CommitLogRecordViolation::NegativeLength {
             declared_size: Some(declared_size),
-            kind: CommitLogRecordErrorKind::NegativeLength {
-                field: CommitLogRecordField::BodyLength,
-                value: i64::from(body_len),
-            },
+            field: CommitLogRecordField::BodyLength,
+            value: i64::from(body_len),
         });
     }
     let body_bytes = reader.take(body_len as usize, CommitLogRecordField::Body)?;
@@ -378,9 +400,10 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
                 let computed = checksum.checksum(body_bytes.as_ref());
                 let stored = body_crc as u32;
                 if computed != stored {
-                    return Err(CommitLogRecordError {
+                    return Err(CommitLogRecordViolation::BodyCrcMismatch {
                         declared_size: Some(declared_size),
-                        kind: CommitLogRecordErrorKind::BodyCrcMismatch { computed, stored },
+                        computed,
+                        stored,
                     });
                 }
             }
@@ -392,12 +415,10 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
         CommitLogRecordVersion::V2 => {
             let value = reader.read_i16(CommitLogRecordField::TopicLength)?;
             if value < 0 {
-                return Err(CommitLogRecordError {
+                return Err(CommitLogRecordViolation::NegativeLength {
                     declared_size: Some(declared_size),
-                    kind: CommitLogRecordErrorKind::NegativeLength {
-                        field: CommitLogRecordField::TopicLength,
-                        value: i64::from(value),
-                    },
+                    field: CommitLogRecordField::TopicLength,
+                    value: i64::from(value),
                 });
             }
             value as usize
@@ -406,12 +427,10 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
     let topic = reader.take(topic_len, CommitLogRecordField::Topic)?;
     let properties_len = reader.read_i16(CommitLogRecordField::PropertiesLength)?;
     if properties_len < 0 {
-        return Err(CommitLogRecordError {
+        return Err(CommitLogRecordViolation::NegativeLength {
             declared_size: Some(declared_size),
-            kind: CommitLogRecordErrorKind::NegativeLength {
-                field: CommitLogRecordField::PropertiesLength,
-                value: i64::from(properties_len),
-            },
+            field: CommitLogRecordField::PropertiesLength,
+            value: i64::from(properties_len),
         });
     }
     let properties = reader.take(properties_len as usize, CommitLogRecordField::Properties)?;

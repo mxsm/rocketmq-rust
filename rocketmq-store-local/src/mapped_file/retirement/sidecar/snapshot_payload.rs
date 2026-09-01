@@ -27,7 +27,7 @@ use super::types::QuarantineSnapshotEntry;
 use super::types::RetirementStage;
 use super::types::RetirementTicketSnapshotEntry;
 use super::types::SnapshotEntry;
-use super::SidecarError;
+use super::SidecarViolation;
 
 pub(super) const INCARNATION_KIND: u16 = 1;
 pub(super) const RETIREMENT_TICKET_KIND: u16 = 2;
@@ -57,7 +57,7 @@ pub(super) fn encode_payload(
     entry: &SnapshotEntry,
     store_uuid: StoreUuid,
     base_sequence: u64,
-) -> Result<Vec<u8>, SidecarError> {
+) -> Result<Vec<u8>, SidecarViolation> {
     match entry {
         SnapshotEntry::Incarnation(entry) => {
             validate_incarnation(entry, store_uuid)?;
@@ -132,7 +132,7 @@ pub(super) fn decode_payload(
     payload: &[u8],
     store_uuid: StoreUuid,
     base_sequence: u64,
-) -> Result<SnapshotEntry, SidecarError> {
+) -> Result<SnapshotEntry, SidecarViolation> {
     let mut decoder = PayloadDecoder::new(kind, payload);
     let entry = match kind {
         INCARNATION_KIND => {
@@ -140,7 +140,7 @@ pub(super) fn decode_payload(
             let phase = phase_from_wire(decoder.take_u8()?)?;
             let flags = decoder.take_u8()?;
             if flags & !1 != 0 {
-                return Err(SidecarError::InvalidFlags {
+                return Err(SidecarViolation::InvalidFlags {
                     field: "incarnation_snapshot",
                     value: u64::from(flags),
                 });
@@ -177,7 +177,7 @@ pub(super) fn decode_payload(
             let stage = stage_from_wire(decoder.take_u8()?)?;
             let flags = decoder.take_u8()?;
             if flags & !0x07 != 0 {
-                return Err(SidecarError::InvalidFlags {
+                return Err(SidecarViolation::InvalidFlags {
                     field: "retirement_ticket_snapshot",
                     value: u64::from(flags),
                 });
@@ -215,7 +215,7 @@ pub(super) fn decode_payload(
             let reason = quarantine_reason_from_wire(decoder.take_u8()?)?;
             let flags = decoder.take_u16()?;
             if flags & !0x07 != 0 {
-                return Err(SidecarError::InvalidQuarantineFields { flags });
+                return Err(SidecarViolation::InvalidQuarantineFields { flags });
             }
             let sequence_at_observation = decoder.take_u64()?;
             let physical_bytes = decoder.take_array::<32>()?;
@@ -230,7 +230,7 @@ pub(super) fn decode_payload(
             decoder.require_zero_u32("quarantine_snapshot.reserved")?;
             let content_fingerprint = if flags & 0x02 == 0 {
                 if content_length != 0 || content_crc32 != 0 {
-                    return Err(SidecarError::InvalidQuarantineFields { flags });
+                    return Err(SidecarViolation::InvalidQuarantineFields { flags });
                 }
                 None
             } else {
@@ -253,24 +253,24 @@ pub(super) fn decode_payload(
             validate_quarantine(&entry, base_sequence)?;
             SnapshotEntry::Quarantine(entry)
         }
-        _ => return Err(SidecarError::InvalidSnapshotEntryKind { kind }),
+        _ => return Err(SidecarViolation::InvalidSnapshotEntryKind { kind }),
     };
     decoder.finish()?;
     Ok(entry)
 }
 
-fn validate_incarnation(entry: &IncarnationSnapshotEntry, store_uuid: StoreUuid) -> Result<(), SidecarError> {
+fn validate_incarnation(entry: &IncarnationSnapshotEntry, store_uuid: StoreUuid) -> Result<(), SidecarViolation> {
     if entry.incarnation.store_uuid() != store_uuid {
-        return Err(SidecarError::SnapshotStoreUuidMismatch);
+        return Err(SidecarViolation::SnapshotStoreUuidMismatch);
     }
     if entry.expected_file_length == 0 {
-        return Err(SidecarError::ZeroExpectedFileLength);
+        return Err(SidecarViolation::ZeroExpectedFileLength);
     }
     require_nonzero_id("create_nonce", &entry.create_nonce)?;
     entry
         .canonical_path
         .validate_segment_binding(entry.segment_offset)
-        .map_err(|source| SidecarError::InvalidIdentity {
+        .map_err(|source| SidecarViolation::InvalidIdentity {
             field: "canonical_path",
             source,
         })?;
@@ -282,13 +282,13 @@ fn validate_incarnation(entry: &IncarnationSnapshotEntry, store_uuid: StoreUuid)
             entry.segment_offset,
             &entry.create_nonce,
         )
-        .map_err(|source| SidecarError::InvalidIdentity {
+        .map_err(|source| SidecarViolation::InvalidIdentity {
             field: "create_file_path",
             source,
         })?;
     let key_matches = matches!(entry.phase, IncarnationPhase::Allocated) == entry.physical_key.is_none();
     if !key_matches {
-        return Err(SidecarError::IncarnationPhaseKeyMismatch);
+        return Err(SidecarViolation::IncarnationPhaseKeyMismatch);
     }
     Ok(())
 }
@@ -297,27 +297,27 @@ fn validate_retirement(
     entry: &RetirementTicketSnapshotEntry,
     store_uuid: StoreUuid,
     base_sequence: u64,
-) -> Result<(), SidecarError> {
+) -> Result<(), SidecarViolation> {
     if entry.incarnation.store_uuid() != store_uuid {
-        return Err(SidecarError::SnapshotStoreUuidMismatch);
+        return Err(SidecarViolation::SnapshotStoreUuidMismatch);
     }
     if entry.stage_sequence == 0 || entry.stage_sequence > base_sequence {
-        return Err(SidecarError::StageSequenceOutOfRange {
+        return Err(SidecarViolation::StageSequenceOutOfRange {
             sequence: entry.stage_sequence,
             base_sequence,
         });
     }
     if entry.mapping_generation == 0 {
-        return Err(SidecarError::ZeroMappingGeneration);
+        return Err(SidecarViolation::ZeroMappingGeneration);
     }
     if entry.expected_file_length == 0 {
-        return Err(SidecarError::ZeroExpectedFileLength);
+        return Err(SidecarViolation::ZeroExpectedFileLength);
     }
     require_nonzero_id("retirement_nonce", &entry.retirement_nonce)?;
     entry
         .canonical_path
         .validate_segment_binding(entry.segment_offset)
-        .map_err(|source| SidecarError::InvalidIdentity {
+        .map_err(|source| SidecarViolation::InvalidIdentity {
             field: "canonical_path",
             source,
         })?;
@@ -332,7 +332,7 @@ fn validate_retirement(
                 entry.mapping_generation,
                 &entry.retirement_nonce,
             )
-            .map_err(|source| SidecarError::InvalidIdentity {
+            .map_err(|source| SidecarViolation::InvalidIdentity {
                 field: "tombstone_path",
                 source,
             })?;
@@ -343,14 +343,14 @@ fn validate_retirement(
         RetirementStage::NamespaceAbsent | RetirementStage::CompletedRetained => true,
     };
     if !tombstone_matches {
-        return Err(SidecarError::RetirementTombstoneStageMismatch);
+        return Err(SidecarViolation::RetirementTombstoneStageMismatch);
     }
     Ok(())
 }
 
-fn validate_quarantine(entry: &QuarantineSnapshotEntry, base_sequence: u64) -> Result<(), SidecarError> {
+fn validate_quarantine(entry: &QuarantineSnapshotEntry, base_sequence: u64) -> Result<(), SidecarViolation> {
     if entry.sequence_at_observation == 0 || entry.sequence_at_observation > base_sequence {
-        return Err(SidecarError::ObservationSequenceOutOfRange {
+        return Err(SidecarViolation::ObservationSequenceOutOfRange {
             sequence: entry.sequence_at_observation,
             base_sequence,
         });
@@ -366,12 +366,12 @@ const fn phase_wire(value: IncarnationPhase) -> u8 {
     }
 }
 
-fn phase_from_wire(value: u8) -> Result<IncarnationPhase, SidecarError> {
+fn phase_from_wire(value: u8) -> Result<IncarnationPhase, SidecarViolation> {
     match value {
         1 => Ok(IncarnationPhase::Allocated),
         2 => Ok(IncarnationPhase::Bound),
         3 => Ok(IncarnationPhase::Published),
-        value => Err(SidecarError::InvalidEnumValue {
+        value => Err(SidecarViolation::InvalidEnumValue {
             field: "incarnation_phase",
             value: u64::from(value),
         }),
@@ -388,14 +388,14 @@ const fn stage_wire(value: RetirementStage) -> u8 {
     }
 }
 
-fn stage_from_wire(value: u8) -> Result<RetirementStage, SidecarError> {
+fn stage_from_wire(value: u8) -> Result<RetirementStage, SidecarViolation> {
     match value {
         1 => Ok(RetirementStage::IntentDurable),
         2 => Ok(RetirementStage::LogicalRemoved),
         3 => Ok(RetirementStage::Tombstoned),
         4 => Ok(RetirementStage::NamespaceAbsent),
         5 => Ok(RetirementStage::CompletedRetained),
-        value => Err(SidecarError::InvalidEnumValue {
+        value => Err(SidecarViolation::InvalidEnumValue {
             field: "retirement_stage",
             value: u64::from(value),
         }),
@@ -416,7 +416,7 @@ const fn retirement_reason_wire(value: RetirementReason) -> u16 {
     }
 }
 
-fn retirement_reason_from_wire(value: u16) -> Result<RetirementReason, SidecarError> {
+fn retirement_reason_from_wire(value: u16) -> Result<RetirementReason, SidecarViolation> {
     match value {
         1 => Ok(RetirementReason::TtlExpired),
         2 => Ok(RetirementReason::OffsetTruncate),
@@ -427,7 +427,7 @@ fn retirement_reason_from_wire(value: u16) -> Result<RetirementReason, SidecarEr
         7 => Ok(RetirementReason::TopicRetirement),
         8 => Ok(RetirementReason::DerivedFileRetirement),
         9 => Ok(RetirementReason::AuditedOperatorRequest),
-        value => Err(SidecarError::InvalidEnumValue {
+        value => Err(SidecarViolation::InvalidEnumValue {
             field: "retirement_reason",
             value: u64::from(value),
         }),
@@ -443,13 +443,13 @@ const fn quarantine_entity_kind_wire(value: QuarantineEntityKind) -> u8 {
     }
 }
 
-fn quarantine_entity_kind_from_wire(value: u8) -> Result<QuarantineEntityKind, SidecarError> {
+fn quarantine_entity_kind_from_wire(value: u8) -> Result<QuarantineEntityKind, SidecarViolation> {
     match value {
         1 => Ok(QuarantineEntityKind::Create),
         2 => Ok(QuarantineEntityKind::Tombstone),
         3 => Ok(QuarantineEntityKind::Sidecar),
         4 => Ok(QuarantineEntityKind::Canonical),
-        value => Err(SidecarError::InvalidEnumValue {
+        value => Err(SidecarViolation::InvalidEnumValue {
             field: "quarantine_entity_kind",
             value: u64::from(value),
         }),
@@ -465,13 +465,13 @@ const fn quarantine_reason_wire(value: QuarantineReason) -> u8 {
     }
 }
 
-fn quarantine_reason_from_wire(value: u8) -> Result<QuarantineReason, SidecarError> {
+fn quarantine_reason_from_wire(value: u8) -> Result<QuarantineReason, SidecarViolation> {
     match value {
         1 => Ok(QuarantineReason::UnknownOwner),
         2 => Ok(QuarantineReason::KeyMismatch),
         3 => Ok(QuarantineReason::MalformedName),
         4 => Ok(QuarantineReason::RestoreRebindRequired),
-        value => Err(SidecarError::InvalidEnumValue {
+        value => Err(SidecarViolation::InvalidEnumValue {
             field: "quarantine_reason",
             value: u64::from(value),
         }),
@@ -501,25 +501,25 @@ fn push_physical_key(output: &mut Vec<u8>, key: PhysicalFileKey) {
     }
 }
 
-fn decode_physical_key(bytes: [u8; 32]) -> Result<PhysicalFileKey, SidecarError> {
+fn decode_physical_key(bytes: [u8; 32]) -> Result<PhysicalFileKey, SidecarViolation> {
     if bytes[1..8].iter().any(|byte| *byte != 0) {
-        return Err(SidecarError::NonZeroPhysicalFileKeyReserved);
+        return Err(SidecarViolation::NonZeroPhysicalFileKeyReserved);
     }
     match bytes[0] {
         1 => {
             if bytes[24..32].iter().any(|byte| *byte != 0) {
-                return Err(SidecarError::NonZeroPhysicalFileKeyReserved);
+                return Err(SidecarViolation::NonZeroPhysicalFileKeyReserved);
             }
             Ok(PhysicalFileKey::unix(
                 u64::from_le_bytes(
                     bytes[8..16]
                         .try_into()
-                        .map_err(|_| SidecarError::SnapshotLengthOverflow)?,
+                        .map_err(|_| SidecarViolation::SnapshotLengthOverflow)?,
                 ),
                 u64::from_le_bytes(
                     bytes[16..24]
                         .try_into()
-                        .map_err(|_| SidecarError::SnapshotLengthOverflow)?,
+                        .map_err(|_| SidecarViolation::SnapshotLengthOverflow)?,
                 ),
             ))
         }
@@ -527,26 +527,26 @@ fn decode_physical_key(bytes: [u8; 32]) -> Result<PhysicalFileKey, SidecarError>
             u64::from_le_bytes(
                 bytes[8..16]
                     .try_into()
-                    .map_err(|_| SidecarError::SnapshotLengthOverflow)?,
+                    .map_err(|_| SidecarViolation::SnapshotLengthOverflow)?,
             ),
             bytes[16..32]
                 .try_into()
-                .map_err(|_| SidecarError::SnapshotLengthOverflow)?,
+                .map_err(|_| SidecarViolation::SnapshotLengthOverflow)?,
         )),
-        kind => Err(SidecarError::InvalidPhysicalFileKeyKind { kind }),
+        kind => Err(SidecarViolation::InvalidPhysicalFileKeyKind { kind }),
     }
 }
 
-fn require_absent_key(bytes: &[u8; 32]) -> Result<(), SidecarError> {
+fn require_absent_key(bytes: &[u8; 32]) -> Result<(), SidecarViolation> {
     if *bytes != [0; 32] {
-        return Err(SidecarError::InvalidAbsentPhysicalFileKey);
+        return Err(SidecarViolation::InvalidAbsentPhysicalFileKey);
     }
     Ok(())
 }
 
-fn require_nonzero_id(field: &'static str, value: &[u8; 16]) -> Result<(), SidecarError> {
+fn require_nonzero_id(field: &'static str, value: &[u8; 16]) -> Result<(), SidecarViolation> {
     if *value == [0; 16] {
-        return Err(SidecarError::ZeroOpaqueIdentifier { field });
+        return Err(SidecarViolation::ZeroOpaqueIdentifier { field });
     }
     Ok(())
 }
@@ -588,75 +588,75 @@ impl<'a> PayloadDecoder<'a> {
         Self { kind, input, offset: 0 }
     }
 
-    fn take_array<const N: usize>(&mut self) -> Result<[u8; N], SidecarError> {
+    fn take_array<const N: usize>(&mut self) -> Result<[u8; N], SidecarViolation> {
         let bytes = self.take(N)?;
-        bytes.try_into().map_err(|_| SidecarError::SnapshotLengthOverflow)
+        bytes.try_into().map_err(|_| SidecarViolation::SnapshotLengthOverflow)
     }
 
-    fn take_u8(&mut self) -> Result<u8, SidecarError> {
+    fn take_u8(&mut self) -> Result<u8, SidecarViolation> {
         Ok(self.take(1)?[0])
     }
 
-    fn take_u16(&mut self) -> Result<u16, SidecarError> {
+    fn take_u16(&mut self) -> Result<u16, SidecarViolation> {
         Ok(u16::from_le_bytes(self.take_array()?))
     }
 
-    fn take_u32(&mut self) -> Result<u32, SidecarError> {
+    fn take_u32(&mut self) -> Result<u32, SidecarViolation> {
         Ok(u32::from_le_bytes(self.take_array()?))
     }
 
-    fn take_u64(&mut self) -> Result<u64, SidecarError> {
+    fn take_u64(&mut self) -> Result<u64, SidecarViolation> {
         Ok(u64::from_le_bytes(self.take_array()?))
     }
 
-    fn take_incarnation(&mut self) -> Result<FileIncarnationId, SidecarError> {
-        let uuid = StoreUuid::new(self.take_array()?).map_err(|source| SidecarError::InvalidIdentity {
+    fn take_incarnation(&mut self) -> Result<FileIncarnationId, SidecarViolation> {
+        let uuid = StoreUuid::new(self.take_array()?).map_err(|source| SidecarViolation::InvalidIdentity {
             field: "store_uuid",
             source,
         })?;
-        FileIncarnationId::new(uuid, self.take_u64()?).map_err(|source| SidecarError::InvalidIdentity {
+        FileIncarnationId::new(uuid, self.take_u64()?).map_err(|source| SidecarViolation::InvalidIdentity {
             field: "file_incarnation_id",
             source,
         })
     }
 
-    fn take_ticket(&mut self) -> Result<TicketId, SidecarError> {
-        TicketId::new(self.take_u64()?).map_err(|source| SidecarError::InvalidIdentity {
+    fn take_ticket(&mut self) -> Result<TicketId, SidecarViolation> {
+        TicketId::new(self.take_u64()?).map_err(|source| SidecarViolation::InvalidIdentity {
             field: "ticket_id",
             source,
         })
     }
 
-    fn take_path(&mut self, field: &'static str) -> Result<StoreRelativePath, SidecarError> {
+    fn take_path(&mut self, field: &'static str) -> Result<StoreRelativePath, SidecarViolation> {
         let length = usize::from(self.take_u16()?);
         let bytes = self.take(length)?;
-        let value = std::str::from_utf8(bytes).map_err(|_| SidecarError::InvalidUtf8Path { field })?;
-        StoreRelativePath::new(value).map_err(|source| SidecarError::InvalidIdentity { field, source })
+        let value = std::str::from_utf8(bytes).map_err(|_| SidecarViolation::InvalidUtf8Path { field })?;
+        StoreRelativePath::new(value).map_err(|source| SidecarViolation::InvalidIdentity { field, source })
     }
 
     fn take_optional_path(
         &mut self,
         field: &'static str,
         present: bool,
-    ) -> Result<Option<StoreRelativePath>, SidecarError> {
+    ) -> Result<Option<StoreRelativePath>, SidecarViolation> {
         let length = usize::from(self.take_u16()?);
         if (length != 0) != present {
-            return Err(SidecarError::OptionalPathFlagMismatch { field });
+            return Err(SidecarViolation::OptionalPathFlagMismatch { field });
         }
         if length == 0 {
             return Ok(None);
         }
         let bytes = self.take(length)?;
-        let value = std::str::from_utf8(bytes).map_err(|_| SidecarError::InvalidUtf8Path { field })?;
+        let value = std::str::from_utf8(bytes).map_err(|_| SidecarViolation::InvalidUtf8Path { field })?;
         StoreRelativePath::new(value)
             .map(Some)
-            .map_err(|source| SidecarError::InvalidIdentity { field, source })
+            .map_err(|source| SidecarViolation::InvalidIdentity { field, source })
     }
 
-    fn require_zero_u16(&mut self, field: &'static str) -> Result<(), SidecarError> {
+    fn require_zero_u16(&mut self, field: &'static str) -> Result<(), SidecarViolation> {
         let value = self.take_u16()?;
         if value != 0 {
-            return Err(SidecarError::NonZeroReserved {
+            return Err(SidecarViolation::NonZeroReserved {
                 field,
                 value: u64::from(value),
             });
@@ -664,10 +664,10 @@ impl<'a> PayloadDecoder<'a> {
         Ok(())
     }
 
-    fn require_zero_u32(&mut self, field: &'static str) -> Result<(), SidecarError> {
+    fn require_zero_u32(&mut self, field: &'static str) -> Result<(), SidecarViolation> {
         let value = self.take_u32()?;
         if value != 0 {
-            return Err(SidecarError::NonZeroReserved {
+            return Err(SidecarViolation::NonZeroReserved {
                 field,
                 value: u64::from(value),
             });
@@ -675,9 +675,9 @@ impl<'a> PayloadDecoder<'a> {
         Ok(())
     }
 
-    fn finish(self) -> Result<(), SidecarError> {
+    fn finish(self) -> Result<(), SidecarViolation> {
         if self.offset != self.input.len() {
-            return Err(SidecarError::TrailingSnapshotPayload {
+            return Err(SidecarViolation::TrailingSnapshotPayload {
                 kind: self.kind,
                 remaining: self.input.len() - self.offset,
             });
@@ -685,13 +685,13 @@ impl<'a> PayloadDecoder<'a> {
         Ok(())
     }
 
-    fn take(&mut self, length: usize) -> Result<&'a [u8], SidecarError> {
+    fn take(&mut self, length: usize) -> Result<&'a [u8], SidecarViolation> {
         let end = self
             .offset
             .checked_add(length)
-            .ok_or(SidecarError::SnapshotLengthOverflow)?;
+            .ok_or(SidecarViolation::SnapshotLengthOverflow)?;
         let Some(bytes) = self.input.get(self.offset..end) else {
-            return Err(SidecarError::UnexpectedSnapshotPayloadEnd {
+            return Err(SidecarViolation::UnexpectedSnapshotPayloadEnd {
                 kind: self.kind,
                 offset: self.offset,
                 needed: length,

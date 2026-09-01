@@ -17,7 +17,7 @@ use super::super::identity::StoreUuid;
 use super::super::sidecar::LifecycleSnapshot;
 use super::super::sidecar::StoreMeta;
 #[cfg(test)]
-use super::types::BootstrapPlanError;
+use super::types::BootstrapPlanViolation;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct CanonicalStoreMetaEvidence {
@@ -128,7 +128,7 @@ mod test_constructors {
     impl BootstrapFoundationEvidence {
         pub(in crate::mapped_file::retirement::bootstrap) fn verified_for_test(
             meta: &StoreMeta,
-        ) -> Result<Self, BootstrapPlanError> {
+        ) -> Result<Self, BootstrapPlanViolation> {
             let canonical_bytes = encode_store_meta(meta)?;
             Self::from_bytes_for_test(canonical_bytes, meta)
         }
@@ -136,10 +136,10 @@ mod test_constructors {
         pub(in crate::mapped_file::retirement::bootstrap) fn from_bytes_for_test(
             canonical_bytes: [u8; 64],
             expected_meta: &StoreMeta,
-        ) -> Result<Self, BootstrapPlanError> {
+        ) -> Result<Self, BootstrapPlanViolation> {
             let store_meta = canonical_store_meta(canonical_bytes)?;
             if store_meta.meta != *expected_meta {
-                return Err(BootstrapPlanError::FoundationStoreMetaMismatch);
+                return Err(BootstrapPlanViolation::FoundationStoreMetaMismatch);
             }
             Ok(Self { store_meta })
         }
@@ -148,16 +148,16 @@ mod test_constructors {
     impl BootstrapInventoryEvidence {
         pub(in crate::mapped_file::retirement::bootstrap) fn verified_for_test(
             snapshot: &LifecycleSnapshot,
-        ) -> Result<Self, BootstrapPlanError> {
+        ) -> Result<Self, BootstrapPlanViolation> {
             let canonical_snapshot = encode_snapshot(snapshot)?;
             let decoded = decode_snapshot(&canonical_snapshot)?;
             if encode_snapshot(&decoded)? != canonical_snapshot {
-                return Err(BootstrapPlanError::InvalidSnapshot {
+                return Err(BootstrapPlanViolation::InvalidSnapshot {
                     reason: "inventory snapshot is not canonical",
                 });
             }
             let inventory_count =
-                u64::try_from(decoded.entries.len()).map_err(|_| BootstrapPlanError::ArithmeticOverflow {
+                u64::try_from(decoded.entries.len()).map_err(|_| BootstrapPlanViolation::ArithmeticOverflow {
                     field: "bootstrap inventory count",
                 })?;
             Ok(Self {
@@ -178,7 +178,7 @@ mod test_constructors {
             snapshot: &LifecycleSnapshot,
             predecessor_sealed_prefix_length: u64,
             predecessor_prefix_crc32: u32,
-        ) -> Result<Self, BootstrapPlanError> {
+        ) -> Result<Self, BootstrapPlanViolation> {
             let common = generation_common(
                 meta,
                 snapshot,
@@ -208,7 +208,7 @@ mod test_constructors {
             predecessor_sealed_prefix_length: u64,
             predecessor_prefix_crc32: u32,
             suffix: Vec<u8>,
-        ) -> Result<Self, BootstrapPlanError> {
+        ) -> Result<Self, BootstrapPlanViolation> {
             let common = generation_common(
                 meta,
                 snapshot,
@@ -235,10 +235,10 @@ mod test_constructors {
         }
     }
 
-    fn canonical_store_meta(bytes: [u8; 64]) -> Result<CanonicalStoreMetaEvidence, BootstrapPlanError> {
+    fn canonical_store_meta(bytes: [u8; 64]) -> Result<CanonicalStoreMetaEvidence, BootstrapPlanViolation> {
         let meta = decode_store_meta(&bytes)?;
         if encode_store_meta(&meta)? != bytes {
-            return Err(BootstrapPlanError::FoundationStoreMetaMismatch);
+            return Err(BootstrapPlanViolation::FoundationStoreMetaMismatch);
         }
         let stored_crc32 = u32::from_le_bytes([bytes[60], bytes[61], bytes[62], bytes[63]]);
         Ok(CanonicalStoreMetaEvidence {
@@ -255,7 +255,7 @@ mod test_constructors {
         predecessor_prefix_crc32: u32,
         open_reason: OpenReason,
         suffix: &[u8],
-    ) -> Result<GenerationSwitchCommonEvidence, BootstrapPlanError> {
+    ) -> Result<GenerationSwitchCommonEvidence, BootstrapPlanViolation> {
         let canonical_store_meta_bytes = encode_store_meta(meta)?;
         let store_meta = canonical_store_meta(canonical_store_meta_bytes)?;
         let canonical_snapshot = encode_snapshot(snapshot)?;
@@ -263,17 +263,18 @@ mod test_constructors {
         let marker_epoch = decoded_snapshot
             .generation
             .checked_add(1)
-            .ok_or(BootstrapPlanError::ArithmeticOverflow { field: "marker epoch" })?;
+            .ok_or(BootstrapPlanViolation::ArithmeticOverflow { field: "marker epoch" })?;
         let anchor_sequence =
             decoded_snapshot
                 .base_sequence
                 .checked_add(1)
-                .ok_or(BootstrapPlanError::ArithmeticOverflow {
+                .ok_or(BootstrapPlanViolation::ArithmeticOverflow {
                     field: "LogOpened sequence",
                 })?;
-        let suffix_length = u32::try_from(suffix.len()).map_err(|_| BootstrapPlanError::InvalidGenerationSwitch {
-            reason: "tail suffix length exceeds u32",
-        })?;
+        let suffix_length =
+            u32::try_from(suffix.len()).map_err(|_| BootstrapPlanViolation::InvalidGenerationSwitch {
+                reason: "tail suffix length exceeds u32",
+            })?;
         let suffix_crc32 = if suffix.is_empty() { 0 } else { crc32(suffix) };
         let snapshot_crc32 = crc32(&canonical_snapshot);
         let log_opened_record = LedgerRecord::LogOpened {
@@ -284,7 +285,7 @@ mod test_constructors {
             predecessor_terminal_acknowledged_sequence: decoded_snapshot.base_sequence,
             snapshot_base_sequence: decoded_snapshot.base_sequence,
             snapshot_file_length: u64::try_from(canonical_snapshot.len()).map_err(|_| {
-                BootstrapPlanError::ArithmeticOverflow {
+                BootstrapPlanViolation::ArithmeticOverflow {
                     field: "snapshot file length",
                 }
             })?,

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
@@ -154,7 +156,15 @@ pub struct SegmentedTimeline {
 impl SegmentedTimeline {
     /// Opens the native index, validates only active run headers/footers, and retains orphan runs
     /// for explicit reconciliation.
-    pub fn open(store_root: impl AsRef<Path>, config: SegmentedTimelineConfig) -> Result<Self, SegmentedTimelineError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn open(store_root: impl AsRef<Path>, config: SegmentedTimelineConfig) -> Result<Self, StoreError> {
+        Self::open_typed(store_root, config).map_err(|error| error.into_store_error(StoreOperation::Load))
+    }
+
+    fn open_typed(
+        store_root: impl AsRef<Path>,
+        config: SegmentedTimelineConfig,
+    ) -> Result<Self, SegmentedTimelineError> {
         let config = config.validate()?;
         let root = store_root.as_ref().join(TIMELINE_DIRECTORY);
         let manifest = TimelineManifestV1::load(&root)?;
@@ -177,7 +187,18 @@ impl SegmentedTimeline {
     }
 
     /// Verifies that an overlay checkpoint cannot reference future or non-durable native bytes.
+    /// Reports failures through the canonical storage facade.
     pub fn validate_overlay_checkpoint(
+        &self,
+        manifest_generation: u64,
+        durable_end: u64,
+        manifest_checksum: u32,
+    ) -> Result<(), StoreError> {
+        self.validate_overlay_checkpoint_typed(manifest_generation, durable_end, manifest_checksum)
+            .map_err(|error| error.into_store_error(StoreOperation::Load))
+    }
+
+    fn validate_overlay_checkpoint_typed(
         &self,
         manifest_generation: u64,
         durable_end: u64,
@@ -197,7 +218,13 @@ impl SegmentedTimeline {
     }
 
     /// Loads and verifies the exact archived manifest protected by a snapshot pin.
-    pub fn validate_snapshot_pin(&self, pin: NativeSnapshotPin) -> Result<(), SegmentedTimelineError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn validate_snapshot_pin(&self, pin: NativeSnapshotPin) -> Result<(), StoreError> {
+        self.validate_snapshot_pin_typed(pin)
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    fn validate_snapshot_pin_typed(&self, pin: NativeSnapshotPin) -> Result<(), SegmentedTimelineError> {
         let manifest = self.manifest.lock();
         if manifest.snapshot_pins.get(&pin.snapshot_generation).copied() != Some(pin.manifest_generation) {
             return Err(SegmentedTimelineError::UnknownSnapshotPin);
@@ -213,12 +240,22 @@ impl SegmentedTimeline {
     ///
     /// The returned file identities are relative to `target_root` and can be embedded directly in
     /// a cross-media snapshot manifest.
+    /// Reports failures through the canonical storage facade.
     pub fn create_snapshot_files(
         &self,
         target_root: &Path,
         pin: NativeSnapshotPin,
+    ) -> Result<Vec<TimerSnapshotFile>, StoreError> {
+        self.create_snapshot_files_typed(target_root, pin)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    fn create_snapshot_files_typed(
+        &self,
+        target_root: &Path,
+        pin: NativeSnapshotPin,
     ) -> Result<Vec<TimerSnapshotFile>, SegmentedTimelineError> {
-        self.validate_snapshot_pin(pin)?;
+        self.validate_snapshot_pin_typed(pin)?;
         let manifest = TimelineManifestV1::load_archive(&self.root, pin.manifest_generation)?;
         let mut files = Vec::with_capacity(manifest.active_runs.len().saturating_add(1));
         let manifest_relative = PathBuf::from("manifests").join(format!("{:020}.manifest", pin.manifest_generation));
@@ -242,7 +279,13 @@ impl SegmentedTimeline {
     ///
     /// Existing identical keys are reused. A conflicting replay fails closed. Newly created run
     /// files are synced before one A/B manifest publication makes them reachable.
-    pub fn append_batch(
+    /// Reports failures through the canonical storage facade.
+    pub fn append_batch(&self, records: &[TimelineSegmentRecord]) -> Result<NativeWriteReceipt, StoreError> {
+        self.append_batch_typed(records)
+            .map_err(|error| error.into_store_error(StoreOperation::Append))
+    }
+
+    fn append_batch_typed(
         &self,
         records: &[TimelineSegmentRecord],
     ) -> Result<NativeWriteReceipt, SegmentedTimelineError> {
@@ -312,7 +355,20 @@ impl SegmentedTimeline {
     }
 
     /// Reads one bounded page. At most one partition's runs are open simultaneously.
+    /// Reports failures through the canonical storage facade.
     pub fn scan_due(
+        &self,
+        from_exclusive: Option<TimelineSegmentKey>,
+        due_exclusive_ms: i64,
+        max_records: usize,
+        max_bytes: usize,
+        continuation: Option<SegmentedTimelineContinuation>,
+    ) -> Result<SegmentedTimelinePage, StoreError> {
+        self.scan_due_typed(from_exclusive, due_exclusive_ms, max_records, max_bytes, continuation)
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    fn scan_due_typed(
         &self,
         from_exclusive: Option<TimelineSegmentKey>,
         due_exclusive_ms: i64,
@@ -383,7 +439,13 @@ impl SegmentedTimeline {
     }
 
     /// Returns the exact active record for one full key, if present.
-    pub fn get(&self, key: TimelineSegmentKey) -> Result<Option<TimelineSegmentRecord>, SegmentedTimelineError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn get(&self, key: TimelineSegmentKey) -> Result<Option<TimelineSegmentRecord>, StoreError> {
+        self.get_typed(key)
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    fn get_typed(&self, key: TimelineSegmentKey) -> Result<Option<TimelineSegmentRecord>, SegmentedTimelineError> {
         let manifest = self.manifest.lock().clone();
         let mut found = None;
         for descriptor in manifest.partition_runs(key.partition()?) {
@@ -407,7 +469,13 @@ impl SegmentedTimeline {
     }
 
     /// Pins the current native generation for one shared Extended snapshot.
-    pub fn pin_snapshot(&self, snapshot_generation: u64) -> Result<NativeSnapshotPin, SegmentedTimelineError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn pin_snapshot(&self, snapshot_generation: u64) -> Result<NativeSnapshotPin, StoreError> {
+        self.pin_snapshot_typed(snapshot_generation)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    fn pin_snapshot_typed(&self, snapshot_generation: u64) -> Result<NativeSnapshotPin, SegmentedTimelineError> {
         if snapshot_generation == 0 {
             return Err(SegmentedTimelineError::InvalidSnapshotGeneration);
         }
@@ -431,7 +499,13 @@ impl SegmentedTimeline {
     }
 
     /// Releases a previously persisted snapshot pin and then reclaims unreachable runs.
-    pub fn release_snapshot(&self, pin: NativeSnapshotPin) -> Result<usize, SegmentedTimelineError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn release_snapshot(&self, pin: NativeSnapshotPin) -> Result<usize, StoreError> {
+        self.release_snapshot_typed(pin)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    fn release_snapshot_typed(&self, pin: NativeSnapshotPin) -> Result<usize, SegmentedTimelineError> {
         let mut manifest = self.manifest.lock();
         if manifest.snapshot_pins.get(&pin.snapshot_generation).copied() != Some(pin.manifest_generation) {
             return Err(SegmentedTimelineError::UnknownSnapshotPin);
@@ -447,7 +521,11 @@ impl SegmentedTimeline {
     ///
     /// `retain` is evaluated only after a stable de-duplicated merge. The caller must enforce
     /// terminal, replication, grace-period, and snapshot fences before returning `false`.
-    pub fn merge_one<F>(&self, mut retain: F) -> Result<NativeMergeResult, SegmentedTimelineError>
+    #[allow(
+        dead_code,
+        reason = "exercised by the in-crate merge scenarios; production merge scheduling arrives with the store merge driver"
+    )]
+    pub(crate) fn merge_one<F>(&self, mut retain: F) -> Result<NativeMergeResult, SegmentedTimelineError>
     where
         F: FnMut(&TimelineSegmentRecord) -> bool,
     {
@@ -458,7 +536,11 @@ impl SegmentedTimeline {
     ///
     /// A yielded merge publishes no run or manifest. Its immutable inputs remain reachable, so a
     /// later invocation resumes safely without a separate recovery protocol.
-    pub fn merge_one_prioritized<F, P>(
+    #[allow(
+        dead_code,
+        reason = "exercised by the in-crate merge scenarios; production merge scheduling arrives with the store merge driver"
+    )]
+    pub(crate) fn merge_one_prioritized<F, P>(
         &self,
         mut retain: F,
         mut due_delivery_pending: P,
@@ -555,7 +637,13 @@ impl SegmentedTimeline {
     }
 
     /// Deletes a whole partition only when no snapshot generation is pinned.
-    pub fn delete_partition(&self, partition: TimelinePartitionKey) -> Result<usize, SegmentedTimelineError> {
+    /// Reports failures through the canonical storage facade.
+    pub fn delete_partition(&self, partition: TimelinePartitionKey) -> Result<usize, StoreError> {
+        self.delete_partition_typed(partition)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    fn delete_partition_typed(&self, partition: TimelinePartitionKey) -> Result<usize, SegmentedTimelineError> {
         let mut manifest = self.manifest.lock();
         if !manifest.snapshot_pins.is_empty() {
             return Err(SegmentedTimelineError::SnapshotPinned);
@@ -578,7 +666,11 @@ impl SegmentedTimeline {
     }
 
     /// Lists sealed or partial run files not reachable from the current manifest.
-    pub fn orphan_runs(&self) -> Result<Vec<PathBuf>, SegmentedTimelineError> {
+    #[allow(
+        dead_code,
+        reason = "exercised by the in-crate merge scenarios; production merge scheduling arrives with the store merge driver"
+    )]
+    pub(crate) fn orphan_runs(&self) -> Result<Vec<PathBuf>, SegmentedTimelineError> {
         if !self.root.exists() {
             return Ok(Vec::new());
         }
@@ -714,6 +806,10 @@ impl SegmentedTimeline {
         Ok(page)
     }
 
+    #[allow(
+        dead_code,
+        reason = "exercised by the in-crate merge scenarios; production merge scheduling arrives with the store merge driver"
+    )]
     fn read_merged_runs(
         &self,
         manifest: &TimelineManifestV1,
@@ -899,6 +995,7 @@ fn run_order(left: &TimelineRunDescriptor, right: &TimelineRunDescriptor) -> Ord
         .then_with(|| left.run_id.cmp(&right.run_id))
 }
 
+#[allow(dead_code, reason = "used by the in-crate merge scenarios")]
 fn collect_run_paths(directory: &Path, output: &mut Vec<PathBuf>) -> Result<(), std::io::Error> {
     for entry in std::fs::read_dir(directory)? {
         let entry = entry?;
@@ -949,7 +1046,7 @@ fn copy_snapshot_file(
 
 /// Native segmented Timeline failure.
 #[derive(Debug, Error)]
-pub enum SegmentedTimelineError {
+pub(crate) enum SegmentedTimelineError {
     /// Underlying filesystem operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -987,9 +1084,11 @@ pub enum SegmentedTimelineError {
     RunIdCollision,
     /// Merge candidates unexpectedly span partitions.
     #[error("native Timeline merge partition mismatch")]
+    #[allow(dead_code, reason = "reported by the in-crate merge scenarios")]
     PartitionMismatch,
     /// A merge cannot publish an empty base without an explicit partition tombstone protocol.
     #[error("native Timeline merge produced an empty base")]
+    #[allow(dead_code, reason = "reported by the in-crate merge scenarios")]
     EmptyMergeOutput,
     /// Ordering invariant was violated while merging runs.
     #[error("native Timeline merge ordering violation")]
@@ -1024,4 +1123,27 @@ pub enum SegmentedTimelineError {
     /// Archived snapshot manifest does not match its pin.
     #[error("native Timeline snapshot manifest mismatch")]
     SnapshotManifestMismatch,
+}
+
+impl SegmentedTimelineError {
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Filesystem faults keep their typed I/O source, nested segment or
+    /// manifest evidence is corrupted state, and the remaining typed failures
+    /// follow the owning operation. The complete leaf is preserved as the
+    /// typed source.
+    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
+        let descriptor = match (&self, operation) {
+            (Self::Io(_), _) => &rocketmq_error::STORAGE_IO_FAILED,
+            (Self::Segment(_) | Self::Manifest(_), _) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+            (_, StoreOperation::Load | StoreOperation::Read | StoreOperation::QueryOffset) => {
+                &rocketmq_error::STORAGE_READ_FAILED
+            }
+            (_, StoreOperation::Append | StoreOperation::Flush | StoreOperation::AppendDerived) => {
+                &rocketmq_error::STORAGE_WRITE_FAILED
+            }
+            _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+        };
+        StoreError::new(descriptor, operation).with_source(self)
+    }
 }

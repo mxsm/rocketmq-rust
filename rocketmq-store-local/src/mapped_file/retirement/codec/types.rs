@@ -17,7 +17,7 @@ use super::super::identity::PhysicalFileKey;
 use super::super::identity::StoreRelativePath;
 use super::super::identity::StoreUuid;
 use super::super::identity::TicketId;
-use super::CodecError;
+use super::CodecViolation;
 use super::RecordType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,13 +38,13 @@ impl GenerationAbortReason {
         }
     }
 
-    pub(super) fn from_wire(value: u32) -> Result<Self, CodecError> {
+    pub(super) fn from_wire(value: u32) -> Result<Self, CodecViolation> {
         match value {
             1 => Ok(Self::Io),
             2 => Ok(Self::Space),
             3 => Ok(Self::OperatorCancellation),
             4 => Ok(Self::Validation),
-            value => Err(CodecError::InvalidEnumValue {
+            value => Err(CodecViolation::InvalidEnumValue {
                 field: "generation_abort_reason",
                 value: u64::from(value),
             }),
@@ -66,11 +66,11 @@ impl OpenReason {
         }
     }
 
-    pub(super) fn from_wire(value: u8) -> Result<Self, CodecError> {
+    pub(super) fn from_wire(value: u8) -> Result<Self, CodecViolation> {
         match value {
             0 => Ok(Self::Compaction),
             1 => Ok(Self::TailRepair),
-            value => Err(CodecError::InvalidEnumValue {
+            value => Err(CodecViolation::InvalidEnumValue {
                 field: "open_reason",
                 value: u64::from(value),
             }),
@@ -106,7 +106,7 @@ impl RetirementReason {
         }
     }
 
-    pub(super) fn from_wire(value: u16) -> Result<Self, CodecError> {
+    pub(super) fn from_wire(value: u16) -> Result<Self, CodecViolation> {
         match value {
             1 => Ok(Self::TtlExpired),
             2 => Ok(Self::OffsetTruncate),
@@ -117,7 +117,7 @@ impl RetirementReason {
             7 => Ok(Self::TopicRetirement),
             8 => Ok(Self::DerivedFileRetirement),
             9 => Ok(Self::AuditedOperatorRequest),
-            value => Err(CodecError::InvalidEnumValue {
+            value => Err(CodecViolation::InvalidEnumValue {
                 field: "retirement_reason",
                 value: u64::from(value),
             }),
@@ -143,13 +143,13 @@ impl QuarantineEntityKind {
         }
     }
 
-    pub(super) fn from_wire(value: u8) -> Result<Self, CodecError> {
+    pub(super) fn from_wire(value: u8) -> Result<Self, CodecViolation> {
         match value {
             1 => Ok(Self::Create),
             2 => Ok(Self::Tombstone),
             3 => Ok(Self::Sidecar),
             4 => Ok(Self::Canonical),
-            value => Err(CodecError::InvalidEnumValue {
+            value => Err(CodecViolation::InvalidEnumValue {
                 field: "quarantine_entity_kind",
                 value: u64::from(value),
             }),
@@ -175,13 +175,13 @@ impl QuarantineReason {
         }
     }
 
-    pub(super) fn from_wire(value: u8) -> Result<Self, CodecError> {
+    pub(super) fn from_wire(value: u8) -> Result<Self, CodecViolation> {
         match value {
             1 => Ok(Self::UnknownOwner),
             2 => Ok(Self::KeyMismatch),
             3 => Ok(Self::MalformedName),
             4 => Ok(Self::RestoreRebindRequired),
-            value => Err(CodecError::InvalidEnumValue {
+            value => Err(CodecViolation::InvalidEnumValue {
                 field: "quarantine_reason",
                 value: u64::from(value),
             }),

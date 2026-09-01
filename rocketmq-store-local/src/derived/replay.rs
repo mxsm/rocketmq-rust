@@ -25,7 +25,7 @@ use super::owner::DerivedCursorOwnerError;
 use crate::commit_log::record::is_blank_message;
 use crate::commit_log::record::CommitLogFrameCursor;
 use crate::commit_log::record::CommitLogFrameSource;
-use crate::commit_log::record::FrameCursorStartError;
+use crate::commit_log::record::CursorStartContractViolation;
 
 /// Idempotent application boundary for one derived view.
 pub trait DerivedReplaySink {
@@ -102,7 +102,11 @@ impl DerivedReplayReport {
 ///
 /// Fails closed on an invalid start cursor, unrepresentable record identity, sink error, or cursor
 /// persistence error.
-pub fn replay_derived<S, P, K>(
+#[allow(
+    dead_code,
+    reason = "exercised by the in-crate replay harness; the store-side derived owner arrives with E3-4"
+)]
+pub(crate) fn replay_derived<S, P, K>(
     source: S,
     owner: &mut DerivedCursorOwner<P>,
     sink: &mut K,
@@ -160,8 +164,9 @@ where
 
 /// Failure while replaying the authoritative CommitLog into one derived view.
 #[derive(Debug)]
-pub enum DerivedReplayError<SinkError, PersistenceError> {
-    StartCursor(FrameCursorStartError),
+#[allow(dead_code, reason = "exercised by the in-crate replay harness")]
+pub(crate) enum DerivedReplayError<SinkError, PersistenceError> {
+    StartCursor(CursorStartContractViolation),
     OffsetNotRepresentable(u64),
     FrameTooLarge(usize),
     Record(StoreContractViolation),

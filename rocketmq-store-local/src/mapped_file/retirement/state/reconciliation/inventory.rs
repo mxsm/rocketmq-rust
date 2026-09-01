@@ -25,7 +25,7 @@ use super::NamespaceObject;
 use super::RecoveredLedgerState;
 use super::StableNamespaceInventory;
 use crate::mapped_file::retirement::codec::ContentFingerprint;
-use crate::mapped_file::retirement::identity::IdentityError;
+use crate::mapped_file::retirement::identity::IdentityViolation;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::identity::StoreUuid;
 use crate::mapped_file::retirement::replay::discovery::platform::EntryKind;
@@ -85,7 +85,7 @@ pub(crate) enum ReconciliationInventoryError {
     #[error("cannot represent a physical identity on this target")]
     UnsupportedPhysicalIdentity,
     #[error("invalid store-relative inventory path")]
-    Identity(#[source] IdentityError),
+    Identity(#[source] IdentityViolation),
     #[error("handle-relative namespace inventory failed")]
     Platform(#[source] PlatformError),
     #[error("positional namespace read failed")]

@@ -171,27 +171,27 @@ fn registration_reserves_incarnation_path_and_physical_key() {
 
     assert_eq!(
         registry.register_published(registration(1, 12, FILE_LENGTH, owner.clone(), queue.clone())),
-        Err(RegistryError::DuplicateIncarnation {
+        Err(RegistryViolation::DuplicateIncarnation {
             incarnation: incarnation(1),
         })
     );
     assert_eq!(
         registry.register_published(registration(2, 12, 0, owner.clone(), queue.clone())),
-        Err(RegistryError::CanonicalPathReserved {
+        Err(RegistryViolation::CanonicalPathReserved {
             path: canonical_path(0),
             incumbent: incarnation(1),
         })
     );
     assert_eq!(
         registry.register_published(registration(2, 11, FILE_LENGTH, owner.clone(), queue.clone())),
-        Err(RegistryError::PhysicalKeyReserved {
+        Err(RegistryViolation::PhysicalKeyReserved {
             physical_key: physical_key(11),
             incumbent: incarnation(1),
         })
     );
     assert_eq!(
         registry.register_published(registration(3, 13, FILE_LENGTH * 2, owner, queue)),
-        Err(RegistryError::OwnerAlreadyRegistered {
+        Err(RegistryViolation::OwnerAlreadyRegistered {
             incumbent: incarnation(1),
         })
     );
@@ -215,7 +215,7 @@ fn preparation_requires_the_exact_registered_identity_and_owner() {
             )
             .err()
             .expect("wrong key is rejected"),
-        RegistryError::PhysicalKeyMismatch {
+        RegistryViolation::PhysicalKeyMismatch {
             incarnation: incarnation(1),
         }
     );
@@ -237,7 +237,7 @@ fn preparation_requires_the_exact_registered_identity_and_owner() {
             )
             .err()
             .expect("wrong path is rejected"),
-        RegistryError::CanonicalPathMismatch {
+        RegistryViolation::CanonicalPathMismatch {
             incarnation: incarnation(1),
         }
     );
@@ -250,7 +250,7 @@ fn preparation_requires_the_exact_registered_identity_and_owner() {
             )
             .err()
             .expect("wrong offset is rejected"),
-        RegistryError::SegmentOffsetMismatch {
+        RegistryViolation::SegmentOffsetMismatch {
             incarnation: incarnation(1),
         }
     );
@@ -263,7 +263,7 @@ fn preparation_requires_the_exact_registered_identity_and_owner() {
             )
             .err()
             .expect("wrong length is rejected"),
-        RegistryError::ExpectedLengthMismatch {
+        RegistryViolation::ExpectedLengthMismatch {
             incarnation: incarnation(1),
         }
     );
@@ -278,7 +278,7 @@ fn preparation_requires_the_exact_registered_identity_and_owner() {
             )
             .err()
             .expect("wrong owner is rejected"),
-        RegistryError::OwnerIdentityMismatch {
+        RegistryViolation::OwnerIdentityMismatch {
             incarnation: incarnation(1),
         }
     );
@@ -292,7 +292,7 @@ fn preparation_requires_the_exact_registered_identity_and_owner() {
             )
             .err()
             .expect("wrong queue is rejected"),
-        RegistryError::QueueIdentityMismatch {
+        RegistryViolation::QueueIdentityMismatch {
             incarnation: incarnation(1),
         }
     );
@@ -308,7 +308,7 @@ fn preparation_requires_the_exact_registered_identity_and_owner() {
             physical_key(11),
             canonical_path(0),
         ),
-        Err(RegistryError::ZeroMappingGeneration)
+        Err(RegistryViolation::ZeroMappingGeneration)
     );
     assert_eq!(
         RetirementOperation::new(
@@ -321,7 +321,7 @@ fn preparation_requires_the_exact_registered_identity_and_owner() {
             physical_key(11),
             canonical_path(0),
         ),
-        Err(RegistryError::ZeroRetirementNonce)
+        Err(RegistryViolation::ZeroRetirementNonce)
     );
 }
 
@@ -398,7 +398,7 @@ fn mismatched_durable_proof_fences_the_registry_and_retains_strong_identity() {
 
     assert!(matches!(
         append.commit(wrong_evidence),
-        Err(RegistryError::DurableEvidenceMismatch { .. })
+        Err(RegistryViolation::DurableEvidenceMismatch { .. })
     ));
     assert!(registry.needs_recovery());
     assert_eq!(registry.retained_identity_count(), 1);
@@ -410,7 +410,7 @@ fn mismatched_durable_proof_fences_the_registry_and_retains_strong_identity() {
             &weak_owner.upgrade().expect("registry retains owner"),
             &queue,
         ),
-        Err(RegistryError::NeedsRecovery)
+        Err(RegistryViolation::NeedsRecovery)
     ));
 }
 
@@ -511,7 +511,7 @@ fn replay_evidence_cannot_commit_an_inflight_writer_reservation() {
 
     assert_eq!(
         append.commit(evidence).expect_err("replay evidence is rejected"),
-        RegistryError::WriterEvidenceRequired
+        RegistryViolation::WriterEvidenceRequired
     );
     assert!(registry.needs_recovery());
     assert!(registry.contains_incarnation(incarnation(1)));

@@ -17,7 +17,7 @@ mod types;
 
 fn validate_prepared_foundation(
     foundation: &plan::PreparedCompactionFoundation,
-) -> Result<(), types::CompactionPlanError> {
+) -> Result<(), types::CompactionPlanViolation> {
     types::validate_meta_binding(&foundation.meta, &foundation.canonical_store_meta)?;
     types::validate_source_frontier(
         foundation.source_generation,
@@ -30,14 +30,14 @@ fn validate_prepared_foundation(
     if super::sidecar::encode_snapshot(&foundation.retained_snapshot)? != foundation.canonical_retained_snapshot
         || super::sidecar::decode_snapshot(&foundation.canonical_retained_snapshot)? != foundation.retained_snapshot
     {
-        return Err(types::CompactionPlanError::InvalidFoundation {
+        return Err(types::CompactionPlanViolation::InvalidFoundation {
             reason: "authoritative recovered inventory is not canonical",
         });
     }
     if foundation.generation_prepared.sequence != foundation.retained_snapshot.base_sequence
         || foundation.generation_prepared.sealed_log_length == 0
     {
-        return Err(types::CompactionPlanError::InvalidFoundation {
+        return Err(types::CompactionPlanViolation::InvalidFoundation {
             reason: "prepared unit and canonical inventory frontier differ",
         });
     }

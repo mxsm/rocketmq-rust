@@ -65,7 +65,7 @@ impl<O> RetirementIntentAppend<'_, O> {
     pub(crate) fn commit(
         mut self,
         evidence: DurableIntentEvidence,
-    ) -> Result<DurableRetirementToken<O>, RegistryError> {
+    ) -> Result<DurableRetirementToken<O>, RegistryViolation> {
         let result = self.registry.commit_prepared(&self.binding, evidence);
         self.armed = false;
         result
@@ -109,11 +109,11 @@ impl<O> PreparedQueueHandoff<'_, O> {
     }
 
     /// Reports an ArcSwap conflict and returns the original, still-unconsumed token.
-    pub(crate) fn rollback(mut self) -> Result<DurableRetirementToken<O>, RegistryError> {
+    pub(crate) fn rollback(mut self) -> Result<DurableRetirementToken<O>, RegistryViolation> {
         let Some(token) = self.token.take() else {
             self.armed = false;
             self.registry.fence_abandoned_handoff();
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         };
         self.armed = false;
         self.registry.rollback_handoff(&token)?;
@@ -121,11 +121,11 @@ impl<O> PreparedQueueHandoff<'_, O> {
     }
 
     /// Finalizes token consumption only after the caller completed the exact queue handoff.
-    pub(super) fn commit(mut self) -> Result<RetirementHandoffCapability<O>, RegistryError> {
+    pub(super) fn commit(mut self) -> Result<RetirementHandoffCapability<O>, RegistryViolation> {
         let Some(token) = self.token.take() else {
             self.armed = false;
             self.registry.fence_abandoned_handoff();
-            return Err(RegistryError::NeedsRecovery);
+            return Err(RegistryViolation::NeedsRecovery);
         };
         self.armed = false;
         self.registry.commit_handoff(token)

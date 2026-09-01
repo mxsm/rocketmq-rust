@@ -23,10 +23,10 @@ pub(super) struct SemanticGeneration {
 pub(super) fn replay_generations(
     parsed: &BTreeMap<u64, ParsedGeneration<'_>>,
     evidence: &[SealEvidence],
-) -> Result<BTreeMap<u64, SemanticGeneration>, ReplayError> {
+) -> Result<BTreeMap<u64, SemanticGeneration>, ReplayViolation> {
     let mut states = BTreeMap::<u64, SemanticGeneration>::new();
     for (&generation_number, generation) in parsed {
-        let mut state = LedgerStateMachine::from_snapshot(&generation.snapshot).map_err(ReplayError::State)?;
+        let mut state = LedgerStateMachine::from_snapshot(&generation.snapshot).map_err(ReplayViolation::State)?;
         if let Some(predecessor_number) = generation_number.checked_sub(1) {
             if let (Some(predecessor), Some(source)) =
                 (parsed.get(&predecessor_number), states.get(&predecessor_number))
@@ -37,7 +37,7 @@ pub(super) fn replay_generations(
 
         let units = evidence
             .get(generation.evidence_range.clone())
-            .ok_or(ReplayError::BrokenSealChain {
+            .ok_or(ReplayViolation::BrokenSealChain {
                 generation: generation_number,
             })?;
         let mut sealed_through = generation.snapshot.base_sequence;
@@ -48,7 +48,7 @@ pub(super) fn replay_generations(
             }
             state
                 .apply(unit.slot.frame_sequence, unit.record.clone())
-                .map_err(ReplayError::State)?;
+                .map_err(ReplayViolation::State)?;
             sealed_through = unit.slot.frame_sequence;
             applied_through = unit.slot.frame_sequence;
         }
@@ -56,7 +56,7 @@ pub(super) fn replay_generations(
             if let Some(frame) = generation.tail.as_ref().and_then(|tail| tail.complete_frame.as_ref()) {
                 state
                     .apply(frame.sequence, frame.record.clone())
-                    .map_err(ReplayError::State)?;
+                    .map_err(ReplayViolation::State)?;
                 applied_through = frame.sequence;
             }
         }
@@ -78,15 +78,15 @@ fn validate_transition(
     successor: &ParsedGeneration<'_>,
     successor_snapshot: &LedgerStateMachine,
     evidence: &[SealEvidence],
-) -> Result<(), ReplayError> {
+) -> Result<(), ReplayViolation> {
     source
         .state
         .validate_successor_projection(successor_snapshot)
-        .map_err(ReplayError::State)?;
+        .map_err(ReplayViolation::State)?;
     let terminal = evidence
         .get(predecessor.evidence_range.clone())
         .and_then(|units| units.last())
-        .ok_or(ReplayError::AuthoritativeFrameMissing)?;
+        .ok_or(ReplayViolation::AuthoritativeFrameMissing)?;
     let opener = evidence
         .get(successor.evidence_range.clone())
         .and_then(|units| units.first())
@@ -99,7 +99,7 @@ fn validate_transition(
                 .and_then(|frame| frame.record.as_ref())
         });
     let Some(LedgerRecord::LogOpened { open_reason, .. }) = opener else {
-        return Err(ReplayError::GenerationBindingMismatch);
+        return Err(ReplayViolation::GenerationBindingMismatch);
     };
     match open_reason {
         OpenReason::Compaction => {
@@ -115,7 +115,7 @@ fn validate_transition(
                     != Some((terminal.slot.frame_sequence, successor.bytes.generation))
                 || predecessor.tail.is_some()
             {
-                return Err(ReplayError::GenerationBindingMismatch);
+                return Err(ReplayViolation::GenerationBindingMismatch);
             }
         }
         OpenReason::TailRepair => {
@@ -123,12 +123,12 @@ fn validate_transition(
                 || matches!(terminal.record.as_ref(), Some(LedgerRecord::GenerationPrepared { .. }))
                 || predecessor.tail.is_none()
             {
-                return Err(ReplayError::GenerationBindingMismatch);
+                return Err(ReplayViolation::GenerationBindingMismatch);
             }
         }
     }
     if successor_snapshot.prepared_generation().is_some() {
-        return Err(ReplayError::GenerationBindingMismatch);
+        return Err(ReplayViolation::GenerationBindingMismatch);
     }
     Ok(())
 }

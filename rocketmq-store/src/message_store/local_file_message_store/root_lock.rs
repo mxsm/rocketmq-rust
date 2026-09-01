@@ -25,8 +25,6 @@ use rocketmq_store_local::mapped_file::bootstrap_managed_lifecycle_under_exclusi
 use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_read_only;
 use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_under_exclusive_lock;
 use rocketmq_store_local::mapped_file::LockedManagedLifecycleInspection;
-use rocketmq_store_local::mapped_file::ManagedLifecycleReadError;
-use rocketmq_store_local::mapped_file::ManagedLifecycleReadErrorKind;
 use rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome;
 use rocketmq_store_local::mapped_file::ManagedLifecycleRecoveryReason;
 
@@ -109,8 +107,9 @@ impl StoreRootLease {
         operation: StoreOperation,
     ) -> Result<ManagedLifecycleReadOutcome, StoreError> {
         self.validate_root_binding(operation)?;
+        // The read-only inspection reports its own catalog identity with the reviewed Load
+        // operation; this method only threads the caller operation into root validation.
         inspect_managed_lifecycle_read_only(&self.root)
-            .map_err(|error| managed_lifecycle_read_error(operation, &self.configured_root, error))
     }
 
     pub(super) fn bootstrap_managed_lifecycle(&self, operation: StoreOperation) -> Result<(), StoreError> {
@@ -118,30 +117,7 @@ impl StoreRootLease {
         // SAFETY: this lease retains the exact no-follow Store-root and lock handles, owns the
         // exclusive lock, and revalidated both configured-path bindings immediately above. Store
         // construction has not published or started any legacy component.
-        unsafe { bootstrap_managed_lifecycle_under_exclusive_lock(&self.root) }.map_err(|error| {
-            let descriptor = match error.kind() {
-                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::UnsupportedPlatform => {
-                    &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED
-                }
-                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::Io => {
-                    &rocketmq_error::STORAGE_IO_FAILED
-                }
-                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::Inventory => {
-                    &rocketmq_error::STORAGE_READ_FAILED
-                }
-                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::InvalidIdentity
-                | rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::InvalidArtifact => {
-                    &rocketmq_error::STORAGE_STATE_CORRUPTED
-                }
-                rocketmq_store_local::mapped_file::ManagedLifecycleBootstrapErrorKind::RecoveryRequired => {
-                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
-                }
-            };
-            StoreError::new(descriptor, operation)
-                .in_component(StoreComponent::MappedFile)
-                .with_detail("explicit Wave-B bootstrap failed before Store component construction")
-                .with_source(error)
-        })?;
+        unsafe { bootstrap_managed_lifecycle_under_exclusive_lock(&self.root) }?;
         self.validate_root_binding(operation)
     }
 
@@ -331,7 +307,7 @@ impl StoreRootLease {
             Ok(ManagedLifecycleReadOutcome::RecoveryWriteRequired(reason)) => {
                 Err(managed_lifecycle_fence(operation, recovery_requirement(reason)))
             }
-            Err(error) => Err(managed_lifecycle_read_error(operation, &self.configured_root, error)),
+            Err(error) => Err(error),
         }
     }
 
@@ -358,7 +334,6 @@ impl StoreRootLease {
         // opaque Arc passed to store-local owns those handles and therefore keeps every invariant
         // alive until the returned session and all capabilities derived from it are dropped.
         unsafe { inspect_managed_lifecycle_under_exclusive_lock(&self.root, exclusive_lease) }
-            .map_err(|error| managed_lifecycle_read_error(operation, &self.configured_root, error))
     }
 
     pub(super) fn abort_marker_present(&self, operation: StoreOperation) -> Result<bool, StoreError> {
@@ -465,29 +440,6 @@ const fn recovery_requirement(reason: ManagedLifecycleRecoveryReason) -> &'stati
         ManagedLifecycleRecoveryReason::ResumeGeneration => "generation recovery",
         ManagedLifecycleRecoveryReason::TemporaryArtifact => "temporary-artifact recovery",
     }
-}
-
-fn managed_lifecycle_read_error(
-    operation: StoreOperation,
-    configured_root: &Path,
-    error: ManagedLifecycleReadError,
-) -> StoreError {
-    let descriptor = match error.kind() {
-        ManagedLifecycleReadErrorKind::Io => &rocketmq_error::STORAGE_IO_FAILED,
-        ManagedLifecycleReadErrorKind::InventoryChanged => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-        ManagedLifecycleReadErrorKind::LimitExceeded => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
-        ManagedLifecycleReadErrorKind::UnsupportedPlatform => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
-        ManagedLifecycleReadErrorKind::UnsafeNamespace
-        | ManagedLifecycleReadErrorKind::Corruption
-        | ManagedLifecycleReadErrorKind::UnknownVersionCorruption => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-    };
-    StoreError::new(descriptor, operation)
-        .in_component(StoreComponent::MappedFile)
-        .with_detail(format!(
-            "read-only lifecycle inspection failed under {}",
-            configured_root.join(LIFECYCLE_DIRECTORY_NAME).display()
-        ))
-        .with_source(error)
 }
 
 #[cfg(unix)]

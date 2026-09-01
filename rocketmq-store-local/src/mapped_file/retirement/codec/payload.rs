@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use super::super::identity::FileIncarnationId;
-use super::super::identity::IdentityError;
+use super::super::identity::IdentityViolation;
 use super::super::identity::PhysicalFileKey;
 use super::super::identity::StoreRelativePath;
 use super::super::identity::StoreUuid;
 use super::super::identity::TicketId;
-use super::CodecError;
+use super::CodecViolation;
 use super::RecordType;
 
-pub(super) fn validate_opaque_id(field: &'static str, value: &[u8; 16]) -> Result<(), CodecError> {
+pub(super) fn validate_opaque_id(field: &'static str, value: &[u8; 16]) -> Result<(), CodecViolation> {
     if *value == [0; 16] {
-        return Err(CodecError::ZeroOpaqueIdentifier { field });
+        return Err(CodecViolation::ZeroOpaqueIdentifier { field });
     }
     Ok(())
 }
@@ -67,8 +67,8 @@ pub(super) fn push_optional_physical_key(output: &mut Vec<u8>, value: Option<Phy
     }
 }
 
-pub(super) fn push_path(output: &mut Vec<u8>, value: &StoreRelativePath) -> Result<(), CodecError> {
-    let length = u16::try_from(value.as_bytes().len()).map_err(|_| CodecError::PayloadTooLarge {
+pub(super) fn push_path(output: &mut Vec<u8>, value: &StoreRelativePath) -> Result<(), CodecViolation> {
+    let length = u16::try_from(value.as_bytes().len()).map_err(|_| CodecViolation::PayloadTooLarge {
         length: value.as_bytes().len(),
         maximum: StoreRelativePath::MAX_BYTES,
     })?;
@@ -77,7 +77,10 @@ pub(super) fn push_path(output: &mut Vec<u8>, value: &StoreRelativePath) -> Resu
     Ok(())
 }
 
-pub(super) fn push_optional_path(output: &mut Vec<u8>, value: Option<&StoreRelativePath>) -> Result<(), CodecError> {
+pub(super) fn push_optional_path(
+    output: &mut Vec<u8>,
+    value: Option<&StoreRelativePath>,
+) -> Result<(), CodecViolation> {
     if let Some(value) = value {
         push_path(output, value)
     } else {
@@ -113,10 +116,10 @@ impl<'a> PayloadDecoder<'a> {
         }
     }
 
-    pub(super) fn take<const N: usize>(&mut self) -> Result<[u8; N], CodecError> {
-        let end = self.offset.checked_add(N).ok_or(CodecError::FrameLengthOverflow)?;
+    pub(super) fn take<const N: usize>(&mut self) -> Result<[u8; N], CodecViolation> {
+        let end = self.offset.checked_add(N).ok_or(CodecViolation::FrameLengthOverflow)?;
         let Some(bytes) = self.bytes.get(self.offset..end) else {
-            return Err(CodecError::UnexpectedPayloadEnd {
+            return Err(CodecViolation::UnexpectedPayloadEnd {
                 record_type: self.record_type.wire_value(),
                 offset: self.offset,
                 needed: N,
@@ -124,7 +127,7 @@ impl<'a> PayloadDecoder<'a> {
             });
         };
         self.offset = end;
-        bytes.try_into().map_err(|_| CodecError::UnexpectedPayloadEnd {
+        bytes.try_into().map_err(|_| CodecViolation::UnexpectedPayloadEnd {
             record_type: self.record_type.wire_value(),
             offset: self.offset.saturating_sub(N),
             needed: N,
@@ -132,71 +135,77 @@ impl<'a> PayloadDecoder<'a> {
         })
     }
 
-    pub(super) fn take_u8(&mut self) -> Result<u8, CodecError> {
+    pub(super) fn take_u8(&mut self) -> Result<u8, CodecViolation> {
         Ok(self.take::<1>()?[0])
     }
 
-    pub(super) fn take_u16(&mut self) -> Result<u16, CodecError> {
+    pub(super) fn take_u16(&mut self) -> Result<u16, CodecViolation> {
         self.take().map(u16::from_le_bytes)
     }
 
-    pub(super) fn take_u32(&mut self) -> Result<u32, CodecError> {
+    pub(super) fn take_u32(&mut self) -> Result<u32, CodecViolation> {
         self.take().map(u32::from_le_bytes)
     }
 
-    pub(super) fn take_u64(&mut self) -> Result<u64, CodecError> {
+    pub(super) fn take_u64(&mut self) -> Result<u64, CodecViolation> {
         self.take().map(u64::from_le_bytes)
     }
 
-    pub(super) fn take_store_uuid(&mut self, field: &'static str) -> Result<StoreUuid, CodecError> {
-        StoreUuid::new(self.take()?).map_err(|source| CodecError::InvalidIdentity { field, source })
+    pub(super) fn take_store_uuid(&mut self, field: &'static str) -> Result<StoreUuid, CodecViolation> {
+        StoreUuid::new(self.take()?).map_err(|source| CodecViolation::InvalidIdentity { field, source })
     }
 
-    pub(super) fn take_incarnation(&mut self) -> Result<FileIncarnationId, CodecError> {
+    pub(super) fn take_incarnation(&mut self) -> Result<FileIncarnationId, CodecViolation> {
         let store_uuid = self.take_store_uuid("incarnation_store_uuid")?;
         let create_seq = self.take_u64()?;
-        FileIncarnationId::new(store_uuid, create_seq).map_err(|source| CodecError::InvalidIdentity {
+        FileIncarnationId::new(store_uuid, create_seq).map_err(|source| CodecViolation::InvalidIdentity {
             field: "file_incarnation",
             source,
         })
     }
 
-    pub(super) fn take_ticket(&mut self) -> Result<TicketId, CodecError> {
-        TicketId::new(self.take_u64()?).map_err(|source| CodecError::InvalidIdentity {
+    pub(super) fn take_ticket(&mut self) -> Result<TicketId, CodecViolation> {
+        TicketId::new(self.take_u64()?).map_err(|source| CodecViolation::InvalidIdentity {
             field: "ticket_id",
             source,
         })
     }
 
-    pub(super) fn take_opaque_id(&mut self, field: &'static str) -> Result<[u8; 16], CodecError> {
+    pub(super) fn take_opaque_id(&mut self, field: &'static str) -> Result<[u8; 16], CodecViolation> {
         let value = self.take()?;
         validate_opaque_id(field, &value)?;
         Ok(value)
     }
 
-    pub(super) fn take_physical_key(&mut self) -> Result<PhysicalFileKey, CodecError> {
+    pub(super) fn take_physical_key(&mut self) -> Result<PhysicalFileKey, CodecViolation> {
         decode_physical_key(self.take()?)
     }
 
-    pub(super) fn take_optional_physical_key(&mut self, present: bool) -> Result<Option<PhysicalFileKey>, CodecError> {
+    pub(super) fn take_optional_physical_key(
+        &mut self,
+        present: bool,
+    ) -> Result<Option<PhysicalFileKey>, CodecViolation> {
         let bytes = self.take()?;
         if present {
             decode_physical_key(bytes).map(Some)
         } else if bytes == [0; 32] {
             Ok(None)
         } else {
-            Err(CodecError::InvalidAbsentPhysicalFileKey)
+            Err(CodecViolation::InvalidAbsentPhysicalFileKey)
         }
     }
 
-    pub(super) fn take_required_path(&mut self, field: &'static str) -> Result<StoreRelativePath, CodecError> {
-        self.take_path(field, false)?.ok_or(CodecError::InvalidIdentity {
+    pub(super) fn take_required_path(&mut self, field: &'static str) -> Result<StoreRelativePath, CodecViolation> {
+        self.take_path(field, false)?.ok_or(CodecViolation::InvalidIdentity {
             field,
-            source: IdentityError::EmptyStoreRelativePath,
+            source: IdentityViolation::EmptyStoreRelativePath,
         })
     }
 
-    pub(super) fn take_optional_path(&mut self, field: &'static str) -> Result<Option<StoreRelativePath>, CodecError> {
+    pub(super) fn take_optional_path(
+        &mut self,
+        field: &'static str,
+    ) -> Result<Option<StoreRelativePath>, CodecViolation> {
         self.take_path(field, true)
     }
 
@@ -204,20 +213,23 @@ impl<'a> PayloadDecoder<'a> {
         &mut self,
         field: &'static str,
         optional: bool,
-    ) -> Result<Option<StoreRelativePath>, CodecError> {
+    ) -> Result<Option<StoreRelativePath>, CodecViolation> {
         let length = usize::from(self.take_u16()?);
         if length == 0 && optional {
             return Ok(None);
         }
         if length > StoreRelativePath::MAX_BYTES {
-            return Err(CodecError::PayloadTooLarge {
+            return Err(CodecViolation::PayloadTooLarge {
                 length,
                 maximum: StoreRelativePath::MAX_BYTES,
             });
         }
-        let end = self.offset.checked_add(length).ok_or(CodecError::FrameLengthOverflow)?;
+        let end = self
+            .offset
+            .checked_add(length)
+            .ok_or(CodecViolation::FrameLengthOverflow)?;
         let Some(bytes) = self.bytes.get(self.offset..end) else {
-            return Err(CodecError::UnexpectedPayloadEnd {
+            return Err(CodecViolation::UnexpectedPayloadEnd {
                 record_type: self.record_type.wire_value(),
                 offset: self.offset,
                 needed: length,
@@ -225,16 +237,16 @@ impl<'a> PayloadDecoder<'a> {
             });
         };
         self.offset = end;
-        let value = std::str::from_utf8(bytes).map_err(|_| CodecError::InvalidUtf8Path { field })?;
+        let value = std::str::from_utf8(bytes).map_err(|_| CodecViolation::InvalidUtf8Path { field })?;
         StoreRelativePath::new(value)
             .map(Some)
-            .map_err(|source| CodecError::InvalidIdentity { field, source })
+            .map_err(|source| CodecViolation::InvalidIdentity { field, source })
     }
 
-    pub(super) fn require_u16(&mut self, field: &'static str, expected: u16) -> Result<(), CodecError> {
+    pub(super) fn require_u16(&mut self, field: &'static str, expected: u16) -> Result<(), CodecViolation> {
         let value = self.take_u16()?;
         if value != expected {
-            return Err(CodecError::NonZeroReserved {
+            return Err(CodecViolation::NonZeroReserved {
                 field,
                 value: u64::from(value),
             });
@@ -242,10 +254,10 @@ impl<'a> PayloadDecoder<'a> {
         Ok(())
     }
 
-    pub(super) fn require_u32(&mut self, field: &'static str, expected: u32) -> Result<(), CodecError> {
+    pub(super) fn require_u32(&mut self, field: &'static str, expected: u32) -> Result<(), CodecViolation> {
         let value = self.take_u32()?;
         if value != expected {
-            return Err(CodecError::NonZeroReserved {
+            return Err(CodecViolation::NonZeroReserved {
                 field,
                 value: u64::from(value),
             });
@@ -253,19 +265,19 @@ impl<'a> PayloadDecoder<'a> {
         Ok(())
     }
 
-    pub(super) fn require_u64(&mut self, field: &'static str, expected: u64) -> Result<(), CodecError> {
+    pub(super) fn require_u64(&mut self, field: &'static str, expected: u64) -> Result<(), CodecViolation> {
         let value = self.take_u64()?;
         if value != expected {
-            return Err(CodecError::NonZeroReserved { field, value });
+            return Err(CodecViolation::NonZeroReserved { field, value });
         }
         Ok(())
     }
 
-    pub(super) fn require_zero_bytes(&mut self, field: &'static str, length: usize) -> Result<(), CodecError> {
+    pub(super) fn require_zero_bytes(&mut self, field: &'static str, length: usize) -> Result<(), CodecViolation> {
         for _ in 0..length {
             let value = self.take_u8()?;
             if value != 0 {
-                return Err(CodecError::NonZeroReserved {
+                return Err(CodecViolation::NonZeroReserved {
                     field,
                     value: u64::from(value),
                 });
@@ -274,9 +286,9 @@ impl<'a> PayloadDecoder<'a> {
         Ok(())
     }
 
-    pub(super) fn finish(self) -> Result<(), CodecError> {
+    pub(super) fn finish(self) -> Result<(), CodecViolation> {
         if self.offset != self.bytes.len() {
-            return Err(CodecError::TrailingPayloadBytes {
+            return Err(CodecViolation::TrailingPayloadBytes {
                 record_type: self.record_type.wire_value(),
                 offset: self.offset,
                 remaining: self.bytes.len() - self.offset,
@@ -286,23 +298,33 @@ impl<'a> PayloadDecoder<'a> {
     }
 }
 
-pub(super) fn decode_physical_key(bytes: [u8; 32]) -> Result<PhysicalFileKey, CodecError> {
+pub(super) fn decode_physical_key(bytes: [u8; 32]) -> Result<PhysicalFileKey, CodecViolation> {
     if bytes[1..8] != [0; 7] {
-        return Err(CodecError::NonZeroPhysicalFileKeyReserved);
+        return Err(CodecViolation::NonZeroPhysicalFileKeyReserved);
     }
-    let first = u64::from_le_bytes(bytes[8..16].try_into().map_err(|_| CodecError::FrameLengthOverflow)?);
+    let first = u64::from_le_bytes(
+        bytes[8..16]
+            .try_into()
+            .map_err(|_| CodecViolation::FrameLengthOverflow)?,
+    );
     match bytes[0] {
         1 => {
             if bytes[24..32] != [0; 8] {
-                return Err(CodecError::NonZeroPhysicalFileKeyReserved);
+                return Err(CodecViolation::NonZeroPhysicalFileKeyReserved);
             }
-            let inode = u64::from_le_bytes(bytes[16..24].try_into().map_err(|_| CodecError::FrameLengthOverflow)?);
+            let inode = u64::from_le_bytes(
+                bytes[16..24]
+                    .try_into()
+                    .map_err(|_| CodecViolation::FrameLengthOverflow)?,
+            );
             Ok(PhysicalFileKey::unix(first, inode))
         }
         2 => {
-            let file_id = bytes[16..32].try_into().map_err(|_| CodecError::FrameLengthOverflow)?;
+            let file_id = bytes[16..32]
+                .try_into()
+                .map_err(|_| CodecViolation::FrameLengthOverflow)?;
             Ok(PhysicalFileKey::windows(first, file_id))
         }
-        kind => Err(CodecError::InvalidPhysicalFileKeyKind { kind }),
+        kind => Err(CodecViolation::InvalidPhysicalFileKeyKind { kind }),
     }
 }

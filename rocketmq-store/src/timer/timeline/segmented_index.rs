@@ -653,7 +653,7 @@ fn storage_error(error: rocketmq_error::RocketMQError) -> TimerEngineError {
     TimerEngineError::Storage(std::io::Error::other(error))
 }
 
-fn local_error(error: rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError) -> TimerEngineError {
+fn local_error(error: crate::store_error::StoreError) -> TimerEngineError {
     TimerEngineError::Storage(std::io::Error::other(error))
 }
 
@@ -665,9 +665,7 @@ fn commit_error(error: SegmentedCommitError) -> TimerEngineError {
 #[derive(Debug, Error)]
 pub(crate) enum SegmentedCommitError {
     #[error(transparent)]
-    Native(#[from] rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError),
-    #[error(transparent)]
-    Segment(#[from] rocketmq_store_local::timer::timeline_segment::TimelineSegmentError),
+    Store(#[from] crate::store_error::StoreError),
     #[error(transparent)]
     Rocks(#[from] rocketmq_error::RocketMQError),
     #[error("segmented commit batch is empty")]
@@ -692,9 +690,10 @@ mod tests {
 
     #[test]
     fn local_error_preserves_segmented_timeline_error_as_source() {
-        assert_storage_source::<rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError>(local_error(
-            rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineError::EmptyBatch,
-        ));
+        assert_storage_source::<crate::store_error::StoreError>(local_error(crate::store_error::StoreError::new(
+            &rocketmq_error::STORAGE_WRITE_FAILED,
+            crate::store_error::StoreOperation::Append,
+        )));
     }
 
     #[test]

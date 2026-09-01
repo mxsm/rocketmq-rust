@@ -14,6 +14,9 @@
 
 use std::io;
 
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
 use crate::transfer::segment::FileRangeError;
@@ -27,7 +30,7 @@ use super::MappedFileOperation;
 /// when working with memory-mapped files, including I/O errors, bounds violations,
 /// and resource exhaustion.
 #[derive(Error, Debug)]
-pub enum MappedFileError {
+pub(crate) enum MappedFileError {
     /// Standard I/O error occurred during file operations.
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
@@ -109,28 +112,6 @@ pub enum MappedFileError {
     #[error("Mapped-memory unlock failed: {0}")]
     MemoryUnlockFailed(#[source] rocketmq_error::RocketMQError),
 
-    /// Invalid file name or path provided.
-    ///
-    /// The file name must be a valid path with a parseable numeric offset.
-    #[error("Invalid file name: {0}")]
-    InvalidFileName(String),
-
-    /// File expansion failed.
-    ///
-    /// This occurs when attempting to grow the file size via `set_len()` or
-    /// similar operations.
-    #[error("File expansion failed: current_size={current_size}, requested_size={requested_size}")]
-    ExpansionFailed {
-        /// Current file size in bytes
-        current_size: u64,
-        /// Requested new size in bytes
-        requested_size: u64,
-    },
-
-    /// Reference counting error - attempted to use a file after all references dropped.
-    #[error("Reference resource unavailable")]
-    ReferenceUnavailable,
-
     /// The mapped-file lifecycle rejected a new operation after admission changed state.
     #[error("Mapped-file operation unavailable: operation={operation}, state={state}")]
     Unavailable {
@@ -164,10 +145,49 @@ pub enum MappedFileError {
     Custom(String),
 }
 
-/// Type alias for Results using `MappedFileError`.
-pub type MappedFileResult<T> = Result<T, MappedFileError>;
+impl From<super::lifecycle::LifecycleAcquireRejection> for MappedFileError {
+    fn from(rejection: super::lifecycle::LifecycleAcquireRejection) -> Self {
+        match rejection {
+            super::lifecycle::LifecycleAcquireRejection::Unavailable { state, operation } => {
+                Self::Unavailable { state, operation }
+            }
+            super::lifecycle::LifecycleAcquireRejection::LeaseCountOverflow => Self::LeaseCountOverflow,
+        }
+    }
+}
 
 impl MappedFileError {
+    /// Promotes this leaf into the canonical storage facade exactly once.
+    ///
+    /// Filesystem, mapping, flush, expansion, and memory-lock faults are I/O
+    /// failures; capacity, position, commit, name, and configuration
+    /// violations are invalid requests; lifecycle rejections and exhausted
+    /// resources are backend unavailability. The complete leaf is preserved
+    /// as the typed source.
+    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
+        let descriptor = match &self {
+            Self::Io(_)
+            | Self::MmapFailed(_)
+            | Self::FlushFailed(_)
+            | Self::MemoryLockFailed(_)
+            | Self::MemoryUnlockFailed(_) => &rocketmq_error::STORAGE_IO_FAILED,
+            Self::OutOfBounds { .. }
+            | Self::FileRange(_)
+            | Self::FileFull { .. }
+            | Self::InvalidWritePosition { .. }
+            | Self::InvalidWriteCommit { .. }
+            | Self::WritePositionOverflow { .. }
+            | Self::Configuration(_) => &rocketmq_error::STORAGE_REQUEST_INVALID,
+            Self::Unavailable { .. } | Self::LeaseCountOverflow | Self::TransientStoreExhausted => {
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
+            }
+            Self::Custom(_) => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+        };
+        StoreError::new(descriptor, operation)
+            .in_component(StoreComponent::MappedFile)
+            .with_source(self)
+    }
+
     /// Creates an `OutOfBounds` error from the given parameters.
     ///
     /// # Arguments
@@ -211,6 +231,10 @@ impl MappedFileError {
     /// # Returns
     ///
     /// `true` if the error is recoverable, `false` otherwise
+    #[allow(
+        dead_code,
+        reason = "recovery classification retained for the typed leaf and its unit tests"
+    )]
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
@@ -228,6 +252,10 @@ impl MappedFileError {
     /// # Returns
     ///
     /// `true` if the underlying cause is an I/O error
+    #[allow(
+        dead_code,
+        reason = "recovery classification retained for the typed leaf and its unit tests"
+    )]
     pub fn is_io_error(&self) -> bool {
         matches!(self, Self::Io(_))
     }

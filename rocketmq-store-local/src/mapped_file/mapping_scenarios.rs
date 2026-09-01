@@ -19,14 +19,14 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Barrier;
 
+use crate::mapped_file::DefaultMappedFile;
+use crate::mapped_file::LazyMmapStats;
+use crate::mapped_file::MappedMemory;
+use crate::mapped_file::NativeMappedMemory;
+use crate::mapped_file::ReadOnlyMappedMemory;
 use cheetah_string::CheetahString;
 use memmap2::Mmap;
 use memmap2::MmapMut;
-use rocketmq_store_local::mapped_file::DefaultMappedFile;
-use rocketmq_store_local::mapped_file::LazyMmapStats;
-use rocketmq_store_local::mapped_file::MappedMemory;
-use rocketmq_store_local::mapped_file::NativeMappedMemory;
-use rocketmq_store_local::mapped_file::ReadOnlyMappedMemory;
 
 fn mapped_path(directory: &tempfile::TempDir) -> CheetahString {
     CheetahString::from(

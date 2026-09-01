@@ -34,17 +34,17 @@ impl MicroBatchPolicy {
     ///
     /// # Errors
     ///
-    /// Returns [`MicroBatchPolicyError`] when either hard limit is zero.
+    /// Returns [`MicroBatchPolicyViolation`] when either hard limit is zero.
     pub const fn try_new(
         max_items: usize,
         max_bytes: usize,
         max_wait: Duration,
-    ) -> Result<Self, MicroBatchPolicyError> {
+    ) -> Result<Self, MicroBatchPolicyViolation> {
         if max_items == 0 {
-            return Err(MicroBatchPolicyError::ZeroMaxItems);
+            return Err(MicroBatchPolicyViolation::ZeroMaxItems);
         }
         if max_bytes == 0 {
-            return Err(MicroBatchPolicyError::ZeroMaxBytes);
+            return Err(MicroBatchPolicyViolation::ZeroMaxBytes);
         }
         Ok(Self {
             max_items,
@@ -57,8 +57,8 @@ impl MicroBatchPolicy {
     ///
     /// # Errors
     ///
-    /// Returns [`MicroBatchPolicyError::ZeroMaxBytes`] when the queue has no byte capacity.
-    pub const fn disabled(max_payload_bytes: usize) -> Result<Self, MicroBatchPolicyError> {
+    /// Returns [`MicroBatchPolicyViolation::ZeroMaxBytes`] when the queue has no byte capacity.
+    pub const fn disabled(max_payload_bytes: usize) -> Result<Self, MicroBatchPolicyViolation> {
         Self::try_new(1, max_payload_bytes, Duration::ZERO)
     }
 
@@ -83,7 +83,7 @@ impl MicroBatchPolicy {
 
 /// Invalid micro-batch policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum MicroBatchPolicyError {
+pub enum MicroBatchPolicyViolation {
     /// A batch cannot have a zero item limit.
     #[error("CommitLog micro-batch max-items must be greater than zero")]
     ZeroMaxItems,

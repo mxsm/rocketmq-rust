@@ -21,10 +21,10 @@ pub(super) fn merge_observed_replacement_key(
     ticket_id: TicketId,
     recorded: Option<PhysicalFileKey>,
     observed: Option<PhysicalFileKey>,
-) -> Result<Option<PhysicalFileKey>, RegistryError> {
+) -> Result<Option<PhysicalFileKey>, RegistryViolation> {
     match (recorded, observed) {
         (Some(recorded), Some(observed)) if recorded != observed => {
-            Err(RegistryError::NamespaceProofMismatch { ticket_id })
+            Err(RegistryViolation::NamespaceProofMismatch { ticket_id })
         }
         (Some(key), _) | (_, Some(key)) => Ok(Some(key)),
         (None, None) => Ok(None),
@@ -34,7 +34,7 @@ pub(super) fn merge_observed_replacement_key(
 pub(in crate::mapped_file::retirement) fn commit_writer_intent<O>(
     intent: RetirementIntentAppend<'_, O>,
     proof: writer::WriterDurabilityProof,
-) -> Result<DurableRetirementToken<O>, RegistryError> {
+) -> Result<DurableRetirementToken<O>, RegistryViolation> {
     let (
         record,
         ledger_generation,
@@ -64,7 +64,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_intent<O>(
 pub(in crate::mapped_file::retirement) fn commit_writer_logical_removed<O>(
     capability: RetirementHandoffCapability<O>,
     proof: writer::WriterDurabilityProof,
-) -> Result<LogicalRemovedCapability<O>, RegistryError> {
+) -> Result<LogicalRemovedCapability<O>, RegistryViolation> {
     let (
         record,
         ledger_generation,
@@ -76,7 +76,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_logical_removed<O>(
     ) = proof.into_parts();
     let ticket_id = capability.binding.ticket_id();
     if record != capability.logical_removed_record() {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     }
     let durability = DurabilityCoordinates::verified(
         ledger_generation,
@@ -93,7 +93,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_logical_removed<O>(
 pub(in crate::mapped_file::retirement) fn superseded_path_record<O>(
     capability: &LogicalRemovedCapability<O>,
     observed_replacement_key: PhysicalFileKey,
-) -> Result<codec::LedgerRecord, RegistryError> {
+) -> Result<codec::LedgerRecord, RegistryViolation> {
     let binding = capability.binding();
     merge_observed_replacement_key(
         binding.ticket_id(),
@@ -112,7 +112,7 @@ pub(in crate::mapped_file::retirement) fn superseded_path_record<O>(
 pub(in crate::mapped_file::retirement) fn commit_writer_superseded_path_after_logical<O>(
     capability: LogicalRemovedCapability<O>,
     proof: writer::WriterDurabilityProof,
-) -> Result<LogicalRemovedCapability<O>, RegistryError> {
+) -> Result<LogicalRemovedCapability<O>, RegistryViolation> {
     let (
         record,
         ledger_generation,
@@ -131,14 +131,14 @@ pub(in crate::mapped_file::retirement) fn commit_writer_superseded_path_after_lo
         canonical_path,
     } = record
     else {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     };
     if record_ticket != ticket_id
         || incarnation != capability.binding.incarnation()
         || expected_target_key != capability.binding.target_key()
         || canonical_path != *capability.binding.canonical_path()
     {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     }
     let durability = DurabilityCoordinates::verified(
         ledger_generation,
@@ -156,11 +156,11 @@ pub(in crate::mapped_file::retirement) fn namespace_absent_record<O>(
     capability: &LogicalRemovedCapability<O>,
     proof: &platform::NamespaceAbsenceProof,
     observation_time_ns: u64,
-) -> Result<codec::LedgerRecord, RegistryError> {
+) -> Result<codec::LedgerRecord, RegistryViolation> {
     let request = proof.request();
     let binding = capability.binding();
     if !namespace_request_matches(binding, request) {
-        return Err(RegistryError::NamespaceProofMismatch {
+        return Err(RegistryViolation::NamespaceProofMismatch {
             ticket_id: binding.ticket_id(),
         });
     }
@@ -183,11 +183,11 @@ pub(in crate::mapped_file::retirement) fn namespace_absent_record<O>(
 pub(in crate::mapped_file::retirement) fn tombstoned_record<O>(
     capability: &LogicalRemovedCapability<O>,
     proof: &platform::NamespaceTombstoneProof,
-) -> Result<codec::LedgerRecord, RegistryError> {
+) -> Result<codec::LedgerRecord, RegistryViolation> {
     let request = proof.request();
     let binding = capability.binding();
     if !namespace_request_matches(binding, request) {
-        return Err(RegistryError::NamespaceProofMismatch {
+        return Err(RegistryViolation::NamespaceProofMismatch {
             ticket_id: binding.ticket_id(),
         });
     }
@@ -210,7 +210,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_tombstoned<O>(
     capability: LogicalRemovedCapability<O>,
     proof: writer::WriterDurabilityProof,
     observed_replacement_key: Option<PhysicalFileKey>,
-) -> Result<TombstonedCapability<O>, RegistryError> {
+) -> Result<TombstonedCapability<O>, RegistryViolation> {
     let (
         record,
         ledger_generation,
@@ -230,7 +230,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_tombstoned<O>(
         tombstone_path,
     } = &record
     else {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     };
     if *record_ticket != ticket_id
         || *incarnation != capability.binding.incarnation()
@@ -238,7 +238,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_tombstoned<O>(
         || *retirement_nonce != capability.binding.retirement_nonce()
         || canonical_path != capability.binding.canonical_path()
     {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     }
     let durability = DurabilityCoordinates::verified(
         ledger_generation,
@@ -256,11 +256,11 @@ pub(in crate::mapped_file::retirement) fn namespace_absent_after_tombstone_recor
     capability: &TombstonedCapability<O>,
     proof: &platform::NamespaceAbsenceProof,
     observation_time_ns: u64,
-) -> Result<codec::LedgerRecord, RegistryError> {
+) -> Result<codec::LedgerRecord, RegistryViolation> {
     let request = proof.request();
     let binding = capability.binding();
     if !namespace_request_matches(binding, request) || request.tombstone_path() != capability.tombstone_path() {
-        return Err(RegistryError::NamespaceProofMismatch {
+        return Err(RegistryViolation::NamespaceProofMismatch {
             ticket_id: binding.ticket_id(),
         });
     }
@@ -284,7 +284,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_namespace_absent_after_t
     capability: TombstonedCapability<O>,
     proof: writer::WriterDurabilityProof,
     observed_replacement_key: Option<PhysicalFileKey>,
-) -> Result<NamespaceAbsentCapability<O>, RegistryError> {
+) -> Result<NamespaceAbsentCapability<O>, RegistryViolation> {
     let (
         record,
         ledger_generation,
@@ -305,7 +305,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_namespace_absent_after_t
         ..
     } = &record
     else {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     };
     if *record_ticket != ticket_id
         || *incarnation != capability.binding.incarnation()
@@ -313,7 +313,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_namespace_absent_after_t
         || canonical_path != capability.binding.canonical_path()
         || tombstone_path.as_ref() != Some(&capability.tombstone_path)
     {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     }
     let durability = DurabilityCoordinates::verified(
         ledger_generation,
@@ -328,7 +328,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_namespace_absent_after_t
         merge_observed_replacement_key(ticket_id, capability.observed_replacement_key, observed_replacement_key)?
             .is_some();
     if *replacement_observed != expected_replacement_observed {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     }
     authority.commit_namespace_absent_after_tombstone(capability, durability, observed_replacement_key)
 }
@@ -337,7 +337,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_namespace_absent<O>(
     capability: LogicalRemovedCapability<O>,
     proof: writer::WriterDurabilityProof,
     observed_replacement_key: Option<PhysicalFileKey>,
-) -> Result<NamespaceAbsentCapability<O>, RegistryError> {
+) -> Result<NamespaceAbsentCapability<O>, RegistryViolation> {
     let (
         record,
         ledger_generation,
@@ -358,7 +358,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_namespace_absent<O>(
         ..
     } = &record
     else {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     };
     if *record_ticket != ticket_id
         || *incarnation != capability.binding.incarnation()
@@ -366,7 +366,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_namespace_absent<O>(
         || canonical_path != capability.binding.canonical_path()
         || tombstone_path.is_some()
     {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     }
     let durability = DurabilityCoordinates::verified(
         ledger_generation,
@@ -381,7 +381,7 @@ pub(in crate::mapped_file::retirement) fn commit_writer_namespace_absent<O>(
         merge_observed_replacement_key(ticket_id, capability.observed_replacement_key, observed_replacement_key)?
             .is_some();
     if *replacement_observed != expected_replacement_observed {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     }
     authority.commit_namespace_absent(capability, durability, None, observed_replacement_key)
 }
@@ -401,7 +401,7 @@ pub(in crate::mapped_file::retirement) fn completed_record<O>(
 pub(in crate::mapped_file::retirement) fn commit_writer_completed<O>(
     capability: NamespaceAbsentCapability<O>,
     proof: writer::WriterDurabilityProof,
-) -> Result<CompletedRetirementReceipt, RegistryError> {
+) -> Result<CompletedRetirementReceipt, RegistryViolation> {
     let (
         record,
         ledger_generation,
@@ -419,13 +419,13 @@ pub(in crate::mapped_file::retirement) fn commit_writer_completed<O>(
         ..
     } = record
     else {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     };
     if record_ticket != ticket_id
         || incarnation != capability.binding.incarnation()
         || namespace_absent_sequence != capability.durability.sequence()
     {
-        return Err(RegistryError::DurableStageEvidenceMismatch { ticket_id });
+        return Err(RegistryViolation::DurableStageEvidenceMismatch { ticket_id });
     }
     let durability = DurabilityCoordinates::verified(
         ledger_generation,

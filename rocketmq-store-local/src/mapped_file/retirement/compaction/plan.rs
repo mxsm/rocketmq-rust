@@ -67,7 +67,7 @@ pub(super) struct PreparedCompactionFoundation {
 }
 
 impl CompactionPreparationPlan {
-    pub(super) fn from_verified_source(source: VerifiedCompactionSource) -> Result<Self, CompactionPlanError> {
+    pub(super) fn from_verified_source(source: VerifiedCompactionSource) -> Result<Self, CompactionPlanViolation> {
         let target_generation = add_one(source.source_generation, "target generation")?;
         let sequence = add_one(source.terminal_sequence, "GenerationPrepared sequence")?;
         let acknowledgement_epoch = add_one(source.acknowledgement_epoch, "GenerationPrepared acknowledgement epoch")?;
@@ -122,14 +122,14 @@ impl CompactionPreparationPlan {
     pub(super) fn finish_preparation(
         self,
         receipt: PreparedUnitReceipt,
-    ) -> Result<PreparedCompactionFoundation, CompactionPlanError> {
+    ) -> Result<PreparedCompactionFoundation, CompactionPlanViolation> {
         if receipt.binding != self.binding {
-            return Err(CompactionPlanError::InvalidPreparedReceipt {
+            return Err(CompactionPlanViolation::InvalidPreparedReceipt {
                 reason: "receipt belongs to another Store frontier",
             });
         }
         if receipt.observed_unit != self.generation_prepared {
-            return Err(CompactionPlanError::InvalidPreparedReceipt {
+            return Err(CompactionPlanViolation::InvalidPreparedReceipt {
                 reason: "reopened frame, acknowledgement slot, seal, or coordinates differ",
             });
         }
@@ -149,7 +149,7 @@ impl CompactionPreparationPlan {
         let canonical_retained_snapshot = encode_snapshot(&recovered_inventory)?;
         let retained_snapshot = decode_snapshot(&canonical_retained_snapshot)?;
         if encode_snapshot(&retained_snapshot)? != canonical_retained_snapshot {
-            return Err(CompactionPlanError::InvalidFoundation {
+            return Err(CompactionPlanViolation::InvalidFoundation {
                 reason: "authoritative inventory does not round-trip canonically",
             });
         }
@@ -208,7 +208,7 @@ pub(super) struct CompactionPlan {
 }
 
 impl CompactionPlan {
-    pub(super) fn from_prepared(foundation: PreparedCompactionFoundation) -> Result<Self, CompactionPlanError> {
+    pub(super) fn from_prepared(foundation: PreparedCompactionFoundation) -> Result<Self, CompactionPlanViolation> {
         validate_prepared_foundation(&foundation)?;
         let target_generation = add_one(foundation.source_generation, "target generation")?;
         let target_marker_epoch = add_one(foundation.source_marker_epoch, "target marker epoch")?;
@@ -610,7 +610,9 @@ impl CompactionPlan {
     }
 }
 
-fn plan_snapshot(foundation: &PreparedCompactionFoundation) -> Result<PlannedCompactionSnapshot, CompactionPlanError> {
+fn plan_snapshot(
+    foundation: &PreparedCompactionFoundation,
+) -> Result<PlannedCompactionSnapshot, CompactionPlanViolation> {
     let mut eligible_tickets = BTreeSet::new();
     let mut eligible_incarnations = BTreeSet::new();
     for evidence in &foundation.omission_evidence {
@@ -632,14 +634,14 @@ fn plan_snapshot(foundation: &PreparedCompactionFoundation) -> Result<PlannedCom
             || evidence.entry_binding_crc32 != crc32(&expected_binding)
             || !eligible_tickets.insert(evidence.completed_entry.ticket_id)
         {
-            return Err(CompactionPlanError::InvalidOmissionEvidence {
+            return Err(CompactionPlanViolation::InvalidOmissionEvidence {
                 reason: "proof is stale, duplicated, transferred, or bound to another Store frontier",
             });
         }
         if !foundation.retained_snapshot.entries.iter().any(
             |entry| matches!(entry, SnapshotEntry::RetirementTicket(ticket) if ticket == &evidence.completed_entry),
         ) {
-            return Err(CompactionPlanError::InvalidOmissionEvidence {
+            return Err(CompactionPlanViolation::InvalidOmissionEvidence {
                 reason: "proof does not equal the complete retained ticket entry",
             });
         }
@@ -649,7 +651,7 @@ fn plan_snapshot(foundation: &PreparedCompactionFoundation) -> Result<PlannedCom
             |entry| matches!(entry, SnapshotEntry::RetirementTicket(ticket) if ticket.ticket_id != evidence.completed_entry.ticket_id && ticket.incarnation == evidence.completed_entry.incarnation),
         ) || !eligible_incarnations.insert(evidence.completed_entry.incarnation)
         {
-            return Err(CompactionPlanError::InvalidOmissionEvidence {
+            return Err(CompactionPlanViolation::InvalidOmissionEvidence {
                 reason: "proof does not identify a completed ticket and its sole-reference incarnation",
             });
         }
@@ -677,7 +679,7 @@ fn plan_snapshot(foundation: &PreparedCompactionFoundation) -> Result<PlannedCom
         ..foundation.retained_snapshot.clone()
     };
     let encoded = encode_snapshot(&snapshot)?;
-    let file_length = u64::try_from(encoded.len()).map_err(|_| CompactionPlanError::ArithmeticOverflow {
+    let file_length = u64::try_from(encoded.len()).map_err(|_| CompactionPlanViolation::ArithmeticOverflow {
         field: "snapshot length",
     })?;
     Ok(PlannedCompactionSnapshot {
@@ -702,19 +704,19 @@ fn plan_unit(
     acknowledgement_epoch: u64,
     activated: bool,
     marker_epoch: u64,
-) -> Result<PlannedDurableUnit, CompactionPlanError> {
+) -> Result<PlannedDurableUnit, CompactionPlanViolation> {
     let frame = encode_ledger_frame(&record, sequence, log_generation)?;
-    let frame_length =
-        u64::try_from(frame.len()).map_err(|_| CompactionPlanError::ArithmeticOverflow { field: "frame length" })?;
+    let frame_length = u64::try_from(frame.len())
+        .map_err(|_| CompactionPlanViolation::ArithmeticOverflow { field: "frame length" })?;
     let frame_end_offset =
         frame_start_offset
             .checked_add(frame_length)
-            .ok_or(CompactionPlanError::ArithmeticOverflow {
+            .ok_or(CompactionPlanViolation::ArithmeticOverflow {
                 field: "frame end offset",
             })?;
     let slot_index = ((acknowledgement_epoch
         .checked_sub(1)
-        .ok_or(CompactionPlanError::InvalidFoundation {
+        .ok_or(CompactionPlanViolation::InvalidFoundation {
             reason: "acknowledgement epoch is zero",
         })?)
         & 1) as u8;
@@ -735,7 +737,7 @@ fn plan_unit(
     let sealed_log_length =
         frame_end_offset
             .checked_add(COMMIT_SEAL_LENGTH as u64)
-            .ok_or(CompactionPlanError::ArithmeticOverflow {
+            .ok_or(CompactionPlanViolation::ArithmeticOverflow {
                 field: "sealed log length",
             })?;
     Ok(PlannedDurableUnit {
@@ -763,10 +765,10 @@ fn plan_marker(
     snapshot_file_length: u64,
     snapshot_file_crc32: u32,
     anchor_frame_crc32: u32,
-) -> Result<PlannedCompactionMarker, CompactionPlanError> {
+) -> Result<PlannedCompactionMarker, CompactionPlanViolation> {
     let slot_index = ((marker_epoch
         .checked_sub(1)
-        .ok_or(CompactionPlanError::InvalidFoundation {
+        .ok_or(CompactionPlanViolation::InvalidFoundation {
             reason: "target marker epoch is zero",
         })?)
         & 1) as u8;

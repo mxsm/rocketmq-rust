@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryConfirmCandidateError;
+use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryConfirmCandidateViolation;
 
 #[test]
 fn confirm_candidate_preserves_checked_offset_semantics() {
@@ -24,12 +24,12 @@ fn confirm_candidate_preserves_checked_offset_semantics() {
     for offset in [-1, i64::MIN] {
         assert_eq!(
             abnormal_confirm_candidate_end(offset, 1),
-            Err(AbnormalRecoveryConfirmCandidateError::NegativeCommitLogOffset { offset })
+            Err(AbnormalRecoveryConfirmCandidateViolation::NegativeCommitLogOffset { offset })
         );
     }
     assert_eq!(
         abnormal_confirm_candidate_end(i64::MAX, 1),
-        Err(AbnormalRecoveryConfirmCandidateError::ConfirmCandidateOverflow {
+        Err(AbnormalRecoveryConfirmCandidateViolation::ConfirmCandidateOverflow {
             offset: i64::MAX,
             size: 1,
         })
@@ -42,7 +42,7 @@ fn confirm_candidate_rejects_input_size_above_i64_max() {
     let size = (i64::MAX as usize) + 1;
     assert_eq!(
         abnormal_confirm_candidate_end(0, size),
-        Err(AbnormalRecoveryConfirmCandidateError::InputSizeExceedsI64 { size })
+        Err(AbnormalRecoveryConfirmCandidateViolation::InputSizeExceedsI64 { size })
     );
 }
 
@@ -50,15 +50,15 @@ fn confirm_candidate_rejects_input_size_above_i64_max() {
 fn confirm_candidate_errors_preserve_store_visible_messages() {
     let cases = [
         (
-            AbnormalRecoveryConfirmCandidateError::NegativeCommitLogOffset { offset: -7 },
+            AbnormalRecoveryConfirmCandidateViolation::NegativeCommitLogOffset { offset: -7 },
             "commitlog offset -7 is negative",
         ),
         (
-            AbnormalRecoveryConfirmCandidateError::InputSizeExceedsI64 { size: 11 },
+            AbnormalRecoveryConfirmCandidateViolation::InputSizeExceedsI64 { size: 11 },
             "input frame size 11 exceeds i64::MAX",
         ),
         (
-            AbnormalRecoveryConfirmCandidateError::ConfirmCandidateOverflow {
+            AbnormalRecoveryConfirmCandidateViolation::ConfirmCandidateOverflow {
                 offset: i64::MAX,
                 size: 1,
             },

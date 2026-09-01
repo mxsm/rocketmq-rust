@@ -602,11 +602,8 @@ fn percent_reduction(baseline: u128, optimized: u128) -> usize {
 }
 
 #[cfg(target_os = "linux")]
-fn transfer_error_to_io(error: crate::transfer::error::TransferError) -> io::Error {
-    match error {
-        crate::transfer::error::TransferError::Io(error) => error,
-        error => io::Error::other(format!("{error:?}")),
-    }
+fn transfer_error_to_io(error: crate::store_error::StoreError) -> io::Error {
+    io::Error::other(format!("{error:?}"))
 }
 
 #[cfg(unix)]

@@ -26,7 +26,7 @@ use super::payload::validate_opaque_id;
 use super::payload::PayloadDecoder;
 use super::schema::validate_known_payload_length;
 use super::semantics::validate_envelope_relationships;
-use super::CodecError;
+use super::CodecViolation;
 use super::ContentFingerprint;
 use super::GenerationAbortReason;
 use super::LedgerRecord;
@@ -37,7 +37,7 @@ use super::RecordType;
 use super::RetirementReason;
 use super::MAX_PAYLOAD_LENGTH;
 
-pub(super) fn encode_record_payload(record: &LedgerRecord, sequence: u64) -> Result<Vec<u8>, CodecError> {
+pub(super) fn encode_record_payload(record: &LedgerRecord, sequence: u64) -> Result<Vec<u8>, CodecViolation> {
     let mut output = Vec::new();
     match record {
         LedgerRecord::StoreInitialized {
@@ -205,7 +205,7 @@ pub(super) fn encode_record_payload(record: &LedgerRecord, sequence: u64) -> Res
             canonical_path,
         } => {
             if *mapping_generation == 0 {
-                return Err(CodecError::ZeroMappingGeneration);
+                return Err(CodecViolation::ZeroMappingGeneration);
             }
             validate_expected_length(*expected_length)?;
             validate_opaque_id("retirement_nonce", retirement_nonce)?;
@@ -329,7 +329,7 @@ pub(super) fn encode_record_payload(record: &LedgerRecord, sequence: u64) -> Res
         }
     }
     if output.len() > MAX_PAYLOAD_LENGTH {
-        return Err(CodecError::PayloadTooLarge {
+        return Err(CodecViolation::PayloadTooLarge {
             length: output.len(),
             maximum: MAX_PAYLOAD_LENGTH,
         });
@@ -342,7 +342,7 @@ pub(super) fn decode_record_payload(
     sequence: u64,
     log_generation: u64,
     payload: &[u8],
-) -> Result<LedgerRecord, CodecError> {
+) -> Result<LedgerRecord, CodecViolation> {
     validate_known_payload_length(record_type, payload.len())?;
     let mut decoder = PayloadDecoder::new(record_type, payload);
     let record = match record_type {
@@ -422,7 +422,7 @@ pub(super) fn decode_record_payload(
             let target_snapshot_generation = decoder.take_u64()?;
             let repeated_sequence = decoder.take_u64()?;
             if repeated_sequence != sequence {
-                return Err(CodecError::InvalidEnvelopeRelationship {
+                return Err(CodecViolation::InvalidEnvelopeRelationship {
                     detail: "GenerationPrepared repeated sequence differs from its frame",
                 });
             }
@@ -519,7 +519,7 @@ pub(super) fn decode_record_payload(
             decoder.require_u16("retirement_intent_flags", 0)?;
             let mapping_generation = decoder.take_u64()?;
             if mapping_generation == 0 {
-                return Err(CodecError::ZeroMappingGeneration);
+                return Err(CodecViolation::ZeroMappingGeneration);
             }
             let segment_offset = decoder.take_u64()?;
             let expected_length = decoder.take_u64()?;
@@ -572,7 +572,7 @@ pub(super) fn decode_record_payload(
             let incarnation = decoder.take_incarnation()?;
             let proof_flags = decoder.take_u16()?;
             if proof_flags & 0x0003 != 0x0003 || proof_flags & !0x0007 != 0 {
-                return Err(CodecError::InvalidProofFlags {
+                return Err(CodecViolation::InvalidProofFlags {
                     field: "namespace_absent",
                     flags: u32::from(proof_flags),
                 });
@@ -599,7 +599,7 @@ pub(super) fn decode_record_payload(
             let namespace_absent_sequence = decoder.take_u64()?;
             let proof_flags = decoder.take_u32()?;
             if proof_flags != 0x0000_0003 {
-                return Err(CodecError::InvalidProofFlags {
+                return Err(CodecViolation::InvalidProofFlags {
                     field: "completed",
                     flags: proof_flags,
                 });
@@ -631,7 +631,7 @@ pub(super) fn decode_record_payload(
             let reason = QuarantineReason::from_wire(decoder.take_u8()?)?;
             let flags = decoder.take_u16()?;
             if flags & !0x0007 != 0 {
-                return Err(CodecError::InvalidQuarantineFlags { flags });
+                return Err(CodecViolation::InvalidQuarantineFlags { flags });
             }
             let sequence_at_observation = decoder.take_u64()?;
             let physical_key = decoder.take_optional_physical_key(flags & 0x0001 != 0)?;
@@ -644,13 +644,13 @@ pub(super) fn decode_record_payload(
                 })
             } else {
                 if content_length != 0 {
-                    return Err(CodecError::NonZeroReserved {
+                    return Err(CodecViolation::NonZeroReserved {
                         field: "absent_content_length",
                         value: content_length,
                     });
                 }
                 if content_crc32 != 0 {
-                    return Err(CodecError::NonZeroReserved {
+                    return Err(CodecViolation::NonZeroReserved {
                         field: "absent_content_crc32",
                         value: u64::from(content_crc32),
                     });
@@ -661,7 +661,7 @@ pub(super) fn decode_record_payload(
             let source_path = decoder.take_required_path("source_path")?;
             let destination_path = decoder.take_optional_path("destination_path")?;
             if destination_path.is_some() != (flags & 0x0004 != 0) {
-                return Err(CodecError::OptionalPathFlagMismatch {
+                return Err(CodecViolation::OptionalPathFlagMismatch {
                     field: "destination_path",
                 });
             }
@@ -676,7 +676,7 @@ pub(super) fn decode_record_payload(
             }
         }
         RecordType::Unknown(_) => {
-            return Err(CodecError::InvalidEnvelopeRelationship {
+            return Err(CodecViolation::InvalidEnvelopeRelationship {
                 detail: "unknown noncritical payload must be skipped without typed decoding",
             });
         }
@@ -686,9 +686,9 @@ pub(super) fn decode_record_payload(
     Ok(record)
 }
 
-fn validate_expected_length(expected_length: u64) -> Result<(), CodecError> {
+fn validate_expected_length(expected_length: u64) -> Result<(), CodecViolation> {
     if expected_length == 0 {
-        return Err(CodecError::ZeroExpectedFileLength);
+        return Err(CodecViolation::ZeroExpectedFileLength);
     }
     Ok(())
 }

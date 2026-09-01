@@ -59,19 +59,19 @@ fn foundation_rejects_creation_time_mismatch_instead_of_accepting_separate_raw_m
 
     assert_eq!(
         BootstrapFoundationEvidence::from_bytes_for_test(encoded_meta, &mismatched),
-        Err(BootstrapPlanError::FoundationStoreMetaMismatch)
+        Err(BootstrapPlanViolation::FoundationStoreMetaMismatch)
     );
 }
 
 #[test]
 fn store_initialized_must_commit_before_the_inventory_proof_can_be_consumed() {
-    let constructor: fn(BootstrapFoundationEvidence) -> Result<InitialBootstrapPlan, BootstrapPlanError> =
+    let constructor: fn(BootstrapFoundationEvidence) -> Result<InitialBootstrapPlan, BootstrapPlanViolation> =
         InitialBootstrapPlan::new;
     let transition: fn(
         InitialBootstrapPlan,
         DurableUnitProgress,
         BootstrapInventoryEvidence,
-    ) -> Result<InitialBootstrapInventoryPlan, BootstrapPlanError> = InitialBootstrapPlan::consume_inventory;
+    ) -> Result<InitialBootstrapInventoryPlan, BootstrapPlanViolation> = InitialBootstrapPlan::consume_inventory;
     assert!(constructor(foundation(&store_meta())).is_ok());
 
     let plan = initial_store_plan();
@@ -92,7 +92,7 @@ fn store_initialized_must_commit_before_the_inventory_proof_can_be_consumed() {
         inventory(&bootstrap_snapshot()),
     )
     .expect_err("an uncommitted StoreInitialized cannot cross the type-state boundary");
-    assert_eq!(error, BootstrapPlanError::StoreInitializedNotDurable);
+    assert_eq!(error, BootstrapPlanViolation::StoreInitializedNotDurable);
 }
 
 #[test]
@@ -313,14 +313,14 @@ fn forged_inventory_metadata_and_identity_never_create_the_late_phase() {
     count_mismatch.inventory_count = 1;
     assert!(matches!(
         initial_store_plan().consume_inventory(DurableUnitProgress::Committed, count_mismatch),
-        Err(BootstrapPlanError::InvalidSnapshot { .. })
+        Err(BootstrapPlanViolation::InvalidSnapshot { .. })
     ));
 
     let mut identity_mismatch = inventory(&bootstrap_snapshot());
     identity_mismatch.store_uuid = StoreUuid::new([9; 16]).expect("UUID is nonzero");
     assert_eq!(
         initial_store_plan().consume_inventory(DurableUnitProgress::Committed, identity_mismatch),
-        Err(BootstrapPlanError::FoundationIdentityMismatch)
+        Err(BootstrapPlanViolation::FoundationIdentityMismatch)
     );
 }
 

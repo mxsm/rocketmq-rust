@@ -142,7 +142,7 @@ fn payload_decoder_rejects_invalid_enum_reserved_path_key_and_proof_bytes() {
     mutate_payload(&mut retirement, 32, &[10, 0]);
     assert!(matches!(
         decode_typed(&retirement, 100, 3),
-        Err(CodecError::InvalidEnumValue {
+        Err(CodecViolation::InvalidEnumValue {
             field: "retirement_reason",
             value: 10,
         })
@@ -152,7 +152,7 @@ fn payload_decoder_rejects_invalid_enum_reserved_path_key_and_proof_bytes() {
     mutate_payload(&mut store_initialized, 56, &2_u64.to_le_bytes());
     assert!(matches!(
         decode_typed(&store_initialized, 1, 0),
-        Err(CodecError::NonZeroReserved {
+        Err(CodecViolation::NonZeroReserved {
             field: "feature_bitmap",
             value: 2,
         })
@@ -162,7 +162,7 @@ fn payload_decoder_rejects_invalid_enum_reserved_path_key_and_proof_bytes() {
     mutate_payload(&mut allocate, 58, b"\\");
     assert!(matches!(
         decode_typed(&allocate, 100, 3),
-        Err(CodecError::InvalidIdentity {
+        Err(CodecViolation::InvalidIdentity {
             field: "canonical_path",
             ..
         })
@@ -172,14 +172,14 @@ fn payload_decoder_rejects_invalid_enum_reserved_path_key_and_proof_bytes() {
     mutate_payload(&mut bind, 32, &[9]);
     assert_eq!(
         decode_typed(&bind, 100, 3),
-        Err(CodecError::InvalidPhysicalFileKeyKind { kind: 9 })
+        Err(CodecViolation::InvalidPhysicalFileKeyKind { kind: 9 })
     );
 
     let mut completed = COMPLETED_FRAME.to_vec();
     mutate_payload(&mut completed, 48, &0x0000_000b_u32.to_le_bytes());
     assert_eq!(
         decode_typed(&completed, 100, 2),
-        Err(CodecError::InvalidProofFlags {
+        Err(CodecViolation::InvalidProofFlags {
             field: "completed",
             flags: 0x0000_000b,
         })
@@ -202,14 +202,14 @@ fn payload_decoder_rejects_truncation_trailing_bytes_and_invalid_utf8() {
         .expect("bounded payload still has a valid envelope");
     assert!(matches!(
         decode_typed(&trailing, 100, 3),
-        Err(CodecError::TrailingPayloadBytes { remaining: 1, .. })
+        Err(CodecViolation::TrailingPayloadBytes { remaining: 1, .. })
     ));
 
     let mut invalid_utf8 = allocate;
     mutate_payload(&mut invalid_utf8, 58, &[0xff]);
     assert_eq!(
         decode_typed(&invalid_utf8, 100, 3),
-        Err(CodecError::InvalidUtf8Path {
+        Err(CodecViolation::InvalidUtf8Path {
             field: "canonical_path",
         })
     );
@@ -227,7 +227,7 @@ fn payload_codec_enforces_cross_field_and_envelope_invariants() {
     };
     assert!(matches!(
         encode_ledger_frame(&invalid_prepared, 10, 2),
-        Err(CodecError::InvalidGenerationRelationship { .. })
+        Err(CodecViolation::InvalidGenerationRelationship { .. })
     ));
 
     let invalid_abort = LedgerRecord::GenerationAborted {
@@ -239,7 +239,7 @@ fn payload_codec_enforces_cross_field_and_envelope_invariants() {
     };
     assert!(matches!(
         encode_ledger_frame(&invalid_abort, 10, 2),
-        Err(CodecError::InvalidEnvelopeRelationship { .. })
+        Err(CodecViolation::InvalidEnvelopeRelationship { .. })
     ));
 
     let invalid_tail = LedgerRecord::LogOpened {
@@ -260,7 +260,7 @@ fn payload_codec_enforces_cross_field_and_envelope_invariants() {
     };
     assert_eq!(
         encode_ledger_frame(&invalid_tail, 10, 3),
-        Err(CodecError::InvalidTailRepairFields)
+        Err(CodecViolation::InvalidTailRepairFields)
     );
 }
 
@@ -290,12 +290,12 @@ fn tail_repair_suffix_length_is_strictly_bounded_by_one_sealed_record_unit() {
     for invalid_length in [0, MAX_SEALED_RECORD_UNIT_LENGTH as u32, u32::MAX] {
         assert_eq!(
             encode_ledger_frame(&tail_repair(invalid_length), 10, 3),
-            Err(CodecError::InvalidTailRepairFields)
+            Err(CodecViolation::InvalidTailRepairFields)
         );
         mutate_payload(&mut invalid_decoded, 80, &invalid_length.to_le_bytes());
         assert_eq!(
             decode_typed(&invalid_decoded, 10, 3),
-            Err(CodecError::InvalidTailRepairFields)
+            Err(CodecViolation::InvalidTailRepairFields)
         );
     }
 }
@@ -318,14 +318,14 @@ fn malformed_partial_prefix_is_corruption_not_tail_partial() {
     bad_magic[0] ^= 0xff;
     assert!(matches!(
         decode_next_frame(&bad_magic, 100, 2),
-        Err(CodecError::InvalidMagic { .. })
+        Err(CodecViolation::InvalidMagic { .. })
     ));
 
     let mut bad_version = COMPLETED_FRAME[..8].to_vec();
     bad_version[4] = 2;
     assert!(matches!(
         decode_next_frame(&bad_version, 100, 2),
-        Err(CodecError::UnsupportedFormatVersion { major: 2, minor: 0 })
+        Err(CodecViolation::UnsupportedFormatVersion { major: 2, minor: 0 })
     ));
 }
 
@@ -341,7 +341,7 @@ fn impossible_sequence_generation_and_crc_prefixes_are_not_tail_partials() {
         impossible[offset] ^= 1;
         assert_eq!(
             decode_next_frame(&impossible, 100, 2),
-            Err(CodecError::InvalidFieldPrefix { field, offset }),
+            Err(CodecViolation::InvalidFieldPrefix { field, offset }),
             "field={field}"
         );
     }
@@ -353,26 +353,26 @@ fn decoder_rejects_header_payload_and_ordering_corruption() {
     bad_header_crc[36] ^= 1;
     assert!(matches!(
         decode_next_frame(&bad_header_crc, 100, 2),
-        Err(CodecError::HeaderCrcMismatch { .. })
+        Err(CodecViolation::HeaderCrcMismatch { .. })
     ));
 
     let mut bad_payload_crc = COMPLETED_FRAME;
     bad_payload_crc[96] ^= 1;
     assert!(matches!(
         decode_next_frame(&bad_payload_crc, 100, 2),
-        Err(CodecError::PayloadCrcMismatch { .. })
+        Err(CodecViolation::PayloadCrcMismatch { .. })
     ));
 
     assert_eq!(
         decode_next_frame(&COMPLETED_FRAME, 99, 2),
-        Err(CodecError::SequenceMismatch {
+        Err(CodecViolation::SequenceMismatch {
             expected: 99,
             actual: 100,
         })
     );
     assert_eq!(
         decode_next_frame(&COMPLETED_FRAME, 100, 3),
-        Err(CodecError::LogGenerationMismatch { expected: 3, actual: 2 })
+        Err(CodecViolation::LogGenerationMismatch { expected: 3, actual: 2 })
     );
 }
 
@@ -394,7 +394,7 @@ fn decoder_skips_only_valid_unknown_noncritical_records() {
     rewrite_header_crc(&mut noncritical);
     assert_eq!(
         decode_next_frame(&noncritical, 100, 2),
-        Err(CodecError::UnknownCriticalRecordType { record_type: 0x7777 })
+        Err(CodecViolation::UnknownCriticalRecordType { record_type: 0x7777 })
     );
 }
 
@@ -402,11 +402,11 @@ fn decoder_skips_only_valid_unknown_noncritical_records() {
 fn codec_enforces_frame_limits_and_reserved_values_before_allocation() {
     assert_eq!(
         encode_frame(RecordType::Completed, 0, 2, &[]),
-        Err(CodecError::ZeroSequence)
+        Err(CodecViolation::ZeroSequence)
     );
     assert_eq!(
         encode_frame(RecordType::Completed, 1, 0, &[0; MAX_PAYLOAD_LENGTH + 1]),
-        Err(CodecError::PayloadTooLarge {
+        Err(CodecViolation::PayloadTooLarge {
             length: MAX_PAYLOAD_LENGTH + 1,
             maximum: MAX_PAYLOAD_LENGTH,
         })
@@ -417,7 +417,7 @@ fn codec_enforces_frame_limits_and_reserved_values_before_allocation() {
     rewrite_header_crc(&mut oversized);
     assert_eq!(
         decode_next_frame(&oversized, 100, 2),
-        Err(CodecError::PayloadTooLarge {
+        Err(CodecViolation::PayloadTooLarge {
             length: MAX_PAYLOAD_LENGTH + 1,
             maximum: MAX_PAYLOAD_LENGTH,
         })
@@ -427,7 +427,7 @@ fn codec_enforces_frame_limits_and_reserved_values_before_allocation() {
     short_header[14..16].copy_from_slice(&39_u16.to_le_bytes());
     assert_eq!(
         decode_next_frame(&short_header, 100, 2),
-        Err(CodecError::InvalidHeaderLength {
+        Err(CodecViolation::InvalidHeaderLength {
             length: 39,
             minimum: MIN_HEADER_LENGTH,
             maximum: MIN_HEADER_LENGTH,
@@ -718,13 +718,15 @@ fn mutate_payload(frame: &mut [u8], payload_offset: usize, replacement: &[u8]) {
         .copy_from_slice(&payload_crc.to_le_bytes());
 }
 
-fn decode_typed(frame: &[u8], sequence: u64, generation: u64) -> Result<LedgerRecord, CodecError> {
+fn decode_typed(frame: &[u8], sequence: u64, generation: u64) -> Result<LedgerRecord, CodecViolation> {
     let DecodeOutcome::Frame(frame) = decode_next_frame(frame, sequence, generation)? else {
-        return Err(CodecError::InvalidEnvelopeRelationship {
+        return Err(CodecViolation::InvalidEnvelopeRelationship {
             detail: "test expected a complete frame",
         });
     };
-    frame.decode_record()?.ok_or(CodecError::InvalidEnvelopeRelationship {
-        detail: "test expected a known record",
-    })
+    frame
+        .decode_record()?
+        .ok_or(CodecViolation::InvalidEnvelopeRelationship {
+            detail: "test expected a known record",
+        })
 }

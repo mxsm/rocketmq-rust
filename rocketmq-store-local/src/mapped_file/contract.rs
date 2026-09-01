@@ -21,7 +21,7 @@ use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::FlushDiskType;
 use cheetah_string::CheetahString;
 
-use super::MappedFileResult;
+use rocketmq_store_api::StoreError;
 
 /// Exclusive reservation for one append to a mapped-file segment.
 ///
@@ -48,7 +48,7 @@ pub trait MappedWriteLease {
     ///
     /// Returns an error when `actual_bytes` is zero, exceeds the reservation, or the target range
     /// is outside the mapped segment.
-    fn commit(self, actual_bytes: usize, store_timestamp: Option<u64>) -> MappedFileResult<usize>;
+    fn commit(self, actual_bytes: usize, store_timestamp: Option<u64>) -> Result<usize, StoreError>;
 }
 
 pub trait MappedFile {
@@ -139,7 +139,7 @@ pub trait MappedFile {
     fn select_mapped_buffer(&self, pos: i32, size: i32) -> Option<Self::SelectResult>;
 
     /// Selects a range while preserving lifecycle admission errors.
-    fn try_select_mapped_buffer(&self, pos: i32, size: i32) -> MappedFileResult<Option<Self::SelectResult>> {
+    fn try_select_mapped_buffer(&self, pos: i32, size: i32) -> Result<Option<Self::SelectResult>, StoreError> {
         Ok(self.select_mapped_buffer(pos, size))
     }
 
@@ -158,7 +158,7 @@ pub trait MappedFile {
     fn select_mapped_buffer_with_position(&self, pos: i32) -> Option<Self::SelectResult>;
 
     /// Selects the readable tail while preserving lifecycle admission errors.
-    fn try_select_mapped_buffer_with_position(&self, pos: i32) -> MappedFileResult<Option<Self::SelectResult>> {
+    fn try_select_mapped_buffer_with_position(&self, pos: i32) -> Result<Option<Self::SelectResult>, StoreError> {
         Ok(self.select_mapped_buffer_with_position(pos))
     }
 
@@ -181,7 +181,7 @@ pub trait MappedFile {
     ///
     /// The compatibility default delegates to [`Self::get_bytes`]. Implementations with an
     /// explicit lifecycle should return a typed unavailable error after close.
-    fn try_get_bytes(&self, pos: usize, size: usize) -> MappedFileResult<Option<bytes::Bytes>> {
+    fn try_get_bytes(&self, pos: usize, size: usize) -> Result<Option<bytes::Bytes>, StoreError> {
         Ok(self.get_bytes(pos, size))
     }
 
@@ -211,7 +211,7 @@ pub trait MappedFile {
     /// # Errors
     ///
     /// Returns an error for a zero-sized reservation, an invalid write position, or a full file.
-    fn reserve_write(&self, required_space: usize) -> MappedFileResult<Self::WriteLease<'_>>;
+    fn reserve_write(&self, required_space: usize) -> Result<Self::WriteLease<'_>, StoreError>;
 
     /// Writes a segment of bytes to the mapped file.
     ///
@@ -269,7 +269,7 @@ pub trait MappedFile {
     /// The default implementation preserves compatibility for mapped-file implementations that
     /// cannot yet expose a typed flush error. Implementations with an I/O boundary should
     /// override this method and must not advance their durable position on failure.
-    fn try_flush(&self, flush_least_pages: i32) -> MappedFileResult<i32> {
+    fn try_flush(&self, flush_least_pages: i32) -> Result<i32, StoreError> {
         Ok(self.flush(flush_least_pages))
     }
 
@@ -288,7 +288,7 @@ pub trait MappedFile {
     fn commit(&self, commit_least_pages: i32) -> i32;
 
     /// Commits eligible bytes while preserving lifecycle admission errors.
-    fn try_commit(&self, commit_least_pages: i32) -> MappedFileResult<i32> {
+    fn try_commit(&self, commit_least_pages: i32) -> Result<i32, StoreError> {
         Ok(self.commit(commit_least_pages))
     }
 
@@ -349,7 +349,7 @@ pub trait MappedFile {
     fn get_data(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
     /// Retrieves readable data while preserving lifecycle admission errors.
-    fn try_get_data(&self, pos: usize, size: usize) -> MappedFileResult<Option<bytes::Bytes>> {
+    fn try_get_data(&self, pos: usize, size: usize) -> Result<Option<bytes::Bytes>, StoreError> {
         Ok(self.get_data(pos, size))
     }
 
@@ -369,7 +369,7 @@ pub trait MappedFile {
     fn get_slice(&self, pos: usize, size: usize) -> Option<bytes::Bytes>;
 
     /// Retrieves a slice while preserving lifecycle admission errors.
-    fn try_get_slice(&self, pos: usize, size: usize) -> MappedFileResult<Option<bytes::Bytes>> {
+    fn try_get_slice(&self, pos: usize, size: usize) -> Result<Option<bytes::Bytes>, StoreError> {
         Ok(self.get_slice(pos, size))
     }
 
@@ -466,7 +466,7 @@ pub trait MappedFile {
     fn mlock(&self);
 
     /// Locks the mapping into memory while preserving lifecycle admission errors.
-    fn try_mlock(&self) -> MappedFileResult<()> {
+    fn try_mlock(&self) -> Result<(), StoreError> {
         self.mlock();
         Ok(())
     }
@@ -478,7 +478,7 @@ pub trait MappedFile {
     fn munlock(&self);
 
     /// Unlocks the mapping while preserving lifecycle admission errors.
-    fn try_munlock(&self) -> MappedFileResult<()> {
+    fn try_munlock(&self) -> Result<(), StoreError> {
         self.munlock();
         Ok(())
     }
@@ -494,7 +494,7 @@ pub trait MappedFile {
     fn warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize);
 
     /// Warms the mapping while preserving lifecycle admission errors.
-    fn try_warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize) -> MappedFileResult<()> {
+    fn try_warm_mapped_file(&self, flush_disk_type: FlushDiskType, pages: usize) -> Result<(), StoreError> {
         self.warm_mapped_file(flush_disk_type, pages);
         Ok(())
     }

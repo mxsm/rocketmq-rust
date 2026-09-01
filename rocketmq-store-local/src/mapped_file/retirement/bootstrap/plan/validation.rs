@@ -28,12 +28,12 @@ use super::super::proof::BootstrapInventoryEvidence;
 use super::super::proof::CanonicalStoreMetaEvidence;
 use super::super::proof::GenerationSwitchCommonEvidence;
 use super::super::proof::GenerationSwitchFoundationEvidence;
-use super::super::types::BootstrapPlanError;
+use super::super::types::BootstrapPlanViolation;
 use super::super::types::PlannedSnapshot;
 
 pub(super) fn validate_canonical_store_meta(
     evidence: &CanonicalStoreMetaEvidence,
-) -> Result<&StoreMeta, BootstrapPlanError> {
+) -> Result<&StoreMeta, BootstrapPlanViolation> {
     let decoded = decode_store_meta(&evidence.canonical_bytes)?;
     let stored_crc32 = u32::from_le_bytes([
         evidence.canonical_bytes[60],
@@ -45,7 +45,7 @@ pub(super) fn validate_canonical_store_meta(
         || encode_store_meta(&decoded)? != evidence.canonical_bytes
         || stored_crc32 != evidence.stored_crc32
     {
-        return Err(BootstrapPlanError::FoundationStoreMetaMismatch);
+        return Err(BootstrapPlanViolation::FoundationStoreMetaMismatch);
     }
     Ok(&evidence.meta)
 }
@@ -53,9 +53,9 @@ pub(super) fn validate_canonical_store_meta(
 pub(super) fn validate_initial_inventory(
     inventory: &BootstrapInventoryEvidence,
     meta: &StoreMeta,
-) -> Result<(), BootstrapPlanError> {
+) -> Result<(), BootstrapPlanViolation> {
     if inventory.store_uuid != meta.store_uuid || inventory.snapshot.store_uuid != meta.store_uuid {
-        return Err(BootstrapPlanError::FoundationIdentityMismatch);
+        return Err(BootstrapPlanViolation::FoundationIdentityMismatch);
     }
     validate_canonical_snapshot(
         &inventory.snapshot,
@@ -68,19 +68,19 @@ pub(super) fn validate_initial_inventory(
         || inventory.snapshot.predecessor_log_generation != u64::MAX
         || inventory.snapshot.base_sequence != 1
     {
-        return Err(BootstrapPlanError::InvalidSnapshot {
+        return Err(BootstrapPlanViolation::InvalidSnapshot {
             reason: "initial bootstrap requires the generation-0 inventory at base sequence 1",
         });
     }
     let inventory_count =
-        u64::try_from(inventory.snapshot.entries.len()).map_err(|_| BootstrapPlanError::ArithmeticOverflow {
+        u64::try_from(inventory.snapshot.entries.len()).map_err(|_| BootstrapPlanViolation::ArithmeticOverflow {
             field: "bootstrap inventory count",
         })?;
     if inventory.inventory_count != inventory_count
         || inventory.create_high_water != inventory.snapshot.create_high_water
         || inventory.ticket_high_water != inventory.snapshot.ticket_high_water
     {
-        return Err(BootstrapPlanError::InvalidSnapshot {
+        return Err(BootstrapPlanViolation::InvalidSnapshot {
             reason: "inventory proof metadata differs from the canonical snapshot",
         });
     }
@@ -89,15 +89,15 @@ pub(super) fn validate_initial_inventory(
 
 pub(super) fn validate_generation_foundation(
     foundation: &GenerationSwitchFoundationEvidence,
-) -> Result<(), BootstrapPlanError> {
+) -> Result<(), BootstrapPlanViolation> {
     let common = foundation.common();
     let meta = validate_canonical_store_meta(&common.store_meta)?;
     validate_canonical_snapshot(&common.snapshot, &common.canonical_snapshot, common.snapshot_crc32)?;
     if common.snapshot.store_uuid != meta.store_uuid {
-        return Err(BootstrapPlanError::FoundationIdentityMismatch);
+        return Err(BootstrapPlanViolation::FoundationIdentityMismatch);
     }
     if common.snapshot.mode == SnapshotMode::BootstrapInventory || common.snapshot.generation == 0 {
-        return Err(BootstrapPlanError::InvalidSnapshot {
+        return Err(BootstrapPlanViolation::InvalidSnapshot {
             reason: "generation switch requires a non-bootstrap snapshot generation",
         });
     }
@@ -119,9 +119,9 @@ pub(super) fn validate_generation_foundation(
         .snapshot
         .generation
         .checked_add(1)
-        .ok_or(BootstrapPlanError::ArithmeticOverflow { field: "marker epoch" })?;
+        .ok_or(BootstrapPlanViolation::ArithmeticOverflow { field: "marker epoch" })?;
     if common.marker_epoch != expected_marker_epoch {
-        return Err(BootstrapPlanError::MarkerEpochMismatch {
+        return Err(BootstrapPlanViolation::MarkerEpochMismatch {
             generation: common.snapshot.generation,
             expected: expected_marker_epoch,
             actual: common.marker_epoch,
@@ -177,9 +177,9 @@ fn validate_published_log_opened(
     open_reason: OpenReason,
     suffix_length: u32,
     suffix_crc32: u32,
-) -> Result<(), BootstrapPlanError> {
+) -> Result<(), BootstrapPlanViolation> {
     let snapshot_file_length =
-        u64::try_from(common.canonical_snapshot.len()).map_err(|_| BootstrapPlanError::ArithmeticOverflow {
+        u64::try_from(common.canonical_snapshot.len()).map_err(|_| BootstrapPlanViolation::ArithmeticOverflow {
             field: "snapshot file length",
         })?;
     let expected_log_opened = LedgerRecord::LogOpened {
@@ -202,7 +202,7 @@ fn validate_published_log_opened(
         common
             .predecessor_terminal_sequence
             .checked_add(1)
-            .ok_or(BootstrapPlanError::ArithmeticOverflow {
+            .ok_or(BootstrapPlanViolation::ArithmeticOverflow {
                 field: "LogOpened sequence",
             })?;
     let expected_frame = encode_ledger_frame(&expected_log_opened, anchor_sequence, common.snapshot.generation)?;
@@ -219,23 +219,23 @@ fn validate_canonical_snapshot(
     snapshot: &LifecycleSnapshot,
     canonical: &[u8],
     expected_crc32: u32,
-) -> Result<(), BootstrapPlanError> {
+) -> Result<(), BootstrapPlanViolation> {
     let decoded = decode_snapshot(canonical)?;
     if decoded != *snapshot || encode_snapshot(&decoded)? != canonical || crc32(canonical) != expected_crc32 {
-        return Err(BootstrapPlanError::InvalidSnapshot {
+        return Err(BootstrapPlanViolation::InvalidSnapshot {
             reason: "snapshot proof is not exact and canonical",
         });
     }
     Ok(())
 }
 
-pub(super) const fn invalid_switch(reason: &'static str) -> BootstrapPlanError {
-    BootstrapPlanError::InvalidGenerationSwitch { reason }
+pub(super) const fn invalid_switch(reason: &'static str) -> BootstrapPlanViolation {
+    BootstrapPlanViolation::InvalidGenerationSwitch { reason }
 }
 
 pub(super) fn planned_inventory_snapshot(
     inventory: BootstrapInventoryEvidence,
-) -> Result<PlannedSnapshot, BootstrapPlanError> {
+) -> Result<PlannedSnapshot, BootstrapPlanViolation> {
     Ok(PlannedSnapshot {
         encoded: inventory.canonical_snapshot,
         file_crc32: inventory.snapshot_crc32,
@@ -247,12 +247,12 @@ pub(super) fn planned_inventory_snapshot(
 
 pub(super) fn planned_generation_snapshot(
     common: &GenerationSwitchCommonEvidence,
-) -> Result<PlannedSnapshot, BootstrapPlanError> {
+) -> Result<PlannedSnapshot, BootstrapPlanViolation> {
     Ok(PlannedSnapshot {
         encoded: common.canonical_snapshot.clone(),
         file_crc32: common.snapshot_crc32,
         inventory_count: u64::try_from(common.snapshot.entries.len()).map_err(|_| {
-            BootstrapPlanError::ArithmeticOverflow {
+            BootstrapPlanViolation::ArithmeticOverflow {
                 field: "snapshot inventory count",
             }
         })?,

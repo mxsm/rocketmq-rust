@@ -18,10 +18,7 @@ mod plan;
 mod proof;
 mod types;
 
-pub use executor::{
-    bootstrap_managed_lifecycle_under_exclusive_lock, InitialBootstrapCompletion, ManagedLifecycleBootstrapError,
-    ManagedLifecycleBootstrapErrorKind,
-};
+pub use executor::{bootstrap_managed_lifecycle_under_exclusive_lock, InitialBootstrapCompletion};
 
 #[cfg(test)]
 #[path = "bootstrap_tests.rs"]

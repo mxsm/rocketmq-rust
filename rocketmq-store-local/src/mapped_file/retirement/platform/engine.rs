@@ -23,7 +23,6 @@ use super::types::NamespaceRetirementRequest;
 use super::types::NamespaceTombstoneProof;
 use super::types::NamespaceTransition;
 use super::types::NamespaceTransitionOutcome;
-use super::types::NamespaceVerificationError;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,11 +78,11 @@ impl BackendFailure {
         }
     }
 
-    pub(super) fn into_verification_error(self) -> NamespaceVerificationError {
+    pub(super) fn into_verification_error(self) -> NamespaceTransitionOutcome {
         if self.retryable {
-            NamespaceVerificationError::Retryable(self.failure)
+            NamespaceTransitionOutcome::Retryable(self.failure)
         } else {
-            NamespaceVerificationError::Failed(self.failure)
+            NamespaceTransitionOutcome::Failed(self.failure)
         }
     }
 }
