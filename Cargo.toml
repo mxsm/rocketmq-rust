@@ -46,6 +46,7 @@ members = [
 ]
 exclude = [
   "rocketmq-ai/rocketmq-mcp",
+  "rocketmq-ai/rocketmq-mcp-control",
   "rocketmq-ai/rocketmq-sre",
 ]
 resolver = "2"

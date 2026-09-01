@@ -83,11 +83,13 @@ assert_same_directory_agents() {
 
 ROOT_AGENTS_TEXT="$(read_repository_text "AGENTS.md")"
 MCP_AGENTS_TEXT="$(read_repository_text "rocketmq-ai/rocketmq-mcp/AGENTS.md")"
+MCP_CONTROL_AGENTS_TEXT="$(read_repository_text "rocketmq-ai/rocketmq-mcp-control/AGENTS.md")"
 
 REQUIRED_ROUTE_PATHS=(
   "fuzz/"
   "rocketmq-example/"
   "rocketmq-ai/rocketmq-mcp/"
+  "rocketmq-ai/rocketmq-mcp-control/"
   "rocketmq-ai/rocketmq-sre/"
   "rocketmq-dashboard/rocketmq-dashboard-gpui/"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/"
@@ -136,6 +138,10 @@ for command in "${REQUIRED_MCP_COMMANDS[@]}"; do
   assert_text_contains "$MCP_AGENTS_TEXT" "$command" "rocketmq-mcp AGENTS.md validation"
 done
 
+for command in "cargo check --locked" "python scripts/check_control_boundary.py" "cargo test --locked" "cargo clippy --locked --all-targets --all-features -- -D warnings"; do
+  assert_text_contains "$MCP_CONTROL_AGENTS_TEXT" "$command" "rocketmq-mcp-control AGENTS.md validation"
+done
+
 REQUIRED_SHARED_PATHS=(
   "rocketmq-model"
   "rocketmq-protocol"
@@ -157,6 +163,7 @@ EXPECTED_PROJECT_AGENTS=(
   "fuzz/AGENTS.md"
   "rocketmq-example/AGENTS.md"
   "rocketmq-ai/rocketmq-mcp/AGENTS.md"
+  "rocketmq-ai/rocketmq-mcp-control/AGENTS.md"
   "rocketmq-ai/rocketmq-sre/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md"
@@ -278,7 +285,7 @@ fi
 ADR_PATH="$ROOT/rocketmq-doc/en/agents-routing-validation-adr.md"
 if [[ -f "$ADR_PATH" ]]; then
   ADR_TEXT="$(cat "$ADR_PATH")"
-  for term in "AGENTS.md" "check-agents-routing.ps1" "check-agents-routing.sh" 'root `Cargo.toml`' "standalone" "rocketmq-mcp" "cumulative"; do
+  for term in "AGENTS.md" "check-agents-routing.ps1" "check-agents-routing.sh" 'root `Cargo.toml`' "standalone" "rocketmq-mcp" "rocketmq-mcp-control" "cumulative"; do
     assert_text_contains "$ADR_TEXT" "$term" "AGENTS routing ADR"
   done
 else

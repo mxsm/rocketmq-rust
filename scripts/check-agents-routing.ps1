@@ -109,11 +109,13 @@ function Assert-SameDirectoryAgents {
 
 $rootAgentsText = Read-RepositoryText -RelativePath "AGENTS.md"
 $mcpAgentsText = Read-RepositoryText -RelativePath "rocketmq-ai/rocketmq-mcp/AGENTS.md"
+$mcpControlAgentsText = Read-RepositoryText -RelativePath "rocketmq-ai/rocketmq-mcp-control/AGENTS.md"
 
 $requiredRoutePaths = @(
     "fuzz/",
     "rocketmq-example/",
     "rocketmq-ai/rocketmq-mcp/",
+    "rocketmq-ai/rocketmq-mcp-control/",
     "rocketmq-ai/rocketmq-sre/",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/",
@@ -162,6 +164,10 @@ foreach ($command in $requiredMcpCommands) {
     Assert-TextContains -Text $mcpAgentsText -Needle $command -Context "rocketmq-mcp AGENTS.md validation"
 }
 
+foreach ($command in @("cargo check --locked", "python scripts/check_control_boundary.py", "cargo test --locked", "cargo clippy --locked --all-targets --all-features -- -D warnings")) {
+    Assert-TextContains -Text $mcpControlAgentsText -Needle $command -Context "rocketmq-mcp-control AGENTS.md validation"
+}
+
 $requiredSharedPaths = @(
     "rocketmq-model",
     "rocketmq-protocol",
@@ -183,6 +189,7 @@ $expectedProjectAgents = @(
     "fuzz/AGENTS.md",
     "rocketmq-example/AGENTS.md",
     "rocketmq-ai/rocketmq-mcp/AGENTS.md",
+    "rocketmq-ai/rocketmq-mcp-control/AGENTS.md",
     "rocketmq-ai/rocketmq-sre/AGENTS.md",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md",
     "rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md",
@@ -310,7 +317,7 @@ if (Test-Path -LiteralPath $standaloneTriggerGuardPath) {
 $adrPath = Join-Path $script:RepoRoot "rocketmq-doc/en/agents-routing-validation-adr.md"
 if (Test-Path -LiteralPath $adrPath) {
     $adrText = Get-Content -LiteralPath $adrPath -Raw -Encoding UTF8
-    foreach ($term in @("AGENTS.md", "check-agents-routing.ps1", "check-agents-routing.sh", 'root `Cargo.toml`', "standalone", "rocketmq-mcp", "cumulative")) {
+    foreach ($term in @("AGENTS.md", "check-agents-routing.ps1", "check-agents-routing.sh", 'root `Cargo.toml`', "standalone", "rocketmq-mcp", "rocketmq-mcp-control", "cumulative")) {
         Assert-TextContains -Text $adrText -Needle $term -Context "AGENTS routing ADR"
     }
 }
