@@ -21,9 +21,17 @@ use bytes::BytesMut;
 use crate::base::select_result::SelectMappedBufferResult;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TimerPayloadCursorError {
-    InvalidFrameSize,
-    ShortRead,
+pub(crate) enum TimerPayloadCursorViolation {
+    InvalidFrameSize {
+        cursor: usize,
+        requested: usize,
+        remaining: usize,
+    },
+    ShortRead {
+        cursor: usize,
+        requested: usize,
+        remaining: usize,
+    },
 }
 
 /// Sequential frame reader over owner-backed CommitLog selections.
@@ -35,6 +43,7 @@ pub(crate) struct TimerPayloadCursor {
     segments: VecDeque<Bytes>,
     segment_position: usize,
     remaining: usize,
+    cursor: usize,
     copied_bytes: usize,
 }
 
@@ -49,6 +58,7 @@ impl TimerPayloadCursor {
             segments,
             segment_position: 0,
             remaining,
+            cursor: 0,
             copied_bytes: 0,
         }
     }
@@ -57,12 +67,12 @@ impl TimerPayloadCursor {
         self.remaining
     }
 
-    pub(crate) fn take_frame(&mut self, size: usize) -> Result<Bytes, TimerPayloadCursorError> {
+    pub(crate) fn take_frame(&mut self, size: usize) -> Result<Bytes, TimerPayloadCursorViolation> {
         if size == 0 {
-            return Err(TimerPayloadCursorError::InvalidFrameSize);
+            return Err(self.violation(true, size));
         }
         if size > self.remaining {
-            return Err(TimerPayloadCursorError::ShortRead);
+            return Err(self.violation(false, size));
         }
         self.discard_empty_segments();
 
@@ -75,11 +85,12 @@ impl TimerPayloadCursor {
             let start = self.segment_position;
             let end = start + size;
             let Some(segment) = self.segments.front() else {
-                return Err(TimerPayloadCursorError::ShortRead);
+                return Err(self.violation(false, size));
             };
             let frame = segment.slice(start..end);
             self.segment_position = end;
             self.remaining -= size;
+            self.cursor += size;
             self.discard_empty_segments();
             return Ok(frame);
         }
@@ -87,7 +98,9 @@ impl TimerPayloadCursor {
         let mut frame = BytesMut::with_capacity(size);
         while frame.len() < size {
             self.discard_empty_segments();
-            let segment = self.segments.front().ok_or(TimerPayloadCursorError::ShortRead)?;
+            let Some(segment) = self.segments.front() else {
+                return Err(self.violation(false, size));
+            };
             let needed = size - frame.len();
             let available = segment.len().saturating_sub(self.segment_position);
             let take = available.min(needed);
@@ -95,9 +108,26 @@ impl TimerPayloadCursor {
             self.segment_position += take;
         }
         self.remaining -= size;
+        self.cursor += size;
         self.copied_bytes += size;
         self.discard_empty_segments();
         Ok(frame.freeze())
+    }
+
+    fn violation(&self, invalid_size: bool, requested: usize) -> TimerPayloadCursorViolation {
+        if invalid_size {
+            TimerPayloadCursorViolation::InvalidFrameSize {
+                cursor: self.cursor,
+                requested,
+                remaining: self.remaining,
+            }
+        } else {
+            TimerPayloadCursorViolation::ShortRead {
+                cursor: self.cursor,
+                requested,
+                remaining: self.remaining,
+            }
+        }
     }
 
     fn discard_empty_segments(&mut self) {
@@ -159,7 +189,14 @@ mod tests {
     fn short_read_fails_without_partial_consumption() {
         let mut cursor = TimerPayloadCursor::new(vec![selection(0, Bytes::from_static(b"abc"))]);
 
-        assert_eq!(cursor.take_frame(4), Err(TimerPayloadCursorError::ShortRead));
+        assert_eq!(
+            cursor.take_frame(4),
+            Err(TimerPayloadCursorViolation::ShortRead {
+                cursor: 0,
+                requested: 4,
+                remaining: 3,
+            })
+        );
         assert_eq!(cursor.remaining(), 3);
         assert_eq!(cursor.copied_bytes(), 0);
     }

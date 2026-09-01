@@ -170,14 +170,14 @@ pub use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLock
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 
 #[derive(Debug)]
-enum NormalRecoveryAdapterError {
+enum NormalRecoveryAdapterViolation {
     FramePositionOverflow { position: usize, size: usize },
     RelativeOffsetConversion(std::num::TryFromIntError),
     MessageSizeConversion(std::num::TryFromIntError),
 }
 
 #[derive(Debug)]
-enum AbnormalRecoveryAdapterError {
+enum AbnormalRecoveryAdapterViolation {
     ConfirmCandidate,
     ConfirmLimitConversion(std::num::TryFromIntError),
     FramePositionOverflow { position: usize, size: usize },
@@ -185,8 +185,8 @@ enum AbnormalRecoveryAdapterError {
     ValidatedSizeConversion(std::num::TryFromIntError),
 }
 
-fn confirm_candidate_value(candidate: Option<i64>) -> Result<i64, AbnormalRecoveryAdapterError> {
-    candidate.ok_or(AbnormalRecoveryAdapterError::ConfirmCandidate)
+fn confirm_candidate_value(candidate: Option<i64>) -> Result<i64, AbnormalRecoveryAdapterViolation> {
+    candidate.ok_or(AbnormalRecoveryAdapterViolation::ConfirmCandidate)
 }
 
 fn log_abnormal_recovery_window(
@@ -1539,9 +1539,9 @@ impl CommitLog {
                     let dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
                     if dispatch_request.success && dispatch_request.msg_size > 0 {
                         let relative_start = u64::try_from(absolute_offset)
-                            .map_err(NormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                            .map_err(NormalRecoveryAdapterViolation::RelativeOffsetConversion)?;
                         let frame_size = u64::try_from(dispatch_request.msg_size)
-                            .map_err(NormalRecoveryAdapterError::MessageSizeConversion)?;
+                            .map_err(NormalRecoveryAdapterViolation::MessageSizeConversion)?;
                         Ok(NormalRecoveryRecord::Message {
                             relative_start,
                             size: frame_size,
@@ -1594,22 +1594,21 @@ impl CommitLog {
                     index += 1;
                 }
                 NormalRecoverySegmentOutcome::StopRecovery => break 'segments,
-                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::RelativeOffsetConversion(
-                    error,
-                )) => {
+                NormalRecoverySegmentOutcome::AdapterFailed(
+                    NormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
+                ) => {
                     warn!("normal optimized recovery relative offset conversion failed: {error}");
                     break 'segments;
                 }
-                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::MessageSizeConversion(
+                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterViolation::MessageSizeConversion(
                     error,
                 )) => {
                     warn!("normal optimized recovery message size conversion failed: {error}");
                     break 'segments;
                 }
-                NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::FramePositionOverflow {
-                    position,
-                    size,
-                }) => {
+                NormalRecoverySegmentOutcome::AdapterFailed(
+                    NormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
+                ) => {
                     warn!("normal optimized recovery frame position overflow at {position} with size {size}");
                     break 'segments;
                 }
@@ -1687,13 +1686,12 @@ impl CommitLog {
                         let Some(mut msg_bytes) = msg else {
                             return Ok(NormalRecoveryRecord::SourceEnded);
                         };
-                        let next_position =
-                            current_pos
-                                .checked_add(size)
-                                .ok_or(NormalRecoveryAdapterError::FramePositionOverflow {
-                                    position: current_pos,
-                                    size,
-                                })?;
+                        let next_position = current_pos.checked_add(size).ok_or(
+                            NormalRecoveryAdapterViolation::FramePositionOverflow {
+                                position: current_pos,
+                                size,
+                            },
+                        )?;
                         current_pos = next_position;
                         let dispatch_request = check_message_and_return_size(
                             &mut msg_bytes,
@@ -1706,9 +1704,9 @@ impl CommitLog {
                         );
                         if dispatch_request.success && dispatch_request.msg_size > 0 {
                             let relative_start = u64::try_from(frame_position)
-                                .map_err(NormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                                .map_err(NormalRecoveryAdapterViolation::RelativeOffsetConversion)?;
                             let frame_size = u64::try_from(dispatch_request.msg_size)
-                                .map_err(NormalRecoveryAdapterError::MessageSizeConversion)?;
+                                .map_err(NormalRecoveryAdapterViolation::MessageSizeConversion)?;
                             Ok(NormalRecoveryRecord::Message {
                                 relative_start,
                                 size: frame_size,
@@ -1764,20 +1762,20 @@ impl CommitLog {
                     }
                     NormalRecoverySegmentOutcome::StopRecovery => break 'segments,
                     NormalRecoverySegmentOutcome::AdapterFailed(
-                        NormalRecoveryAdapterError::FramePositionOverflow { position, size },
+                        NormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                     ) => {
                         warn!("normal recovery frame position overflow at {position} with size {size}");
                         break 'segments;
                     }
                     NormalRecoverySegmentOutcome::AdapterFailed(
-                        NormalRecoveryAdapterError::RelativeOffsetConversion(error),
+                        NormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                     ) => {
                         warn!("normal recovery relative offset conversion failed: {error}");
                         break 'segments;
                     }
-                    NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterError::MessageSizeConversion(
-                        error,
-                    )) => {
+                    NormalRecoverySegmentOutcome::AdapterFailed(
+                        NormalRecoveryAdapterViolation::MessageSizeConversion(error),
+                    ) => {
                         warn!("normal recovery message size conversion failed: {error}");
                         break 'segments;
                     }
@@ -1935,12 +1933,12 @@ impl CommitLog {
                             msg_size,
                         ))?;
                         let validated_size = u64::try_from(dispatch_request.msg_size)
-                            .map_err(AbnormalRecoveryAdapterError::ValidatedSizeConversion)?;
+                            .map_err(AbnormalRecoveryAdapterViolation::ValidatedSizeConversion)?;
                         let relative_start = u64::try_from(absolute_offset)
-                            .map_err(AbnormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                            .map_err(AbnormalRecoveryAdapterViolation::RelativeOffsetConversion)?;
                         let dispatch_gate = if confirm_bounded {
                             let confirm_offset = u64::try_from(confirm_offset.max(0))
-                                .map_err(AbnormalRecoveryAdapterError::ConfirmLimitConversion)?;
+                                .map_err(AbnormalRecoveryAdapterViolation::ConfirmLimitConversion)?;
                             AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset }
                         } else {
                             AbnormalRecoveryDispatchGate::Ungated
@@ -2008,30 +2006,30 @@ impl CommitLog {
                     index += 1;
                 }
                 AbnormalRecoverySegmentOutcome::StopRecovery => break 'segments,
-                AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterError::ConfirmCandidate) => {
+                AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterViolation::ConfirmCandidate) => {
                     warn!("optimized abnormal recovery confirm candidate failed");
                     break 'segments;
                 }
                 AbnormalRecoverySegmentOutcome::AdapterFailed(
-                    AbnormalRecoveryAdapterError::ConfirmLimitConversion(error),
+                    AbnormalRecoveryAdapterViolation::ConfirmLimitConversion(error),
                 ) => {
                     warn!("optimized abnormal recovery confirm limit conversion failed: {error}");
                     break 'segments;
                 }
                 AbnormalRecoverySegmentOutcome::AdapterFailed(
-                    AbnormalRecoveryAdapterError::RelativeOffsetConversion(error),
+                    AbnormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                 ) => {
                     warn!("optimized abnormal recovery relative offset conversion failed: {error}");
                     break 'segments;
                 }
                 AbnormalRecoverySegmentOutcome::AdapterFailed(
-                    AbnormalRecoveryAdapterError::ValidatedSizeConversion(error),
+                    AbnormalRecoveryAdapterViolation::ValidatedSizeConversion(error),
                 ) => {
                     warn!("optimized abnormal recovery validated size conversion failed: {error}");
                     break 'segments;
                 }
                 AbnormalRecoverySegmentOutcome::AdapterFailed(
-                    AbnormalRecoveryAdapterError::FramePositionOverflow { position, size },
+                    AbnormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                 ) => {
                     warn!("optimized abnormal recovery frame position overflow at {position} with size {size}");
                     break 'segments;
@@ -2121,7 +2119,7 @@ impl CommitLog {
                             return Ok(AbnormalRecoveryRecord::SourceEnded);
                         };
                         current_pos = current_pos.checked_add(input_size).ok_or(
-                            AbnormalRecoveryAdapterError::FramePositionOverflow {
+                            AbnormalRecoveryAdapterViolation::FramePositionOverflow {
                                 position: current_pos,
                                 size: input_size,
                             },
@@ -2141,12 +2139,12 @@ impl CommitLog {
                                 input_size,
                             ))?;
                             let validated_size = u64::try_from(dispatch_request.msg_size)
-                                .map_err(AbnormalRecoveryAdapterError::ValidatedSizeConversion)?;
+                                .map_err(AbnormalRecoveryAdapterViolation::ValidatedSizeConversion)?;
                             let relative_start = u64::try_from(frame_position)
-                                .map_err(AbnormalRecoveryAdapterError::RelativeOffsetConversion)?;
+                                .map_err(AbnormalRecoveryAdapterViolation::RelativeOffsetConversion)?;
                             let dispatch_gate = if confirm_bounded {
                                 let confirm_offset = u64::try_from(confirm_offset.max(0))
-                                    .map_err(AbnormalRecoveryAdapterError::ConfirmLimitConversion)?;
+                                    .map_err(AbnormalRecoveryAdapterViolation::ConfirmLimitConversion)?;
                                 AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset }
                             } else {
                                 AbnormalRecoveryDispatchGate::Ungated
@@ -2207,30 +2205,32 @@ impl CommitLog {
                         }
                     }
                     AbnormalRecoverySegmentOutcome::StopRecovery => break 'segments,
-                    AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterError::ConfirmCandidate) => {
+                    AbnormalRecoverySegmentOutcome::AdapterFailed(
+                        AbnormalRecoveryAdapterViolation::ConfirmCandidate,
+                    ) => {
                         warn!("standard abnormal recovery confirm candidate failed");
                         break 'segments;
                     }
                     AbnormalRecoverySegmentOutcome::AdapterFailed(
-                        AbnormalRecoveryAdapterError::ConfirmLimitConversion(error),
+                        AbnormalRecoveryAdapterViolation::ConfirmLimitConversion(error),
                     ) => {
                         warn!("standard abnormal recovery confirm limit conversion failed: {error}");
                         break 'segments;
                     }
                     AbnormalRecoverySegmentOutcome::AdapterFailed(
-                        AbnormalRecoveryAdapterError::FramePositionOverflow { position, size },
+                        AbnormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                     ) => {
                         warn!("standard abnormal recovery frame position overflow at {position} with size {size}");
                         break 'segments;
                     }
                     AbnormalRecoverySegmentOutcome::AdapterFailed(
-                        AbnormalRecoveryAdapterError::RelativeOffsetConversion(error),
+                        AbnormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                     ) => {
                         warn!("standard abnormal recovery relative offset conversion failed: {error}");
                         break 'segments;
                     }
                     AbnormalRecoverySegmentOutcome::AdapterFailed(
-                        AbnormalRecoveryAdapterError::ValidatedSizeConversion(error),
+                        AbnormalRecoveryAdapterViolation::ValidatedSizeConversion(error),
                     ) => {
                         warn!("standard abnormal recovery validated size conversion failed: {error}");
                         break 'segments;
@@ -2973,7 +2973,9 @@ mod tests {
             None,
             false,
             crate::runtime::test_service_context("commit-log-store-test"),
-        );
+        )
+        .expect("create CommitLog test Store")
+        .expect("test Timer Store configuration is valid");
         store
             .wire_owned_root_dependencies()
             .expect("commit-log tests should wire owned Store capabilities");

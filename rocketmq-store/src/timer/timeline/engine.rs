@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -64,23 +63,15 @@ impl ExtendedTimelineEngine {
         }
     }
 
-    fn ensure_loaded(&self) -> Result<(), TimerEngineError> {
-        self.loaded
-            .load(Ordering::Acquire)
-            .then_some(())
-            .ok_or(TimerEngineError::NotLoaded)
+    fn is_loaded(&self) -> bool {
+        self.loaded.load(Ordering::Acquire)
     }
 
-    fn ensure_current_epoch(&self, epoch: TimerEngineEpoch) -> Result<(), TimerEngineError> {
+    fn is_current_epoch(&self, epoch: TimerEngineEpoch) -> bool {
         if !self.formal {
-            return Err(TimerEngineError::UnsupportedMode(
-                "shadow Extended Timeline never owns deliverable work",
-            ));
+            return false;
         }
-        if !self.role.is_current_delivery_epoch(epoch.get()) {
-            return Err(TimerEngineError::UnsupportedMode("stale Extended Timeline owner epoch"));
-        }
-        Ok(())
+        self.role.is_current_delivery_epoch(epoch.get())
     }
 
     async fn run_io<T, F>(&self, name: &'static str, operation: F) -> Result<T, TimerEngineError>
@@ -91,7 +82,7 @@ impl ExtendedTimelineEngine {
         self.runtime_scope
             .spawn_io(name, operation)
             .await
-            .map_err(|error| TimerEngineError::Storage(io::Error::other(error.to_string())))?
+            .map_err(TimerEngineError::Runtime)?
     }
 }
 
@@ -105,7 +96,7 @@ impl TimerEngine for ExtendedTimelineEngine {
         self.run_io("timer-extended-engine-load", move || {
             materializer
                 .refresh_cleanup_fence()
-                .map_err(|error| TimerEngineError::Storage(io::Error::other(error.to_string())))
+                .map_err(|error| TimerEngineError::Materializer(Box::new(error)))
         })
         .await?;
         self.loaded.store(true, Ordering::Release);
@@ -113,16 +104,18 @@ impl TimerEngine for ExtendedTimelineEngine {
     }
 
     async fn enqueue_source(&self, budget: WorkBudget) -> Result<EngineBatchProgress, TimerEngineError> {
-        self.ensure_loaded()?;
-        if budget.is_exhausted(0, 0) {
-            return Err(TimerEngineError::InvalidBudget);
+        if !self.is_loaded() || budget.is_exhausted(0, 0) {
+            return Ok(EngineBatchProgress {
+                durable: false,
+                ..EngineBatchProgress::empty()
+            });
         }
         let materializer = Arc::clone(&self.materializer);
         let messages = self
             .run_io("timer-extended-engine-source", move || {
                 materializer
                     .run_once_with_budget(budget.max_messages, budget.max_bytes)
-                    .map_err(|error| TimerEngineError::Storage(io::Error::other(error.to_string())))
+                    .map_err(|error| TimerEngineError::Materializer(Box::new(error)))
             })
             .await?;
         Ok(EngineBatchProgress {
@@ -138,12 +131,17 @@ impl TimerEngine for ExtendedTimelineEngine {
         epoch: TimerEngineEpoch,
         budget: WorkBudget,
     ) -> Result<EngineBatchProgress, TimerEngineError> {
-        self.ensure_loaded()?;
-        if budget.is_exhausted(0, 0) {
-            return Err(TimerEngineError::InvalidBudget);
+        if !self.is_loaded() || budget.is_exhausted(0, 0) {
+            return Ok(EngineBatchProgress {
+                durable: false,
+                ..EngineBatchProgress::empty()
+            });
         }
-        if self.formal {
-            self.ensure_current_epoch(epoch)?;
+        if self.formal && !self.is_current_epoch(epoch) {
+            return Ok(EngineBatchProgress {
+                durable: false,
+                ..EngineBatchProgress::empty()
+            });
         }
         let scanner = Arc::clone(&self.due_scanner);
         let formal = self.formal;
@@ -155,7 +153,7 @@ impl TimerEngine for ExtendedTimelineEngine {
                 } else {
                     scanner.scan_shadow_until_with_budget(now_ms, budget.max_messages, budget.max_bytes)
                 };
-                result.map_err(|error| TimerEngineError::Storage(io::Error::other(error.to_string())))
+                result.map_err(|error| TimerEngineError::DueScanner(Box::new(error)))
             })
             .await?;
         Ok(EngineBatchProgress {
@@ -167,37 +165,35 @@ impl TimerEngine for ExtendedTimelineEngine {
     }
 
     async fn complete(&self, _timer_id: TimerId, epoch: TimerEngineEpoch) -> Result<(), TimerEngineError> {
-        self.ensure_loaded()?;
-        self.ensure_current_epoch(epoch)?;
+        if !self.is_loaded() || !self.is_current_epoch(epoch) {
+            return Ok(());
+        }
         self.checkpoint().await.map(|_| ())
     }
 
     async fn cancel(&self, _timer_id: TimerId) -> Result<(), TimerEngineError> {
-        Err(TimerEngineError::UnsupportedMode(
-            "Extended Timeline cancellation must enter through a durable Recall source record",
-        ))
+        Ok(())
     }
 
     async fn checkpoint(&self) -> Result<bool, TimerEngineError> {
-        self.ensure_loaded()?;
+        if !self.is_loaded() {
+            return Ok(false);
+        }
         let materializer = Arc::clone(&self.materializer);
         self.run_io("timer-extended-engine-checkpoint", move || {
             materializer
                 .refresh_cleanup_fence()
                 .map(|_| true)
-                .map_err(|error| TimerEngineError::Storage(io::Error::other(error.to_string())))
+                .map_err(|error| TimerEngineError::Materializer(Box::new(error)))
         })
         .await
     }
 
     async fn on_role_change(&self, active: bool, epoch: TimerEngineEpoch) -> Result<(), TimerEngineError> {
-        self.ensure_loaded()?;
+        if !self.is_loaded() {
+            return Ok(());
+        }
         if !self.formal {
-            if active {
-                return Err(TimerEngineError::UnsupportedMode(
-                    "shadow Extended Timeline cannot become a delivery owner",
-                ));
-            }
             return Ok(());
         }
         let role = Arc::clone(&self.role);

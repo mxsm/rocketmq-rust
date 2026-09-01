@@ -419,7 +419,8 @@ fn rocksdb_message_store_try_new_opens_real_rocksdb_consume_queue_backend() {
         true,
         rocksdb_service_context("rocksdb-message-store-open-test"),
     )
-    .expect("rocksdb message store should construct");
+    .expect("rocksdb message store should construct")
+    .expect("test Timer Store configuration is valid");
 
     assert!(message_store.rocksdb_config().enabled);
     assert_eq!(
@@ -518,7 +519,8 @@ fn rocksdb_message_store_close_closes_consume_queue_and_message_rocksdb() {
         true,
         rocksdb_service_context("rocksdb-message-store-close-test"),
     )
-    .expect("rocksdb message store should construct");
+    .expect("rocksdb message store should construct")
+    .expect("test Timer Store configuration is valid");
     let message_rocksdb_storage = message_store.message_rocksdb_storage();
 
     message_store.close_rocksdb();
@@ -3064,7 +3066,8 @@ fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq
         false,
         rocksdb_service_context("rocksdb-message-store-dispatch-test"),
     )
-    .expect("rocksdb message store should open");
+    .expect("rocksdb message store should open")
+    .expect("test Timer Store configuration is valid");
     let mut request = dispatch_request("TopicA", 3, 7, 1024, 128, 7, 1_700_000_000_000);
     request.keys = CheetahString::from_static_str("KeyA");
     request.uniq_key = Some(CheetahString::from_static_str("UniqA"));
@@ -3154,7 +3157,8 @@ fn rocksdb_message_store_registers_trans_dispatcher_when_enabled() {
         false,
         rocksdb_service_context("rocksdb-message-store-trans-enabled-test"),
     )
-    .expect("rocksdb message store should open");
+    .expect("rocksdb message store should open")
+    .expect("test Timer Store configuration is valid");
     let trans_service = message_store
         .rocksdb_trans_service()
         .expect("transaction service should be enabled");
@@ -3199,7 +3203,8 @@ fn rocksdb_message_store_keeps_trans_service_disabled_by_default() {
         false,
         rocksdb_service_context("rocksdb-message-store-trans-disabled-test"),
     )
-    .expect("rocksdb message store should open");
+    .expect("rocksdb message store should open")
+    .expect("test Timer Store configuration is valid");
 
     assert!(message_store.rocksdb_trans_service().is_none());
     message_store.close_rocksdb();
@@ -3224,7 +3229,8 @@ fn rocksdb_message_store_registers_timer_dispatcher_when_enabled() {
         false,
         rocksdb_service_context("rocksdb-message-store-timer-enabled-test"),
     )
-    .expect("rocksdb message store should open");
+    .expect("rocksdb message store should open")
+    .expect("test Timer Store configuration is valid");
     let timer_service = message_store
         .rocksdb_timer_service()
         .expect("timer service should be enabled");
@@ -3268,7 +3274,8 @@ fn rocksdb_message_store_keeps_timer_service_disabled_by_default() {
         false,
         rocksdb_service_context("rocksdb-message-store-timer-disabled-test"),
     )
-    .expect("rocksdb message store should open");
+    .expect("rocksdb message store should open")
+    .expect("test Timer Store configuration is valid");
 
     assert!(message_store.rocksdb_timer_service().is_none());
     message_store.close_rocksdb();
@@ -3294,7 +3301,8 @@ fn rocksdb_message_store_delete_topics_removes_rocksdb_consume_queue_state() {
         false,
         rocksdb_service_context("rocksdb-message-store-delete-topics-test"),
     )
-    .expect("rocksdb message store should open");
+    .expect("rocksdb message store should open")
+    .expect("test Timer Store configuration is valid");
     let topic = CheetahString::from_static_str("TopicA");
     let mut request = dispatch_request("TopicA", 3, 7, 1024, 128, 7, 1_700_000_000_000);
     message_store.local_file_store_mut().do_dispatch(&mut request);
@@ -3331,7 +3339,8 @@ fn rocksdb_message_store_truncate_dirty_logic_files_corrects_rocksdb_consume_que
         false,
         rocksdb_service_context("rocksdb-message-store-truncate-test"),
     )
-    .expect("rocksdb message store should open");
+    .expect("rocksdb message store should open")
+    .expect("test Timer Store configuration is valid");
     let topic = CheetahString::from_static_str("TopicA");
     let mut first = dispatch_request("TopicA", 3, 0, 100, 10, 1, 1_700_000_000_000);
     let mut dirty = dispatch_request("TopicA", 3, 1, 300, 30, 2, 1_700_000_000_001);
@@ -3373,7 +3382,8 @@ async fn rocksdb_message_store_clean_expired_consumer_queue_triggers_background_
         false,
         rocksdb_service_context("rocksdb-message-store-clean-expired-test"),
     )
-    .expect("rocksdb message store should open");
+    .expect("rocksdb message store should open")
+    .expect("test Timer Store configuration is valid");
     let mut request = dispatch_request("TopicA", 3, 0, 100, 10, 1, 1_700_000_000_000);
     message_store.local_file_store_mut().do_dispatch(&mut request);
     let rocksdb_store = message_store.rocksdb_store();

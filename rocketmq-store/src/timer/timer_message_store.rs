@@ -82,7 +82,7 @@ use crate::timer::error::QuarantineRecord;
 use crate::timer::error::TimerWorkResult;
 use crate::timer::java_compat::JavaCompatEngine;
 use crate::timer::payload_cursor::TimerPayloadCursor;
-use crate::timer::payload_cursor::TimerPayloadCursorError;
+use crate::timer::payload_cursor::TimerPayloadCursorViolation;
 use crate::timer::pipeline::TimerPipeline;
 use crate::timer::pipeline::TimerPipelineDiagnostics;
 use crate::timer::role::TimerRoleState;
@@ -135,11 +135,25 @@ struct TimerDeleteIdentity {
     generation: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TimerPayloadReadError {
+/// Result of reading and decoding a Timer payload from the CommitLog.
+///
+/// Invalid locators and unavailable or malformed payload bytes are bounded dispositions used by
+/// the existing quarantine path, not operational storage errors.
+#[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the public read outcome preserves the decoded MessageExt payload by value"
+)]
+pub enum TimerPayloadReadOutcome {
+    /// The CommitLog payload decoded successfully.
+    Decoded(MessageExt),
+    /// The locator is empty, negative, or exceeds the caller's byte budget.
     InvalidLocator,
+    /// The CommitLog no longer contains the requested payload.
     Missing,
+    /// The selected CommitLog range is shorter than declared.
     ShortRead,
+    /// The selected bytes are not a supported message record.
     Decode,
 }
 
@@ -264,16 +278,16 @@ impl TimerMessageStore {
             return false;
         }
         let root_dir = self.message_store_config.store_path_root_dir.as_str();
-        if let Err(error) = self.quarantine_manifest.load() {
-            error!("load timer quarantine manifest failed: {error}");
+        if self.quarantine_manifest.load().is_err() {
+            error!(source_present = true, "load timer quarantine manifest failed");
             return false;
         }
-        if let Err(error) = self.message_store_config.timer_policy_snapshot() {
-            error!("load timer store failed because timer configuration is invalid: {error}");
+        if self.message_store_config.timer_policy_snapshot().is_err() {
+            error!("load timer store failed because timer configuration is invalid");
             return false;
         }
-        if let Err(error) = self.role_state.load() {
-            error!("load timer role epoch failed: {error}");
+        if self.role_state.load().is_err() {
+            error!(source_present = true, "load timer role epoch failed");
             return false;
         }
         let fingerprint = match self.timer_storage_fingerprint() {
@@ -284,15 +298,15 @@ impl TimerMessageStore {
             }
         };
         let format_path = PathBuf::from(root_dir).join("timer-v2").join("FORMAT");
-        if let Err(error) = fingerprint.load_or_create(&format_path) {
-            error!("load timer storage fingerprint failed: {error}");
+        if fingerprint.load_or_create(&format_path).is_err() {
+            error!(source_present = true, "load timer storage fingerprint failed");
             return false;
         }
         let timer_checkpoint =
             match TimerCheckpoint::new_with_policy(get_timer_check_path(root_dir), fingerprint.policy_hash()) {
                 Ok(timer_checkpoint) => timer_checkpoint,
-                Err(err) => {
-                    error!("load timer checkpoint failed: {err}");
+                Err(_error) => {
+                    error!(source_present = true, "load timer checkpoint failed");
                     return false;
                 }
             };
@@ -302,14 +316,17 @@ impl TimerMessageStore {
             self.message_store_config.mapped_file_size_timer_log,
             Arc::clone(&self.storage_metrics),
         );
-        if let Err(err) = timer_log.load() {
-            error!("load timer log failed: {err}");
+        if timer_log.load().is_err() {
+            error!(source_present = true, "load timer log failed");
             return false;
         }
         let timer_log_len = match timer_log.durable_length() {
             Ok(length) => length as i64,
-            Err(error) => {
-                error!("read timer log length during checkpoint selection failed: {error}");
+            Err(_error) => {
+                error!(
+                    source_present = true,
+                    "read timer log length during checkpoint selection failed"
+                );
                 return false;
             }
         };
@@ -320,8 +337,11 @@ impl TimerMessageStore {
                     error!("no V2 timer checkpoint references available durable log data");
                     return false;
                 }
-                Err(error) => {
-                    error!("select timer checkpoint against durable log failed: {error}");
+                Err(_error) => {
+                    error!(
+                        source_present = true,
+                        "select timer checkpoint against durable log failed"
+                    );
                     return false;
                 }
             }
@@ -334,7 +354,7 @@ impl TimerMessageStore {
             4_096,
             Arc::clone(&self.storage_metrics),
         );
-        if let Err(first_error) = timer_wheel.load_at_generation(timer_checkpoint.wheel_generation()) {
+        if let Err(_first_error) = timer_wheel.load_at_generation(timer_checkpoint.wheel_generation()) {
             let rejected_generation = timer_checkpoint.local_generation();
             let fallback_loaded = rejected_generation > 0
                 && timer_checkpoint
@@ -347,39 +367,30 @@ impl TimerMessageStore {
             if !fallback_loaded {
                 let rebuilt_slots = match self.rebuild_timer_wheel_from_log(&timer_checkpoint, &timer_log) {
                     Ok(slots) => slots,
-                    Err(rebuild_error) => {
+                    Err(_rebuild_error) => {
                         error!(
-                            "load timer wheel failed ({first_error}) and rebuilding from committed timer log failed: \
-                             {rebuild_error}"
+                            source_present = true,
+                            "rebuilding the timer wheel from committed data failed"
                         );
                         return false;
                     }
                 };
-                if let Err(rebuild_error) =
+                if let Err(_rebuild_error) =
                     timer_wheel.load_rebuilt(timer_checkpoint.wheel_generation(), &rebuilt_slots)
                 {
-                    error!(
-                        "load timer wheel failed ({first_error}) and installing rebuilt pages failed: {rebuild_error}"
-                    );
+                    error!(source_present = true, "installing rebuilt timer wheel pages failed");
                     return false;
                 }
-                warn!(
-                    "rebuilt {} pending timer slots from the committed timer log because wheel pages were invalid: {}",
-                    rebuilt_slots.len(),
-                    first_error
-                );
+                warn!("rebuilt timer wheel pages from committed timer data");
             } else {
-                warn!(
-                    "fallback from timer checkpoint generation {} because its wheel pages are invalid: {}",
-                    rejected_generation, first_error
-                );
+                warn!("selected an earlier timer checkpoint because the latest wheel pages were invalid");
             }
         }
 
         let recovered_state = match self.recover_and_revise(&timer_checkpoint, &timer_log, &timer_wheel) {
             Ok(recovered_state) => recovered_state,
-            Err(err) => {
-                error!("recover timer state failed: {err}");
+            Err(_error) => {
+                error!(source_present = true, "recover timer state failed");
                 return false;
             }
         };
@@ -395,8 +406,8 @@ impl TimerMessageStore {
         self.refresh_timer_backlog_distribution();
         if self.should_check_and_revise_metrics() {
             self.check_and_revise_metrics();
-            if let Err(error) = self.timer_metrics.persist() {
-                error!("persist revised timer metrics failed: {error}");
+            if self.timer_metrics.persist().is_err() {
+                error!(source_present = true, "persist revised timer metrics failed");
                 return false;
             }
         }
@@ -415,20 +426,20 @@ impl TimerMessageStore {
             .max(MIN_SCHEDULER_INTERVAL_MS);
         let scheduler_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.timer.scheduler");
         let pipeline = match TimerPipeline::new(&self.runtime_scope, &self.message_store_config) {
-            Ok(pipeline) => pipeline,
-            Err(error) => {
-                error!("failed to create TimerMessageStore pipeline: {error}");
+            Some(pipeline) => pipeline,
+            None => {
+                error!("failed to create TimerMessageStore pipeline: invalid configuration");
                 return;
             }
         };
-        if let Err(error) = pipeline.spawn(
+        if !pipeline.spawn(
             &scheduler_group,
             JavaCompatEngine::new(Arc::clone(self)),
             self.message_store_config.timer_put_message_thread_num,
             self.message_store_config.timer_get_message_thread_num,
             self.message_store_config.timer_completion_gap_limit,
         ) {
-            error!("failed to spawn TimerMessageStore pipeline: {error}");
+            error!("failed to spawn TimerMessageStore pipeline: scheduler closed");
             pipeline.close();
             scheduler_group.cancel();
             return;
@@ -436,7 +447,7 @@ impl TimerMessageStore {
         let scheduler_tasks = ScheduledTaskGroup::new(scheduler_group.clone());
         let scheduler = Arc::clone(self);
         let scheduled_pipeline = Arc::clone(&pipeline);
-        if let Err(error) = scheduler_tasks.schedule_fixed_delay(
+        if let Err(_error) = scheduler_tasks.schedule_fixed_delay(
             ScheduledTaskConfig::fixed_delay("timer-message-scheduler", Duration::from_millis(interval_ms)),
             move || {
                 let scheduler = scheduler.clone();
@@ -446,7 +457,7 @@ impl TimerMessageStore {
                 }
             },
         ) {
-            error!("failed to spawn TimerMessageStore scheduler: {error}");
+            error!(source_present = true, "failed to spawn TimerMessageStore scheduler");
             pipeline.close();
             scheduler_group.cancel();
             return;
@@ -528,13 +539,9 @@ impl TimerMessageStore {
         self.storage_metrics.snapshot()
     }
 
-    fn look_messages_by_locator(
-        &self,
-        locators: &[(i64, i32)],
-        max_bytes: usize,
-    ) -> Vec<Result<MessageExt, TimerPayloadReadError>> {
+    fn look_messages_by_locator(&self, locators: &[(i64, i32)], max_bytes: usize) -> Vec<TimerPayloadReadOutcome> {
         let Some(store_context) = self.store_context.as_ref() else {
-            return locators.iter().map(|_| Err(TimerPayloadReadError::Missing)).collect();
+            return locators.iter().map(|_| TimerPayloadReadOutcome::Missing).collect();
         };
         let mut output = Vec::with_capacity(locators.len());
         let mut cursor = 0usize;
@@ -542,12 +549,12 @@ impl TimerMessageStore {
         while cursor < locators.len() {
             let (start, first_size) = locators[cursor];
             let Ok(first_size) = usize::try_from(first_size) else {
-                output.push(Err(TimerPayloadReadError::InvalidLocator));
+                output.push(TimerPayloadReadOutcome::InvalidLocator);
                 cursor += 1;
                 continue;
             };
             if start < 0 || first_size == 0 || retained_bytes.saturating_add(first_size) > max_bytes {
-                output.push(Err(TimerPayloadReadError::InvalidLocator));
+                output.push(TimerPayloadReadOutcome::InvalidLocator);
                 cursor += 1;
                 continue;
             }
@@ -574,28 +581,26 @@ impl TimerMessageStore {
             }
 
             let Some(segments) = store_context.commit_log.get_bulk_data(start, run_bytes as i32) else {
-                output.extend((run_start..cursor).map(|_| Err(TimerPayloadReadError::Missing)));
+                output.extend((run_start..cursor).map(|_| TimerPayloadReadOutcome::Missing));
                 retained_bytes = retained_bytes.saturating_add(run_bytes);
                 continue;
             };
             let mut payload_cursor = TimerPayloadCursor::new(segments);
             if payload_cursor.remaining() != run_bytes {
-                output.extend((run_start..cursor).map(|_| Err(TimerPayloadReadError::ShortRead)));
+                output.extend((run_start..cursor).map(|_| TimerPayloadReadOutcome::ShortRead));
                 retained_bytes = retained_bytes.saturating_add(run_bytes);
                 continue;
             }
             for (_, size) in &locators[run_start..cursor] {
                 let size = *size as usize;
-                let result = payload_cursor
-                    .take_frame(size)
-                    .map_err(|error| match error {
-                        TimerPayloadCursorError::InvalidFrameSize => TimerPayloadReadError::InvalidLocator,
-                        TimerPayloadCursorError::ShortRead => TimerPayloadReadError::ShortRead,
-                    })
-                    .and_then(|mut bytes| {
-                        MessageDecoder::decode(&mut bytes, true, false, false, false, false)
-                            .ok_or(TimerPayloadReadError::Decode)
-                    });
+                let result = match payload_cursor.take_frame(size) {
+                    Err(error) => match error {
+                        TimerPayloadCursorViolation::InvalidFrameSize { .. } => TimerPayloadReadOutcome::InvalidLocator,
+                        TimerPayloadCursorViolation::ShortRead { .. } => TimerPayloadReadOutcome::ShortRead,
+                    },
+                    Ok(mut bytes) => MessageDecoder::decode(&mut bytes, true, false, false, false, false)
+                        .map_or(TimerPayloadReadOutcome::Decode, TimerPayloadReadOutcome::Decoded),
+                };
                 output.push(result);
             }
             retained_bytes = retained_bytes.saturating_add(run_bytes);
@@ -807,8 +812,11 @@ impl TimerMessageStore {
         let scheduler_group = self.scheduler_group.lock().take();
         if let Some(scheduler_group) = scheduler_group {
             let report = scheduler_group.shutdown(Duration::from_secs(5)).await;
-            if let Err(error) = crate::runtime::shutdown_report_result("TimerMessageStore scheduler", report.clone()) {
-                warn!("TimerMessageStore scheduler failed during shutdown: {error}");
+            if crate::runtime::shutdown_report_result("TimerMessageStore scheduler", report.clone()).is_err() {
+                warn!(
+                    source_present = true,
+                    "TimerMessageStore scheduler failed during shutdown"
+                );
                 return None;
             }
             return Some(report);
@@ -850,8 +858,8 @@ impl TimerMessageStore {
     /// Persists timer state and releases its storage objects after scheduler work has stopped.
     pub(crate) fn shutdown_storage_with_persistence(&self) {
         self.sync_last_read_time_ms();
-        if let Err(error) = self.timer_metrics.persist() {
-            error!("persist timer metrics during shutdown failed: {error}");
+        if self.timer_metrics.persist().is_err() {
+            error!(source_present = true, "persist timer metrics during shutdown failed");
         }
         if let Some(timer_log) = self.timer_log.lock().take() {
             let _ = timer_log.shutdown();
@@ -865,8 +873,8 @@ impl TimerMessageStore {
     }
 
     pub fn sync_last_read_time_ms(&self) {
-        if let Err(error) = self.commit_durable_progress() {
-            error!("commit durable timer progress failed: {error}");
+        if self.commit_durable_progress().is_err() {
+            error!(source_present = true, "commit durable timer progress failed");
         }
     }
 
@@ -980,15 +988,18 @@ impl TimerMessageStore {
             self.enqueue_suspended.store(false, Ordering::Relaxed);
             match self.role_state.transition(true) {
                 Ok(_) => self.should_running_dequeue.store(true, Ordering::Release),
-                Err(error) => {
+                Err(_error) => {
                     self.should_running_dequeue.store(false, Ordering::Release);
-                    error!("keep timer delivery stopped because activating role epoch failed: {error}");
+                    error!(
+                        source_present = true,
+                        "keep timer delivery stopped because activating role epoch failed"
+                    );
                 }
             }
         } else if previous {
             self.should_running_dequeue.store(false, Ordering::Release);
-            if let Err(error) = self.role_state.transition(false) {
-                error!("persist timer role downgrade epoch failed: {error}");
+            if self.role_state.transition(false).is_err() {
+                error!(source_present = true, "persist timer role downgrade epoch failed");
             }
             self.enqueue_suspended.store(true, Ordering::Relaxed);
             self.sync_last_read_time_ms();
@@ -1128,10 +1139,7 @@ impl TimerMessageStore {
                 break;
             };
             let Some(message) = self.look_store_message(cq_unit.pos, cq_unit.size) else {
-                warn!(
-                    "skip backlog metrics for timer queue offset {} because commitlog message {}:{} is missing",
-                    queue_offset, cq_unit.pos, cq_unit.size
-                );
+                warn!("skip timer backlog metrics because a persisted payload is missing");
                 queue_offset = cq_unit.queue_offset + 1;
                 continue;
             };
@@ -1155,10 +1163,10 @@ impl TimerMessageStore {
             }
             let entries = match self.load_slot_entries(slot) {
                 Ok(entries) => entries,
-                Err(err) => {
+                Err(_error) => {
                     warn!(
-                        "skip backlog metrics for timer slot {} because loading entries failed: {}",
-                        slot.time_ms, err
+                        source_present = true,
+                        "skip timer backlog metrics because loading entries failed"
                     );
                     continue;
                 }
@@ -1166,10 +1174,7 @@ impl TimerMessageStore {
 
             for entry in entries {
                 let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
-                    warn!(
-                        "skip backlog metrics for timer log position {} because commitlog message {}:{} is missing",
-                        entry.position, entry.record.commit_log_offset, entry.record.size
-                    );
+                    warn!("skip timer backlog metrics because a persisted payload is missing");
                     continue;
                 };
                 observe_backlog_message(backlog_metrics, &message, now_ms);
@@ -1206,10 +1211,7 @@ impl TimerMessageStore {
         let checkpoint_len = timer_checkpoint.last_timer_log_flush_pos();
         let target_len = plan_recovered_timer_log_len(current_len, checkpoint_len);
         if target_len != current_len {
-            warn!(
-                "revise timer log from {} to {} based on checkpoint flush position {}",
-                current_len, target_len, checkpoint_len
-            );
+            warn!("revise the timer log to the durable checkpoint boundary");
             timer_log.truncate(target_len as u64)?;
         }
         Ok(target_len)
@@ -1230,15 +1232,9 @@ impl TimerMessageStore {
         let max_offset = consume_queue.get_max_offset_in_queue();
         let recovered_offset = clamp_queue_offset(checkpoint_queue_offset, Some(min_offset), Some(max_offset));
         if recovered_offset == min_offset && checkpoint_queue_offset < min_offset {
-            warn!(
-                "revise timer queue offset from {} to consume queue min {}",
-                checkpoint_queue_offset, min_offset
-            );
+            warn!("revise the timer queue cursor to its durable lower bound");
         } else if recovered_offset == max_offset && checkpoint_queue_offset > max_offset {
-            warn!(
-                "revise timer queue offset from {} to consume queue max {}",
-                checkpoint_queue_offset, max_offset
-            );
+            warn!("revise the timer queue cursor to its durable upper bound");
         }
         recovered_offset
     }
@@ -1249,10 +1245,7 @@ impl TimerMessageStore {
                 return Slot::new_with_num_magic(0, 0, 0, 0, 0);
             }
             if !timer_slot_is_valid(slot, recovered_log_len) {
-                warn!(
-                    "clear invalid timer wheel slot time={} first={} last={} num={} against log len {}",
-                    slot.time_ms, slot.first_pos, slot.last_pos, slot.num, recovered_log_len
-                );
+                warn!("clear an invalid persisted timer wheel slot");
                 Slot::new_with_num_magic(0, 0, 0, 0, 0)
             } else {
                 slot
@@ -1445,8 +1438,8 @@ impl TimerMessageStore {
     pub(crate) fn process_enqueue_stage(&self, limit: usize) -> usize {
         match self.process_enqueue_stage_with_durability(limit) {
             Ok((messages, _)) => messages,
-            Err(error) => {
-                error!("commit timer source stage failed: {error}");
+            Err(_error) => {
+                error!(source_present = true, "commit timer source stage failed");
                 0
             }
         }
@@ -1472,8 +1465,8 @@ impl TimerMessageStore {
     pub(crate) async fn process_due_stage(&self, limit: usize, delivery_epoch: u64) -> usize {
         match self.process_due_stage_with_durability(limit, delivery_epoch).await {
             Ok((messages, _)) => messages,
-            Err(error) => {
-                error!("commit timer due stage failed: {error}");
+            Err(_error) => {
+                error!(source_present = true, "commit timer due stage failed");
                 0
             }
         }
@@ -1610,19 +1603,18 @@ impl TimerMessageStore {
 
         for (cq_unit, message) in batch.into_iter().zip(messages) {
             let message = match message {
-                Ok(message) => message,
-                Err(reason) => {
+                TimerPayloadReadOutcome::Decoded(message) => message,
+                reason => {
                     let corruption = match reason {
-                        TimerPayloadReadError::Missing => CorruptionReason::MissingPayload,
-                        TimerPayloadReadError::ShortRead => CorruptionReason::ShortRead,
-                        TimerPayloadReadError::Decode => CorruptionReason::UnsupportedRecord,
-                        TimerPayloadReadError::InvalidLocator => CorruptionReason::UnsupportedRecord,
+                        TimerPayloadReadOutcome::Missing => CorruptionReason::MissingPayload,
+                        TimerPayloadReadOutcome::ShortRead => CorruptionReason::ShortRead,
+                        TimerPayloadReadOutcome::Decode | TimerPayloadReadOutcome::InvalidLocator => {
+                            CorruptionReason::UnsupportedRecord
+                        }
+                        TimerPayloadReadOutcome::Decoded(_) => continue,
                     };
                     self.quarantine_source(cq_unit.queue_offset, corruption);
-                    warn!(
-                        "timer queue offset {} is blocked because commitlog message {}:{} cannot be read: {:?}",
-                        cq_unit.queue_offset, cq_unit.pos, cq_unit.size, reason
-                    );
+                    warn!("timer materialization is blocked by an unreadable persisted payload");
                     break;
                 }
             };
@@ -1640,17 +1632,11 @@ impl TimerMessageStore {
             }
             if let Err(reason) = validate_timer_source_route(&message) {
                 self.quarantine_source(cq_unit.queue_offset, reason);
-                warn!(
-                    "timer queue offset {} is blocked because its persisted route is invalid: {:?}",
-                    cq_unit.queue_offset, reason
-                );
+                warn!("timer materialization is blocked by invalid persisted routing data");
                 break;
             }
             let Some(deliver_time_ms) = parse_deliver_time_ms(&message) else {
-                warn!(
-                    "skip timer queue offset {} because TIMER_OUT_MS is invalid",
-                    queue_offset
-                );
+                warn!("skip a persisted timer payload with an invalid delivery deadline");
                 self.curr_queue_offset
                     .store(cq_unit.queue_offset + 1, Ordering::Relaxed);
                 continue;
@@ -1683,11 +1669,8 @@ impl TimerMessageStore {
                         .store(cq_unit.queue_offset + 1, Ordering::Relaxed);
                     indexed += 1;
                 }
-                Err(err) => {
-                    error!(
-                        "index timer queue offset {} to slot {} failed: {}",
-                        queue_offset, slot_time_ms, err
-                    );
+                Err(_error) => {
+                    error!(source_present = true, "index a timer payload into the wheel failed");
                     break;
                 }
             }
@@ -1697,13 +1680,13 @@ impl TimerMessageStore {
     }
 
     fn quarantine_source(&self, source_offset: i64, reason: CorruptionReason) {
-        if let Err(error) = self.quarantine_manifest.record(QuarantineRecord {
+        if let Err(_error) = self.quarantine_manifest.record(QuarantineRecord {
             timer_id: TimerId::new(source_offset.max(0) as u128),
             reason,
             source_offset,
             attempts: 0,
         }) {
-            error!("persist timer quarantine record failed: {error}");
+            error!(source_present = true, "persist timer quarantine record failed");
         }
     }
 
@@ -1783,15 +1766,15 @@ impl TimerMessageStore {
     async fn deliver_slot(&self, slot_time_ms: i64, slot: Slot, limit: usize, delivery_epoch: u64) -> usize {
         let mut active_drain = match self.take_or_build_slot_drain(slot) {
             Ok(active_drain) => active_drain,
-            Err(err) => {
-                error!("prepare timer slot {} drain plan failed: {}", slot_time_ms, err);
+            Err(_error) => {
+                error!(source_present = true, "prepare a timer slot drain plan failed");
                 return 0;
             }
         };
         let entries = match active_drain.plan.read_batch(limit) {
             Ok(entries) => entries,
-            Err(error) => {
-                error!("read timer slot {} continuation failed: {}", slot_time_ms, error);
+            Err(_error) => {
+                error!(source_present = true, "read a timer slot continuation failed");
                 self.slot_drains.lock().insert(slot_time_ms, active_drain);
                 return 0;
             }
@@ -1801,17 +1784,14 @@ impl TimerMessageStore {
         for entry in &entries {
             let Some(message) = self.look_store_message(entry.record.commit_log_offset, entry.record.size) else {
                 self.quarantine_source(entry.record.queue_offset, CorruptionReason::MissingPayload);
-                warn!(
-                    "delay delivery blocked at timer log position {} because commitlog {}:{} is missing",
-                    entry.position, entry.record.commit_log_offset, entry.record.size
-                );
+                warn!("timer delivery is blocked by a missing persisted payload");
                 break;
             };
             if need_roll(entry.record.magic) {
                 let now_ms = self.floor_time_ms(self.clock.read().wall_time_ms());
                 if parse_deliver_time_ms(&message).is_some_and(|deliver_time_ms| deliver_time_ms > now_ms) {
                     if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
-                        warn!("reject stale timer roll batch for role epoch {delivery_epoch}");
+                        warn!("reject a stale timer roll batch");
                         break;
                     }
                     let rolled_topic =
@@ -1895,7 +1875,7 @@ impl TimerMessageStore {
                 break;
             }
             if !self.role_state.is_current_delivery_epoch(delivery_epoch) {
-                warn!("reject stale timer delivery batch for role epoch {delivery_epoch}");
+                warn!("reject a stale timer delivery batch");
                 break;
             }
             let put_result = self.put_store_message(deliver_message).await;
@@ -1911,8 +1891,8 @@ impl TimerMessageStore {
         active_drain.plan.advance(&entries[..processed]);
         let remaining_slot = match active_drain.plan.remaining_slot() {
             Ok(remaining_slot) => remaining_slot,
-            Err(error) => {
-                error!("read remaining timer slot {} plan failed: {}", slot_time_ms, error);
+            Err(_error) => {
+                error!(source_present = true, "read a remaining timer slot plan failed");
                 self.slot_drains.lock().insert(slot_time_ms, active_drain);
                 return 0;
             }
@@ -1927,17 +1907,14 @@ impl TimerMessageStore {
             ),
             None => self.put_timer_wheel_slot(slot_time_ms, 0, 0, 0, 0),
         };
-        if let Err(error) = rewrite_result {
-            error!("rewrite timer slot {} continuation failed: {}", slot_time_ms, error);
+        if let Err(_error) = rewrite_result {
+            error!(source_present = true, "rewrite a timer slot continuation failed");
             self.slot_drains.lock().insert(slot_time_ms, active_drain);
             return 0;
         }
         if active_drain.plan.remaining() == 0 {
-            if let Err(error) = active_drain.plan.remove() {
-                warn!(
-                    "remove completed timer slot {} drain plan failed: {}",
-                    slot_time_ms, error
-                );
+            if let Err(_error) = active_drain.plan.remove() {
+                warn!(source_present = true, "remove a completed timer slot drain plan failed");
             }
         } else {
             self.slot_drains.lock().insert(slot_time_ms, active_drain);
@@ -1945,17 +1922,17 @@ impl TimerMessageStore {
         processed
     }
 
-    fn accept_delivery_result(&self, source_offset: i64, operation: &'static str, result: &PutMessageResult) -> bool {
+    fn accept_delivery_result(&self, source_offset: i64, _operation: &'static str, result: &PutMessageResult) -> bool {
         let status = result.put_message_status();
         match classify_delivery_status(status) {
             TimerWorkResult::Complete if result.is_ok() => true,
             TimerWorkResult::Complete | TimerWorkResult::Retry(_) => {
-                warn!("timer {operation} will retry after put status {status:?}");
+                warn!("timer delivery will retry after a transient Store response");
                 false
             }
             TimerWorkResult::Quarantine(reason) => {
                 self.quarantine_source(source_offset, reason);
-                warn!("timer {operation} is quarantined after put status {status:?}");
+                warn!("timer delivery is quarantined after a terminal Store response");
                 false
             }
             TimerWorkResult::Cancelled | TimerWorkResult::StaleGeneration => false,
@@ -2120,8 +2097,8 @@ impl TimerMessageStore {
                     Ok(queue_id) => {
                         inner.message_ext_inner.queue_id = queue_id;
                     }
-                    Err(err) => {
-                        warn!("drop timer message because REAL_QID is invalid: {}", err);
+                    Err(_error) => {
+                        warn!("drop timer message because REAL_QID is invalid");
                         return None;
                     }
                 }
@@ -2156,10 +2133,7 @@ impl TimerMessageStore {
         let aligned = self.floor_time_ms(fallback_time_ms);
         let max_allowed_cursor = aligned.saturating_add(self.precision_ms() * MAX_FUTURE_CURSOR_SKEW_SLOTS);
         if current > max_allowed_cursor {
-            warn!(
-                "rewind timer read cursor from {} to {} because it is ahead of system time by more than {} slots",
-                current, aligned, MAX_FUTURE_CURSOR_SKEW_SLOTS
-            );
+            warn!("rewind the timer read cursor because it exceeds the allowed clock skew");
             self.curr_read_time_ms.store(aligned, Ordering::Relaxed);
             return aligned;
         }
@@ -2595,7 +2569,9 @@ mod tests {
             None,
             false,
             crate::runtime::test_service_context("timer-local-file-store-test"),
-        );
+        )
+        .expect("create Timer test Store")
+        .expect("test Timer Store configuration is valid");
         store
             .wire_owned_root_dependencies()
             .expect("Timer tests should wire owned Store capabilities");

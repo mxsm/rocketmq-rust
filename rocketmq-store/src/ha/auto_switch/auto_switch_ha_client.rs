@@ -182,7 +182,9 @@ mod tests {
             None,
             false,
             crate::runtime::test_service_context("auto-switch-ha-client-store-test"),
-        );
+        )
+        .expect("create auto-switch HA test Store")
+        .expect("test Timer Store configuration is valid");
         store
             .wire_owned_root_dependencies()
             .expect("wire owned test store dependencies");

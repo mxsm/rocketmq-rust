@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 use rocketmq_store_api::TimerSnapshotManifest;
-use thiserror::Error;
 
 use crate::timer::clock::TimerClockSafety;
 use crate::timer::clock::TimerClockState;
@@ -64,25 +63,24 @@ impl TimelinePromotionGate {
         }
     }
 
-    pub(crate) fn mark_snapshot_installed(
-        &self,
-        manifest: TimerSnapshotManifest,
-    ) -> Result<(), TimelinePromotionError> {
-        manifest.validate()?;
+    pub(crate) fn mark_snapshot_installed(&self, manifest: TimerSnapshotManifest) -> TimelinePromotionOutcome {
+        if let Err(violation) = manifest.validate() {
+            return TimelinePromotionOutcome::Manifest(violation);
+        }
         if manifest.activation_epoch != self.expected_activation_epoch
             || manifest.format_fingerprint != self.expected_format_fingerprint
         {
-            return Err(TimelinePromotionError::SnapshotCompatibility);
+            return TimelinePromotionOutcome::SnapshotCompatibility;
         }
         let mut installed = self.installed_snapshot.write();
         if installed
             .as_ref()
             .is_some_and(|current| current.generation >= manifest.generation)
         {
-            return Err(TimelinePromotionError::StaleSnapshot);
+            return TimelinePromotionOutcome::StaleSnapshot;
         }
         *installed = Some(manifest);
-        Ok(())
+        TimelinePromotionOutcome::Promotable
     }
 
     pub(crate) fn snapshot_generation(&self) -> u64 {
@@ -92,28 +90,26 @@ impl TimelinePromotionGate {
             .map_or(0, |manifest| manifest.generation)
     }
 
-    pub(crate) fn evaluate(&self, observation: TimelinePromotionObservation) -> Result<(), TimelinePromotionError> {
+    pub(crate) fn evaluate(&self, observation: TimelinePromotionObservation) -> TimelinePromotionOutcome {
         if self.clock.state() == TimerClockState::Unsafe {
-            return Err(TimelinePromotionError::ClockUnsafe);
+            return TimelinePromotionOutcome::ClockUnsafe;
         }
-        let snapshot = self
-            .installed_snapshot
-            .read()
-            .clone()
-            .ok_or(TimelinePromotionError::SnapshotMissing)?;
+        let Some(snapshot) = self.installed_snapshot.read().clone() else {
+            return TimelinePromotionOutcome::SnapshotMissing;
+        };
         if observation.activation_epoch != self.expected_activation_epoch
             || observation.format_fingerprint != self.expected_format_fingerprint
             || observation.capability_version != self.expected_capability_version
             || observation.role_epoch < snapshot.role_epoch
         {
-            return Err(TimelinePromotionError::Compatibility);
+            return TimelinePromotionOutcome::Compatibility;
         }
         if observation.source_replay_cursor < observation.source_retention_start
             || observation.completion_replay_cursor < observation.final_retention_start
             || observation.source_replay_cursor < snapshot.source_physical_cursor
             || observation.completion_replay_cursor < snapshot.completion_physical_cursor
         {
-            return Err(TimelinePromotionError::RetentionGap);
+            return TimelinePromotionOutcome::RetentionGap;
         }
         if observation.source_replay_cursor < observation.replicated_source_end
             || observation.completion_replay_cursor < observation.replicated_final_end
@@ -121,29 +117,35 @@ impl TimelinePromotionGate {
             || observation.due_backlog != 0
             || observation.completion_backlog != 0
         {
-            return Err(TimelinePromotionError::NotCaughtUp);
+            return TimelinePromotionOutcome::NotCaughtUp;
         }
-        Ok(())
+        TimelinePromotionOutcome::Promotable
     }
 }
 
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub(crate) enum TimelinePromotionError {
-    #[error(transparent)]
-    Manifest(#[from] rocketmq_store_api::StoreContractViolation),
-    #[error("Extended promotion requires an installed snapshot")]
+/// Source-free result of evaluating an Extended Timeline role promotion.
+///
+/// Every non-promotable variant is a deterministic rejection; operational promotion failures
+/// are returned separately as [`StoreError`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TimelinePromotionOutcome {
+    /// Promotion prerequisites are satisfied.
+    Promotable,
+    /// The snapshot manifest violates its source-free contract.
+    Manifest(rocketmq_store_api::StoreContractViolation),
+    /// Promotion requires an installed snapshot.
     SnapshotMissing,
-    #[error("Extended snapshot format or activation epoch is incompatible")]
+    /// Snapshot format or activation epoch is incompatible.
     SnapshotCompatibility,
-    #[error("Extended snapshot generation is not newer than the installed artifact")]
+    /// Snapshot generation does not advance the installed artifact.
     StaleSnapshot,
-    #[error("Extended member capability, epoch, or format is incompatible")]
+    /// Member capability, epoch, or format is incompatible.
     Compatibility,
-    #[error("Extended source or final-fact replay has crossed retention")]
+    /// Source or final-fact replay has crossed retention.
     RetentionGap,
-    #[error("Extended source, due, or completion replay is not caught up")]
+    /// Source, due, or completion replay is not caught up.
     NotCaughtUp,
-    #[error("CLOCK_UNSAFE prevents Extended promotion")]
+    /// The clock safety gate rejects promotion.
     ClockUnsafe,
 }
 
@@ -167,6 +169,6 @@ mod tests {
             capability_version: 1,
             ..TimelinePromotionObservation::default()
         };
-        assert_eq!(gate.evaluate(observation), Err(TimelinePromotionError::SnapshotMissing));
+        assert_eq!(gate.evaluate(observation), TimelinePromotionOutcome::SnapshotMissing);
     }
 }

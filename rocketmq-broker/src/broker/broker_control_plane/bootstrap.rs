@@ -77,26 +77,23 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
 
     pub(crate) async fn bootstrap_controller_mode(&self) {
         let Some(controller_leader) = self.discover_controller_leader().await else {
-            warn!(
-                "Skip controller mode bootstrap because controller leader is unavailable, broker={}",
-                self.config.broker_snapshot().broker_identity.get_canonical_name()
-            );
+            warn!("skip controller mode bootstrap because the controller leader is unavailable");
             return;
         };
 
         let broker_config = self.config.broker_snapshot();
-        if let Some(Err(error)) = self.controller.with_replicas_mut(|replicas_manager| {
+        if let Some(Err(_)) = self.controller.with_replicas_mut(|replicas_manager| {
             replicas_manager.set_controller_leader_address(controller_leader.clone());
             replicas_manager.validate_registration_state(&broker_config)
         }) {
-            warn!("Controller mode registration state is invalid: {}", error);
+            warn!("controller mode registration state is invalid");
             return;
         }
 
         let controller_broker_id = match self.ensure_controller_broker_id(&controller_leader).await {
             Ok(controller_broker_id) => controller_broker_id,
-            Err(error) => {
-                warn!("Ensure controller broker id failed: {}", error);
+            Err(_) => {
+                warn!("ensure controller broker id failed");
                 return;
             }
         };
@@ -132,7 +129,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     })
                     .unwrap_or(ControllerRegisterFollowup::HeartbeatThenQueryReplicaInfo);
                 if register_followup == ControllerRegisterFollowup::ApplyRoleChange {
-                    if let Err(error) = self
+                    match self
                         .apply_controller_role_change(
                             Some(controller_leader.clone()),
                             register_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
@@ -143,19 +140,25 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         )
                         .await
                     {
-                        warn!("Apply controller register result failed: {}", error);
+                        Ok(true) => {}
+                        Ok(false) => warn!("Controller register role transition was rejected"),
+                        Err(_) => warn!("apply controller register result failed"),
                     }
                     return;
                 }
             }
-            Err(error) => {
-                warn!("Register broker to controller failed: {}", error);
+            Err(_) => {
+                warn!("register broker to controller failed");
                 return;
             }
         }
 
-        if let Err(error) = self.send_heartbeat_to_controller_leader(&controller_leader).await {
-            warn!("Send bootstrap heartbeat to controller failed: {}", error);
+        if self
+            .send_heartbeat_to_controller_leader(&controller_leader)
+            .await
+            .is_err()
+        {
+            warn!("send bootstrap heartbeat to controller failed");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -175,8 +178,8 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     )
                 })
                 .unwrap_or(ControllerReplicaInfoFollowup::ElectMaster);
-            if replica_followup == ControllerReplicaInfoFollowup::ApplyRoleChange
-                && self
+            if replica_followup == ControllerReplicaInfoFollowup::ApplyRoleChange {
+                match self
                     .apply_controller_replica_info(
                         controller_leader.clone(),
                         replica_info_header
@@ -188,8 +191,11 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         sync_state_set.get_sync_state_set().cloned().unwrap_or_default(),
                     )
                     .await
-            {
-                return;
+                {
+                    Ok(true) => return,
+                    Ok(false) => warn!("Controller replica-info role transition was rejected"),
+                    Err(_) => warn!("apply controller replica info failed"),
+                }
             }
         }
 
@@ -204,7 +210,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             .await
         {
             Ok((elect_header, sync_state_set)) => {
-                if let Err(error) = self
+                match self
                     .apply_controller_role_change(
                         Some(controller_leader),
                         elect_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
@@ -215,16 +221,18 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     )
                     .await
                 {
-                    warn!("Apply controller elect-master result failed: {}", error);
+                    Ok(true) => {}
+                    Ok(false) => warn!("Controller elect-master role transition was rejected"),
+                    Err(_) => warn!("apply controller elect-master result failed"),
                 }
             }
-            Err(error) => {
+            Err(_) => {
                 if let Ok((replica_info_header, sync_state_set)) = self
                     .broker_outer_api
                     .get_replica_info(&controller_leader, broker_name)
                     .await
                 {
-                    if self
+                    match self
                         .apply_controller_replica_info(
                             controller_leader,
                             replica_info_header
@@ -237,10 +245,12 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         )
                         .await
                     {
-                        return;
+                        Ok(true) => return,
+                        Ok(false) => warn!("Controller fallback role transition was rejected"),
+                        Err(_) => warn!("apply fallback controller replica info failed"),
                     }
                 }
-                warn!("Elect master during controller mode bootstrap failed: {}", error);
+                warn!("elect master during controller mode bootstrap failed");
             }
         }
     }
@@ -253,27 +263,20 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: HashSet<i64>,
-    ) -> bool {
+    ) -> rocketmq_error::RocketMQResult<bool> {
         if master_broker_id.is_none() || master_epoch.is_none() {
-            return false;
+            return Ok(false);
         }
 
-        if let Err(error) = self
-            .apply_controller_role_change(
-                Some(controller_leader),
-                master_broker_id,
-                master_address,
-                master_epoch,
-                sync_state_set_epoch,
-                sync_state_set,
-            )
-            .await
-        {
-            warn!("Apply controller replica info failed: {}", error);
-            return false;
-        }
-
-        true
+        self.apply_controller_role_change(
+            Some(controller_leader),
+            master_broker_id,
+            master_address,
+            master_epoch,
+            sync_state_set_epoch,
+            sync_state_set,
+        )
+        .await
     }
 
     async fn persist_broker_id_snapshot(
@@ -410,8 +413,8 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         self.controller
                             .with_replicas_mut(ReplicasManager::clear_temp_metadata_state);
                     }
-                    Err(cleanup_error) => {
-                        warn!(%cleanup_error, "Failed to remove pending broker-id metadata after controller rejection");
+                    Err(_) => {
+                        warn!("failed to remove pending broker-id metadata after controller rejection");
                     }
                 }
             } else {
@@ -468,8 +471,8 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     }
                     first_reachable.get_or_insert(address);
                 }
-                Err(error) => {
-                    warn!("Discover controller leader failed via {}: {}", address, error);
+                Err(_) => {
+                    warn!("discover controller leader failed");
                 }
             }
         }
@@ -519,7 +522,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     })
                     .unwrap_or(ControllerReplicaSyncFollowup::Bootstrap);
                 if sync_followup == ControllerReplicaSyncFollowup::ApplyRoleChange {
-                    if let Err(error) = self
+                    match self
                         .apply_controller_role_change(
                             Some(leader),
                             response_header.master_broker_id.and_then(|id| u64::try_from(id).ok()),
@@ -530,7 +533,9 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         )
                         .await
                     {
-                        warn!("Apply controller replica info failed: {}", error);
+                        Ok(true) => {}
+                        Ok(false) => warn!("Controller replica-info role transition was rejected"),
+                        Err(_) => warn!("apply controller replica info failed"),
                     }
                 } else {
                     self.bootstrap_controller_mode().await;
@@ -547,8 +552,8 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             {
                 self.bootstrap_controller_mode().await;
             }
-            Err(error) => {
-                warn!("Sync controller replica info failed: {}", error);
+            Err(_) => {
+                warn!("sync controller replica info failed");
             }
         }
     }
@@ -603,14 +608,11 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         let broker_member_group = match broker_member_group {
             Ok(Some(broker_member_group)) if !broker_member_group.broker_addrs.is_empty() => broker_member_group,
             Ok(_) => {
-                warn!(
-                    "Couldn't find any broker member from namesrv in {}/{}",
-                    broker_cluster_name, broker_name
-                );
+                warn!("no broker member was available from the name server");
                 return;
             }
-            Err(error) => {
-                error!("syncBrokerMemberGroup from namesrv failed, error={}", error);
+            Err(_) => {
+                error!("broker-member synchronization with the name server failed");
                 return;
             }
         };
@@ -619,15 +621,15 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             broker_addr_table.len() + usize::from(!broker_addr_table.contains_key(&broker_id))
         }
 
-        if let Err(error) = self.store.set_alive_replica_num_in_group(alive_broker_count(
-            &broker_member_group.broker_addrs,
-            broker_config.broker_identity.broker_id,
-        ) as i32)
+        if self
+            .store
+            .set_alive_replica_num_in_group(alive_broker_count(
+                &broker_member_group.broker_addrs,
+                broker_config.broker_identity.broker_id,
+            ) as i32)
+            .is_err()
         {
-            warn!(
-                ?error,
-                "Skip broker-member synchronization because Store is unavailable"
-            );
+            warn!("skip broker-member synchronization because Store is unavailable");
             return;
         }
         if !self.role_state.is_isolated() {
@@ -649,10 +651,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         let broker_config = self.config.broker_snapshot();
         let controller_targets = heartbeat_state.controller_targets;
         if controller_targets.is_empty() {
-            warn!(
-                "Skip controller heartbeat because no controller address is configured, broker={}",
-                broker_config.broker_identity.get_canonical_name()
-            );
+            warn!("skip controller heartbeat because no controller address is configured");
             return;
         }
 
@@ -698,16 +697,12 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         });
         let mut installed_lease = false;
         for outcome in futures::future::join_all(futures).await.into_iter().flatten() {
-            let (target, sent_at, result) = outcome;
+            let (_, sent_at, result) = outcome;
             match result {
                 Ok(Some(grant)) => installed_lease |= self.install_controller_write_lease(grant, sent_at).await,
                 Ok(None) => {}
-                Err(error) => {
-                    warn!(
-                        remote_addr = %target,
-                        error_kind = ?error.kind(),
-                        "controller heartbeat failed"
-                    );
+                Err(_) => {
+                    warn!("controller heartbeat failed");
                 }
             }
         }

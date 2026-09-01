@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::StoreContractViolation;
 use serde::Deserialize;
-use thiserror::Error;
 
 const MIB: usize = 1024 * 1024;
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -80,6 +80,11 @@ pub struct TimerStoreConfig {
     pub gc_retention_grace_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ValidatedTimerStoreConfig {
+    _private: (),
+}
+
 impl Default for TimerStoreConfig {
     fn default() -> Self {
         Self {
@@ -114,64 +119,127 @@ impl Default for TimerStoreConfig {
 }
 
 impl TimerStoreConfig {
+    pub(crate) fn validated(&self) -> Option<ValidatedTimerStoreConfig> {
+        self.validate().ok()?;
+        Some(ValidatedTimerStoreConfig { _private: () })
+    }
+
     /// Validates limits before any Extended Timeline resource is opened.
     ///
     /// # Errors
     ///
-    /// Returns a field-specific error for an unsafe or internally inconsistent limit.
-    pub fn validate(&self) -> Result<(), TimerStoreConfigError> {
-        if self.lane_count == 0 || self.lane_count > usize::from(u16::MAX) {
-            return Err(TimerStoreConfigError::Invalid("laneCount"));
-        }
-        if self.materialize_batch_messages == 0
-            || self.materialize_batch_bytes < self.payload_record_bytes
-            || self.due_scan_messages == 0
-            || self.due_scan_bytes < 128
-        {
-            return Err(TimerStoreConfigError::Invalid("boundedBatch"));
-        }
-        if self.payload_segment_bytes == 0
-            || self.payload_segment_bytes > self.payload_partition_live_bytes
-            || self.payload_open_handles == 0
-            || self.payload_batch_bytes < self.payload_record_bytes
-            || self.payload_record_bytes == 0
-        {
-            return Err(TimerStoreConfigError::Invalid("payloadStore"));
-        }
-        if self.safety_overlap_ms <= 0 || !(180..=400).contains(&self.horizon_days) {
-            return Err(TimerStoreConfigError::Invalid("horizon"));
-        }
-        if self.shadow_diff_sample_limit == 0 || self.scheduler_interval_ms == 0 {
-            return Err(TimerStoreConfigError::Invalid("shadowRuntime"));
-        }
-        if self.delivery_lease_ms == 0
-            || self.clock_backward_tolerance_ms < 0
-            || self.max_pending_messages == 0
-            || self.max_pending_bytes == 0
-            || self.max_topic_pending_bytes == 0
-            || self.max_topic_pending_bytes > self.max_pending_bytes
-            || self.max_tenant_pending_bytes == 0
-            || self.max_tenant_pending_bytes > self.max_pending_bytes
-            || self.max_bucket_messages == 0
-            || self.max_bucket_bytes == 0
-            || self.minimum_free_bytes == 0
-            || self.minimum_free_ratio_basis_points == 0
-            || self.minimum_free_ratio_basis_points >= 10_000
-            || self.materialization_lag_reject_messages == 0
-            || self.gc_retention_grace_ms == 0
-        {
-            return Err(TimerStoreConfigError::Invalid("productionSafety"));
-        }
+    /// Returns a source-free field violation for an unsafe or inconsistent limit.
+    pub fn validate(&self) -> Result<(), StoreContractViolation> {
+        validate_limit("laneCount", self.lane_count as i128, 1, i128::from(u16::MAX))?;
+        validate_limit(
+            "materializeBatchMessages",
+            self.materialize_batch_messages as i128,
+            1,
+            i128::MAX,
+        )?;
+        validate_limit(
+            "materializeBatchBytes",
+            self.materialize_batch_bytes as i128,
+            self.payload_record_bytes as i128,
+            i128::MAX,
+        )?;
+        validate_limit("dueScanMessages", self.due_scan_messages as i128, 1, i128::MAX)?;
+        validate_limit("dueScanBytes", self.due_scan_bytes as i128, 128, i128::MAX)?;
+        validate_limit(
+            "payloadSegmentBytes",
+            i128::from(self.payload_segment_bytes),
+            1,
+            i128::from(self.payload_partition_live_bytes),
+        )?;
+        validate_limit("payloadOpenHandles", self.payload_open_handles as i128, 1, i128::MAX)?;
+        validate_limit("payloadRecordBytes", self.payload_record_bytes as i128, 1, i128::MAX)?;
+        validate_limit(
+            "payloadBatchBytes",
+            self.payload_batch_bytes as i128,
+            self.payload_record_bytes as i128,
+            i128::MAX,
+        )?;
+        validate_limit("safetyOverlapMillis", i128::from(self.safety_overlap_ms), 1, i128::MAX)?;
+        validate_limit("horizonDays", i128::from(self.horizon_days), 180, 400)?;
+        validate_limit(
+            "shadowDiffSampleLimit",
+            self.shadow_diff_sample_limit as i128,
+            1,
+            i128::MAX,
+        )?;
+        validate_limit(
+            "schedulerIntervalMillis",
+            i128::from(self.scheduler_interval_ms),
+            1,
+            i128::MAX,
+        )?;
+        validate_limit("deliveryLeaseMillis", i128::from(self.delivery_lease_ms), 1, i128::MAX)?;
+        validate_limit(
+            "clockBackwardToleranceMillis",
+            i128::from(self.clock_backward_tolerance_ms),
+            0,
+            i128::MAX,
+        )?;
+        validate_limit(
+            "maxPendingMessages",
+            i128::from(self.max_pending_messages),
+            1,
+            i128::MAX,
+        )?;
+        validate_limit("maxPendingBytes", i128::from(self.max_pending_bytes), 1, i128::MAX)?;
+        validate_limit(
+            "maxTopicPendingBytes",
+            i128::from(self.max_topic_pending_bytes),
+            1,
+            i128::from(self.max_pending_bytes),
+        )?;
+        validate_limit(
+            "maxTenantPendingBytes",
+            i128::from(self.max_tenant_pending_bytes),
+            1,
+            i128::from(self.max_pending_bytes),
+        )?;
+        validate_limit("maxBucketMessages", i128::from(self.max_bucket_messages), 1, i128::MAX)?;
+        validate_limit("maxBucketBytes", i128::from(self.max_bucket_bytes), 1, i128::MAX)?;
+        validate_limit("minimumFreeBytes", i128::from(self.minimum_free_bytes), 1, i128::MAX)?;
+        validate_limit(
+            "minimumFreeRatioBasisPoints",
+            i128::from(self.minimum_free_ratio_basis_points),
+            1,
+            9_999,
+        )?;
+        validate_limit(
+            "materializationLagRejectMessages",
+            i128::from(self.materialization_lag_reject_messages),
+            1,
+            i128::MAX,
+        )?;
+        validate_limit(
+            "gcRetentionGraceMillis",
+            i128::from(self.gc_retention_grace_ms),
+            1,
+            i128::MAX,
+        )?;
         Ok(())
     }
 }
 
-/// Invalid Extended Timeline resource configuration.
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-pub enum TimerStoreConfigError {
-    /// One named group contains a zero, overflow, or inconsistent limit.
-    #[error("invalid Extended Timeline timer configuration group: {0}")]
-    Invalid(&'static str),
+fn validate_limit(
+    field: &'static str,
+    actual: i128,
+    minimum: i128,
+    maximum: i128,
+) -> Result<(), StoreContractViolation> {
+    if (minimum..=maximum).contains(&actual) {
+        Ok(())
+    } else {
+        Err(StoreContractViolation::TimerConfigurationOutOfRange {
+            field,
+            actual,
+            minimum,
+            maximum,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -189,6 +257,14 @@ mod tests {
     fn inconsistent_payload_budget_is_rejected() {
         let mut config = TimerStoreConfig::default();
         config.payload_batch_bytes = config.payload_record_bytes - 1;
-        assert_eq!(config.validate(), Err(TimerStoreConfigError::Invalid("payloadStore")));
+        assert_eq!(
+            config.validate(),
+            Err(StoreContractViolation::TimerConfigurationOutOfRange {
+                field: "payloadBatchBytes",
+                actual: (config.payload_record_bytes - 1) as i128,
+                minimum: config.payload_record_bytes as i128,
+                maximum: i128::MAX,
+            })
+        );
     }
 }

@@ -30,8 +30,7 @@ use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
-use crate::store_error::HAError;
-use crate::store_error::HAResult;
+use crate::ha::HAError;
 
 const CONNECTION_ESTABLISH_TIMEOUT: u64 = 10 * 1000;
 
@@ -115,7 +114,7 @@ impl Inner {
         }
 
         if fail_matching_request(&self.request, remote_addr).await {
-            error!("Wait HA connection establish with {} timeout", remote_addr);
+            error!("Waiting for the requested HA connection state timed out");
         }
     }
 
@@ -213,12 +212,15 @@ impl HAConnectionStateNotificationService {
         let _ = self.service_manager.shutdown().await;
     }
 
-    pub async fn start(&self) -> HAResult<()> {
+    pub async fn start(&self) -> Result<(), HAError> {
         match self.service_manager.start().await {
             Ok(_) => Ok(()),
-            Err(e) => {
-                error!("Failed to start HAConnectionStateNotificationService, error: {:?}", e);
-                Err(HAError::operation("start HA connection-state notification", e))
+            Err(source) => {
+                error!(
+                    source_present = true,
+                    "Failed to start HAConnectionStateNotificationService"
+                );
+                Err(HAError::operation("start HA connection-state notification", source))
             }
         }
     }

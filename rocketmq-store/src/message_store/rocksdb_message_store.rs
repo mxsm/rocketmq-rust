@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
+use crate::config::timer_store_config::ValidatedTimerStoreConfig;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
@@ -51,7 +52,6 @@ use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
-use crate::base::backend_ops::StoreHealthSnapshot;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
@@ -146,6 +146,14 @@ impl fmt::Debug for RocksDBMessageStore {
 }
 
 impl RocksDBMessageStore {
+    /// Creates a RocksDB Store after validating caller-owned Timer limits.
+    ///
+    /// Returns `Ok(None)` before any RocksDB or Store-root I/O when the Timer
+    /// configuration is inconsistent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] only when operational Store composition fails.
     pub fn try_new(
         message_store_config: Arc<MessageStoreConfig>,
         micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
@@ -154,7 +162,7 @@ impl RocksDBMessageStore {
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
         service_context: ChildServiceContext,
-    ) -> Result<Self, StoreError> {
+    ) -> Result<Option<Self>, StoreError> {
         Self::try_new_with_telemetry(
             message_store_config,
             micro_batch_policy,
@@ -167,9 +175,45 @@ impl RocksDBMessageStore {
         )
     }
 
+    /// Creates a RocksDB Store with telemetry after validating caller-owned Timer limits.
+    ///
+    /// Returns `Ok(None)` before any RocksDB or Store-root I/O when the Timer
+    /// configuration is inconsistent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] only when operational Store composition fails.
     pub fn try_new_with_telemetry(
         message_store_config: Arc<MessageStoreConfig>,
         micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
+        broker_config: Arc<StoreRuntimeConfig>,
+        topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
+        broker_stats_manager: Option<Arc<BrokerStatsManager>>,
+        notify_message_arrive_in_batch: bool,
+        service_context: ChildServiceContext,
+        telemetry: crate::telemetry::StoreTelemetry,
+    ) -> Result<Option<Self>, StoreError> {
+        let Some(timer_store_config) = message_store_config.timer_store_config.validated() else {
+            return Ok(None);
+        };
+        Self::try_new_with_telemetry_validated(
+            message_store_config,
+            micro_batch_policy,
+            timer_store_config,
+            broker_config,
+            topic_config_table,
+            broker_stats_manager,
+            notify_message_arrive_in_batch,
+            service_context,
+            telemetry,
+        )
+        .map(Some)
+    }
+
+    pub(crate) fn try_new_with_telemetry_validated(
+        message_store_config: Arc<MessageStoreConfig>,
+        micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
+        timer_store_config: ValidatedTimerStoreConfig,
         broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
@@ -194,9 +238,10 @@ impl RocksDBMessageStore {
         let rocksdb_index_service = derived.rocksdb_index_service();
         let rocksdb_timer_service = derived.rocksdb_timer_service();
         let rocksdb_trans_service = derived.rocksdb_trans_service();
-        let mut local_file_store = Box::new(LocalFileMessageStore::try_new_with_telemetry(
+        let mut local_file_store = Box::new(LocalFileMessageStore::try_new_with_telemetry_validated(
             Arc::clone(&message_store_config),
             micro_batch_policy,
+            timer_store_config,
             broker_config,
             topic_config_table,
             broker_stats_manager,
@@ -1018,7 +1063,7 @@ impl BackendOps for RocksDBMessageStore {
         self.local_file_store.sync_flush_runtime_info()
     }
 
-    fn health_snapshot(&self) -> StoreHealthSnapshot {
+    fn health_snapshot(&self) -> rocketmq_store_api::StoreHealthSnapshot {
         self.local_file_store.health_snapshot()
     }
 

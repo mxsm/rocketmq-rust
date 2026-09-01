@@ -21,17 +21,19 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_runtime::ChildServiceContext;
-use thiserror::Error;
 
 use crate::base::backend_ops::BackendOps;
 use crate::base::store_enum::StoreType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_runtime_config::StoreRuntimeConfig;
+use crate::config::timer_store_config::ValidatedTimerStoreConfig;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 #[cfg(feature = "rocksdb_store")]
 use crate::message_store::rocksdb_message_store::RocksDBMessageStore;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store_error::StoreError;
+#[cfg(not(feature = "rocksdb_store"))]
+use crate::store_error::{StoreComponent, StoreOperation};
 use crate::store_ports::StorePorts;
 use crate::telemetry::StoreTelemetry;
 use crate::timer::timer_message_store::TimerMessageStore;
@@ -46,12 +48,14 @@ pub struct StoreFactoryConfig {
     notify_message_arrive_in_batch: bool,
     telemetry: StoreTelemetry,
     micro_batch_policy: MicroBatchPolicy,
+    timer_store_config: ValidatedTimerStoreConfig,
 }
 
 impl StoreFactoryConfig {
     /// Validates the caller-owned store configuration before backend composition.
     ///
-    /// Returns `None` when the CommitLog micro-batch limits cannot form a valid policy.
+    /// Returns `None` when either the Timer limits or CommitLog micro-batch limits
+    /// cannot form a valid policy.
     pub fn try_new(
         message_store: Arc<MessageStoreConfig>,
         runtime: Arc<StoreRuntimeConfig>,
@@ -60,6 +64,7 @@ impl StoreFactoryConfig {
         notify_message_arrive_in_batch: bool,
         telemetry: StoreTelemetry,
     ) -> Option<Self> {
+        let timer_store_config = message_store.timer_store_config.validated()?;
         let micro_batch_policy = if message_store.commit_log_micro_batch_enabled {
             MicroBatchPolicy::try_new(
                 message_store.commit_log_micro_batch_max_items,
@@ -77,11 +82,34 @@ impl StoreFactoryConfig {
             notify_message_arrive_in_batch,
             telemetry,
             micro_batch_policy,
+            timer_store_config,
         })
     }
 
     pub fn backend(&self) -> StoreType {
         self.message_store.store_type
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_timer_configuration_is_rejected_before_store_composition() {
+        let mut message_store = MessageStoreConfig::default();
+        message_store.timer_store_config.lane_count = 0;
+
+        let config = StoreFactoryConfig::try_new(
+            Arc::new(message_store),
+            Arc::new(StoreRuntimeConfig::default()),
+            Arc::new(DashMap::new()),
+            None,
+            false,
+            StoreTelemetry::noop(),
+        );
+
+        assert!(config.is_none());
     }
 }
 
@@ -102,19 +130,6 @@ impl OpenedStore {
     }
 }
 
-/// Failure to construct the configured backend.
-#[derive(Debug, Error)]
-pub enum StoreFactoryError {
-    #[error("failed to open {backend:?} message store: {source}")]
-    Open {
-        backend: StoreType,
-        #[source]
-        source: StoreError,
-    },
-    #[error("{backend:?} message store is not available in this build")]
-    BackendUnavailable { backend: StoreType },
-}
-
 /// The only composition boundary allowed to select a concrete message-store backend.
 pub struct StoreFactory;
 
@@ -123,37 +138,29 @@ impl StoreFactory {
     ///
     /// # Errors
     ///
-    /// Returns [`StoreFactoryError`] when the selected backend is unavailable or
-    /// cannot establish its owned dependencies.
-    pub fn open(
-        config: StoreFactoryConfig,
-        service_context: ChildServiceContext,
-    ) -> Result<OpenedStore, StoreFactoryError> {
+    /// Returns [`StoreError`] when the selected backend is unavailable or cannot
+    /// establish its owned dependencies.
+    pub fn open(config: StoreFactoryConfig, service_context: ChildServiceContext) -> Result<OpenedStore, StoreError> {
         match config.backend() {
             StoreType::LocalFile => Self::open_local(config, service_context),
             StoreType::RocksDB => Self::open_rocksdb(config, service_context),
         }
     }
 
-    fn open_local(
-        config: StoreFactoryConfig,
-        service_context: ChildServiceContext,
-    ) -> Result<OpenedStore, StoreFactoryError> {
+    fn open_local(config: StoreFactoryConfig, service_context: ChildServiceContext) -> Result<OpenedStore, StoreError> {
         let backend = StoreType::LocalFile;
-        let mut store = LocalFileMessageStore::try_new_with_telemetry(
+        let mut store = LocalFileMessageStore::try_new_with_telemetry_validated(
             config.message_store,
             config.micro_batch_policy,
+            config.timer_store_config,
             config.runtime,
             config.topic_config_table,
             config.broker_stats_manager,
             config.notify_message_arrive_in_batch,
             service_context.component("local"),
             config.telemetry,
-        )
-        .map_err(|source| StoreFactoryError::Open { backend, source })?;
-        store
-            .wire_owned_root_dependencies()
-            .map_err(|source| StoreFactoryError::Open { backend, source })?;
+        )?;
+        store.wire_owned_root_dependencies()?;
         let timer_message_store = store.get_timer_message_store().cloned();
         Ok(OpenedStore {
             backend,
@@ -166,19 +173,19 @@ impl StoreFactory {
     fn open_rocksdb(
         config: StoreFactoryConfig,
         service_context: ChildServiceContext,
-    ) -> Result<OpenedStore, StoreFactoryError> {
+    ) -> Result<OpenedStore, StoreError> {
         let backend = StoreType::RocksDB;
-        let store = RocksDBMessageStore::try_new_with_telemetry(
+        let store = RocksDBMessageStore::try_new_with_telemetry_validated(
             config.message_store,
             config.micro_batch_policy,
+            config.timer_store_config,
             config.runtime,
             config.topic_config_table,
             config.broker_stats_manager,
             config.notify_message_arrive_in_batch,
             service_context.component("rocksdb"),
             config.telemetry,
-        )
-        .map_err(|source| StoreFactoryError::Open { backend, source })?;
+        )?;
         let timer_message_store = store.get_timer_message_store().cloned();
         Ok(OpenedStore {
             backend,
@@ -191,9 +198,10 @@ impl StoreFactory {
     fn open_rocksdb(
         _config: StoreFactoryConfig,
         _service_context: ChildServiceContext,
-    ) -> Result<OpenedStore, StoreFactoryError> {
-        Err(StoreFactoryError::BackendUnavailable {
-            backend: StoreType::RocksDB,
-        })
+    ) -> Result<OpenedStore, StoreError> {
+        Err(
+            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)
+                .in_component(StoreComponent::RocksDb),
+        )
     }
 }

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error as StdError;
+use std::fmt;
 use std::future::Future;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
@@ -45,7 +47,7 @@ use tracing::warn;
 use crate::ha::flow_monitor::FlowMonitor;
 use crate::ha::ha_client::HAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
-use crate::ha::HAServiceFailure;
+use crate::ha::HAError;
 use crate::message_store::local_file_message_store::HAReplicaStoreHandle;
 use crate::store_error::StoreError;
 
@@ -135,12 +137,7 @@ struct Inner {
 
 impl Inner {
     async fn close_master(&self) {
-        let endpoint = self.master_endpoint_snapshot();
-        info!(
-            "HAClient close connection with master {:?} at generation {}",
-            endpoint.address.as_ref(),
-            endpoint.generation
-        );
+        info!("HAClient closed the current master connection");
 
         // A reconnect closes the current stream and returns to Ready, while a
         // service shutdown must remain terminal.
@@ -184,11 +181,7 @@ impl Inner {
                 });
             }
             _ = &mut timeout => {
-                warn!(
-                    generation = endpoint.generation,
-                    timeout_millis = connect_timeout.as_millis() as u64,
-                    "HAClient connection attempt timed out"
-                );
+                warn!("HAClient connection attempt timed out");
                 return Ok(MasterConnectOutcome::Retry {
                     observed_generation: endpoint.generation,
                 });
@@ -198,10 +191,9 @@ impl Inner {
 
         let stream = match connect_result {
             Ok(stream) => stream,
-            Err(error) => {
+            Err(_) => {
                 warn!(
-                    generation = endpoint.generation,
-                    %error,
+                    source_present = true,
                     "HAClient failed to connect to the current master endpoint"
                 );
                 return Ok(MasterConnectOutcome::Retry {
@@ -219,10 +211,7 @@ impl Inner {
             });
         }
 
-        info!(
-            generation = endpoint.generation,
-            "HAClient connected to master endpoint"
-        );
+        info!("HAClient connected to the current master endpoint");
         Ok(MasterConnectOutcome::Connected(ConnectedMaster {
             stream,
             endpoint,
@@ -267,7 +256,7 @@ impl Inner {
             *state = HAConnectionState::Ready;
         }
         drop(state);
-        info!(generation = next.generation, "Updated HA master endpoint");
+        info!("Updated HA master endpoint");
         true
     }
 
@@ -327,10 +316,6 @@ impl Inner {
         info!("change state to {:?}", new_state);
         let mut state = self.current_state.write().await;
         *state = new_state;
-    }
-
-    pub async fn ha_master_address(&self) -> Option<String> {
-        self.master_endpoint_snapshot().address
     }
 }
 
@@ -405,8 +390,8 @@ impl DefaultHAClient {
         let service_group = self.service_group.write().await.take();
         if let Some(service_group) = service_group {
             let report = service_group.shutdown(Duration::from_secs(5)).await;
-            if let Err(error) = crate::runtime::shutdown_report_result("DefaultHAClient", report) {
-                warn!("DefaultHAClient task shutdown reported an error: {error}");
+            if crate::runtime::shutdown_report_result("DefaultHAClient", report).is_err() {
+                warn!(source_present = true, "DefaultHAClient task shutdown reported an error");
             }
         }
 
@@ -453,14 +438,14 @@ impl HAClient for DefaultHAClient {
             return;
         }
 
-        if let Err(error) = self.inner.flow_monitor.start().await {
-            warn!("HAClient flow monitor not started: {error}");
+        if self.inner.flow_monitor.start().await.is_err() {
+            warn!(source_present = true, "HAClient flow monitor did not start");
             return;
         }
         let client = Arc::clone(&self.inner);
         let service_group = crate::runtime::task_group(&self.runtime_scope, "rocketmq-store.ha.client");
         let service_loop_group = service_group.clone();
-        if let Err(error) = service_group.spawn_service("ha-client-service", async move {
+        if let Err(_error) = service_group.spawn_service("ha-client-service", async move {
             // main loop: connect -> start read/write tasks -> supervise/reconnect
             loop {
                 if client.owner_cancel.is_cancelled() {
@@ -517,7 +502,7 @@ impl HAClient for DefaultHAClient {
                                     .enable_controller_mode,
                             };
                             let reader_err_tx = reader_client.err_tx.clone();
-                            if let Err(error) = service_loop_group.spawn_operation(
+                            if let Err(_error) = service_loop_group.spawn_operation(
                                 &connection_operation,
                                 "ha-client-reader",
                                 async move {
@@ -529,7 +514,7 @@ impl HAClient for DefaultHAClient {
                                     let _ = reader_err_tx.send(error).await;
                                 }
                             }) {
-                                warn!("HAClient failed to spawn reader task: {error}");
+                                warn!(source_present = true, "HAClient failed to spawn reader task");
                                 client.mark_ready_unless_shutdown().await;
                                 if client
                                     .wait_reconnect_delay_after(endpoint.generation)
@@ -567,7 +552,7 @@ impl HAClient for DefaultHAClient {
                                 endpoint_owner: Arc::clone(&client),
                             };
                             let writer_err_tx = err_tx.clone();
-                            if let Err(error) = service_loop_group.spawn_operation(
+                            if let Err(_error) = service_loop_group.spawn_operation(
                                 &connection_operation,
                                 "ha-client-writer",
                                 async move {
@@ -579,7 +564,7 @@ impl HAClient for DefaultHAClient {
                                     let _ = writer_err_tx.send(error).await;
                                 }
                             }) {
-                                warn!("HAClient failed to spawn writer task: {error}");
+                                warn!(source_present = true, "HAClient failed to spawn writer task");
                                 client.shutdown_notify.notify_waiters();
                                 if !connection_operation
                                     .cancel_and_wait(&service_loop_group, Duration::from_secs(3))
@@ -608,8 +593,8 @@ impl HAClient for DefaultHAClient {
                             let exit = loop {
                                 tokio::select! {
                                     // subtask error
-                                    Some(e) = err_rx.recv() => {
-                                        warn!("HAClient subtask error: {e:#}");
+                                    Some(_error) = err_rx.recv() => {
+                                        warn!(source_present = true, "HAClient subtask failed");
                                         break false;
                                     }
                                     // housekeeping
@@ -617,10 +602,7 @@ impl HAClient for DefaultHAClient {
                                         let interval = current_millis().saturating_sub(client.last_read_timestamp.load(Ordering::SeqCst));
                                         // If the interval exceeds the configured value, it indicates that the connection may have been disconnected.
                                         if interval > client.replica_store.message_store_config_ref().ha_housekeeping_interval {
-                                            warn!(
-                                                "AutoRecoverHAClient, housekeeping, connection [{:?}] expired, {}",
-                                                client.ha_master_address().await, interval
-                                            );
+                                            warn!("HAClient housekeeping expired the current connection");
                                             break false;
                                         }
                                         // Is it time for the heartbeat? (Even if the offset remains unchanged)
@@ -630,11 +612,7 @@ impl HAClient for DefaultHAClient {
                                     }
                                     changed = endpoint_updates.changed() => {
                                         if changed.is_ok() {
-                                            info!(
-                                                previous_generation = endpoint.generation,
-                                                current_generation = endpoint_updates.borrow().generation,
-                                                "HAClient master endpoint changed; retiring the active connection"
-                                            );
+                                            info!("HAClient master endpoint changed; retiring the active connection");
                                             break false;
                                         }
                                         break true;
@@ -679,8 +657,8 @@ impl HAClient for DefaultHAClient {
                         }
                         Ok(MasterConnectOutcome::EndpointChanged) => continue,
                         Ok(MasterConnectOutcome::Shutdown) => break,
-                        Err(e) => {
-                            warn!("connect_master error: {e:#}");
+                        Err(_error) => {
+                            warn!(source_present = true, "HAClient master connection operation failed");
                             if client.wait_reconnect_delay().await {
                                 break;
                             }
@@ -692,7 +670,7 @@ impl HAClient for DefaultHAClient {
             client.flow_monitor.shutdown_with_interrupt(true).await;
             info!("HAClient service finished");
         }) {
-            warn!("HAClient service not started: {error}");
+            warn!(source_present = true, "HAClient service did not start");
             return;
         }
         let mut service_group_guard = self.service_group.write().await;
@@ -708,8 +686,8 @@ impl HAClient for DefaultHAClient {
         let service_group = self.service_group.write().await.take();
         if let Some(service_group) = service_group {
             let report = service_group.shutdown(Duration::from_secs(5)).await;
-            if let Err(error) = crate::runtime::shutdown_report_result("DefaultHAClient", report) {
-                warn!("DefaultHAClient task shutdown reported an error: {error}");
+            if crate::runtime::shutdown_report_result("DefaultHAClient", report).is_err() {
+                warn!(source_present = true, "DefaultHAClient task shutdown reported an error");
             }
         }
         self.close_master().await;
@@ -725,7 +703,7 @@ impl HAClient for DefaultHAClient {
         let next_address = (!new_address.is_empty()).then(|| new_address.to_string());
         if *master_address != next_address {
             *master_address = next_address;
-            info!("Updated master address to: {}", new_address);
+            info!("Updated master address");
         }
     }
 
@@ -804,7 +782,7 @@ impl ReaderTask {
                     return if changed.is_ok() {
                         Ok(())
                     } else {
-                        Err(HAClientError::Service("HA endpoint publisher closed".to_string()))
+                        Err(HAClientError::EndpointPublisherClosed)
                     };
                 }
                 next = self.reader.next() => next,
@@ -817,7 +795,7 @@ impl ReaderTask {
                     self.buf.extend_from_slice(&bytes);
 
                     if !self.dispatch_read().await? {
-                        return Err(HAClientError::Service("dispatchReadRequest error".to_string()));
+                        return Err(HAClientError::DispatchReadRequest);
                     }
                     self.publish_last_read_timestamp_if_current();
                 }
@@ -825,7 +803,7 @@ impl ReaderTask {
                     return Err(HAClientError::Io(e));
                 }
                 None => {
-                    return Err(HAClientError::Connection("read EOF".to_string()));
+                    return Err(HAClientError::ReadEof);
                 }
             }
         }
@@ -856,8 +834,7 @@ impl ReaderTask {
                         frame.master_phy_offset,
                         body,
                         0,
-                        i32::try_from(body.len())
-                            .map_err(|_| HAClientError::Service("HA frame body exceeds i32".to_string()))?,
+                        i32::try_from(body.len()).map_err(|_| HAClientError::FrameBodyTooLarge)?,
                     )
                     .await?;
             }
@@ -957,7 +934,7 @@ impl WriterTask {
                     return if changed.is_ok() {
                         Ok(())
                     } else {
-                        Err(HAClientError::Service("HA endpoint publisher closed".to_string()))
+                        Err(HAClientError::EndpointPublisherClosed)
                     };
                 }
                 Ok(()) = self.offset_rx.changed() => {
@@ -1001,7 +978,7 @@ impl WriterTask {
                 return if changed.is_ok() {
                     Ok(false)
                 } else {
-                    Err(HAClientError::Service("HA endpoint publisher closed".to_string()))
+                    Err(HAClientError::EndpointPublisherClosed)
                 };
             }
             result = self.wr.send(bytes) => result,
@@ -1050,21 +1027,79 @@ impl WriterTask {
     }
 }
 
-/// Error types
-#[derive(Debug, thiserror::Error)]
-pub enum HAClientError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    #[error(transparent)]
-    HAConnection(#[from] HAServiceFailure),
-    #[error("invalid HA wire frame")]
+/// Internal HA client operation failure.
+pub(crate) enum HAClientError {
+    Io(std::io::Error),
+    Store(StoreError),
+    HAConnection(HAError),
     Wire,
-    #[error("Connection error: {0}")]
-    Connection(String),
-    #[error("Service error: {0}")]
-    Service(String),
+    EndpointPublisherClosed,
+    DispatchReadRequest,
+    ReadEof,
+    FrameBodyTooLarge,
+}
+
+impl fmt::Debug for HAClientError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Io(_) => "HAClientError::Io",
+            Self::Store(_) => "HAClientError::Store",
+            Self::HAConnection(_) => "HAClientError::HAConnection",
+            Self::Wire => "HAClientError::Wire",
+            Self::EndpointPublisherClosed => "HAClientError::EndpointPublisherClosed",
+            Self::DispatchReadRequest => "HAClientError::DispatchReadRequest",
+            Self::ReadEof => "HAClientError::ReadEof",
+            Self::FrameBodyTooLarge => "HAClientError::FrameBodyTooLarge",
+        })
+    }
+}
+
+impl fmt::Display for HAClientError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Io(_) => "HA client I/O operation failed",
+            Self::Store(_) => "HA client Store operation failed",
+            Self::HAConnection(_) => "HA client connection operation failed",
+            Self::Wire => "invalid HA wire frame",
+            Self::EndpointPublisherClosed => "HA endpoint publisher closed",
+            Self::DispatchReadRequest => "HA read request dispatch failed",
+            Self::ReadEof => "HA peer closed the connection",
+            Self::FrameBodyTooLarge => "HA frame body exceeds the wire limit",
+        })
+    }
+}
+
+impl StdError for HAClientError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(source) => Some(source),
+            Self::Store(source) => Some(source),
+            Self::HAConnection(source) => Some(source),
+            Self::Wire
+            | Self::EndpointPublisherClosed
+            | Self::DispatchReadRequest
+            | Self::ReadEof
+            | Self::FrameBodyTooLarge => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for HAClientError {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io(source)
+    }
+}
+
+impl From<StoreError> for HAClientError {
+    fn from(source: StoreError) -> Self {
+        Self::Store(source)
+    }
+}
+
+impl From<HAError> for HAClientError {
+    fn from(source: HAError) -> Self {
+        Self::HAConnection(source)
+    }
 }
 
 #[cfg(test)]
@@ -1114,7 +1149,9 @@ mod tests {
             None,
             false,
             crate::runtime::test_service_context("default-ha-client-store-test"),
-        );
+        )
+        .expect("create default HA client test Store")
+        .expect("test Timer Store configuration is valid");
         store
             .wire_owned_root_dependencies()
             .expect("wire owned test store dependencies");
@@ -1483,5 +1520,35 @@ mod tests {
             .expect_err("offset mismatch should stop dispatch");
         assert!(matches!(error, HAClientError::Wire));
         assert!(std::error::Error::source(&error).is_none());
+    }
+
+    #[test]
+    fn client_leaf_redacts_sources_while_preserving_typed_causal_edges() {
+        const SENTINEL: &str = "sensitive-ha-client-source-9967";
+        let store = StoreError::new(
+            &rocketmq_error::STORAGE_IO_FAILED,
+            rocketmq_store_api::StoreOperation::Replicate,
+        )
+        .with_source(std::io::Error::other(SENTINEL));
+        let errors = [
+            HAClientError::Io(std::io::Error::other(SENTINEL)),
+            HAClientError::Store(store),
+            HAClientError::HAConnection(HAError::operation(SENTINEL, std::io::Error::other(SENTINEL))),
+        ];
+
+        for error in errors {
+            assert!(!error.to_string().contains(SENTINEL));
+            assert!(!format!("{error:?}").contains(SENTINEL));
+            assert!(std::error::Error::source(&error).is_some());
+        }
+
+        let error = HAClientError::Io(std::io::Error::other(SENTINEL));
+        assert_eq!(
+            std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(SENTINEL)
+        );
     }
 }

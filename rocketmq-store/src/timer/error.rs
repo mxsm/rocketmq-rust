@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::error::Error as StdError;
+use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -23,7 +25,6 @@ use parking_lot::Mutex;
 use rocketmq_store_api::TimerId;
 use serde::Deserialize;
 use serde::Serialize;
-use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(crate) enum RetryClass {
@@ -186,18 +187,62 @@ impl QuarantineManifest {
     }
 }
 
-#[derive(Debug, Error)]
 pub(crate) enum TimerEngineError {
-    #[error("timer engine is not loaded")]
-    NotLoaded,
-    #[error("timer engine mode is unsupported: {0}")]
-    UnsupportedMode(&'static str),
-    #[error("timer work budget is invalid")]
-    InvalidBudget,
-    #[error("timer pipeline is closed")]
-    PipelineClosed,
-    #[error("timer storage operation failed: {0}")]
-    Storage(#[from] std::io::Error),
+    #[cfg(feature = "extended_timeline")]
+    Runtime(rocketmq_error::RocketMQError),
+    #[cfg(feature = "extended_timeline")]
+    Materializer(Box<crate::timer::timeline::TimelineMaterializerError>),
+    #[cfg(feature = "extended_timeline")]
+    DueScanner(Box<crate::timer::timeline::TimelineDueScannerError>),
+    Storage(std::io::Error),
+}
+
+impl fmt::Debug for TimerEngineError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            #[cfg(feature = "extended_timeline")]
+            Self::Runtime(_) => "TimerEngineError::Runtime",
+            #[cfg(feature = "extended_timeline")]
+            Self::Materializer(_) => "TimerEngineError::Materializer",
+            #[cfg(feature = "extended_timeline")]
+            Self::DueScanner(_) => "TimerEngineError::DueScanner",
+            Self::Storage(_) => "TimerEngineError::Storage",
+        })
+    }
+}
+
+impl fmt::Display for TimerEngineError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            #[cfg(feature = "extended_timeline")]
+            Self::Runtime(_) => "timer runtime operation failed",
+            #[cfg(feature = "extended_timeline")]
+            Self::Materializer(_) => "timer materialization failed",
+            #[cfg(feature = "extended_timeline")]
+            Self::DueScanner(_) => "timer due scan failed",
+            Self::Storage(_) => "timer storage operation failed",
+        })
+    }
+}
+
+impl StdError for TimerEngineError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            #[cfg(feature = "extended_timeline")]
+            Self::Runtime(source) => Some(source),
+            #[cfg(feature = "extended_timeline")]
+            Self::Materializer(source) => Some(source),
+            #[cfg(feature = "extended_timeline")]
+            Self::DueScanner(source) => Some(source),
+            Self::Storage(source) => Some(source),
+        }
+    }
+}
+
+impl From<std::io::Error> for TimerEngineError {
+    fn from(source: std::io::Error) -> Self {
+        Self::Storage(source)
+    }
 }
 
 #[cfg(test)]
@@ -274,5 +319,68 @@ mod tests {
                 second,
             ]
         );
+    }
+
+    #[cfg(feature = "extended_timeline")]
+    #[test]
+    fn timer_engine_operational_variants_preserve_typed_sources_without_rendering_them() {
+        const SENTINEL: &str = "sensitive-timer-source-9967";
+        let runtime = TimerEngineError::Runtime(rocketmq_error::RocketMQError::illegal_argument(SENTINEL));
+        assert!(runtime
+            .source()
+            .and_then(|source| source.downcast_ref::<rocketmq_error::RocketMQError>())
+            .is_some());
+        assert!(!runtime.to_string().contains(SENTINEL));
+        assert!(!format!("{runtime:?}").contains(SENTINEL));
+
+        let materializer_store = rocketmq_store_api::StoreError::new(
+            &rocketmq_error::STORAGE_READ_FAILED,
+            rocketmq_store_api::StoreOperation::Read,
+        )
+        .with_source(std::io::Error::other(SENTINEL));
+        let materializer = TimerEngineError::Materializer(Box::new(
+            crate::timer::timeline::TimelineMaterializerError::Store(materializer_store),
+        ));
+        let materializer_source = materializer
+            .source()
+            .and_then(|source| source.downcast_ref::<Box<crate::timer::timeline::TimelineMaterializerError>>())
+            .expect("boxed materializer source remains typed");
+        assert!(materializer_source
+            .source()
+            .and_then(|source| source.downcast_ref::<rocketmq_store_api::StoreError>())
+            .is_some());
+        assert!(!materializer.to_string().contains(SENTINEL));
+        assert!(!format!("{materializer:?}").contains(SENTINEL));
+
+        let scanner_store = rocketmq_store_api::StoreError::new(
+            &rocketmq_error::STORAGE_READ_FAILED,
+            rocketmq_store_api::StoreOperation::Read,
+        )
+        .with_source(std::io::Error::other(SENTINEL));
+        let due_scanner = TimerEngineError::DueScanner(Box::new(
+            crate::timer::timeline::TimelineDueScannerError::Store(scanner_store),
+        ));
+        let scanner_source = due_scanner
+            .source()
+            .and_then(|source| source.downcast_ref::<Box<crate::timer::timeline::TimelineDueScannerError>>())
+            .expect("boxed scanner source remains typed");
+        assert!(scanner_source
+            .source()
+            .and_then(|source| source.downcast_ref::<rocketmq_store_api::StoreError>())
+            .is_some());
+        assert!(!due_scanner.to_string().contains(SENTINEL));
+        assert!(!format!("{due_scanner:?}").contains(SENTINEL));
+
+        let storage = TimerEngineError::Storage(std::io::Error::other(SENTINEL));
+        assert_eq!(
+            storage
+                .source()
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(SENTINEL)
+        );
+        assert!(!storage.to_string().contains(SENTINEL));
+        assert!(!format!("{storage:?}").contains(SENTINEL));
     }
 }

@@ -21,67 +21,85 @@ use crate::ha::general_ha_client::GeneralHAClient;
 use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::log_file::group_commit_request::GroupCommitRequest;
-use crate::store_error::HAResult;
+use rocketmq_store_api::StoreError;
 pub(crate) use rocketmq_store_local::ha::replication::HAAckedReplicaSnapshot;
 
 #[trait_variant::make(HAService: Send)]
 pub trait RocketHAService: Sync {
-    /// Start the HA service
+    /// Starts the HA service.
     ///
-    /// # Returns
-    /// Result indicating success or failure
-    async fn start(&self) -> HAResult<()>;
+    /// # Errors
+    ///
+    /// Returns a storage error when binding, runtime startup, or another operational HA
+    /// initialization step fails.
+    async fn start(&self) -> Result<(), StoreError>;
 
     /// Shutdown the HA service
     async fn shutdown(&self);
 
-    /// Change this node to master state
+    /// Changes this node to master state.
     ///
     /// # Parameters
     /// * `master_epoch` - The new master epoch
     ///
-    /// # Returns
-    /// Whether the change was successful
-    async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool>;
+    /// Returns `Ok(false)` when the requested epoch or role transition is rejected by the HA
+    /// contract, and `Ok(true)` after the transition is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error only when the transition fails operationally.
+    async fn change_to_master(&self, master_epoch: i32) -> Result<bool, StoreError>;
 
-    /// Change this node to master state when it was already a master
+    /// Changes this node to master state when it was already a master.
     ///
     /// # Parameters
     /// * `master_epoch` - The new master epoch
     ///
-    /// # Returns
-    /// Whether the change was successful
-    async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> HAResult<bool>;
+    /// Returns `Ok(false)` when the requested epoch or transition is rejected by the HA
+    /// contract, and `Ok(true)` after the transition is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error only when the transition fails operationally.
+    async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> Result<bool, StoreError>;
 
-    /// Change this node to slave state
+    /// Changes this node to slave state.
     ///
     /// # Parameters
     /// * `new_master_addr` - Address of the new master
     /// * `new_master_epoch` - The new master epoch
     /// * `slave_id` - Optional ID for this slave
     ///
-    /// # Returns
-    /// Whether the change was successful
+    /// Returns `Ok(false)` when the address, epoch, replica identifier, or requested transition
+    /// is rejected by the HA contract, and `Ok(true)` after the transition is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error only when the transition fails operationally.
     async fn change_to_slave(
         &self,
         new_master_addr: &str,
         new_master_epoch: i32,
         slave_id: Option<i64>,
-    ) -> HAResult<bool>;
+    ) -> Result<bool, StoreError>;
 
-    /// Change this node to slave state when master has not changed
+    /// Changes this node to slave state when the master has not changed.
     ///
     /// # Parameters
     /// * `new_master_addr` - Address of the new master
     /// * `new_master_epoch` - The new master epoch
     ///
-    /// # Returns
-    /// Whether the change was successful
+    /// Returns `Ok(false)` when the address, epoch, or requested transition is rejected by the HA
+    /// contract, and `Ok(true)` after the transition is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error only when the transition fails operationally.
     async fn change_to_slave_when_master_not_change(
         &self,
         new_master_addr: &str,
         new_master_epoch: i32,
-    ) -> HAResult<bool>;
+    ) -> Result<bool, StoreError>;
 
     /// Update the master address
     ///

@@ -76,7 +76,6 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
 use rocketmq_store::StoreAppendReceipt;
-use rocketmq_store::StoreHealthError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::SyncFlushRuntimeInfo;
 use rocketmq_store_api::MessageAppender;
@@ -1579,7 +1578,9 @@ fn store_health_reject_remark(policy: &impl SendBackpressurePolicy, snapshot: St
         return Some("store_backpressure reason=store_shutdown".to_string());
     }
     if !snapshot.writable {
-        let error_code = snapshot.last_error.map_or("unknown", StoreHealthError::code);
+        let error_code = snapshot
+            .last_error
+            .map_or("unknown", |descriptor| descriptor.code().as_str());
         return Some(format!(
             "store_backpressure reason=store_not_writeable, lastFlushErrorCode={error_code}"
         ));
@@ -2195,11 +2196,10 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_store::store_append_receipt;
+    use rocketmq_store::FlushBacklog;
     use rocketmq_store::PutMessageResult;
     use rocketmq_store::PutMessageStatus;
     use rocketmq_store::StoreAppendReceipt;
-    use rocketmq_store::StoreFlushBacklog as FlushBacklog;
-    use rocketmq_store::StoreHealthError;
     use rocketmq_store::StoreHealthSnapshot;
     use rocketmq_store::StorePorts;
     use rocketmq_store::SyncFlushRuntimeInfo;
@@ -2718,7 +2718,7 @@ mod tests {
         let store = CapabilityStore {
             health: StoreHealthSnapshot {
                 writable: false,
-                last_error: Some(StoreHealthError::new(&rocketmq_error::STORAGE_WRITE_FAILED)),
+                last_error: Some(&rocketmq_error::STORAGE_WRITE_FAILED),
                 ..StoreHealthSnapshot::default()
             },
             receipt: None,
@@ -2982,7 +2982,7 @@ mod tests {
         ] {
             let snapshot = StoreHealthSnapshot {
                 writable: false,
-                last_error: Some(StoreHealthError::new(descriptor)),
+                last_error: Some(descriptor),
                 ..StoreHealthSnapshot::default()
             };
 

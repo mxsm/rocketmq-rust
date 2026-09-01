@@ -143,24 +143,32 @@ impl LocalFileMessageStore {
 
         #[cfg(feature = "extended_timeline")]
         if let Some(admission) = self.extended_timeline_admission.as_ref() {
-            if let Err(error) = admission.check(&msg, current_millis() as i64) {
-                warn!("Extended Timer admission rejected: {error}");
-                let status = match error {
-                    TimelineAdmissionError::MalformedTimer
-                    | TimelineAdmissionError::HorizonOverflow
-                    | TimelineAdmissionError::HorizonExceeded
-                    | TimelineAdmissionError::RecordTooLarge => PutMessageStatus::WheelTimerMsgIllegal,
-                    TimelineAdmissionError::RoleInactive
-                    | TimelineAdmissionError::MaterializationLag
-                    | TimelineAdmissionError::GlobalCapacity
-                    | TimelineAdmissionError::TopicQuota
-                    | TimelineAdmissionError::TenantQuota
-                    | TimelineAdmissionError::HotBucket
-                    | TimelineAdmissionError::DiskHeadroom
-                    | TimelineAdmissionError::Timeline(_)
-                    | TimelineAdmissionError::Io(_) => PutMessageStatus::WheelTimerFlowControl,
-                };
-                return PutMessageResult::new_default(status);
+            match admission.check(&msg, current_millis() as i64) {
+                Ok(TimelineAdmissionOutcome::Accepted) => {}
+                Ok(
+                    TimelineAdmissionOutcome::MalformedTimer
+                    | TimelineAdmissionOutcome::HorizonOverflow
+                    | TimelineAdmissionOutcome::HorizonExceeded
+                    | TimelineAdmissionOutcome::RecordTooLarge,
+                ) => return PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal),
+                Ok(
+                    TimelineAdmissionOutcome::RoleInactive
+                    | TimelineAdmissionOutcome::MaterializationLag
+                    | TimelineAdmissionOutcome::GlobalCapacity
+                    | TimelineAdmissionOutcome::TopicQuota
+                    | TimelineAdmissionOutcome::TenantQuota
+                    | TimelineAdmissionOutcome::HotBucket
+                    | TimelineAdmissionOutcome::DiskHeadroom,
+                ) => return PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl),
+                Err(error) => {
+                    warn!(
+                        "Extended Timer admission failed: descriptor={}, operation={:?}, component={:?}",
+                        error.descriptor().code(),
+                        error.operation(),
+                        error.component()
+                    );
+                    return PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl);
+                }
             }
         }
 

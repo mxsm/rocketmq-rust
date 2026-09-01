@@ -15,7 +15,7 @@
 #![cfg(feature = "extended_timeline")]
 
 use rocketmq_store::TimerStoreConfig;
-use rocketmq_store::TimerStoreConfigError;
+use rocketmq_store_api::StoreContractViolation;
 
 #[test]
 fn timer_capacity_configuration_supports_a_year_but_fails_closed_outside_bounds() {
@@ -32,7 +32,15 @@ fn timer_capacity_configuration_supports_a_year_but_fails_closed_outside_bounds(
             horizon_days: days,
             ..TimerStoreConfig::default()
         };
-        assert_eq!(config.validate(), Err(TimerStoreConfigError::Invalid("horizon")));
+        assert_eq!(
+            config.validate(),
+            Err(StoreContractViolation::TimerConfigurationOutOfRange {
+                field: "horizonDays",
+                actual: i128::from(days),
+                minimum: 180,
+                maximum: 400,
+            })
+        );
     }
 }
 
@@ -45,7 +53,12 @@ fn byte_and_bucket_quotas_cannot_be_disabled_or_exceed_the_global_budget() {
     };
     assert_eq!(
         config.validate(),
-        Err(TimerStoreConfigError::Invalid("productionSafety"))
+        Err(StoreContractViolation::TimerConfigurationOutOfRange {
+            field: "maxTopicPendingBytes",
+            actual: i128::from(config.max_topic_pending_bytes),
+            minimum: 1,
+            maximum: i128::from(config.max_pending_bytes),
+        })
     );
 
     let config = TimerStoreConfig {
@@ -54,7 +67,12 @@ fn byte_and_bucket_quotas_cannot_be_disabled_or_exceed_the_global_budget() {
     };
     assert_eq!(
         config.validate(),
-        Err(TimerStoreConfigError::Invalid("productionSafety"))
+        Err(StoreContractViolation::TimerConfigurationOutOfRange {
+            field: "maxBucketMessages",
+            actual: 0,
+            minimum: 1,
+            maximum: i128::MAX,
+        })
     );
 
     let config = TimerStoreConfig {
@@ -63,6 +81,11 @@ fn byte_and_bucket_quotas_cannot_be_disabled_or_exceed_the_global_budget() {
     };
     assert_eq!(
         config.validate(),
-        Err(TimerStoreConfigError::Invalid("productionSafety"))
+        Err(StoreContractViolation::TimerConfigurationOutOfRange {
+            field: "minimumFreeRatioBasisPoints",
+            actual: 10_000,
+            minimum: 1,
+            maximum: 9_999,
+        })
     );
 }

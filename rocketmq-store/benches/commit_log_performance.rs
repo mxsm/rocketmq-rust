@@ -196,7 +196,9 @@ fn new_bench_store_with_mapped_file_size(
         None,
         false,
         benchmark_service_context(),
-    );
+    )
+    .expect("create CommitLog benchmark Store")
+    .expect("benchmark Timer Store configuration is valid");
     store
         .wire_owned_root_dependencies()
         .expect("wire owned benchmark store dependencies");

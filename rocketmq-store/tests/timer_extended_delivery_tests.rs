@@ -100,7 +100,9 @@ fn new_formal_store(root: &TempDir) -> LocalFileMessageStore {
         None,
         false,
         service_context(),
-    );
+    )
+    .expect("create Extended Timeline delivery Store")
+    .expect("test Timer Store configuration is valid");
     store.wire_owned_root_dependencies().expect("wire formal timeline");
     store
 }
@@ -203,7 +205,8 @@ async fn timer_delivery_is_not_early_and_preserves_the_admission_token() {
 
     let snapshot = store
         .create_extended_timer_snapshot()
-        .expect("create consistent Extended snapshot");
+        .expect("create consistent Extended snapshot")
+        .expect("snapshot is promotable");
     snapshot.validate().expect("validate Extended snapshot manifest");
     let installed_generation = store
         .get_runtime_info()

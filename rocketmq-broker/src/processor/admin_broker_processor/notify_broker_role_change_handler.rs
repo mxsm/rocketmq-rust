@@ -50,10 +50,10 @@ impl NotifyBrokerRoleChangeHandler {
 
         let request_header = match request.decode_command_custom_header::<NotifyBrokerRoleChangedRequestHeader>() {
             Ok(header) => header,
-            Err(error) => {
+            Err(_) => {
                 return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,
-                    format!("invalid role-change header: {error}"),
+                    "invalid role-change header",
                 )));
             }
         };
@@ -66,18 +66,15 @@ impl NotifyBrokerRoleChangeHandler {
         };
         let sync_state_set_info = match SyncStateSet::decode(body) {
             Ok(sync_state_set) => sync_state_set,
-            Err(error) => {
+            Err(_) => {
                 return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,
-                    format!("invalid sync-state-set body: {error}"),
+                    "invalid sync-state-set body",
                 )));
             }
         };
 
-        info!(
-            "Receive notifyBrokerRoleChanged request, try to change brokerRole, request:{}",
-            request_header
-        );
+        info!("received controller role-change request");
 
         if broker_config_request_handler
             .broker_runtime_inner()
@@ -91,7 +88,7 @@ impl NotifyBrokerRoleChangeHandler {
         let sync_state_set = sync_state_set_info.get_sync_state_set().cloned().unwrap_or_default();
         let controller_leader_address = controller_leader_address.to_string().into();
 
-        if let Err(error) = broker_config_request_handler
+        match broker_config_request_handler
             .apply_controller_role_change(
                 Some(controller_leader_address),
                 request_header.master_broker_id,
@@ -102,10 +99,19 @@ impl NotifyBrokerRoleChangeHandler {
             )
             .await
         {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                ResponseCode::SystemError,
-                error.to_string(),
-            )));
+            Ok(true) => {}
+            Ok(false) => {
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    "controller role transition was rejected",
+                )));
+            }
+            Err(_) => {
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    "controller role transition failed",
+                )));
+            }
         }
 
         Ok(Some(response.set_code(ResponseCode::Success)))
@@ -114,6 +120,7 @@ impl NotifyBrokerRoleChangeHandler {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::sync::Arc;
 
@@ -158,6 +165,7 @@ mod tests {
             .set_body(Bytes::from(
                 serde_json::to_vec(&body).expect("serialize sync-state set"),
             ));
+        request.make_custom_header_to_net();
 
         let response = handler
             .notify_broker_role_changed(
@@ -212,5 +220,75 @@ mod tests {
             response.remark().map(CheetahString::as_str),
             Some("notify broker role change requires a trusted network controller peer")
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_header_uses_a_fixed_redacted_remark() {
+        const SENSITIVE: &str = "sensitive-role-header-value";
+        let runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+        );
+        let handler = NotifyBrokerRoleChangeHandler::new();
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::NotifyBrokerRoleChanged)
+            .set_ext_fields(HashMap::from([(
+                CheetahString::from_static_str("masterBrokerId"),
+                CheetahString::from_static_str(SENSITIVE),
+            )]));
+
+        let response = handler
+            .notify_broker_role_changed(
+                &broker_config_request_handler,
+                &AdminRequestMetadata::network_for_test(peer),
+                RequestCode::NotifyBrokerRoleChanged,
+                &mut request,
+            )
+            .await
+            .expect("malformed header should return a response")
+            .expect("malformed header response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        let remark = response.remark().map(CheetahString::as_str);
+        assert_eq!(remark, Some("invalid role-change header"));
+        assert!(!remark.unwrap_or_default().contains(SENSITIVE));
+    }
+
+    #[tokio::test]
+    async fn malformed_body_uses_a_fixed_redacted_remark() {
+        const SENSITIVE: &str = "sensitive-sync-state-body";
+        let runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+        );
+        let handler = NotifyBrokerRoleChangeHandler::new();
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(runtime.admin_runtime_for_test());
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
+        let header = NotifyBrokerRoleChangedRequestHeader {
+            master_address: Some(CheetahString::from_static_str("127.0.0.1:10912")),
+            master_epoch: Some(1),
+            sync_state_set_epoch: Some(1),
+            master_broker_id: Some(0),
+        };
+        let mut request = RemotingCommand::create_request_command(RequestCode::NotifyBrokerRoleChanged, header)
+            .set_body(Bytes::from_static(SENSITIVE.as_bytes()));
+        request.make_custom_header_to_net();
+
+        let response = handler
+            .notify_broker_role_changed(
+                &broker_config_request_handler,
+                &AdminRequestMetadata::network_for_test(peer),
+                RequestCode::NotifyBrokerRoleChanged,
+                &mut request,
+            )
+            .await
+            .expect("malformed body should return a response")
+            .expect("malformed body response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        let remark = response.remark().map(CheetahString::as_str);
+        assert_eq!(remark, Some("invalid sync-state-set body"));
+        assert!(!remark.unwrap_or_default().contains(SENSITIVE));
     }
 }

@@ -24,8 +24,11 @@ pub(super) async fn process(
     epoch: TimerEngineEpoch,
     budget: WorkBudget,
 ) -> Result<EngineBatchProgress, TimerEngineError> {
-    if budget.is_exhausted(0, 0) {
-        return Err(TimerEngineError::InvalidBudget);
+    if !super::recovery::is_loaded(store) || budget.is_exhausted(0, 0) {
+        return Ok(EngineBatchProgress {
+            durable: false,
+            ..EngineBatchProgress::empty()
+        });
     }
     let (messages, durable) = store
         .process_pipeline_due_stage(budget.max_messages, epoch.get())

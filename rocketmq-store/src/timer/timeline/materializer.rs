@@ -146,7 +146,6 @@ impl ShadowTimelineMaterializer {
         first_unmaterialized_physical_offset: Arc<AtomicI64>,
         mode: TimelineMaterializationMode,
     ) -> Result<Self, TimelineMaterializerError> {
-        config.validate()?;
         let mut payload_config = TimerPayloadStoreConfig::for_store_root(store_root.as_ref());
         payload_config.segment_bytes = config.payload_segment_bytes;
         payload_config.max_open_handles = config.payload_open_handles;
@@ -852,8 +851,6 @@ fn config_fingerprint(config: &TimerStoreConfig) -> u64 {
 /// Fail-closed materialization error. The caller must leave the cleanup fence in place.
 #[derive(Debug, Error)]
 pub(crate) enum TimelineMaterializerError {
-    #[error("invalid Extended Timeline configuration: {0}")]
-    Config(#[from] crate::config::timer_store_config::TimerStoreConfigError),
     #[error("local store failure: {0}")]
     Store(#[from] rocketmq_store_api::StoreError),
     #[error("Timeline store failure: {0}")]

@@ -33,8 +33,9 @@ use crate::ha::ha_connection_state::HAConnectionState;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
+use crate::ha::HAError;
 use crate::log_file::group_commit_request::GroupCommitRequest;
-use crate::store_error::HAResult;
+use rocketmq_store_api::StoreError;
 use rocketmq_store_local::ha::replication::EpochTransition;
 use rocketmq_store_local::ha::replication::HAReplicaRuntimeSnapshot;
 use rocketmq_store_local::ha::replication::ReplicationStateRoot;
@@ -62,13 +63,13 @@ impl AutoSwitchHAService {
         &self.delegate
     }
 
-    pub(crate) fn init(&mut self, service_reference: GeneralHAServiceReference) -> HAResult<()> {
+    pub(crate) fn init(&mut self, service_reference: GeneralHAServiceReference) -> Result<(), HAError> {
         let replication = self.replication_state();
         self.delegate.init(service_reference, Some(replication))?;
         let client = self
             .delegate
             .create_default_ha_client()
-            .map_err(|source| crate::store_error::HAError::operation("bind auto-switch HA service", source))?;
+            .map_err(|source| HAError::operation("bind auto-switch HA service", source))?;
         let client = AutoSwitchHAClient::from_delegate(client, None);
         self.delegate
             .set_general_ha_client(GeneralHAClient::new_with_auto_switch_ha_client(client));
@@ -261,7 +262,7 @@ impl AutoSwitchHAService {
 }
 
 impl HAService for AutoSwitchHAService {
-    async fn start(&self) -> HAResult<()> {
+    async fn start(&self) -> Result<(), StoreError> {
         self.delegate.start().await
     }
 
@@ -269,7 +270,7 @@ impl HAService for AutoSwitchHAService {
         self.delegate.shutdown().await;
     }
 
-    async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {
+    async fn change_to_master(&self, master_epoch: i32) -> Result<bool, StoreError> {
         if !self.apply_epoch_transition(master_epoch) {
             return Ok(false);
         }
@@ -282,7 +283,7 @@ impl HAService for AutoSwitchHAService {
         Ok(true)
     }
 
-    async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> HAResult<bool> {
+    async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> Result<bool, StoreError> {
         self.change_to_master(master_epoch).await
     }
 
@@ -291,7 +292,10 @@ impl HAService for AutoSwitchHAService {
         new_master_addr: &str,
         new_master_epoch: i32,
         slave_id: Option<i64>,
-    ) -> HAResult<bool> {
+    ) -> Result<bool, StoreError> {
+        if new_master_addr.trim().is_empty() || slave_id.is_some_and(|id| id < 0) {
+            return Ok(false);
+        }
         if !self.apply_epoch_transition(new_master_epoch) {
             return Ok(false);
         }
@@ -312,7 +316,7 @@ impl HAService for AutoSwitchHAService {
         &self,
         new_master_addr: &str,
         new_master_epoch: i32,
-    ) -> HAResult<bool> {
+    ) -> Result<bool, StoreError> {
         self.change_to_slave(new_master_addr, new_master_epoch, None).await
     }
 

@@ -43,7 +43,6 @@ use rocketmq_store_api::StoreOperation;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointBarrier;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointService;
 use rocketmq_store_local::release_checkpoint::LocalReleaseCheckpointSnapshot;
-use thiserror::Error;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
@@ -81,11 +80,11 @@ impl StoreReleaseCheckpointService {
     /// # Errors
     ///
     /// Returns an unavailable error after the Broker detaches its Store.
-    pub fn backend(&self) -> Result<ReleaseCheckpointBackend, StoreReleaseCheckpointError> {
+    pub fn backend(&self) -> Result<ReleaseCheckpointBackend, StoreError> {
         match self
             .store
             .upgrade()
-            .ok_or(StoreReleaseCheckpointError::StoreUnavailable)?
+            .ok_or_else(|| store_unavailable(StoreOperation::Admin))?
             .as_ref()
         {
             StorePorts::LocalFileStore(_) => Ok(ReleaseCheckpointBackend::Local),
@@ -98,32 +97,41 @@ impl StoreReleaseCheckpointService {
     ///
     /// # Errors
     ///
-    /// Returns a typed error when the Store is detached, the request deadline
-    /// expires, or the identity record cannot be validated or persisted.
+    /// Returns `Ok(None)` when the authorization expires before the operation begins.
+    /// Genuine Store lifecycle, runtime, identity-decode, and I/O failures are returned with
+    /// [`StoreOperation::Admin`].
     pub async fn storage_identity(
         &self,
         authorization: &MaintenanceAuthorizationGrant,
-    ) -> Result<ReleaseCheckpointStorageIdentity, StoreReleaseCheckpointError> {
-        let deadline = authorization_deadline(authorization)?;
+    ) -> Result<Option<ReleaseCheckpointStorageIdentity>, StoreError> {
+        self.storage_identity_for(authorization, StoreOperation::Admin).await
+    }
+
+    async fn storage_identity_for(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        operation: StoreOperation,
+    ) -> Result<Option<ReleaseCheckpointStorageIdentity>, StoreError> {
+        let Some(deadline) = authorization_deadline(authorization) else {
+            return Ok(None);
+        };
         self.storage_identity
             .get_or_try_init(|| async {
-                let source_root = self.source_root()?;
+                let source_root = self.source_root(operation)?;
                 self.storage_io
                     .spawn_io_until("store.load-release-checkpoint-identity", deadline, move || {
-                        load_or_create_storage_identity(&source_root)
+                        load_or_create_storage_identity(&source_root, operation)
                     })
                     .await
-                    .map_err(StoreReleaseCheckpointError::Runtime)?
+                    .map_err(|source| runtime_store_error(operation, source))?
             })
             .await
             .cloned()
+            .map(Some)
     }
 
-    fn source_root(&self) -> Result<PathBuf, StoreReleaseCheckpointError> {
-        let store = self
-            .store
-            .upgrade()
-            .ok_or(StoreReleaseCheckpointError::StoreUnavailable)?;
+    fn source_root(&self, operation: StoreOperation) -> Result<PathBuf, StoreError> {
+        let store = self.store.upgrade().ok_or_else(|| store_unavailable(operation))?;
         let local_store = match store.as_ref() {
             StorePorts::LocalFileStore(local_store) => local_store.as_ref(),
             #[cfg(feature = "rocksdb_store")]
@@ -141,26 +149,21 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
         authorization: &MaintenanceAuthorizationGrant,
         request: StoreReleaseCheckpointRequest,
     ) -> Result<ReleaseCheckpointCreateOutcome, StoreError> {
-        let storage_identity = match self.storage_identity(authorization).await {
-            Ok(identity) => identity,
-            Err(StoreReleaseCheckpointError::AuthorizationExpired) => {
+        let storage_identity = match self.storage_identity_for(authorization, StoreOperation::Flush).await? {
+            Some(identity) => identity,
+            None => {
                 return Ok(ReleaseCheckpointCreateOutcome::Rejected(
                     ReleaseCheckpointCreateRejection::AuthorizationExpired,
                 ));
             }
-            Err(error) => return Err(store_checkpoint_error(StoreOperation::Flush, error)),
         };
         if request.storage_identity != storage_identity {
-            return Err(store_checkpoint_error(
-                StoreOperation::Flush,
-                StoreReleaseCheckpointError::StorageIdentityMismatch,
-            ));
+            return Err(request_invalid(StoreOperation::Flush));
         }
         let store = self
             .store
             .upgrade()
-            .ok_or(StoreReleaseCheckpointError::StoreUnavailable)
-            .map_err(|error| store_checkpoint_error(StoreOperation::Flush, error))?;
+            .ok_or_else(|| store_unavailable(StoreOperation::Flush))?;
         match store.as_ref() {
             StorePorts::LocalFileStore(_) => {
                 let barrier = Arc::new(OwnedLocalCheckpointBarrier {
@@ -198,26 +201,21 @@ impl ReleaseCheckpointStore for StoreReleaseCheckpointService {
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &StoreReleaseCheckpointManifest,
     ) -> Result<ReleaseCheckpointRestoreOutcome, StoreError> {
-        let storage_identity = match self.storage_identity(authorization).await {
-            Ok(identity) => identity,
-            Err(StoreReleaseCheckpointError::AuthorizationExpired) => {
+        let storage_identity = match self.storage_identity_for(authorization, StoreOperation::Read).await? {
+            Some(identity) => identity,
+            None => {
                 return Ok(ReleaseCheckpointRestoreOutcome::Rejected(
                     ReleaseCheckpointRestoreRejection::AuthorizationExpired,
                 ));
             }
-            Err(error) => return Err(store_checkpoint_error(StoreOperation::Read, error)),
         };
         if manifest.storage_identity != storage_identity {
-            return Err(store_checkpoint_error(
-                StoreOperation::Read,
-                StoreReleaseCheckpointError::StorageIdentityMismatch,
-            ));
+            return Err(request_invalid(StoreOperation::Read));
         }
         let store = self
             .store
             .upgrade()
-            .ok_or(StoreReleaseCheckpointError::StoreUnavailable)
-            .map_err(|error| store_checkpoint_error(StoreOperation::Read, error))?;
+            .ok_or_else(|| store_unavailable(StoreOperation::Read))?;
         match store.as_ref() {
             StorePorts::LocalFileStore(_) => {
                 let barrier = Arc::new(OwnedLocalCheckpointBarrier {
@@ -268,16 +266,12 @@ impl LocalReleaseCheckpointBarrier for OwnedLocalCheckpointBarrier {
         let store = self
             .store
             .upgrade()
-            .ok_or(StoreReleaseCheckpointError::StoreUnavailable)
-            .map_err(|error| store_checkpoint_error(StoreOperation::Flush, error))?;
+            .ok_or_else(|| store_unavailable(StoreOperation::Flush))?;
         let local_store = match store.as_ref() {
             StorePorts::LocalFileStore(local_store) => local_store.as_ref(),
             #[cfg(feature = "rocksdb_store")]
             StorePorts::RocksDBStore(_) => {
-                return Err(store_checkpoint_error(
-                    StoreOperation::Flush,
-                    StoreReleaseCheckpointError::WrongBackend,
-                ));
+                return Err(request_invalid(StoreOperation::Flush));
             }
         };
         let source_root = PathBuf::from(local_store.message_store_config_ref().store_path_root_dir.as_str());
@@ -300,10 +294,7 @@ impl LocalReleaseCheckpointBarrier for OwnedLocalCheckpointBarrier {
         deadline: ShutdownDeadline,
     ) -> Result<ReleaseCheckpointOffsets, Self::Error> {
         if manifest.storage_identity != self.storage_identity {
-            return Err(store_checkpoint_error(
-                StoreOperation::Read,
-                StoreReleaseCheckpointError::StorageIdentityMismatch,
-            ));
+            return Err(request_invalid(StoreOperation::Read));
         }
         let checkpoint_root = checkpoint_root.to_path_buf();
         let expected_identity = self.storage_identity.clone();
@@ -314,9 +305,8 @@ impl LocalReleaseCheckpointBarrier for OwnedLocalCheckpointBarrier {
                 verify_local_checkpoint_layout(&checkpoint_root, &expected_identity, offsets)
             })
             .await
-            .map_err(StoreReleaseCheckpointError::Runtime)
-            .map_err(|error| store_checkpoint_error(StoreOperation::Read, error))?;
-        verification.map_err(|error| store_checkpoint_error(StoreOperation::Read, error))?;
+            .map_err(|source| runtime_store_error(StoreOperation::Read, source))?;
+        verification?;
         Ok(offsets)
     }
 }
@@ -328,44 +318,29 @@ struct LocalSnapshotLease {
 
 fn load_or_create_storage_identity(
     source_root: &Path,
-) -> Result<ReleaseCheckpointStorageIdentity, StoreReleaseCheckpointError> {
+    operation: StoreOperation,
+) -> Result<ReleaseCheckpointStorageIdentity, StoreError> {
     let identity_path = source_root.join(STORAGE_IDENTITY_FILE);
     if identity_path.exists() {
-        return read_storage_identity(&identity_path);
+        return read_storage_identity(&identity_path, operation);
     }
     let identity = ReleaseCheckpointStorageIdentity {
         volume_id: format!("volume-{}", Uuid::new_v4()),
         wal_generation: 1,
     };
-    fs::create_dir_all(source_root).map_err(|source| StoreReleaseCheckpointError::IdentityIo {
-        operation: "create Store root",
-        path: source_root.to_path_buf(),
-        source,
-    })?;
+    fs::create_dir_all(source_root).map_err(|source| io_store_error(operation, source))?;
     let partial_path = source_root.join(format!(".{STORAGE_IDENTITY_FILE}.partial-{}", Uuid::new_v4()));
     let result = (|| {
-        let bytes = serde_json::to_vec_pretty(&identity).map_err(StoreReleaseCheckpointError::IdentityDecode)?;
+        let bytes = serde_json::to_vec_pretty(&identity).map_err(|source| decode_store_error(operation, source))?;
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&partial_path)
-            .map_err(|source| StoreReleaseCheckpointError::IdentityIo {
-                operation: "create storage identity",
-                path: partial_path.clone(),
-                source,
-            })?;
-        file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|source| {
-            StoreReleaseCheckpointError::IdentityIo {
-                operation: "persist storage identity",
-                path: partial_path.clone(),
-                source,
-            }
-        })?;
-        fs::rename(&partial_path, &identity_path).map_err(|source| StoreReleaseCheckpointError::IdentityIo {
-            operation: "publish storage identity",
-            path: identity_path.clone(),
-            source,
-        })
+            .map_err(|source| io_store_error(operation, source))?;
+        file.write_all(&bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|source| io_store_error(operation, source))?;
+        fs::rename(&partial_path, &identity_path).map_err(|source| io_store_error(operation, source))
     })();
     if result.is_err() {
         let _ = fs::remove_file(&partial_path);
@@ -374,16 +349,15 @@ fn load_or_create_storage_identity(
     Ok(identity)
 }
 
-fn read_storage_identity(path: &Path) -> Result<ReleaseCheckpointStorageIdentity, StoreReleaseCheckpointError> {
-    let bytes = fs::read(path).map_err(|source| StoreReleaseCheckpointError::IdentityIo {
-        operation: "read storage identity",
-        path: path.to_path_buf(),
-        source,
-    })?;
+fn read_storage_identity(
+    path: &Path,
+    operation: StoreOperation,
+) -> Result<ReleaseCheckpointStorageIdentity, StoreError> {
+    let bytes = fs::read(path).map_err(|source| io_store_error(operation, source))?;
     let identity: ReleaseCheckpointStorageIdentity =
-        serde_json::from_slice(&bytes).map_err(StoreReleaseCheckpointError::IdentityDecode)?;
+        serde_json::from_slice(&bytes).map_err(|source| decode_store_error(operation, source))?;
     if identity.volume_id.trim().is_empty() || identity.wal_generation == 0 {
-        return Err(StoreReleaseCheckpointError::InvalidStorageIdentity);
+        return Err(state_corrupted(operation));
     }
     Ok(identity)
 }
@@ -392,81 +366,65 @@ fn verify_local_checkpoint_layout(
     checkpoint_root: &Path,
     expected_identity: &ReleaseCheckpointStorageIdentity,
     offsets: ReleaseCheckpointOffsets,
-) -> Result<(), StoreReleaseCheckpointError> {
-    let identity = read_storage_identity(&checkpoint_root.join(STORAGE_IDENTITY_FILE))?;
+) -> Result<(), StoreError> {
+    let identity = read_storage_identity(&checkpoint_root.join(STORAGE_IDENTITY_FILE), StoreOperation::Read)?;
     if &identity != expected_identity {
-        return Err(StoreReleaseCheckpointError::StorageIdentityMismatch);
+        return Err(request_invalid(StoreOperation::Read));
     }
     for required in ["commitlog", "consumequeue", "index"] {
         let path = checkpoint_root.join(required);
         if !path.is_dir() {
-            return Err(StoreReleaseCheckpointError::RestoreLayout(format!(
-                "checkpoint is missing {required}"
-            )));
+            return Err(state_corrupted(StoreOperation::Read));
         }
     }
-    let store_checkpoint = StoreCheckpoint::read_snapshot(checkpoint_root.join("checkpoint")).map_err(|source| {
-        StoreReleaseCheckpointError::IdentityIo {
-            operation: "read isolated Store checkpoint",
-            path: checkpoint_root.join("checkpoint"),
-            source,
-        }
-    })?;
+    let store_checkpoint = StoreCheckpoint::read_snapshot(checkpoint_root.join("checkpoint"))
+        .map_err(|source| io_store_error(StoreOperation::Read, source))?;
     if store_checkpoint.index_safe_phy_offset < offsets.index_offset.max(0) as u64 {
-        return Err(StoreReleaseCheckpointError::RestoreLayout(
-            "persisted index safe offset is behind the manifest".to_string(),
-        ));
+        return Err(state_corrupted(StoreOperation::Read));
     }
     if store_checkpoint.master_flushed_offset > offsets.appended_offset.max(0) as u64
         || store_checkpoint.confirm_phy_offset > offsets.appended_offset.max(0) as u64
     {
-        return Err(StoreReleaseCheckpointError::RestoreLayout(
-            "persisted Store checkpoint offsets exceed the manifest".to_string(),
-        ));
+        return Err(state_corrupted(StoreOperation::Read));
     }
     Ok(())
 }
 
-fn authorization_deadline(
-    authorization: &MaintenanceAuthorizationGrant,
-) -> Result<ShutdownDeadline, StoreReleaseCheckpointError> {
+fn authorization_deadline(authorization: &MaintenanceAuthorizationGrant) -> Option<ShutdownDeadline> {
     let now = rocketmq_runtime::common::time_utils::current_millis();
     let remaining = authorization
         .deadline_unix_millis()
         .checked_sub(now)
-        .filter(|remaining| *remaining > 0)
-        .ok_or(StoreReleaseCheckpointError::AuthorizationExpired)?;
-    Ok(ShutdownDeadline::after(std::time::Duration::from_millis(remaining)))
+        .filter(|remaining| *remaining > 0)?;
+    Some(ShutdownDeadline::after(std::time::Duration::from_millis(remaining)))
 }
 
-fn store_checkpoint_error(operation: StoreOperation, error: StoreReleaseCheckpointError) -> StoreError {
-    match error {
-        StoreReleaseCheckpointError::Store(source) => source,
-        error => {
-            let descriptor = match &error {
-                StoreReleaseCheckpointError::StoreUnavailable => &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,
-                StoreReleaseCheckpointError::StorageIdentityMismatch | StoreReleaseCheckpointError::WrongBackend => {
-                    &rocketmq_error::STORAGE_REQUEST_INVALID
-                }
-                StoreReleaseCheckpointError::IdentityDecode(_)
-                | StoreReleaseCheckpointError::InvalidStorageIdentity
-                | StoreReleaseCheckpointError::RestoreLayout(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-                StoreReleaseCheckpointError::Runtime(source) => runtime_error_descriptor(source),
-                StoreReleaseCheckpointError::IdentityIo { .. } => &rocketmq_error::STORAGE_IO_FAILED,
-                #[cfg(feature = "rocksdb_store")]
-                StoreReleaseCheckpointError::RocksDb(_) => match operation {
-                    StoreOperation::Read => &rocketmq_error::STORAGE_READ_FAILED,
-                    _ => &rocketmq_error::STORAGE_WRITE_FAILED,
-                },
-                StoreReleaseCheckpointError::AuthorizationExpired | StoreReleaseCheckpointError::Store(_) => {
-                    &rocketmq_error::STORAGE_INTERNAL_FAILURE
-                }
-            };
-            StoreError::new(descriptor, operation)
-                .in_component(StoreComponent::Store)
-                .with_source(error)
-        }
-    }
+fn store_error(descriptor: &'static rocketmq_error::ErrorDescriptor, operation: StoreOperation) -> StoreError {
+    StoreError::new(descriptor, operation).in_component(StoreComponent::Store)
+}
+
+fn store_unavailable(operation: StoreOperation) -> StoreError {
+    store_error(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, operation)
+}
+
+fn request_invalid(operation: StoreOperation) -> StoreError {
+    store_error(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
+}
+
+fn state_corrupted(operation: StoreOperation) -> StoreError {
+    store_error(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
+}
+
+fn io_store_error(operation: StoreOperation, source: std::io::Error) -> StoreError {
+    store_error(&rocketmq_error::STORAGE_IO_FAILED, operation).with_source(source)
+}
+
+fn decode_store_error(operation: StoreOperation, source: serde_json::Error) -> StoreError {
+    state_corrupted(operation).with_source(source)
+}
+
+fn runtime_store_error(operation: StoreOperation, source: RuntimeError) -> StoreError {
+    store_error(runtime_error_descriptor(&source), operation).with_source(source)
 }
 
 fn runtime_error_descriptor(source: &RuntimeError) -> &'static rocketmq_error::ErrorDescriptor {
@@ -489,57 +447,92 @@ fn runtime_error_descriptor(source: &RuntimeError) -> &'static rocketmq_error::E
     }
 }
 
-/// Failure from the Broker-composed Store checkpoint service.
-#[derive(Debug, Error)]
-pub enum StoreReleaseCheckpointError {
-    #[error("Store is unavailable")]
-    StoreUnavailable,
-    #[error("release-checkpoint authorization expired")]
-    AuthorizationExpired,
-    #[error("checkpoint storage identity does not match the mounted Store")]
-    StorageIdentityMismatch,
-    #[error("checkpoint request does not match the selected Store backend")]
-    WrongBackend,
-    #[error("invalid storage identity encoding")]
-    IdentityDecode(#[source] serde_json::Error),
-    #[error("storage identity requires a volume ID and non-zero WAL generation")]
-    InvalidStorageIdentity,
-    #[error("local restore verification failed: {0}")]
-    RestoreLayout(String),
-    #[error("checkpoint runtime failed")]
-    Runtime(#[source] RuntimeError),
-    #[error("Store checkpoint barrier failed: {0}")]
-    Store(#[from] crate::store_error::StoreError),
-    #[cfg(feature = "rocksdb_store")]
-    #[error("RocksDB Store checkpoint failed: {0}")]
-    RocksDb(#[source] rocketmq_store_rocksdb::release_checkpoint::RocksDbReleaseCheckpointError),
-    #[error("{operation} failed for {path}: {source}")]
-    IdentityIo {
-        operation: &'static str,
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
+    use rocketmq_security_api::MaintenanceAuthorizationContext;
+    use rocketmq_security_api::MaintenanceAuthorizer;
+    use rocketmq_security_api::MaintenanceCapability;
+    use rocketmq_security_api::MaintenancePolicy;
+    use rocketmq_security_api::MaintenancePrincipalBinding;
+    use rocketmq_security_api::MaintenanceRequestClass;
+    use rocketmq_security_api::MaintenanceResourceBudget;
+    use rocketmq_security_api::MaintenanceRole;
+    use rocketmq_security_api::MaintenanceRoleGrant;
+    use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION;
     use tempfile::tempdir;
 
-    #[derive(Debug, thiserror::Error)]
-    #[error("private Store checkpoint source")]
-    struct CheckpointCause;
+    fn expired_release_authorization() -> MaintenanceAuthorizationGrant {
+        let policy = MaintenancePolicy {
+            schema_version: MAINTENANCE_POLICY_SCHEMA_VERSION,
+            policy_id: "rocketmq.store-release-checkpoint-test".to_owned(),
+            policy_version: 1,
+            require_authentication: true,
+            require_authorization: true,
+            require_fencing_token: true,
+            max_request_lifetime_millis: 60_000,
+            resource_budget: MaintenanceResourceBudget {
+                max_checkpoint_bytes: 1024,
+                max_store_members: 1,
+                max_concurrent_operations: 1,
+            },
+            principal_bindings: vec![MaintenancePrincipalBinding {
+                principal: "release-operator".to_owned(),
+                roles: BTreeSet::from([MaintenanceRole::ReleaseOperator]),
+            }],
+            role_grants: vec![MaintenanceRoleGrant {
+                role: MaintenanceRole::ReleaseOperator,
+                capabilities: BTreeSet::from([MaintenanceCapability::ReleaseCheckpoint]),
+            }],
+        };
+        let authorizer = MaintenanceAuthorizer::new(policy.into_validated().expect("valid maintenance policy"));
+        authorizer
+            .authorize(
+                Some(&MaintenanceAuthorizationContext {
+                    authentication_enabled: true,
+                    authorization_enabled: true,
+                    principal: Some("release-operator".to_owned()),
+                    request_class: MaintenanceRequestClass::PrivilegedMaintenance,
+                    capability: MaintenanceCapability::ReleaseCheckpoint,
+                    deadline_unix_millis: 1,
+                    fencing_token: Some(7),
+                }),
+                0,
+            )
+            .expect("authorization is initially valid")
+    }
 
     #[test]
     fn storage_identity_is_persisted_and_reloaded_without_generation_drift() {
         let temp = tempdir().expect("temporary Store root");
-        let first = load_or_create_storage_identity(temp.path()).expect("create storage identity");
-        let second = load_or_create_storage_identity(temp.path()).expect("reload storage identity");
+        let first =
+            load_or_create_storage_identity(temp.path(), StoreOperation::Admin).expect("create storage identity");
+        let second =
+            load_or_create_storage_identity(temp.path(), StoreOperation::Admin).expect("reload storage identity");
 
         assert_eq!(first, second);
         assert_eq!(first.wal_generation, 1);
         assert!(temp.path().join(STORAGE_IDENTITY_FILE).is_file());
+    }
+
+    #[tokio::test]
+    async fn expired_authorization_rejects_storage_identity_before_store_access() {
+        let temp = tempdir().expect("temporary checkpoint root");
+        let service = StoreReleaseCheckpointService::new(
+            Weak::new(),
+            temp.path().to_path_buf(),
+            crate::runtime::test_service_context("release-checkpoint-expiry-test"),
+        );
+
+        let identity = service
+            .storage_identity(&expired_release_authorization())
+            .await
+            .expect("authorization expiry is a semantic rejection");
+
+        assert!(identity.is_none());
+        assert!(!temp.path().join(STORAGE_IDENTITY_FILE).exists());
     }
 
     #[test]
@@ -548,7 +541,7 @@ mod tests {
         for directory in ["commitlog", "consumequeue", "index"] {
             fs::create_dir(temp.path().join(directory)).expect("checkpoint directory");
         }
-        let identity = load_or_create_storage_identity(temp.path()).expect("storage identity");
+        let identity = load_or_create_storage_identity(temp.path(), StoreOperation::Read).expect("storage identity");
         let checkpoint = StoreCheckpoint::new(temp.path().join("checkpoint")).expect("Store checkpoint");
         checkpoint.set_index_safe_phy_offset(64);
         checkpoint.flush().expect("persist Store checkpoint");
@@ -569,42 +562,30 @@ mod tests {
     }
 
     #[test]
-    fn contained_store_checkpoint_error_is_forwarded_without_remapping() {
-        let source = StoreError::new(
-            &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
-            StoreOperation::QueryOffset,
-        )
-        .in_component(StoreComponent::CommitLog)
-        .with_source(CheckpointCause);
-
-        let error = store_checkpoint_error(StoreOperation::Flush, StoreReleaseCheckpointError::Store(source));
-
-        assert_eq!(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, error.descriptor());
-        assert_eq!(StoreOperation::QueryOffset, error.operation());
-        assert_eq!(StoreComponent::CommitLog, error.component());
-        assert!(std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<CheckpointCause>())
-            .is_some());
-    }
-
-    #[test]
-    fn owned_checkpoint_leaf_mapping_keeps_operation_component_and_source() {
-        let error = store_checkpoint_error(
-            StoreOperation::Read,
-            StoreReleaseCheckpointError::StorageIdentityMismatch,
-        );
+    fn deterministic_identity_mismatch_is_source_free() {
+        let error = request_invalid(StoreOperation::Read);
 
         assert_eq!(&rocketmq_error::STORAGE_REQUEST_INVALID, error.descriptor());
         assert_eq!(StoreOperation::Read, error.operation());
         assert_eq!(StoreComponent::Store, error.component());
-        assert!(std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<StoreReleaseCheckpointError>())
-            .is_some());
+        assert!(std::error::Error::source(&error).is_none());
         assert!(error
             .public_view()
             .expect("valid public view")
             .fields()
             .next()
             .is_none());
+    }
+
+    #[test]
+    fn operational_checkpoint_source_remains_typed_once() {
+        let error = io_store_error(StoreOperation::Flush, std::io::Error::other("checkpoint write failed"));
+
+        assert_eq!(&rocketmq_error::STORAGE_IO_FAILED, error.descriptor());
+        assert_eq!(StoreOperation::Flush, error.operation());
+        assert_eq!(StoreComponent::Store, error.component());
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
     }
 }

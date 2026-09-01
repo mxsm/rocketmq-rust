@@ -203,6 +203,12 @@ fn one_contract_type_owns_every_deterministic_store_api_violation() {
         StoreContractViolation::TimerInvalidPayloadLocator,
         StoreContractViolation::TimerInvalidPayloadStoreLocator,
         StoreContractViolation::TimerInvalidRoute,
+        StoreContractViolation::TimerConfigurationOutOfRange {
+            field: "timer_precision_ms",
+            actual: 0,
+            minimum: 1,
+            maximum: 1_000,
+        },
     ];
 
     for expected in [
@@ -440,7 +446,8 @@ fn contract_family(violation: &StoreContractViolation) -> ContractFamily {
         StoreContractViolation::TimerUnknownEngine(_)
         | StoreContractViolation::TimerInvalidPayloadLocator
         | StoreContractViolation::TimerInvalidPayloadStoreLocator
-        | StoreContractViolation::TimerInvalidRoute => ContractFamily::Timer,
+        | StoreContractViolation::TimerInvalidRoute
+        | StoreContractViolation::TimerConfigurationOutOfRange { .. } => ContractFamily::Timer,
     }
 }
 

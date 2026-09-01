@@ -112,12 +112,13 @@ use rocketmq_store_local::message_store::reput::ReputPolicy;
 use rocketmq_store_local::message_store::LocalStoreComposition;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
+use crate::base::backend_ops::canonical_health_snapshot;
+use crate::base::backend_ops::BackendHealthSnapshot;
 use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
 use crate::base::backend_ops::StoreHealthRecorder;
-use crate::base::backend_ops::StoreHealthSnapshot;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
@@ -205,7 +206,7 @@ use crate::timer::timeline::ShadowTimelineMaterializer;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineAdmissionController;
 #[cfg(feature = "extended_timeline")]
-use crate::timer::timeline::TimelineAdmissionError;
+use crate::timer::timeline::TimelineAdmissionOutcome;
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelineCompletionReconciler;
 #[cfg(feature = "extended_timeline")]
@@ -2094,8 +2095,12 @@ impl BackendOps for LocalFileMessageStore {
         self.commit_log.sync_flush_runtime_info()
     }
 
-    fn health_snapshot(&self) -> StoreHealthSnapshot {
-        self.store_health_snapshot()
+    fn health_snapshot(&self) -> rocketmq_store_api::StoreHealthSnapshot {
+        canonical_health_snapshot(
+            self.store_health_snapshot(),
+            self.get_max_phy_offset(),
+            self.get_flushed_where(),
+        )
     }
 
     fn lock_time_millis(&self) -> i64 {
@@ -2352,14 +2357,16 @@ impl BackendOps for LocalFileMessageStore {
         }
     }
 
-    fn sync_broker_role_with_term(&self, broker_role: BrokerRole, external_term: u64) -> Result<(), StoreError> {
+    fn sync_broker_role_with_term(&self, broker_role: BrokerRole, external_term: u64) -> Result<bool, StoreError> {
         let previous_role = self.store_runtime_state.broker_role();
+        #[cfg(feature = "extended_timeline")]
+        if !self.sync_extended_timeline_controller_role(previous_role, broker_role, external_term)? {
+            return Ok(false);
+        }
         self.commit_log.sync_broker_role(broker_role);
         self.refresh_controller_confirm_offset_after_role_change();
         self.sync_timer_message_store_role();
-        #[cfg(feature = "extended_timeline")]
-        self.sync_extended_timeline_controller_role(previous_role, broker_role, external_term)?;
-        Ok(())
+        Ok(true)
     }
 
     fn install_controller_write_lease(&self, token: WriteLeaseToken, valid_for: Duration) -> bool {

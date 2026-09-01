@@ -15,12 +15,12 @@
 use super::*;
 
 impl LocalFileMessageStore {
-    pub(super) fn store_health_snapshot(&self) -> StoreHealthSnapshot {
+    pub(super) fn store_health_snapshot(&self) -> BackendHealthSnapshot {
         let ha_runtime_info = self
             .ha_service
             .as_ref()
             .map_or_else(Default::default, GeneralHAService::group_transfer_runtime_info);
-        StoreHealthSnapshot {
+        BackendHealthSnapshot {
             writeable: self.store_health_recorder.writeable(),
             last_flush_error: self.store_health_recorder.last_flush_error(),
             os_page_cache_busy: self.is_os_page_cache_busy(),

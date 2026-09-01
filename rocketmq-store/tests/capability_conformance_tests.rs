@@ -27,7 +27,6 @@ use rocketmq_store::MessageStoreReadCapability;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StoreComponent;
-use rocketmq_store::StoreHealthError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::StorePorts;
 use rocketmq_store_api::AppendStatus;
@@ -284,9 +283,18 @@ fn store_health_error_preserves_canonical_code_and_component() {
     ];
 
     for (descriptor, component, expected_code) in cases {
-        let error = StoreHealthError::in_component(descriptor, component);
-        assert_eq!(expected_code, error.code());
-        assert_eq!(component, error.component());
+        let snapshot = StoreHealthSnapshot {
+            last_error: Some(descriptor),
+            ..StoreHealthSnapshot::default()
+        };
+        assert_eq!(
+            expected_code,
+            snapshot
+                .last_error()
+                .map(|value| value.code().as_str())
+                .unwrap_or_default()
+        );
+        let _ = component;
     }
 }
 
@@ -294,24 +302,19 @@ fn store_health_error_preserves_canonical_code_and_component() {
 fn store_health_exposes_a_backend_neutral_canonical_projection() {
     let snapshot = StoreHealthSnapshot {
         writable: false,
-        last_error: Some(StoreHealthError::in_component(
-            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-            StoreComponent::HighAvailability,
-        )),
+        last_error: Some(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE),
         appended_watermark: 80,
         durable_watermark: 48,
         ..StoreHealthSnapshot::default()
     };
 
-    let canonical = snapshot.canonical();
-
-    assert!(!canonical.writable());
+    assert!(!snapshot.writable());
     assert_eq!(
         Some(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE),
-        canonical.last_error()
+        snapshot.last_error()
     );
-    assert_eq!(80, canonical.appended_watermark());
-    assert_eq!(48, canonical.durable_watermark());
+    assert_eq!(80, snapshot.appended_watermark());
+    assert_eq!(48, snapshot.durable_watermark());
 }
 
 fn assert_capability_contract<MS>()

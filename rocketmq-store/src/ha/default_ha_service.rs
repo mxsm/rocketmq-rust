@@ -24,6 +24,9 @@ use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_protocol::protocol::body::ha_client_runtime_info::HAClientRuntimeInfo;
 use rocketmq_protocol::protocol::body::ha_connection_runtime_info::HAConnectionRuntimeInfo;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::select;
@@ -57,10 +60,9 @@ use crate::ha::ha_connection_state_notification_service::HAConnectionStateNotifi
 use crate::ha::ha_service::HAAckedReplicaSnapshot;
 use crate::ha::ha_service::HAService;
 use crate::ha::transfer_metrics::HaTransferMetrics;
+use crate::ha::HAError;
 use crate::log_file::group_commit_request::GroupCommitRequest;
 use crate::message_store::local_file_message_store::HAReplicaStoreHandle;
-use crate::store_error::HAError;
-use crate::store_error::HAResult;
 use rocketmq_store_local::ha::replication::ReplicationProgress;
 
 type AutoSwitchReplicationState = rocketmq_store_local::ha::replication::ReplicationStateRoot;
@@ -121,21 +123,24 @@ impl DefaultHAConnectionContext {
         }
     }
 
-    fn install_group_transfer_service(&self, service: &Arc<GroupTransferService>) -> HAResult<()> {
+    fn install_group_transfer_service(&self, service: &Arc<GroupTransferService>) -> Result<(), HAError> {
         self.inner
             .group_transfer_service
             .set(Arc::downgrade(service))
             .map_err(|_| HAError::invalid_state("GroupTransferService already installed"))
     }
 
-    fn install_state_notification_service(&self, service: &Arc<HAConnectionStateNotificationService>) -> HAResult<()> {
+    fn install_state_notification_service(
+        &self,
+        service: &Arc<HAConnectionStateNotificationService>,
+    ) -> Result<(), HAError> {
         self.inner
             .state_notification_service
             .set(Arc::downgrade(service))
             .map_err(|_| HAError::invalid_state("HAConnectionStateNotificationService already installed"))
     }
 
-    fn install_auto_switch_replication(&self, replication: Arc<AutoSwitchReplicationState>) -> HAResult<()> {
+    fn install_auto_switch_replication(&self, replication: Arc<AutoSwitchReplicationState>) -> Result<(), HAError> {
         self.inner
             .auto_switch_replication
             .set(replication)
@@ -452,7 +457,7 @@ impl DefaultHAService {
             .map_or_else(GroupTransferRuntimeInfo::default, |service| service.runtime_info())
     }
 
-    pub(crate) fn ensure_ha_client(&mut self) -> HAResult<bool> {
+    pub(crate) fn ensure_ha_client(&mut self) -> Result<bool, HAError> {
         if self.ha_client.is_some() {
             return Ok(false);
         }
@@ -486,7 +491,7 @@ impl DefaultHAService {
         &mut self,
         service_reference: GeneralHAServiceReference,
         auto_switch_replication: Option<Arc<AutoSwitchReplicationState>>,
-    ) -> HAResult<()> {
+    ) -> Result<(), HAError> {
         // Initialize the DefaultHAService with the provided message store.
         let config = self.replica_store.message_store_config();
         let is_auto_switch = auto_switch_replication.is_some();
@@ -533,9 +538,8 @@ impl DefaultHAService {
                 .collect::<Vec<_>>()
         };
         for mut connection in connections {
-            let connection_id = connection.get_ha_connection_id().to_owned();
             if timeout(Duration::from_secs(3), connection.shutdown()).await.is_err() {
-                warn!("Timed out shutting down HA connection {}", connection_id);
+                warn!("Timed out shutting down an HA connection");
             }
         }
     }
@@ -572,22 +576,29 @@ impl DefaultHAService {
 }
 
 impl HAService for DefaultHAService {
-    async fn start(&self) -> HAResult<()> {
+    async fn start(&self) -> Result<(), StoreError> {
+        let not_initialized = || {
+            StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Start)
+                .in_component(StoreComponent::HighAvailability)
+        };
         self.accept_socket_service
             .as_ref()
-            .ok_or_else(|| HAError::invalid_state("AcceptSocketService not initialized"))?
+            .ok_or_else(not_initialized)?
             .start()
-            .await?;
+            .await
+            .map_err(StoreError::from)?;
         self.group_transfer_service
             .as_ref()
-            .ok_or_else(|| HAError::invalid_state("GroupTransferService not initialized"))?
+            .ok_or_else(not_initialized)?
             .start()
-            .await?;
+            .await
+            .map_err(StoreError::from)?;
         self.ha_connection_state_notification_service
             .as_ref()
-            .ok_or_else(|| HAError::invalid_state("HAConnectionStateNotificationService not initialized"))?
+            .ok_or_else(not_initialized)?
             .start()
-            .await?;
+            .await
+            .map_err(StoreError::from)?;
         if let Some(ref ha_client) = self.ha_client {
             ha_client.start().await;
         }
@@ -640,28 +651,28 @@ impl HAService for DefaultHAService {
         }
     }
 
-    async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {
+    async fn change_to_master(&self, _master_epoch: i32) -> Result<bool, StoreError> {
         Ok(false)
     }
 
-    async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> HAResult<bool> {
+    async fn change_to_master_when_last_role_is_master(&self, _master_epoch: i32) -> Result<bool, StoreError> {
         Ok(false)
     }
 
     async fn change_to_slave(
         &self,
-        new_master_addr: &str,
-        new_master_epoch: i32,
-        slave_id: Option<i64>,
-    ) -> HAResult<bool> {
+        _new_master_addr: &str,
+        _new_master_epoch: i32,
+        _slave_id: Option<i64>,
+    ) -> Result<bool, StoreError> {
         Ok(false)
     }
 
     async fn change_to_slave_when_master_not_change(
         &self,
-        new_master_addr: &str,
-        new_master_epoch: i32,
-    ) -> HAResult<bool> {
+        _new_master_addr: &str,
+        _new_master_epoch: i32,
+    ) -> Result<bool, StoreError> {
         Ok(false)
     }
 
@@ -822,7 +833,7 @@ impl AcceptSocketService {
         stream: TcpStream,
         addr: SocketAddr,
         is_auto_switch: bool,
-    ) -> Result<GeneralHAConnection, crate::ha::HAServiceFailure> {
+    ) -> Result<GeneralHAConnection, crate::ha::HAError> {
         let default_connection =
             DefaultHAConnection::new(runtime_scope, connection_context, stream, message_store_config, addr).await?;
         let general_connection = if is_auto_switch {
@@ -833,7 +844,7 @@ impl AcceptSocketService {
         Ok(general_connection)
     }
 
-    pub async fn start(&self) -> HAResult<()> {
+    pub async fn start(&self) -> Result<(), HAError> {
         let mut worker_group_guard = self.worker_group.lock().await;
         if worker_group_guard.is_some() {
             warn!("AcceptSocketService is already started");
@@ -842,7 +853,7 @@ impl AcceptSocketService {
 
         let listener = TcpListener::bind(self.socket_address_listen)
             .await
-            .map_err(HAError::Io)?;
+            .map_err(HAError::StartIo)?;
         let shutdown_token = CancellationToken::new();
         *self.shutdown_token.lock().await = shutdown_token.clone();
         let is_auto_switch = self.is_auto_switch;
@@ -864,7 +875,7 @@ impl AcceptSocketService {
                         accept_result = listener.accept() => {
                             match accept_result {
                                 Ok((stream, addr)) => {
-                                    info!("HAService receive new connection, {}", addr);
+                                    info!("HAService received a new connection");
                                     match AcceptSocketService::build_connection(
                                         runtime_scope.clone(),
                                         connection_context.clone(),
@@ -876,20 +887,20 @@ impl AcceptSocketService {
                                     .await
                                     {
                                         Ok(mut general_conn) => {
-                                            if let Err(e) = general_conn.start().await {
-                                                error!("Error starting HAService: {}", e);
+                                            if general_conn.start().await.is_err() {
+                                                error!(source_present = true, "HAService connection did not start");
                                             } else {
-                                                info!("HAService accept new connection, {}", addr);
+                                                info!("HAService accepted a new connection");
                                                 connection_context.add_connection(general_conn).await;
                                             }
                                         }
-                                        Err(e) => {
-                                            error!("Error creating HAConnection: {}", e);
+                                        Err(_error) => {
+                                            error!(source_present = true, "HAService connection creation failed");
                                         }
                                     }
                                 }
-                                Err(e) => {
-                                    error!("Failed to accept connection: {}", e);
+                                Err(_error) => {
+                                    error!(source_present = true, "HAService connection accept failed");
                                     // Add a small delay to prevent busy-waiting on persistent errors
                                     sleep(Duration::from_millis(100)).await;
                                 }
@@ -909,8 +920,8 @@ impl AcceptSocketService {
         let worker_group = self.worker_group.lock().await.take();
         if let Some(worker_group) = worker_group {
             let report = worker_group.shutdown(Duration::from_secs(3)).await;
-            if let Err(error) = crate::runtime::shutdown_report_result("AcceptSocketService", report) {
-                warn!("AcceptSocketService failed during shutdown: {error}");
+            if crate::runtime::shutdown_report_result("AcceptSocketService", report).is_err() {
+                warn!(source_present = true, "AcceptSocketService failed during shutdown");
             }
         }
     }
@@ -919,6 +930,7 @@ impl AcceptSocketService {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::error::Error;
     use std::path::Path;
     use std::sync::atomic::Ordering;
 
@@ -1002,10 +1014,10 @@ mod tests {
 
         let error = service.start().await.expect_err("start should fail before init");
 
-        assert!(matches!(
-            error,
-            HAError::InvalidState(message) if message.contains("AcceptSocketService")
-        ));
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED);
+        assert_eq!(error.operation(), StoreOperation::Start);
+        assert_eq!(error.component(), StoreComponent::HighAvailability);
+        assert!(error.source().is_none());
         let _ = std::fs::remove_dir_all(temp_root);
     }
 

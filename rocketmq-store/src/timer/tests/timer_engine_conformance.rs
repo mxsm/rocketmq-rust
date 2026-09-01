@@ -66,7 +66,7 @@ fn routing_fails_closed_when_extended_capability_is_unavailable() {
         3 * 86_400_000,
         false,
     )
-    .is_err());
+    .is_none());
 }
 
 #[test]
@@ -120,7 +120,9 @@ async fn extended_timeline_engine_uses_the_same_bounded_conformance_contract() {
         None,
         false,
         crate::runtime::test_service_context("extended-timer-engine-conformance"),
-    );
+    )
+    .expect("create Extended Timeline conformance Store")
+    .expect("test Timer Store configuration is valid");
     store.wire_owned_root_dependencies().expect("wire Extended Timeline");
     let engine = store
         .extended_timeline_engine_for_test()

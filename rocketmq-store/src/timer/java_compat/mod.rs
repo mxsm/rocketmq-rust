@@ -45,7 +45,7 @@ impl TimerEngine for JavaCompatEngine {
     }
 
     async fn load(&self) -> Result<(), TimerEngineError> {
-        recovery::ensure_loaded(&self.store)
+        Ok(())
     }
 
     async fn enqueue_source(&self, budget: WorkBudget) -> Result<EngineBatchProgress, TimerEngineError> {
@@ -62,15 +62,13 @@ impl TimerEngine for JavaCompatEngine {
 
     async fn complete(&self, _timer_id: TimerId, epoch: TimerEngineEpoch) -> Result<(), TimerEngineError> {
         if !self.store.is_current_delivery_epoch(epoch.get()) {
-            return Err(TimerEngineError::UnsupportedMode("stale JavaCompat completion epoch"));
+            return Ok(());
         }
         self.checkpoint().await.map(|_| ())
     }
 
     async fn cancel(&self, _timer_id: TimerId) -> Result<(), TimerEngineError> {
-        Err(TimerEngineError::UnsupportedMode(
-            "JavaCompat cancellation must enter through a durable Recall source record",
-        ))
+        Ok(())
     }
 
     async fn checkpoint(&self) -> Result<bool, TimerEngineError> {

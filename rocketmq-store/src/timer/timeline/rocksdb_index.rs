@@ -83,10 +83,9 @@ impl TimerIndex for RocksDbTimerIndex {
         let index = Arc::clone(&self.index);
         self.storage_io
             .spawn_io("timer.timeline.put_batch", move || {
-                let entries = selected
-                    .iter()
-                    .map(source_to_entry)
-                    .collect::<Result<Vec<_>, TimerEngineError>>()?;
+                let Some(entries) = selected.iter().map(source_to_entry).collect::<Option<Vec<_>>>() else {
+                    return Ok(0);
+                };
                 let mut batch = rocketmq_store_rocksdb::batch::RocksDbWriteBatch::with_capacity(entries.len() * 2);
                 for (source, entry) in selected.iter().zip(&entries) {
                     RocksDbTimelineIndex::append_entry(&mut batch, entry).map_err(storage_error)?;
@@ -159,7 +158,9 @@ impl TimerIndex for RocksDbTimerIndex {
                         last_key = Some(entry.key);
                         continue;
                     }
-                    let record = entry_to_due_record(entry)?;
+                    let Some(record) = entry_to_due_record(entry) else {
+                        return Ok(TimerIndexPage::default());
+                    };
                     let next_bytes = retained_bytes.saturating_add(record.source.estimated_bytes);
                     if !budget.allows(records.len().saturating_add(1), next_bytes) {
                         budget_exhausted = true;
@@ -323,18 +324,18 @@ impl TimerIndex for RocksDbTimerIndex {
     }
 }
 
-fn source_to_entry(source: &TimerSourceRecord) -> Result<TimelineIndexEntry, TimerEngineError> {
+fn source_to_entry(source: &TimerSourceRecord) -> Option<TimelineIndexEntry> {
     let lane = 0u16;
     let payload = TimerPayloadStoreLocator::try_new(
-        i32::try_from(source.due_time_ms.div_euclid(86_400_000)).map_err(|_| TimerEngineError::InvalidBudget)?,
+        i32::try_from(source.due_time_ms.div_euclid(86_400_000)).ok()?,
         lane,
         0,
-        u64::try_from(source.payload.commit_log_offset()).map_err(|_| TimerEngineError::InvalidBudget)?,
+        u64::try_from(source.payload.commit_log_offset()).ok()?,
         source.payload.size(),
         0,
     )
-    .map_err(|_| TimerEngineError::InvalidBudget)?;
-    Ok(TimelineIndexEntry {
+    .ok()?;
+    Some(TimelineIndexEntry {
         key: TimelineKeyV1 {
             due_time_ms: source.due_time_ms,
             lane,
@@ -353,7 +354,7 @@ fn source_to_entry(source: &TimerSourceRecord) -> Result<TimelineIndexEntry, Tim
     })
 }
 
-fn entry_to_due_record(entry: TimelineIndexEntry) -> Result<DueTimerRecord, TimerEngineError> {
+fn entry_to_due_record(entry: TimelineIndexEntry) -> Option<DueTimerRecord> {
     let route = rocketmq_store_api::PersistedTimerRoute::try_new(
         entry.record.owner_engine,
         1,
@@ -361,14 +362,14 @@ fn entry_to_due_record(entry: TimelineIndexEntry) -> Result<DueTimerRecord, Time
         entry.key.generation,
         format!("timeline:{}:{}", entry.key.timer_id.get(), entry.key.generation.get()),
     )
-    .map_err(|_| TimerEngineError::InvalidBudget)?;
-    Ok(DueTimerRecord {
+    .ok()?;
+    Some(DueTimerRecord {
         source: TimerSourceRecord {
             id: entry.key.timer_id,
             source_offset: entry.record.source_cq_offset,
             due_time_ms: entry.key.due_time_ms,
             payload: TimerPayloadLocator::try_new(entry.record.source_physical_offset, entry.record.source_size)
-                .map_err(|_| TimerEngineError::InvalidBudget)?,
+                .ok()?,
             route,
             estimated_bytes: entry.record.source_size as usize,
         },

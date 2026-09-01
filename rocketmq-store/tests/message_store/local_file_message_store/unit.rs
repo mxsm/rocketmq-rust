@@ -235,9 +235,36 @@ fn try_new_owned_test_store_at_root(
         None,
         false,
         crate::runtime::test_service_context("local-file-store-test"),
-    )?;
+    )?
+    .expect("test Timer Store configuration is valid");
     store.wire_owned_root_dependencies()?;
     Ok(store)
+}
+
+#[test]
+fn direct_constructor_rejects_invalid_timer_configuration_before_store_io() {
+    let parent = tempdir().expect("temporary parent");
+    let store_root = parent.path().join("must-not-be-created");
+    let mut message_store_config = MessageStoreConfig {
+        store_path_root_dir: store_root.to_string_lossy().to_string().into(),
+        ..MessageStoreConfig::default()
+    };
+    message_store_config.timer_store_config.lane_count = 0;
+
+    let outcome = LocalFileMessageStore::try_new(
+        Arc::new(message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
+        Arc::new(StoreRuntimeConfig::default()),
+        Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
+        None,
+        false,
+        crate::runtime::test_service_context("invalid-timer-store-test"),
+    )
+    .expect("invalid Timer limits are a source-free contract outcome");
+
+    assert!(outcome.is_none());
+    assert!(!store_root.exists(), "contract rejection must precede Store-root I/O");
 }
 
 fn new_configured_test_store_with_broker(
@@ -255,7 +282,9 @@ fn new_configured_test_store_with_broker(
         None,
         false,
         crate::runtime::test_service_context("configured-local-file-store-test"),
-    );
+    )
+    .expect("create configured LocalFile test Store")
+    .expect("test Timer Store configuration is valid");
     assert!(store.get_timer_message_store().is_none());
     store
         .wire_owned_root_dependencies()
@@ -667,6 +696,9 @@ async fn destroy_store_is_write_disabled_and_retries_without_namespace_mutation(
         Err(error) => error,
     };
     assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some());
 
     drop(store);
     drop(new_configured_test_store(&temp_dir, MessageStoreConfig::default()));
@@ -869,6 +901,8 @@ fn new_unwired_test_store(temp_dir: &tempfile::TempDir) -> LocalFileMessageStore
         false,
         crate::runtime::test_service_context("unwired-local-file-store-test"),
     )
+    .expect("create unwired LocalFile test Store")
+    .expect("test Timer Store configuration is valid")
 }
 
 #[tokio::test]
@@ -907,6 +941,8 @@ fn new_owned_wiring_test_store(
         false,
         crate::runtime::test_service_context("owned-wiring-local-file-store-test"),
     )
+    .expect("create owned-wiring LocalFile test Store")
+    .expect("test Timer Store configuration is valid")
 }
 
 #[test]
@@ -3474,24 +3510,28 @@ async fn sync_broker_role_in_controller_mode_refreshes_confirm_offset_for_master
 fn master_store_in_process_round_trips_concrete_store_reference() {
     let temp_dir = tempdir().unwrap();
     let store = new_test_store(&temp_dir);
-    let master_store = Arc::new(LocalFileMessageStore::new(
-        Arc::new(MessageStoreConfig {
-            store_path_root_dir: temp_dir
-                .path()
-                .join("master-store")
-                .to_string_lossy()
-                .to_string()
-                .into(),
-            ..MessageStoreConfig::default()
-        }),
-        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
-            .expect("valid test policy"),
-        Arc::new(StoreRuntimeConfig::default()),
-        Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
-        None,
-        false,
-        crate::runtime::test_service_context("master-local-file-store-test"),
-    ));
+    let master_store = Arc::new(
+        LocalFileMessageStore::new(
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: temp_dir
+                    .path()
+                    .join("master-store")
+                    .to_string_lossy()
+                    .to_string()
+                    .into(),
+                ..MessageStoreConfig::default()
+            }),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
+            Arc::new(StoreRuntimeConfig::default()),
+            Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
+            None,
+            false,
+            crate::runtime::test_service_context("master-local-file-store-test"),
+        )
+        .expect("create master LocalFile test Store")
+        .expect("test Timer Store configuration is valid"),
+    );
 
     store.set_master_store_in_process(master_store.clone());
 
@@ -3671,15 +3711,8 @@ fn failed_canonical_flush_marks_store_unwriteable_and_legacy_flush_keeps_waterma
 
     assert_eq!(error.component(), StoreComponent::MappedFile);
     let health = store.health_snapshot();
-    assert!(!health.writeable);
-    assert_eq!(
-        health.last_flush_error.map(|error| error.descriptor),
-        Some(&rocketmq_error::STORAGE_IO_FAILED)
-    );
-    assert_eq!(
-        health.last_flush_error.map(|error| error.component),
-        Some(StoreComponent::MappedFile)
-    );
+    assert!(!health.writable);
+    assert_eq!(health.last_error, Some(&rocketmq_error::STORAGE_IO_FAILED));
     assert_eq!(store.flush(), durable_before);
     assert_eq!(store.get_flushed_where(), durable_before);
 }
@@ -3707,11 +3740,8 @@ async fn graceful_shutdown_reports_typed_final_flush_failure() {
 
     assert_eq!(error.component(), StoreComponent::MappedFile);
     let health = store.health_snapshot();
-    assert!(!health.writeable);
-    assert_eq!(
-        health.last_flush_error.map(|error| error.descriptor),
-        Some(&rocketmq_error::STORAGE_IO_FAILED)
-    );
+    assert!(!health.writable);
+    assert_eq!(health.last_error, Some(&rocketmq_error::STORAGE_IO_FAILED));
 }
 
 #[tokio::test]

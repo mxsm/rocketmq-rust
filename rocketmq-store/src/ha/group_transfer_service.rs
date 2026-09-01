@@ -37,9 +37,8 @@ use crate::base::message_status_enum::PutMessageStatus;
 use crate::ha::ack_frontier::AckFrontier;
 use crate::ha::general_ha_service::GeneralHAServiceReference;
 use crate::ha::ha_service::HAService;
+use crate::ha::HAError;
 use crate::log_file::group_commit_request::GroupCommitRequest;
-use crate::store_error::HAError;
-use crate::store_error::HAResult;
 pub(crate) use rocketmq_store_local::ha::replication::GroupTransferRuntimeInfo;
 
 const PROGRESS_SAFETY_RECHECK_INTERVAL: Duration = Duration::from_millis(100);
@@ -62,7 +61,7 @@ impl GroupTransferService {
             .unwrap_or_else(|error| panic!("failed to build GroupTransferService resource budget: {error}"))
     }
 
-    pub fn try_new(ha_service: GeneralHAServiceReference) -> HAResult<Self> {
+    pub fn try_new(ha_service: GeneralHAServiceReference) -> Result<Self, HAError> {
         let inner = Arc::new(GroupTransferServiceInner::try_new(ha_service)?);
         Ok(GroupTransferService {
             inner: inner.clone(),
@@ -70,10 +69,10 @@ impl GroupTransferService {
         })
     }
 
-    pub async fn start(&self) -> HAResult<()> {
-        self.service_manager.start().await.map_err(|e| {
-            error!("Failed to start GroupTransferService: {:?}", e);
-            HAError::operation("start group transfer service", e)
+    pub async fn start(&self) -> Result<(), HAError> {
+        self.service_manager.start().await.map_err(|source| {
+            error!(source_present = true, "Failed to start GroupTransferService");
+            HAError::operation("start group transfer service", source)
         })
     }
 
@@ -107,17 +106,15 @@ struct GroupTransferServiceInner {
 }
 
 impl GroupTransferServiceInner {
-    fn try_new(ha_service: GeneralHAServiceReference) -> HAResult<Self> {
+    fn try_new(ha_service: GeneralHAServiceReference) -> Result<Self, HAError> {
         let process_limit = ProcessMemoryLimit::detect()
             .map_err(|error| HAError::operation("detect HA process memory limit", error))?;
-        let managed_bytes = process_limit
-            .fraction(1, 16)
-            .map_err(|error| HAError::operation("derive HA memory budget", error))?;
+        let managed_bytes = process_limit.fraction(1, 16).map_err(HAError::budget)?;
         let queue_bytes = usize::try_from((managed_bytes / 2).max(1)).unwrap_or(usize::MAX);
         let request_bytes = std::mem::size_of::<PendingGroupTransfer>().max(1);
         let queue_count = (queue_bytes / request_bytes).clamp(1, 65_536);
         let tree = ResourceBudgetTree::new("store", BudgetLimit::new(queue_count, queue_bytes, FullPolicy::Reject))
-            .map_err(|error| HAError::operation("build Store resource budget", error))?;
+            .map_err(HAError::budget)?;
         let queue_budget = tree
             .root()
             .child(
@@ -126,7 +123,7 @@ impl GroupTransferServiceInner {
                     .with_rate(RateLimit::new(queue_count as u64, queue_count as u64))
                     .with_max_age(Duration::from_secs(30)),
             )
-            .map_err(|error| HAError::operation("build HA group-transfer budget", error))?;
+            .map_err(HAError::budget)?;
         Ok(GroupTransferServiceInner {
             ha_service,
             ack_notify_count: AtomicU64::new(0),
@@ -155,11 +152,11 @@ impl GroupTransferServiceInner {
     #[inline]
     async fn put_request(&self, request: GroupCommitRequest) {
         let retained_bytes = std::mem::size_of::<PendingGroupTransfer>();
-        if let Err(error) = self
+        if let Err(_error) = self
             .pending_requests
             .try_push_data(PendingGroupTransfer::new(request), retained_bytes)
         {
-            warn!(error = %error, "HA group-transfer queue rejected a request");
+            warn!("HA group-transfer queue rejected a request");
         }
     }
 
@@ -171,8 +168,8 @@ impl GroupTransferServiceInner {
                 mix_all::ALL_ACK_IN_SYNC_STATE_SET,
             ) {
                 Ok(policy) => policy,
-                Err(error) => {
-                    warn!(error = %error, "HA group-transfer request has an invalid ACK policy");
+                Err(_error) => {
+                    warn!("HA group-transfer request has an invalid ACK policy");
                     pending
                         .request_mut()
                         .wakeup_customer(PutMessageStatus::FlushSlaveTimeout);
@@ -211,11 +208,7 @@ impl GroupTransferServiceInner {
         active.retain_mut(|pending| {
             if now >= pending.deadline() {
                 pending.complete(PutMessageStatus::FlushSlaveTimeout);
-                warn!(
-                    offset = pending.next_offset(),
-                    ack_nums = pending.ack_nums(),
-                    "transfer message to slave timed out"
-                );
+                warn!("HA group-transfer request timed out");
                 return false;
             }
             match frontier.decide(pending.requested_authority(), pending.policy, pending.next_offset()) {
@@ -224,12 +217,8 @@ impl GroupTransferServiceInner {
                     false
                 }
                 ReplicationDecision::Wait { .. } => true,
-                ReplicationDecision::Reject(reason) => {
-                    warn!(
-                        ?reason,
-                        offset = pending.next_offset(),
-                        "HA group-transfer request was rejected by the canonical decision"
-                    );
+                ReplicationDecision::Reject(_reason) => {
+                    warn!("HA group-transfer request was rejected by the canonical decision");
                     pending.complete(PutMessageStatus::FlushSlaveTimeout);
                     false
                 }

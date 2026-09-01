@@ -1200,6 +1200,8 @@ mod tests {
             false,
             crate::runtime::test_service_context("single-consume-queue-test"),
         )
+        .expect("create single consume queue test Store")
+        .expect("test Timer Store configuration is valid")
     }
 
     fn new_test_consume_queue(

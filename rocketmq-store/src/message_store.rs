@@ -20,7 +20,6 @@ pub(crate) mod runtime_state;
 #[cfg(feature = "rocksdb_store")]
 pub mod rocksdb_message_store;
 
-pub use release_checkpoint::StoreReleaseCheckpointError;
 pub use release_checkpoint::StoreReleaseCheckpointService;
 
 use std::any::Any;
@@ -48,7 +47,6 @@ use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
-use crate::base::backend_ops::StoreHealthSnapshot;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
@@ -492,7 +490,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, sync_flush_runtime_info())
     }
 
-    fn health_snapshot(&self) -> StoreHealthSnapshot {
+    fn health_snapshot(&self) -> rocketmq_store_api::StoreHealthSnapshot {
         delegate_store!(self, health_snapshot())
     }
 
@@ -699,7 +697,7 @@ macro_rules! message_store_methods {
         delegate_store!(self, sync_broker_role(broker_role));
     }
 
-    fn sync_broker_role_with_term(&self, broker_role: BrokerRole, external_term: u64) -> Result<(), StoreError> {
+    fn sync_broker_role_with_term(&self, broker_role: BrokerRole, external_term: u64) -> Result<bool, StoreError> {
         delegate_store!(self, sync_broker_role_with_term(broker_role, external_term))
     }
 
