@@ -830,7 +830,7 @@ impl NameServerRuntime {
         let in_flight_timeout = deadline.remaining().min(Duration::from_secs(30));
 
         info!(
-            "Phase 1/5: Waiting for in-flight requests (remaining: {}ms)...",
+            "NameServer shutdown: draining in-flight requests (timeout: {} ms)...",
             in_flight_timeout.as_millis()
         );
         shutdown_report.in_flight = self.wait_for_inflight_requests(in_flight_timeout).await;
@@ -841,7 +841,7 @@ impl NameServerRuntime {
             );
         }
 
-        info!("Phase 2/5: Stopping scheduled tasks...");
+        info!("NameServer shutdown: stopping scheduled tasks...");
         if let Some(scheduled_tasks) = self.scheduled_tasks.take() {
             let scheduled_report = scheduled_tasks.shutdown(deadline.remaining()).await;
             if let Err(error) = scheduled_report.assert_no_task_leak() {
@@ -876,9 +876,9 @@ impl NameServerRuntime {
             .is_none_or(|report| !report.timed_out && report.pending_operations == 0 && report.pending_bytes == 0);
         shutdown_report.metadata_io_healthy = Some(metadata_persisted && metadata_drained);
 
-        info!("Phase 3/5: Shutting down embedded controller...");
         #[cfg(feature = "embedded-controller")]
         if let Some(controller_manager) = self.inner.controller_manager() {
+            info!("NameServer shutdown: stopping the embedded controller...");
             shutdown_report.embedded_controller_healthy =
                 Some(match controller_manager.shutdown_until(deadline).await {
                     Ok(()) => true,
@@ -889,7 +889,7 @@ impl NameServerRuntime {
                 });
         }
 
-        info!("Phase 4/5: Shutting down route info manager...");
+        info!("NameServer shutdown: stopping the route information manager...");
         shutdown_report.route_unregistration =
             match tokio::time::timeout(deadline.remaining(), self.inner.route_info_manager().shutdown()).await {
                 Ok(report) => report,
@@ -915,13 +915,12 @@ impl NameServerRuntime {
             );
         }
 
+        let server_task_timeout = deadline.remaining().min(TASK_JOIN_TIMEOUT);
         info!(
-            "Phase 5/5: Waiting for server task (timeout: {}s)...",
-            TASK_JOIN_TIMEOUT.as_secs()
+            "NameServer shutdown: stopping the server task group (timeout: {} ms)...",
+            server_task_timeout.as_millis()
         );
-        shutdown_report.server = self
-            .wait_for_server_task(deadline.remaining().min(TASK_JOIN_TIMEOUT))
-            .await;
+        shutdown_report.server = self.wait_for_server_task(server_task_timeout).await;
         shutdown_report.remoting_server = self
             .wait_for_remoting_server_report(deadline.remaining().min(TASK_JOIN_TIMEOUT))
             .await;
