@@ -16,6 +16,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::future::Future;
+use std::mem::size_of;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -26,12 +27,20 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use serde::Serialize;
+
 use rocketmq_observability::metrics::mcp::McpCacheEvent;
 
+use crate::infrastructure::snapshot::RetainedSize;
 use crate::model::contract::observed_at;
 use crate::model::contract::CacheStatus;
 use crate::model::contract::QueryPayload;
 use crate::model::contract::QueryResult;
+
+const MAX_CACHE_ENTRY_BYTES: usize = 4 * 1024 * 1024;
+const MAX_CACHE_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+const RETAINED_CACHE_ENTRY_OVERHEAD: usize = 2 * 1024;
+const ARC_ALLOCATION_OVERHEAD: usize = 2 * size_of::<usize>();
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CacheMetricsSnapshot {
@@ -74,6 +83,8 @@ pub(crate) struct QueryCache {
 struct QueryCacheInner {
     enabled: bool,
     capacity: usize,
+    max_entry_bytes: usize,
+    max_total_bytes: usize,
     generation: AtomicU64,
     state: Mutex<CacheState>,
     flights: Mutex<HashMap<String, Weak<Mutex<()>>>>,
@@ -84,6 +95,7 @@ struct QueryCacheInner {
 struct CacheState {
     entries: HashMap<String, CacheEntry>,
     insertion_order: VecDeque<String>,
+    retained_bytes: usize,
 }
 
 struct CacheEntry {
@@ -91,14 +103,21 @@ struct CacheEntry {
     observed_at: String,
     inserted_at: Instant,
     expires_at: Instant,
+    retained_bytes: usize,
 }
 
 impl QueryCache {
     pub(crate) fn new(enabled: bool, capacity: usize) -> Self {
+        Self::with_byte_limits(enabled, capacity, MAX_CACHE_ENTRY_BYTES, MAX_CACHE_TOTAL_BYTES)
+    }
+
+    fn with_byte_limits(enabled: bool, capacity: usize, max_entry_bytes: usize, max_total_bytes: usize) -> Self {
         Self {
             inner: Arc::new(QueryCacheInner {
                 enabled,
                 capacity,
+                max_entry_bytes,
+                max_total_bytes,
                 generation: AtomicU64::new(0),
                 state: Mutex::new(CacheState::default()),
                 flights: Mutex::new(HashMap::new()),
@@ -115,7 +134,7 @@ impl QueryCache {
         load: Load,
     ) -> Result<QueryResult<T>, E>
     where
-        T: Clone + Send + Sync + 'static,
+        T: Clone + RetainedSize + Serialize + Send + Sync + 'static,
         Load: FnOnce() -> LoadFuture,
         LoadFuture: Future<Output = Result<T, E>>,
     {
@@ -139,7 +158,7 @@ impl QueryCache {
         load: Load,
     ) -> Result<QueryResult<T>, E>
     where
-        T: Clone + Send + Sync + 'static,
+        T: Clone + RetainedSize + Serialize + Send + Sync + 'static,
         Load: FnOnce() -> LoadFuture,
         LoadFuture: Future<Output = Result<QueryPayload<T>, E>>,
         Cancelled: FnOnce() -> E,
@@ -172,9 +191,17 @@ impl QueryCache {
 
         let generation = self.inner.generation.load(Ordering::Acquire);
         let payload = load().await?;
+        let source_retained_bytes = payload.retained_size();
         let observed_at = observed_at();
-        self.insert_if_current(key, payload.clone(), observed_at.clone(), ttl, generation)
-            .await;
+        self.insert_if_current(
+            key,
+            payload.clone(),
+            source_retained_bytes,
+            observed_at.clone(),
+            ttl,
+            generation,
+        )
+        .await;
         self.inner.metrics.misses.fetch_add(1, Ordering::Relaxed);
         rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Miss);
         Ok(QueryResult::from_payload(payload, observed_at, 0, CacheStatus::Miss))
@@ -197,6 +224,9 @@ impl QueryCache {
         let removed = state.entries.len();
         state.entries.clear();
         state.insertion_order.clear();
+        state.entries.shrink_to_fit();
+        state.insertion_order.shrink_to_fit();
+        state.retained_bytes = 0;
         self.inner.metrics.invalidations.fetch_add(1, Ordering::Relaxed);
         rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Invalidation);
         removed
@@ -226,25 +256,50 @@ impl QueryCache {
         Some(result)
     }
 
-    async fn insert_if_current<T>(&self, key: String, value: T, observed_at: String, ttl: Duration, generation: u64)
-    where
-        T: Send + Sync + 'static,
+    async fn insert_if_current<T>(
+        &self,
+        key: String,
+        value: QueryPayload<T>,
+        source_retained_bytes: usize,
+        observed_at: String,
+        ttl: Duration,
+        generation: u64,
+    ) where
+        T: RetainedSize + Serialize + Send + Sync + 'static,
     {
+        let Ok(mut serialized) = serde_json::to_vec(&value) else {
+            return;
+        };
+        serialized.shrink_to_fit();
+        let retained_bytes = retained_cache_entry_bytes(
+            &key,
+            &observed_at,
+            source_retained_bytes
+                .max(value.retained_size())
+                .max(serialized.capacity()),
+        );
+        if retained_bytes > self.inner.max_entry_bytes || retained_bytes > self.inner.max_total_bytes {
+            return;
+        }
         let mut state = self.inner.state.lock().await;
         if self.inner.generation.load(Ordering::Acquire) != generation {
             return;
         }
         remove_entry(&mut state, &key);
-        while state.entries.len() >= self.inner.capacity {
+        while state.entries.len() >= self.inner.capacity
+            || state.retained_bytes.saturating_add(retained_bytes) > self.inner.max_total_bytes
+        {
             let Some(oldest) = state.insertion_order.pop_front() else {
                 break;
             };
-            if state.entries.remove(&oldest).is_some() {
+            if let Some(entry) = state.entries.remove(&oldest) {
+                state.retained_bytes = state.retained_bytes.saturating_sub(entry.retained_bytes);
                 self.inner.metrics.evictions.fetch_add(1, Ordering::Relaxed);
                 rocketmq_observability::metrics::mcp::record_cache_event(McpCacheEvent::Eviction);
             }
         }
         let inserted_at = Instant::now();
+        state.retained_bytes = state.retained_bytes.saturating_add(retained_bytes);
         state.insertion_order.push_back(key.clone());
         state.entries.insert(
             key,
@@ -253,6 +308,7 @@ impl QueryCache {
                 observed_at,
                 inserted_at,
                 expires_at: inserted_at + ttl,
+                retained_bytes,
             },
         );
     }
@@ -272,12 +328,31 @@ impl QueryCache {
     async fn len(&self) -> usize {
         self.inner.state.lock().await.entries.len()
     }
+
+    #[cfg(test)]
+    async fn retained_bytes(&self) -> usize {
+        self.inner.state.lock().await.retained_bytes
+    }
 }
 
 fn remove_entry(state: &mut CacheState, key: &str) {
-    if state.entries.remove(key).is_some() {
+    if let Some(entry) = state.entries.remove(key) {
+        state.retained_bytes = state.retained_bytes.saturating_sub(entry.retained_bytes);
         state.insertion_order.retain(|candidate| candidate != key);
+        if state.entries.is_empty() {
+            state.entries.shrink_to_fit();
+            state.insertion_order.shrink_to_fit();
+        }
     }
+}
+
+fn retained_cache_entry_bytes(key: &String, observed_at: &String, payload_bytes: usize) -> usize {
+    size_of::<CacheEntry>()
+        .saturating_add(RETAINED_CACHE_ENTRY_OVERHEAD)
+        .saturating_add(ARC_ALLOCATION_OVERHEAD)
+        .saturating_add(key.capacity().saturating_mul(2))
+        .saturating_add(observed_at.capacity())
+        .saturating_add(payload_bytes)
 }
 
 #[cfg(test)]
@@ -295,6 +370,21 @@ mod tests {
     use crate::model::contract::SourceFailureCode;
 
     use super::*;
+
+    #[derive(Clone, Serialize)]
+    struct HiddenCapacityPayload {
+        visible: String,
+        #[serde(skip_serializing)]
+        hidden: String,
+    }
+
+    impl RetainedSize for HiddenCapacityPayload {
+        fn retained_heap_size(&self) -> usize {
+            self.visible
+                .retained_heap_size()
+                .saturating_add(self.hidden.retained_heap_size())
+        }
+    }
 
     #[tokio::test]
     async fn cache_returns_miss_then_hit_without_reloading() {
@@ -381,6 +471,139 @@ mod tests {
         assert_eq!(result.cache_status, CacheStatus::Miss);
         assert_eq!(calls.load(Ordering::SeqCst), 4);
         assert_eq!(cache.len().await, 2);
+    }
+
+    #[tokio::test]
+    async fn cache_enforces_exact_per_entry_and_global_retained_byte_limits() {
+        let key = "entry-a".to_string();
+        let observed = "2026-01-01T00:00:00Z".to_string();
+        let payload = QueryPayload::complete("x".repeat(128));
+        let mut serialized = serde_json::to_vec(&payload).unwrap();
+        serialized.shrink_to_fit();
+        let entry_bytes =
+            retained_cache_entry_bytes(&key, &observed, payload.retained_size().max(serialized.capacity()));
+        let ttl = Duration::from_secs(60);
+
+        let exact = QueryCache::with_byte_limits(true, 8, entry_bytes, entry_bytes * 2);
+        exact
+            .insert_if_current(
+                key.clone(),
+                payload.clone(),
+                payload.retained_size(),
+                observed.clone(),
+                ttl,
+                0,
+            )
+            .await;
+        assert_eq!(exact.len().await, 1);
+        assert_eq!(exact.retained_bytes().await, entry_bytes);
+
+        let below_entry = QueryCache::with_byte_limits(true, 8, entry_bytes - 1, entry_bytes * 2);
+        below_entry
+            .insert_if_current(
+                key.clone(),
+                payload.clone(),
+                payload.retained_size(),
+                observed.clone(),
+                ttl,
+                0,
+            )
+            .await;
+        assert_eq!(below_entry.len().await, 0);
+        assert_eq!(below_entry.retained_bytes().await, 0);
+
+        let global = QueryCache::with_byte_limits(true, 8, entry_bytes + 1, entry_bytes * 2);
+        global
+            .insert_if_current(key, payload.clone(), payload.retained_size(), observed.clone(), ttl, 0)
+            .await;
+        global
+            .insert_if_current(
+                "entry-b".to_string(),
+                payload.clone(),
+                payload.retained_size(),
+                observed.clone(),
+                ttl,
+                0,
+            )
+            .await;
+        assert_eq!(global.len().await, 2);
+        assert_eq!(global.retained_bytes().await, entry_bytes * 2);
+
+        let mut plus_one_observed = String::with_capacity(observed.capacity() + 1);
+        plus_one_observed.push_str(&observed);
+        plus_one_observed.push('x');
+        let plus_one_bytes = retained_cache_entry_bytes(
+            &"entry-c".to_string(),
+            &plus_one_observed,
+            payload.retained_size().max(serialized.capacity()),
+        );
+        assert_eq!(plus_one_bytes, entry_bytes + 1);
+        global
+            .insert_if_current(
+                "entry-c".to_string(),
+                payload.clone(),
+                payload.retained_size(),
+                plus_one_observed,
+                ttl,
+                0,
+            )
+            .await;
+        assert_eq!(
+            global.len().await,
+            1,
+            "one extra retained byte must evict both exact-size entries"
+        );
+        assert_eq!(global.retained_bytes().await, plus_one_bytes);
+        assert_eq!(global.metrics().evictions, 2);
+        assert_eq!(global.clear().await, 1);
+        assert_eq!(global.retained_bytes().await, 0);
+    }
+
+    #[tokio::test]
+    async fn oversized_payload_is_returned_but_never_retained_or_reused() {
+        let cache = QueryCache::new(true, 8);
+        let calls = Arc::new(AtomicUsize::new(0));
+        for _ in 0..2 {
+            let calls = calls.clone();
+            let result = cache
+                .get_or_try_init("infra:oversized".to_string(), Duration::from_secs(60), || async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, ()>("x".repeat(MAX_CACHE_ENTRY_BYTES))
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.cache_status, CacheStatus::Miss);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(cache.len().await, 0);
+        assert_eq!(cache.retained_bytes().await, 0);
+    }
+
+    #[tokio::test]
+    async fn hidden_excess_capacity_is_charged_and_never_cached() {
+        let cache = QueryCache::new(true, 8);
+        let calls = Arc::new(AtomicUsize::new(0));
+        for _ in 0..2 {
+            let calls = calls.clone();
+            let result = cache
+                .get_or_try_init("capacity:hidden".to_string(), Duration::from_secs(60), || async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let mut hidden = String::with_capacity(MAX_CACHE_ENTRY_BYTES + 1);
+                    hidden.push('x');
+                    Ok::<_, ()>(HiddenCapacityPayload {
+                        visible: "ok".to_string(),
+                        hidden,
+                    })
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.cache_status, CacheStatus::Miss);
+            assert!(result.data.hidden.capacity() > MAX_CACHE_ENTRY_BYTES);
+            assert!(serde_json::to_vec(&result.data).unwrap().len() < 64);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(cache.len().await, 0);
+        assert_eq!(cache.retained_bytes().await, 0);
     }
 
     #[tokio::test]

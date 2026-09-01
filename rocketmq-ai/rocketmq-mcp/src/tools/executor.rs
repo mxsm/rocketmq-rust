@@ -48,6 +48,7 @@ use crate::tools::config_tools;
 use crate::tools::connection_tools;
 use crate::tools::consumer_tools;
 use crate::tools::diagnosis_tools;
+use crate::tools::infrastructure_tools;
 use crate::tools::message_tools;
 use crate::tools::output_policy;
 use crate::tools::proxy_tools;
@@ -753,6 +754,61 @@ where
                     success_unlinked_result(descriptor, request_id, cluster, summary, output)
                 })
             }
+            ToolId::GetHaStatus => {
+                let args = match decode_args::<infrastructure_tools::GetHaStatusArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.ha_status(args).await.and_then(|output| {
+                    let summary = summary_ha_status(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetControllerMetadata => {
+                let args = match decode_args::<infrastructure_tools::GetControllerMetadataArgs>(arguments.clone()) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.controller_metadata(args).await.and_then(|output| {
+                    let summary = summary_controller_metadata(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
+            ToolId::GetNameserverConfigSummary => {
+                let args = match decode_args::<infrastructure_tools::GetNameserverConfigSummaryArgs>(arguments.clone())
+                {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return Ok(guarded_call.finish_result(error_result(
+                            descriptor.name,
+                            &tool_name,
+                            request_id,
+                            error,
+                        )));
+                    }
+                };
+                self.adapter.nameserver_config_summary(args).await.and_then(|output| {
+                    let summary = summary_nameserver_config(&output);
+                    let cluster = output.cluster.clone();
+                    success_unlinked_result(descriptor, request_id, cluster, summary, output)
+                })
+            }
             #[cfg(feature = "change-planning")]
             ToolId::PlanCreateTopic => {
                 let args = match decode_args::<change_tools::CreateTopicArgs>(arguments.clone()) {
@@ -1224,6 +1280,32 @@ fn summary_consumer_progress(output: &consumer_tools::GetConsumerProgressOutput)
     format!(
         "Consumer group {} on cluster {} returned {} of {} queue progress rows with total lag {}.",
         output.consumer_group, output.cluster, output.page.count, output.queue_count, output.total_lag
+    )
+}
+
+fn summary_ha_status(output: &infrastructure_tools::GetHaStatusOutput) -> String {
+    format!(
+        "Cluster {} returned {} logical master Broker HA observations and {} Controller sync-state observations.",
+        output.cluster,
+        output.brokers.len(),
+        output.controller_sync_states.len()
+    )
+}
+
+fn summary_controller_metadata(output: &infrastructure_tools::GetControllerMetadataOutput) -> String {
+    format!(
+        "Cluster {} returned metadata for {} configured logical Controllers.",
+        output.cluster,
+        output.controllers.len()
+    )
+}
+
+fn summary_nameserver_config(output: &infrastructure_tools::GetNameserverConfigSummaryOutput) -> String {
+    format!(
+        "Cluster {} returned {} allowlisted NameServer configuration summaries with {} differences.",
+        output.cluster,
+        output.nameservers.len(),
+        output.inconsistent_fields.len()
     )
 }
 
@@ -1704,12 +1786,81 @@ mod tests {
             }))
         }
 
+        async fn ha_status(
+            &self,
+            args: infrastructure_tools::GetHaStatusArgs,
+        ) -> Result<QueryResult<infrastructure_tools::GetHaStatusOutput>, ToolExecutionError> {
+            let brokers = if args.broker_names == ["bounded"] {
+                bounded_ha_brokers()
+            } else {
+                Vec::new()
+            };
+            Ok(QueryResult::bypass(infrastructure_tools::GetHaStatusOutput {
+                cluster: args.cluster,
+                brokers,
+                controller_sync_states: Vec::new(),
+            }))
+        }
+
+        async fn controller_metadata(
+            &self,
+            args: infrastructure_tools::GetControllerMetadataArgs,
+        ) -> Result<QueryResult<infrastructure_tools::GetControllerMetadataOutput>, ToolExecutionError> {
+            Ok(QueryResult::bypass(infrastructure_tools::GetControllerMetadataOutput {
+                cluster: args.cluster,
+                controllers: Vec::new(),
+            }))
+        }
+
+        async fn nameserver_config_summary(
+            &self,
+            args: infrastructure_tools::GetNameserverConfigSummaryArgs,
+        ) -> Result<QueryResult<infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolExecutionError> {
+            Ok(QueryResult::bypass(
+                infrastructure_tools::GetNameserverConfigSummaryOutput {
+                    cluster: args.cluster,
+                    nameservers: Vec::new(),
+                    inconsistent_fields: Vec::new(),
+                },
+            ))
+        }
+
         async fn diagnose_consumer_lag(
             &self,
             _args: diagnosis_tools::DiagnoseConsumerLagArgs,
         ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolExecutionError> {
             unimplemented!("not needed by this test")
         }
+    }
+
+    fn bounded_ha_brokers() -> Vec<infrastructure_tools::BrokerHaObservation> {
+        (0..16)
+            .map(|broker_index| {
+                let connection_count = if broker_index == 15 { 39 } else { 63 };
+                infrastructure_tools::BrokerHaObservation {
+                    broker_name: format!("broker-{broker_index:02}"),
+                    broker_id: 0,
+                    master_commit_log_max_offset: 100,
+                    in_sync_slave_count: u32::try_from(connection_count).unwrap(),
+                    pending_group_transfer_request_count: 0,
+                    pending_group_transfer_oldest_wait_millis: 0,
+                    group_transfer_ack_notify_count: 0,
+                    connections: (1..=connection_count)
+                        .map(|replica_index| infrastructure_tools::HaConnectionObservation {
+                            replica: infrastructure_tools::LogicalBrokerInstance {
+                                broker_name: format!("broker-{broker_index:02}"),
+                                broker_id: u64::try_from(replica_index).unwrap(),
+                            },
+                            slave_ack_offset: 90,
+                            diff: 10,
+                            in_sync: true,
+                            transferred_bytes_per_second: 1,
+                            transfer_from_where: 80,
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
     }
 
     #[tokio::test]
@@ -2021,6 +2172,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn infrastructure_tools_enforce_scope_before_schema_and_never_accept_addresses() {
+        let read_guard = test_guard("read_only");
+        let read_only = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            read_guard.clone(),
+        );
+        let denied_before_schema = read_only
+            .call(
+                CallToolRequestParams::new(ToolId::GetHaStatus.descriptor().name).with_arguments(
+                    serde_json::json!({
+                        "cluster": "local-dev",
+                        "endpoint": "private-controller.internal:9878"
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied_before_schema.is_error, Some(true));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content_text(&denied_before_schema)).unwrap()["code"],
+            "unauthorized_scope"
+        );
+
+        let nameserver = read_only
+            .call(
+                CallToolRequestParams::new(ToolId::GetNameserverConfigSummary.descriptor().name)
+                    .with_arguments(serde_json::json!({"cluster": "local-dev"}).as_object().unwrap().clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(nameserver.is_error, Some(false));
+
+        let diagnose_guard = test_guard("diagnose");
+        let diagnose = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            diagnose_guard.clone(),
+        );
+        for (tool, arguments) in [
+            (
+                ToolId::GetHaStatus,
+                serde_json::json!({
+                    "cluster": "local-dev",
+                    "broker_names": ["broker-a"],
+                    "include_sync_state": true,
+                    "controller_names": ["controller-local"]
+                }),
+            ),
+            (
+                ToolId::GetControllerMetadata,
+                serde_json::json!({"cluster": "local-dev", "controller_names": ["controller-local"]}),
+            ),
+        ] {
+            let result = diagnose
+                .call(
+                    CallToolRequestParams::new(tool.descriptor().name)
+                        .with_arguments(arguments.as_object().unwrap().clone()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(false));
+            let wire = serde_json::to_string(&result).unwrap();
+            assert!(!wire.contains("private-controller"));
+        }
+        let invalid = diagnose
+            .call(
+                CallToolRequestParams::new(ToolId::GetControllerMetadata.descriptor().name).with_arguments(
+                    serde_json::json!({"cluster": "local-dev", "address": "10.20.30.40:9878"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(invalid.is_error, Some(true));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&content_text(&invalid)).unwrap()["code"],
+            "invalid_arguments"
+        );
+        for records in [read_guard.audit_log().records(), diagnose_guard.audit_log().records()] {
+            let wire = serde_json::to_string(&records).unwrap();
+            assert!(!wire.contains("private-controller"));
+            assert!(!wire.contains("10.20.30.40"));
+        }
+    }
+
+    #[tokio::test]
     async fn new_read_tools_dispatch_without_resource_links_and_reject_unknown_fields() {
         let executor = ToolExecutor::new(
             FakeAdapter {
@@ -2256,6 +2503,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exact_nested_infrastructure_budget_reaches_executor_without_output_too_large() {
+        let result = ToolExecutor::new(
+            FakeAdapter {
+                fail: false,
+                partial: false,
+            },
+            test_guard("diagnose"),
+        )
+        .call(
+            CallToolRequestParams::new(ToolId::GetHaStatus.descriptor().name).with_arguments(
+                serde_json::json!({
+                    "cluster":"local-dev",
+                    "broker_names":["bounded"],
+                    "include_sync_state":false
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.is_error, Some(false));
+        let structured = result.structured_content.unwrap();
+        assert_eq!(structured["data"]["brokers"].as_array().unwrap().len(), 16);
+        assert!(!structured["warnings"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("output_rows_truncated")));
+    }
+
+    #[tokio::test]
     async fn proxy_backend_failure_never_exposes_internal_endpoint() {
         let result = ToolExecutor::new(
             FakeAdapter {
@@ -2423,6 +2702,7 @@ mod tests {
                 tenant: None,
                 credentials: None,
                 proxies: Vec::new(),
+                controllers: Vec::new(),
             }],
         )
         .unwrap()

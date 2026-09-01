@@ -24,6 +24,7 @@ pub mod connection_tools;
 pub mod consumer_tools;
 pub mod diagnosis_tools;
 pub mod executor;
+pub mod infrastructure_tools;
 pub mod message_tools;
 pub mod output_policy;
 pub mod proxy_tools;

@@ -552,10 +552,7 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(standard_tool.is_error, Some(false));
-        let cursor = standard_tool.structured_content.as_ref().unwrap()["data"]["next_cursor"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        assert!(standard_tool.structured_content.as_ref().unwrap()["data"]["next_cursor"].is_string());
         assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
 
         let standard_resource = oauth_context(&peer, 2, "other-oauth-read", ["read_only"], ["rocketmq:read"]);
@@ -573,9 +570,29 @@ mod tests {
             "same-class Tool and Resource must share the retained snapshot"
         );
 
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn real_handlers_isolate_topic_snapshots_and_share_sensitive_visibility() {
+        let (_owner, server, counters) = test_server("diagnose", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+
+        running
+            .service()
+            .read_resource(
+                ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics?limit=1"),
+                oauth_context(&peer, 1, "oauth-read", ["read_only"], ["rocketmq:read"]),
+            )
+            .await
+            .unwrap();
+
         let sensitive = oauth_context(
             &peer,
-            3,
+            2,
             "oauth-diagnose",
             ["diagnose"],
             ["rocketmq:read", "rocketmq:diagnose"],
@@ -594,31 +611,7 @@ mod tests {
             "standard and sensitive snapshots must not share"
         );
 
-        let before_cursor_replay = counters.starts.load(Ordering::SeqCst);
-        let replay = complete_tool_response(
-            running
-                .service()
-                .call_tool(
-                    list_topics_request(Some(1), Some(cursor)),
-                    oauth_context(
-                        &peer,
-                        4,
-                        "oauth-diagnose",
-                        ["diagnose"],
-                        ["rocketmq:read", "rocketmq:diagnose"],
-                    ),
-                )
-                .await
-                .unwrap(),
-        );
-        assert_eq!(replay.is_error, Some(true));
-        assert_eq!(
-            counters.starts.load(Ordering::SeqCst),
-            before_cursor_replay,
-            "cross-class cursor rejection must not start an admin session"
-        );
-
-        let stdio_diagnose = local_context(&peer, 5);
+        let stdio_diagnose = local_context(&peer, 3);
         running
             .service()
             .read_resource(
@@ -633,6 +626,65 @@ mod tests {
             "local diagnose must share the sensitive class"
         );
 
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn real_handlers_reject_cross_visibility_cursor_without_session_work() {
+        let (_owner, server, counters) = test_server("diagnose", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let standard_tool = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    list_topics_request(Some(1), None),
+                    oauth_context(&peer, 1, "oauth-read", ["read_only"], ["rocketmq:read"]),
+                )
+                .await
+                .unwrap(),
+        );
+        let cursor = standard_tool.structured_content.as_ref().unwrap()["data"]["next_cursor"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let before_cursor_replay = counters.starts.load(Ordering::SeqCst);
+        let replay = complete_tool_response(
+            running
+                .service()
+                .call_tool(
+                    list_topics_request(Some(1), Some(cursor)),
+                    oauth_context(
+                        &peer,
+                        2,
+                        "oauth-diagnose",
+                        ["diagnose"],
+                        ["rocketmq:read", "rocketmq:diagnose"],
+                    ),
+                )
+                .await
+                .unwrap(),
+        );
+
+        assert_eq!(replay.is_error, Some(true));
+        assert_eq!(
+            counters.starts.load(Ordering::SeqCst),
+            before_cursor_replay,
+            "cross-class cursor rejection must not start an admin session"
+        );
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn real_handlers_isolate_ordinary_cache_by_visibility() {
+        let (_owner, server, counters) = test_server("diagnose", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+
         let overview = || {
             CallToolRequestParams::new("rocketmq_get_cluster_overview")
                 .with_arguments(json!({"cluster": "local-dev"}).as_object().unwrap().clone())
@@ -641,7 +693,7 @@ mod tests {
             .service()
             .call_tool(
                 overview(),
-                oauth_context(&peer, 6, "oauth-read", ["read_only"], ["rocketmq:read"]),
+                oauth_context(&peer, 1, "oauth-read", ["read_only"], ["rocketmq:read"]),
             )
             .await
             .unwrap();
@@ -651,7 +703,7 @@ mod tests {
                 overview(),
                 oauth_context(
                     &peer,
-                    7,
+                    2,
                     "oauth-diagnose",
                     ["diagnose"],
                     ["rocketmq:read", "rocketmq:diagnose"],
@@ -663,7 +715,7 @@ mod tests {
             .service()
             .call_tool(
                 overview(),
-                oauth_context(&peer, 8, "another-read", ["read_only"], ["rocketmq:read"]),
+                oauth_context(&peer, 3, "another-read", ["read_only"], ["rocketmq:read"]),
             )
             .await
             .unwrap();
@@ -675,35 +727,39 @@ mod tests {
 
         drop(running);
         drop(client);
+    }
 
-        let (_owner, read_only_server, read_only_counters) = test_server("read_only", None);
-        let (read_only_running, read_only_client) = connected_test_server(read_only_server).await;
-        let read_only_peer = read_only_running.peer().clone();
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn real_handlers_map_local_read_only_to_standard_visibility() {
+        let (_owner, server, counters) = test_server("read_only", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
 
-        read_only_running
+        running
             .service()
             .call_tool(
                 list_topics_request(None, None),
-                oauth_context(&read_only_peer, 9, "oauth-read", ["read_only"], ["rocketmq:read"]),
+                oauth_context(&peer, 1, "oauth-read", ["read_only"], ["rocketmq:read"]),
             )
             .await
             .unwrap();
-        read_only_running
+        running
             .service()
             .read_resource(
                 ReadResourceRequestParams::new("rocketmq://clusters/local-dev/topics"),
-                local_context(&read_only_peer, 10),
+                local_context(&peer, 2),
             )
             .await
             .unwrap();
         assert_eq!(
-            read_only_counters.topic_inventory_queries.load(Ordering::SeqCst),
+            counters.topic_inventory_queries.load(Ordering::SeqCst),
             1,
             "local read-only must use the standard HTTP read class"
         );
 
-        drop(read_only_running);
-        drop(read_only_client);
+        drop(running);
+        drop(client);
     }
 
     #[cfg(all(feature = "streamable-http", feature = "stdio"))]
@@ -805,6 +861,82 @@ mod tests {
 
         drop(denied_running);
         drop(denied_client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn diagnose_handler_discovers_all_infrastructure_tools() {
+        let (_owner, server, _counters) = test_server("diagnose", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+
+        let names = running
+            .service()
+            .list_tools(None, local_context(&peer, 1))
+            .await
+            .unwrap()
+            .tools
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<BTreeSet<_>>();
+
+        assert!(names.contains("rocketmq_get_ha_status"));
+        assert!(names.contains("rocketmq_get_controller_metadata"));
+        assert!(names.contains("rocketmq_get_nameserver_config_summary"));
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn read_only_handler_discovers_only_read_infrastructure_tool() {
+        let (_owner, server, _counters) = test_server("read_only", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+
+        let names = running
+            .service()
+            .list_tools(None, local_context(&peer, 1))
+            .await
+            .unwrap()
+            .tools
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<BTreeSet<_>>();
+
+        assert!(!names.contains("rocketmq_get_ha_status"));
+        assert!(!names.contains("rocketmq_get_controller_metadata"));
+        assert!(names.contains("rocketmq_get_nameserver_config_summary"));
+        drop(running);
+        drop(client);
+    }
+
+    #[cfg(all(feature = "streamable-http", feature = "stdio"))]
+    #[tokio::test]
+    async fn read_only_handler_denies_infrastructure_diagnosis_before_session_work() {
+        let (_owner, server, counters) = test_server("read_only", None);
+        let (running, client) = connected_test_server(server).await;
+        let peer = running.peer().clone();
+        let request = CallToolRequestParams::new("rocketmq_get_ha_status").with_arguments(
+            json!({"cluster": "local-dev", "endpoint": "private-controller.internal:9878"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+
+        let denied = complete_tool_response(
+            running
+                .service()
+                .call_tool(request, local_context(&peer, 1))
+                .await
+                .unwrap(),
+        );
+
+        assert_eq!(denied.is_error, Some(true));
+        assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 0);
+        drop(running);
+        drop(client);
     }
 
     #[cfg(all(feature = "streamable-http", feature = "stdio"))]
@@ -972,6 +1104,14 @@ mod tests {
             .into_iter()
             .map(|prompt| serde_json::to_value(prompt).expect("prompt descriptor serializes"))
             .collect::<Vec<_>>();
+
+        #[cfg(not(feature = "change-planning"))]
+        assert_eq!(tools.len(), 24);
+        #[cfg(feature = "change-planning")]
+        assert_eq!(tools.len(), 29);
+        assert_eq!(resources.len(), 7);
+        assert_eq!(resource_templates.as_array().unwrap().len(), 10);
+        assert_eq!(prompts.len(), 2);
 
         let surface = json!({
             "tools": tools,

@@ -32,6 +32,7 @@ pub mod consumer_workspace;
 pub mod dashboard;
 pub mod error;
 pub mod error_view;
+pub mod infrastructure_observation;
 pub mod lite;
 pub mod message;
 pub mod proxy;

@@ -18,6 +18,7 @@ allow_tools = [
   "rocketmq_get_topic_config",
   "rocketmq_get_consumer_group_details",
   "rocketmq_get_consumer_progress",
+  "rocketmq_get_nameserver_config_summary",
 ]
 deny_tools = ["*"]
 
@@ -29,6 +30,8 @@ allow_tools = [
   "rocketmq_get_broker_diagnostics",
   "rocketmq_get_broker_log_filter_state",
   "rocketmq_get_proxy_drain_state",
+  "rocketmq_get_ha_status",
+  "rocketmq_get_controller_metadata",
 ]
 
 [roles.operator]

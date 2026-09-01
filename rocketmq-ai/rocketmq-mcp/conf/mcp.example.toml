@@ -75,6 +75,12 @@ name = "proxy-local"
 # cache keys, or configuration Debug formatting.
 endpoint = "127.0.0.1:8081"
 
+[[clusters.controllers]]
+name = "controller-local"
+# Internal endpoint: never exposed through Tool schemas, output, errors, logs,
+# audit records, cache keys, or configuration Debug formatting.
+endpoint = "127.0.0.1:9878"
+
 [security]
 profile = "diagnose"
 allow_change_planning = false

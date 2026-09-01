@@ -206,6 +206,242 @@ impl<T: RetainedSize> RetainedSize for QueryPayload<T> {
     }
 }
 
+impl<T: RetainedSize> RetainedSize for Page<T> {
+    fn retained_heap_size(&self) -> usize {
+        self.items
+            .retained_heap_size()
+            .saturating_add(self.next_cursor.retained_heap_size())
+    }
+}
+
+impl RetainedSize for serde_json::Value {
+    fn retained_heap_size(&self) -> usize {
+        match self {
+            Self::String(value) => value.retained_heap_size(),
+            Self::Array(values) => values.retained_heap_size(),
+            Self::Object(values) => values.iter().fold(0usize, |total, (key, value)| {
+                total
+                    .saturating_add(size_of::<(String, serde_json::Value)>())
+                    .saturating_add(BTREE_MAP_ENTRY_ALLOCATION_OVERHEAD)
+                    .saturating_add(key.retained_heap_size())
+                    .saturating_add(value.retained_heap_size())
+            }),
+            Self::Null | Self::Bool(_) | Self::Number(_) => 0,
+        }
+    }
+}
+
+macro_rules! retained_heap_fields {
+    ($type:path => $($field:ident),+ $(,)?) => {
+        impl RetainedSize for $type {
+            fn retained_heap_size(&self) -> usize {
+                0usize$(.saturating_add(self.$field.retained_heap_size()))+
+            }
+        }
+    };
+}
+
+macro_rules! retained_heap_none {
+    ($($type:path),+ $(,)?) => {
+        $(
+            impl RetainedSize for $type {
+                fn retained_heap_size(&self) -> usize {
+                    0
+                }
+            }
+        )+
+    };
+}
+
+retained_heap_fields!(crate::tools::cluster_tools::BrokerSummary =>
+    cluster,
+    broker_name,
+    broker_addr,
+    version,
+    in_tps,
+    out_tps,
+    timer_progress,
+    page_cache_lock_time_millis,
+    hour,
+    space,
+);
+retained_heap_fields!(crate::tools::cluster_tools::ClusterOverviewOutput =>
+    cluster,
+    namesrv_addr,
+    brokers,
+    generated_at,
+);
+
+retained_heap_fields!(crate::tools::consumer_tools::ConsumerGroupSummary =>
+    group,
+    consume_type,
+    message_model,
+);
+retained_heap_fields!(crate::tools::consumer_tools::ListConsumerGroupsOutput =>
+    cluster,
+    namesrv_addr,
+    page,
+    generated_at,
+);
+retained_heap_fields!(crate::tools::consumer_tools::ConsumerGroupDetailsBrokerRow => broker_name);
+retained_heap_fields!(crate::tools::consumer_tools::GetConsumerGroupDetailsOutput =>
+    cluster,
+    consumer_group,
+    brokers,
+    generated_at,
+);
+
+retained_heap_fields!(crate::tools::broker_tools::DescribeBrokerOutput =>
+    cluster,
+    namesrv_addr,
+    broker_name,
+    brokers,
+    generated_at,
+);
+retained_heap_fields!(crate::tools::broker_tools::BrokerDiagnosticsRow => broker_name, warnings);
+retained_heap_fields!(crate::tools::broker_tools::BrokerDiagnosticsOutput =>
+    cluster,
+    broker_name,
+    diagnostics_schema_version,
+    brokers,
+);
+
+retained_heap_fields!(crate::tools::config_tools::BrokerConfigSummaryRow => broker_name);
+retained_heap_fields!(crate::tools::config_tools::BrokerConfigSummaryOutput =>
+    cluster,
+    broker_name,
+    brokers,
+);
+retained_heap_fields!(crate::tools::config_tools::BrokerLogFilterStateRow =>
+    broker_name,
+    state_schema_version,
+    logger,
+    active_operation_id,
+    last_completed_operation_id,
+);
+retained_heap_fields!(crate::tools::config_tools::BrokerLogFilterStateOutput =>
+    cluster,
+    broker_name,
+    logger,
+    brokers,
+);
+retained_heap_fields!(crate::tools::config_tools::TopicConfigStateRow => broker_name);
+retained_heap_fields!(crate::tools::config_tools::TopicConfigStateOutput => cluster, topic, brokers);
+retained_heap_fields!(crate::tools::config_tools::ConsumerGroupConfigStateRow => broker_name);
+retained_heap_fields!(crate::tools::config_tools::ConsumerGroupConfigStateOutput => cluster, group, brokers);
+retained_heap_fields!(crate::tools::config_tools::TopicConfigObservationRow => broker_name, message_type);
+retained_heap_none!(crate::tools::config_tools::TopicConfigDifferenceField);
+retained_heap_fields!(crate::tools::config_tools::GetTopicConfigOutput =>
+    cluster,
+    topic,
+    brokers,
+    inconsistent_fields,
+    generated_at,
+);
+
+retained_heap_fields!(crate::tools::proxy_tools::ProxyDrainStateOutput =>
+    cluster,
+    proxy_name,
+    state_schema_version,
+    operation_id,
+);
+retained_heap_fields!(crate::tools::message_tools::MessageMetadataOutput =>
+    cluster,
+    message_alias,
+    unique_message_alias,
+    topic,
+    born_at,
+    stored_at,
+);
+
+retained_heap_fields!(crate::tools::infrastructure_tools::LogicalBrokerInstance => broker_name);
+retained_heap_fields!(crate::tools::infrastructure_tools::HaConnectionObservation => replica);
+retained_heap_fields!(crate::tools::infrastructure_tools::BrokerHaObservation => broker_name, connections);
+retained_heap_fields!(crate::tools::infrastructure_tools::BrokerSyncStateObservation =>
+    broker_name,
+    in_sync_replicas,
+    not_in_sync_replicas,
+);
+retained_heap_fields!(crate::tools::infrastructure_tools::ControllerSyncStateObservation =>
+    controller_name,
+    brokers,
+);
+retained_heap_fields!(crate::tools::infrastructure_tools::GetHaStatusOutput =>
+    cluster,
+    brokers,
+    controller_sync_states,
+);
+retained_heap_fields!(crate::tools::infrastructure_tools::ControllerMetadataObservation =>
+    controller_name,
+    group,
+    leader_id,
+);
+retained_heap_fields!(crate::tools::infrastructure_tools::GetControllerMetadataOutput => cluster, controllers);
+retained_heap_none!(
+    crate::tools::infrastructure_tools::NameserverConfigValues,
+    crate::tools::infrastructure_tools::NameserverConfigDifferenceField,
+);
+retained_heap_fields!(crate::tools::infrastructure_tools::NameserverConfigObservation =>
+    nameserver_name,
+    values,
+);
+retained_heap_fields!(crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput =>
+    cluster,
+    nameservers,
+    inconsistent_fields,
+);
+
+retained_heap_fields!(crate::model::diagnosis::EvidenceItem =>
+    id,
+    source_tool,
+    observed_at,
+    query_hash,
+    payload,
+    error_code,
+    summary,
+);
+impl RetainedSize for crate::model::diagnosis::EvidencePayload {
+    fn retained_heap_size(&self) -> usize {
+        match self {
+            Self::ConsumerLag(value) | Self::TopicRoute(value) | Self::BrokerSummary(value) => {
+                value.retained_heap_size()
+            }
+        }
+    }
+}
+retained_heap_fields!(crate::model::diagnosis::EvidenceSnapshot =>
+    evidence_version,
+    query_hash,
+    cluster,
+    target,
+    observed_at,
+    items,
+);
+retained_heap_fields!(crate::model::diagnosis::ImpactItem => area, description);
+retained_heap_fields!(crate::model::diagnosis::Evidence => id, source_tool, summary, data);
+retained_heap_fields!(crate::model::diagnosis::RootCauseCandidate => cause, evidence_refs, reasoning);
+retained_heap_fields!(crate::model::diagnosis::Recommendation => action, priority, rationale, risk, verification);
+retained_heap_fields!(crate::model::diagnosis::MetricWatchItem => name, target, reason);
+retained_heap_fields!(crate::model::diagnosis::DiagnosisReport =>
+    report_type,
+    evidence_version,
+    rules_version,
+    cluster,
+    target,
+    policy_profile,
+    missing_evidence,
+    evidence_refs,
+    evidence_snapshot,
+    summary,
+    impacts,
+    evidences,
+    root_causes,
+    recommendations,
+    risks,
+    follow_up_metrics,
+    generated_at,
+);
+
 #[derive(Debug, Clone, Copy)]
 struct SnapshotLimits {
     max_entries: usize,

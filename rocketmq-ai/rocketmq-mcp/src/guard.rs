@@ -509,6 +509,9 @@ fn requires_explicit_cluster(tool_name: &str) -> bool {
             | "rocketmq_get_topic_config"
             | "rocketmq_get_consumer_group_details"
             | "rocketmq_get_consumer_progress"
+            | "rocketmq_get_ha_status"
+            | "rocketmq_get_controller_metadata"
+            | "rocketmq_get_nameserver_config_summary"
     )
 }
 
@@ -768,6 +771,7 @@ mod tests {
                 tenant: None,
                 credentials: None,
                 proxies: Vec::new(),
+                controllers: Vec::new(),
             }],
         )
         .unwrap()
@@ -799,6 +803,7 @@ mod tests {
                 tenant: Some(tenant.to_string()),
                 credentials: None,
                 proxies: Vec::new(),
+                controllers: Vec::new(),
             }],
         )
         .unwrap()

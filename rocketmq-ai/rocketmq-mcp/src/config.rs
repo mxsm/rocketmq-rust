@@ -184,9 +184,42 @@ impl McpConfig {
         }
 
         let mut default_count = 0usize;
+        let mut normalized_cluster_names = BTreeSet::new();
+        let mut infrastructure_endpoint_owners = BTreeSet::new();
         for cluster in &self.clusters {
             validate_non_empty("clusters.name", &cluster.name)?;
+            if !normalized_cluster_names.insert(cluster.name.trim().to_ascii_lowercase()) {
+                return Err(McpError::InvalidConfig(
+                    "cluster names must be unique after normalization".to_string(),
+                ));
+            }
             validate_non_empty("clusters.namesrv_addr", &cluster.namesrv_addr)?;
+            let nameserver_endpoints = cluster
+                .namesrv_addr
+                .split(';')
+                .map(str::trim)
+                .filter(|endpoint| !endpoint.is_empty())
+                .collect::<Vec<_>>();
+            if nameserver_endpoints.len()
+                > rocketmq_admin_core::core::infrastructure_observation::MAX_NAMESERVER_TARGETS
+            {
+                return Err(McpError::InvalidConfig(
+                    "clusters.namesrv_addr must contain at most 16 configured NameServers".to_string(),
+                ));
+            }
+            let mut unique_nameservers = BTreeSet::new();
+            for endpoint in nameserver_endpoints {
+                let Some(endpoint) = rocketmq_admin_core::core::broker::canonical_remoting_endpoint(endpoint) else {
+                    return Err(McpError::InvalidConfig(
+                        "clusters.namesrv_addr must contain unique bounded remoting host:port values".to_string(),
+                    ));
+                };
+                if !unique_nameservers.insert(endpoint.clone()) || !infrastructure_endpoint_owners.insert(endpoint) {
+                    return Err(McpError::InvalidConfig(
+                        "Controller and NameServer endpoints must have one global logical owner".to_string(),
+                    ));
+                }
+            }
             if let Some(rocketmq_cluster_name) = cluster.rocketmq_cluster_name.as_deref() {
                 validate_non_empty("clusters.rocketmq_cluster_name", rocketmq_cluster_name)?;
             }
@@ -215,6 +248,36 @@ impl McpConfig {
                         "clusters `{}` contains duplicate Proxy alias `{}`",
                         cluster.name, proxy.name
                     )));
+                }
+            }
+            if cluster.controllers.len() > rocketmq_admin_core::core::infrastructure_observation::MAX_CONTROLLER_TARGETS
+            {
+                return Err(McpError::InvalidConfig(
+                    "clusters.controllers must contain at most 32 configured Controllers".to_string(),
+                ));
+            }
+            let mut controller_names = BTreeSet::new();
+            let mut controller_endpoints = BTreeSet::new();
+            for controller in &cluster.controllers {
+                validate_logical_alias("clusters.controllers.name", &controller.name)?;
+                let Some(endpoint) =
+                    rocketmq_admin_core::core::broker::canonical_remoting_endpoint(&controller.endpoint)
+                else {
+                    return Err(McpError::InvalidConfig(
+                        "clusters.controllers.endpoint must be a single bounded remoting host:port".to_string(),
+                    ));
+                };
+                if !controller_names.insert(controller.name.as_str()) || !controller_endpoints.insert(endpoint.clone())
+                {
+                    return Err(McpError::InvalidConfig(format!(
+                        "clusters `{}` contains duplicate Controller configuration",
+                        cluster.name
+                    )));
+                }
+                if !infrastructure_endpoint_owners.insert(endpoint) {
+                    return Err(McpError::InvalidConfig(
+                        "Controller and NameServer endpoints must have one global logical owner".to_string(),
+                    ));
                 }
             }
         }
@@ -672,6 +735,9 @@ pub struct ClusterConfig {
     /// Logical Proxy aliases. Endpoints are internal-only topology data.
     #[serde(default)]
     pub proxies: Vec<ProxyAlias>,
+    /// Logical Controller aliases. Endpoints are internal-only topology data.
+    #[serde(default)]
+    pub controllers: Vec<ControllerAlias>,
 }
 
 impl ClusterConfig {
@@ -699,12 +765,13 @@ impl std::fmt::Debug for ClusterConfig {
         formatter
             .debug_struct("ClusterConfig")
             .field("name", &self.name)
-            .field("namesrv_addr", &self.namesrv_addr)
+            .field("namesrv_addr", &"[REDACTED]")
             .field("default", &self.default)
             .field("rocketmq_cluster_name", &self.rocketmq_cluster_name)
             .field("tenant", &self.tenant)
             .field("credentials", &self.credentials)
             .field("proxies", &self.proxies)
+            .field("controllers", &self.controllers)
             .finish()
     }
 }
@@ -714,6 +781,23 @@ impl std::fmt::Debug for ClusterConfig {
 pub struct ProxyAlias {
     pub name: String,
     pub endpoint: String,
+}
+
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ControllerAlias {
+    pub name: String,
+    pub endpoint: String,
+}
+
+impl std::fmt::Debug for ControllerAlias {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ControllerAlias")
+            .field("name", &self.name)
+            .field("endpoint", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for ProxyAlias {
@@ -1056,6 +1140,7 @@ mod tests {
         assert!(config.server.log_level.is_none());
         assert_eq!(config.clusters[0].proxies.len(), 1);
         assert_eq!(config.clusters[0].proxy_endpoint("proxy-local"), Some("127.0.0.1:8081"));
+        assert_eq!(config.clusters[0].controllers.len(), 1);
     }
 
     #[test]
@@ -1129,6 +1214,7 @@ mod tests {
         secondary.name = "secondary".to_string();
         secondary.namesrv_addr = "127.0.0.2:9876".to_string();
         secondary.default = Some(false);
+        secondary.controllers.clear();
         secondary.proxies = vec![ProxyAlias {
             name: "proxy-a".to_string(),
             endpoint: "secondary-internal:8081".to_string(),
@@ -1158,6 +1244,106 @@ mod tests {
         let error = config.validate().unwrap_err();
         assert!(!error.to_string().contains(ENDPOINT_SENTINEL));
         assert!(!format!("{error:?}").contains(ENDPOINT_SENTINEL));
+    }
+
+    #[test]
+    fn infrastructure_targets_are_bounded_unique_and_debug_redacted() {
+        const CONTROLLER_SENTINEL: &str = "private-controller.example:19878";
+        const NAMESERVER_SENTINEL: &str = "private-nameserver.example:19876";
+        let mut config = McpConfig::load(example_config_path()).unwrap();
+        config.clusters[0].controllers = vec![ControllerAlias {
+            name: "controller-a".to_string(),
+            endpoint: CONTROLLER_SENTINEL.to_string(),
+        }];
+        config.clusters[0].namesrv_addr = NAMESERVER_SENTINEL.to_string();
+        config.validate().unwrap();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("controller-a"));
+        assert!(!debug.contains(CONTROLLER_SENTINEL));
+        assert!(!debug.contains(NAMESERVER_SENTINEL));
+
+        config.clusters[0].controllers = (0..=32)
+            .map(|index| ControllerAlias {
+                name: format!("controller-{index}"),
+                endpoint: format!("controller-{index}.internal:9878"),
+            })
+            .collect();
+        assert!(config.validate().unwrap_err().to_string().contains("at most 32"));
+
+        config.clusters[0].controllers = vec![
+            ControllerAlias {
+                name: "controller-a".to_string(),
+                endpoint: "controller-a.internal:9878".to_string(),
+            },
+            ControllerAlias {
+                name: "controller-a".to_string(),
+                endpoint: "controller-b.internal:9878".to_string(),
+            },
+        ];
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate Controller"));
+
+        config.clusters[0].controllers.clear();
+        config.clusters[0].namesrv_addr = (0..16)
+            .map(|index| format!("nameserver-{index}.internal:9876"))
+            .collect::<Vec<_>>()
+            .join(";");
+        config.validate().unwrap();
+        config.clusters[0].namesrv_addr.push_str(";nameserver-16.internal:9876");
+        assert!(config.validate().unwrap_err().to_string().contains("at most 16"));
+    }
+
+    #[test]
+    fn infrastructure_endpoint_ownership_is_global_canonical_and_redacted() {
+        fn two_clusters() -> McpConfig {
+            let mut config = McpConfig::load(example_config_path()).unwrap();
+            let mut second = config.clusters[0].clone();
+            second.name = "cluster-b".to_string();
+            second.default = Some(false);
+            second.namesrv_addr = "nameserver-b.internal:9876".to_string();
+            second.controllers = vec![ControllerAlias {
+                name: "controller-b".to_string(),
+                endpoint: "controller-b.internal:9878".to_string(),
+            }];
+            config.clusters.push(second);
+            config
+        }
+
+        let mut shared_controller = two_clusters();
+        shared_controller.clusters[0].controllers[0].endpoint = "SHARED.internal:9878".to_string();
+        shared_controller.clusters[1].controllers[0].endpoint = "shared.INTERNAL:9878".to_string();
+        assert_redacted_ownership_error(shared_controller, "SHARED.internal:9878");
+
+        let mut shared_nameserver = two_clusters();
+        shared_nameserver.clusters[0].namesrv_addr = "NS.Shared.internal:9876".to_string();
+        shared_nameserver.clusters[1].namesrv_addr = "ns.shared.INTERNAL:9876".to_string();
+        assert_redacted_ownership_error(shared_nameserver, "NS.Shared.internal:9876");
+
+        let mut equivalent_ipv6 = two_clusters();
+        equivalent_ipv6.clusters[0].namesrv_addr = "[2001:0db8:0:0:0:0:0:1]:9876".to_string();
+        equivalent_ipv6.clusters[1].namesrv_addr = "[2001:db8::1]:9876".to_string();
+        assert_redacted_ownership_error(equivalent_ipv6, "2001:db8");
+
+        let mut cross_kind = two_clusters();
+        cross_kind.clusters[0].namesrv_addr = "shared-kind.internal:9876".to_string();
+        cross_kind.clusters[1].controllers[0].endpoint = "SHARED-KIND.internal:9876".to_string();
+        assert_redacted_ownership_error(cross_kind, "shared-kind.internal:9876");
+
+        let mut duplicate_cluster = two_clusters();
+        duplicate_cluster.clusters[0].name = "Local-Dev".to_string();
+        duplicate_cluster.clusters[1].name = " local-dev ".to_string();
+        let error = duplicate_cluster.validate().unwrap_err();
+        assert!(error.to_string().contains("unique after normalization"));
+    }
+
+    fn assert_redacted_ownership_error(config: McpConfig, endpoint: &str) {
+        let error = config.validate().unwrap_err();
+        let rendered = format!("{error:?} {error}");
+        assert!(rendered.contains("one global logical owner"));
+        assert!(!rendered.to_ascii_lowercase().contains(&endpoint.to_ascii_lowercase()));
     }
 
     #[test]
