@@ -29,6 +29,10 @@ use rocketmq_security_api::MaintenanceRoleGrant;
 use rocketmq_store_api::checkpoint::CheckpointOffsets as ReleaseCheckpointOffsets;
 use rocketmq_store_api::checkpoint::CheckpointRequest as StoreReleaseCheckpointRequest;
 use rocketmq_store_api::checkpoint::CheckpointStorageIdentity as ReleaseCheckpointStorageIdentity;
+use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreateRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
 use rocketmq_store_api::ReleaseCheckpointStore;
 use rocketmq_store_rocksdb::release_checkpoint::RocksDbReleaseCheckpointService;
 use rocketmq_store_rocksdb::runtime::RocksDbRuntimeScope;
@@ -92,9 +96,9 @@ async fn release_checkpoint_restore_flushes_hashes_and_reopens_rocksdb_read_only
         wal_generation: 7,
     };
     let service = RocksDbReleaseCheckpointService::new(
-        store,
+        Arc::clone(&store),
         runtime_scope,
-        checkpoint_root,
+        checkpoint_root.clone(),
         storage_identity.clone(),
         16 * 1024 * 1024,
     );
@@ -125,19 +129,84 @@ async fn release_checkpoint_restore_flushes_hashes_and_reopens_rocksdb_read_only
         offsets,
         storage_identity,
     };
+    let capacity_request = StoreReleaseCheckpointRequest {
+        checkpoint_id: "rocksdb-a-generation-8".to_string(),
+        checkpoint_set_id: "set-generation-8".to_string(),
+        generation: 8,
+        barrier_id: "barrier-78".to_string(),
+        ..request.clone()
+    };
+    let expired_request = request.clone();
 
-    let manifest = service
-        .create_release_checkpoint(&grant, request)
+    let outcome = service
+        .create_release_checkpoint(&grant, request.clone())
         .await
         .expect("create RocksDB checkpoint");
+    let ReleaseCheckpointCreateOutcome::Created(manifest) = outcome else {
+        panic!("authorized checkpoint creation must succeed");
+    };
     assert_eq!(manifest.artifact.sha256.len(), 64);
     assert_eq!(manifest.offsets, offsets);
 
-    let verification = service
+    let expired_context = MaintenanceAuthorizationContext {
+        deadline_unix_millis: 2,
+        ..context
+    };
+    let expired_grant = authorizer
+        .authorize(Some(&expired_context), 1)
+        .expect("construct an already elapsed grant");
+    assert_eq!(
+        ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::AuthorizationExpired),
+        service
+            .create_release_checkpoint(&expired_grant, expired_request)
+            .await
+            .expect("expired authorization is an expected create outcome")
+    );
+    assert_eq!(
+        ReleaseCheckpointRestoreOutcome::Rejected(ReleaseCheckpointRestoreRejection::AuthorizationExpired),
+        service
+            .restore_verify_release_checkpoint(&expired_grant, &manifest)
+            .await
+            .expect("expired authorization is an expected restore outcome")
+    );
+
+    assert_eq!(
+        ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
+        service
+            .create_release_checkpoint(&grant, request)
+            .await
+            .expect("duplicate checkpoint is an expected outcome")
+    );
+
+    let outcome = service
         .restore_verify_release_checkpoint(&grant, &manifest)
         .await
         .expect("restore-verify RocksDB checkpoint");
+    let ReleaseCheckpointRestoreOutcome::Verified(verification) = outcome else {
+        panic!("authorized checkpoint restore verification must succeed");
+    };
     assert!(verification.checksum_verified);
     assert!(verification.offsets_verified);
     assert!(verification.storage_identity_verified);
+
+    let capacity_service = RocksDbReleaseCheckpointService::new(
+        store,
+        RocksDbRuntimeScope::new(runtime.service_context("checkpoint-capacity")),
+        checkpoint_root,
+        capacity_request.storage_identity.clone(),
+        1,
+    );
+    let outcome = capacity_service
+        .create_release_checkpoint(&grant, capacity_request)
+        .await
+        .expect("resource limit is an expected checkpoint outcome");
+    let ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::CapacityExceeded {
+        actual_bytes,
+        maximum_bytes,
+    }) = outcome
+    else {
+        panic!("checkpoint must be rejected by the resource limit");
+    };
+    assert!(actual_bytes > maximum_bytes);
+    assert_eq!(maximum_bytes, 1);
 }

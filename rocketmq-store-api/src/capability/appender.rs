@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error as StdError;
 use std::future::Future;
+
+use crate::StoreError;
 
 /// Message append capability generic over a consumer-owned input.
 pub trait MessageAppender<M: Send>: Send {
     /// Value type used for receipt.
     type Receipt: Send;
-    /// Value type used for error.
-    type Error: StdError + Send + Sync + 'static;
 
     /// Appends one input and returns the implementation-owned receipt projection.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when the append cannot produce an outcome.
-    fn append_message(&mut self, message: M) -> impl Future<Output = Result<Self::Receipt, Self::Error>> + Send;
+    /// Returns [`StoreError`] with [`crate::StoreOperation::Append`] when the
+    /// append cannot produce a receipt.
+    fn append_message(&mut self, message: M) -> impl Future<Output = Result<Self::Receipt, StoreError>> + Send;
 }

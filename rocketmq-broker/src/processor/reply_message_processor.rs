@@ -40,6 +40,7 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
 use rocketmq_store_api::MessageAppender;
+use rocketmq_store_api::StoreError;
 use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
 use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::HandlerOutcome;
@@ -75,7 +76,7 @@ pub(crate) async fn append_reply_message_with_control_reply<S, M, B>(
 where
     S: MessageAppender<M>,
     M: Send,
-    B: FnOnce(Result<S::Receipt, S::Error>) -> (RemotingCommand, StoreHookCompletion),
+    B: FnOnce(Result<S::Receipt, StoreError>) -> (RemotingCommand, StoreHookCompletion),
 {
     append_message_with_control_reply(control, store, message, build_response).await
 }

@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error as StdError;
 use std::future::Future;
+
+use crate::StoreError;
 
 /// Derived-record append capability with implementation-owned values.
 pub trait DerivedRecordSink: Send {
@@ -21,16 +22,15 @@ pub trait DerivedRecordSink: Send {
     type Record: Send;
     /// Value type used for progress.
     type Progress: Send;
-    /// Value type used for error.
-    type Error: StdError + Send + Sync + 'static;
 
     /// Appends derived data independently from primary append acknowledgement.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when derived progress cannot be persisted.
+    /// Returns [`StoreError`] with [`crate::StoreOperation::AppendDerived`]
+    /// when derived progress cannot be persisted.
     fn append_derived(
         &mut self,
         record: Self::Record,
-    ) -> impl Future<Output = Result<Self::Progress, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Self::Progress, StoreError>> + Send;
 }

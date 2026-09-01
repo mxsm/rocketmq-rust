@@ -37,9 +37,15 @@ use rocketmq_store_api::checkpoint::CHECKPOINT_SCHEMA_VERSION as RELEASE_CHECKPO
 use rocketmq_store_api::file_uri_to_path;
 use rocketmq_store_api::hash_checkpoint_directory;
 use rocketmq_store_api::path_to_file_uri;
+use rocketmq_store_api::ReleaseCheckpointCreateOutcome;
+use rocketmq_store_api::ReleaseCheckpointCreateRejection;
+use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
+use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
 use rocketmq_store_api::ReleaseCheckpointStore;
+use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
 use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::RELEASE_CHECKPOINT_MANIFEST_FILE;
 use thiserror::Error;
 
@@ -72,16 +78,12 @@ impl RocksDbReleaseCheckpointService {
             max_checkpoint_bytes,
         }
     }
-}
 
-impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
-    type Error = RocksDbReleaseCheckpointError;
-
-    async fn create_release_checkpoint(
+    async fn create_release_checkpoint_inner(
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: StoreReleaseCheckpointRequest,
-    ) -> Result<StoreReleaseCheckpointManifest, Self::Error> {
+    ) -> Result<StoreReleaseCheckpointManifest, RocksDbReleaseCheckpointError> {
         validate_authorization(authorization)?;
         request.validate()?;
         if request.storage_identity != self.storage_identity {
@@ -189,11 +191,11 @@ impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
         Ok(manifest)
     }
 
-    async fn restore_verify_release_checkpoint(
+    async fn restore_verify_release_checkpoint_inner(
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &StoreReleaseCheckpointManifest,
-    ) -> Result<ReleaseCheckpointRestoreVerification, Self::Error> {
+    ) -> Result<ReleaseCheckpointRestoreVerification, RocksDbReleaseCheckpointError> {
         validate_authorization(authorization)?;
         manifest.validate()?;
         if manifest.backend != ReleaseCheckpointBackend::RocksDb {
@@ -242,6 +244,109 @@ impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
         };
         verification.validate()?;
         Ok(verification)
+    }
+}
+
+impl ReleaseCheckpointStore for RocksDbReleaseCheckpointService {
+    async fn create_release_checkpoint(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        request: StoreReleaseCheckpointRequest,
+    ) -> Result<ReleaseCheckpointCreateOutcome, StoreError> {
+        match self.create_release_checkpoint_inner(authorization, request).await {
+            Ok(manifest) => Ok(ReleaseCheckpointCreateOutcome::Created(manifest)),
+            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
+                ReleaseCheckpointCreateRejection::AuthorizationExpired,
+            )),
+            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => Ok(ReleaseCheckpointCreateOutcome::Rejected(
+                ReleaseCheckpointCreateRejection::CapabilityNotGranted,
+            )),
+            Err(RocksDbReleaseCheckpointError::CheckpointAlreadyExists(_)) => Ok(
+                ReleaseCheckpointCreateOutcome::Rejected(ReleaseCheckpointCreateRejection::AlreadyExists),
+            ),
+            Err(RocksDbReleaseCheckpointError::Artifact(source)) => {
+                if let Some((actual_bytes, maximum_bytes)) = checkpoint_capacity_rejection(&source) {
+                    Ok(ReleaseCheckpointCreateOutcome::Rejected(
+                        ReleaseCheckpointCreateRejection::CapacityExceeded {
+                            actual_bytes,
+                            maximum_bytes,
+                        },
+                    ))
+                } else {
+                    Err(source)
+                }
+            }
+            Err(error) => Err(rocksdb_checkpoint_error(StoreOperation::Flush, error)),
+        }
+    }
+
+    async fn restore_verify_release_checkpoint(
+        &self,
+        authorization: &MaintenanceAuthorizationGrant,
+        manifest: &StoreReleaseCheckpointManifest,
+    ) -> Result<ReleaseCheckpointRestoreOutcome, StoreError> {
+        match self
+            .restore_verify_release_checkpoint_inner(authorization, manifest)
+            .await
+        {
+            Ok(verification) => Ok(ReleaseCheckpointRestoreOutcome::Verified(verification)),
+            Err(RocksDbReleaseCheckpointError::AuthorizationExpired) => Ok(ReleaseCheckpointRestoreOutcome::Rejected(
+                ReleaseCheckpointRestoreRejection::AuthorizationExpired,
+            )),
+            Err(RocksDbReleaseCheckpointError::UnauthorizedCapability) => Ok(
+                ReleaseCheckpointRestoreOutcome::Rejected(ReleaseCheckpointRestoreRejection::CapabilityNotGranted),
+            ),
+            Err(error) => Err(rocksdb_checkpoint_error(StoreOperation::Read, error)),
+        }
+    }
+}
+
+fn checkpoint_capacity_rejection(error: &StoreError) -> Option<(u64, u64)> {
+    let mut source = std::error::Error::source(error);
+    while let Some(current) = source {
+        if let Some(StoreContractViolation::CheckpointArtifactTooLarge { actual, maximum }) =
+            current.downcast_ref::<StoreContractViolation>()
+        {
+            return Some((*actual, *maximum));
+        }
+        source = current.source();
+    }
+    None
+}
+
+fn rocksdb_checkpoint_error(operation: StoreOperation, error: RocksDbReleaseCheckpointError) -> StoreError {
+    match error {
+        RocksDbReleaseCheckpointError::Artifact(source) => source,
+        error => {
+            let descriptor = match &error {
+                RocksDbReleaseCheckpointError::InvalidConfiguration(_)
+                | RocksDbReleaseCheckpointError::StorageIdentityMismatch
+                | RocksDbReleaseCheckpointError::OverlappingRoots
+                | RocksDbReleaseCheckpointError::WrongBackend
+                | RocksDbReleaseCheckpointError::Validation(_) => &rocketmq_error::STORAGE_REQUEST_INVALID,
+                RocksDbReleaseCheckpointError::ArtifactChecksumMismatch => &rocketmq_error::STORAGE_STATE_CORRUPTED,
+                RocksDbReleaseCheckpointError::OpenVerification(_) => &rocketmq_error::STORAGE_READ_FAILED,
+                RocksDbReleaseCheckpointError::Store(_) => match operation {
+                    StoreOperation::Read => &rocketmq_error::STORAGE_READ_FAILED,
+                    _ => &rocketmq_error::STORAGE_WRITE_FAILED,
+                },
+                RocksDbReleaseCheckpointError::Serialize(_) => &rocketmq_error::STORAGE_WRITE_FAILED,
+                RocksDbReleaseCheckpointError::Clock(_) => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                RocksDbReleaseCheckpointError::Io { .. } => &rocketmq_error::STORAGE_IO_FAILED,
+                RocksDbReleaseCheckpointError::AuthorizationExpired
+                | RocksDbReleaseCheckpointError::UnauthorizedCapability
+                | RocksDbReleaseCheckpointError::CheckpointAlreadyExists(_)
+                | RocksDbReleaseCheckpointError::Artifact(_) => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            };
+            let component = if matches!(&error, RocksDbReleaseCheckpointError::InvalidConfiguration(_)) {
+                StoreComponent::Configuration
+            } else {
+                StoreComponent::RocksDb
+            };
+            StoreError::new(descriptor, operation)
+                .in_component(component)
+                .with_source(error)
+        }
     }
 }
 
@@ -330,4 +435,63 @@ pub enum RocksDbReleaseCheckpointError {
         #[source]
         source: std::io::Error,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("private RocksDB checkpoint cause")]
+    struct CheckpointCause;
+
+    #[test]
+    fn checkpoint_artifact_store_error_is_forwarded_without_remapping() {
+        let original = StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Append)
+            .in_component(StoreComponent::CommitLog)
+            .with_source(CheckpointCause);
+
+        let error = rocksdb_checkpoint_error(StoreOperation::Flush, RocksDbReleaseCheckpointError::Artifact(original));
+
+        assert_eq!(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, error.descriptor());
+        assert_eq!(StoreOperation::Append, error.operation());
+        assert_eq!(StoreComponent::CommitLog, error.component());
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<CheckpointCause>())
+            .is_some());
+    }
+
+    #[test]
+    fn capacity_rejection_recovers_the_typed_contract_source() {
+        let error = StoreError::new(&rocketmq_error::STORAGE_CAPACITY_EXHAUSTED, StoreOperation::Flush).with_source(
+            StoreContractViolation::CheckpointArtifactTooLarge {
+                actual: 17,
+                maximum: 16,
+            },
+        );
+
+        assert_eq!(Some((17, 16)), checkpoint_capacity_rejection(&error));
+    }
+
+    #[test]
+    fn rocksdb_checkpoint_leaf_mapping_is_operation_aware_and_typed() {
+        let error = rocksdb_checkpoint_error(
+            StoreOperation::Read,
+            RocksDbReleaseCheckpointError::InvalidConfiguration("private-path".to_string()),
+        );
+
+        assert_eq!(&rocketmq_error::STORAGE_REQUEST_INVALID, error.descriptor());
+        assert_eq!(StoreOperation::Read, error.operation());
+        assert_eq!(StoreComponent::Configuration, error.component());
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<RocksDbReleaseCheckpointError>())
+            .is_some());
+        assert!(error
+            .public_view()
+            .expect("valid public view")
+            .fields()
+            .next()
+            .is_none());
+        assert!(!format!("{error:?}").contains("private-path"));
+    }
 }

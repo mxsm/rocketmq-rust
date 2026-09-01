@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error as StdError;
+use crate::StoreError;
 
 /// Logical offset lookup capability.
 pub trait OffsetIndex: Send + Sync {
@@ -20,13 +20,12 @@ pub trait OffsetIndex: Send + Sync {
     type Query: Send + Sync;
     /// Value type used for output.
     type Output;
-    /// Value type used for error.
-    type Error: StdError + Send + Sync + 'static;
 
     /// Queries the current logical offset projection.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when index state is unavailable or inconsistent.
-    fn query_offset(&self, query: &Self::Query) -> Result<Self::Output, Self::Error>;
+    /// Returns [`StoreError`] with [`crate::StoreOperation::QueryOffset`] when
+    /// index state is unavailable or inconsistent.
+    fn query_offset(&self, query: &Self::Query) -> Result<Self::Output, StoreError>;
 }

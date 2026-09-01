@@ -19,8 +19,10 @@ use std::time::UNIX_EPOCH;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_store_api::GetStatus;
+use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreError as ApiStoreError;
 use rocketmq_store_api::StoreLifecycle;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::WalPort;
 use thiserror::Error;
 use tracing::warn;
@@ -480,21 +482,49 @@ impl RocksDbDerivedStore {
 }
 
 impl StoreLifecycle for RocksDbDerivedStore {
-    type Error = RocksDbMessageStoreError;
-
-    async fn load(&mut self) -> Result<bool, Self::Error> {
+    async fn load(&mut self) -> Result<bool, ApiStoreError> {
         Ok(true)
     }
 
-    async fn start(&mut self) -> Result<(), Self::Error> {
+    async fn start(&mut self) -> Result<(), ApiStoreError> {
         self.start_maintenance();
         Ok(())
     }
 
-    async fn shutdown(&mut self) -> Result<(), Self::Error> {
-        self.shutdown_maintenance().await?;
+    async fn shutdown(&mut self) -> Result<(), ApiStoreError> {
+        self.shutdown_maintenance()
+            .await
+            .map_err(|error| lifecycle_error(StoreOperation::Shutdown, error))?;
         self.close();
         Ok(())
+    }
+}
+
+fn rocksdb_failure_descriptor(operation: StoreOperation) -> &'static rocketmq_error::ErrorDescriptor {
+    match operation {
+        StoreOperation::Load | StoreOperation::Start => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        StoreOperation::Read | StoreOperation::QueryOffset => &rocketmq_error::STORAGE_READ_FAILED,
+        StoreOperation::Append | StoreOperation::Flush | StoreOperation::Replicate | StoreOperation::AppendDerived => {
+            &rocketmq_error::STORAGE_WRITE_FAILED
+        }
+        StoreOperation::Shutdown | StoreOperation::Admin => &rocketmq_error::STORAGE_IO_FAILED,
+    }
+}
+
+fn lifecycle_error(operation: StoreOperation, error: RocksDbMessageStoreError) -> ApiStoreError {
+    match error {
+        RocksDbMessageStoreError::Config(detail) => {
+            ApiStoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
+                .in_component(StoreComponent::Configuration)
+                .with_detail(detail.clone())
+                .with_source(RocksDbMessageStoreError::Config(detail))
+        }
+        RocksDbMessageStoreError::Backend { source } => {
+            ApiStoreError::new(rocksdb_failure_descriptor(operation), operation)
+                .in_component(StoreComponent::RocksDb)
+                .with_source(source)
+        }
+        RocksDbMessageStoreError::Local { source } => source,
     }
 }
 
@@ -654,6 +684,10 @@ fn normalize_index_query_time_range(begin: i64, end: i64, max_query_days: usize)
 mod tests {
     use super::*;
 
+    #[derive(Debug, thiserror::Error)]
+    #[error("private local source")]
+    struct LocalCause;
+
     #[test]
     fn normalize_index_query_time_range_uses_configured_query_days() {
         let before = SystemTime::now()
@@ -667,5 +701,56 @@ mod tests {
             .as_millis() as i64;
         assert!(end >= before && end <= after);
         assert_eq!(end - begin, 2 * MILLIS_PER_DAY);
+    }
+
+    #[test]
+    fn local_store_error_is_forwarded_without_a_second_storage_wrapper() {
+        let source = ApiStoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Append)
+            .in_component(StoreComponent::CommitLog)
+            .with_source(LocalCause);
+
+        let error = lifecycle_error(StoreOperation::Shutdown, RocksDbMessageStoreError::Local { source });
+
+        assert_eq!(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, error.descriptor());
+        assert_eq!(StoreOperation::Append, error.operation());
+        assert_eq!(StoreComponent::CommitLog, error.component());
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<LocalCause>())
+            .is_some());
+    }
+
+    #[test]
+    fn lifecycle_leaf_mapping_retains_descriptor_context_source_and_redaction() {
+        let config = lifecycle_error(
+            StoreOperation::Start,
+            RocksDbMessageStoreError::Config("private configuration path".to_string()),
+        );
+        assert_eq!(&rocketmq_error::STORAGE_REQUEST_INVALID, config.descriptor());
+        assert_eq!(StoreOperation::Start, config.operation());
+        assert_eq!(StoreComponent::Configuration, config.component());
+        assert!(std::error::Error::source(&config)
+            .and_then(|source| source.downcast_ref::<RocksDbMessageStoreError>())
+            .is_some());
+        assert!(config
+            .public_view()
+            .expect("valid public view")
+            .fields()
+            .next()
+            .is_none());
+        assert!(!config.to_string().contains("private configuration"));
+        assert!(!format!("{config:?}").contains("private configuration"));
+
+        let backend = lifecycle_error(
+            StoreOperation::Shutdown,
+            RocksDbMessageStoreError::Backend {
+                source: RocketMQError::internal("rocksdb-test", LocalCause),
+            },
+        );
+        assert_eq!(&rocketmq_error::STORAGE_IO_FAILED, backend.descriptor());
+        assert_eq!(StoreOperation::Shutdown, backend.operation());
+        assert_eq!(StoreComponent::RocksDb, backend.component());
+        assert!(std::error::Error::source(&backend)
+            .and_then(|source| source.downcast_ref::<RocketMQError>())
+            .is_some());
     }
 }

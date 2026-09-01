@@ -41,6 +41,8 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store_api::MessageAppender;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
@@ -201,18 +203,13 @@ struct ReplyAppender {
     state: Arc<State>,
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-struct ReplyStoreError(&'static str);
-
 impl MessageAppender<()> for ReplyAppender {
     type Receipt = StoreAppendReceipt;
-    type Error = ReplyStoreError;
 
     fn append_message(
         &mut self,
         (): (),
-    ) -> impl std::future::Future<Output = Result<Self::Receipt, Self::Error>> + Send {
+    ) -> impl std::future::Future<Output = Result<Self::Receipt, StoreError>> + Send {
         self.state.events.lock().push("store_entered");
         std::future::ready(match self.behavior {
             StoreBehavior::Success => {
@@ -228,7 +225,10 @@ impl MessageAppender<()> for ReplyAppender {
                     23,
                 ))
             }
-            StoreBehavior::Error => Err(ReplyStoreError("reply store not available")),
+            StoreBehavior::Error => Err(StoreError::new(
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                StoreOperation::Append,
+            )),
         })
     }
 }
@@ -277,7 +277,11 @@ impl RequestProcessor for ReplyProbeProcessor {
                     )
                 }
                 Err(remark) => (
-                    crate::processor::system_error_response(&application_remoting_command_factory(), opaque, remark.0),
+                    crate::processor::system_error_response(
+                        &application_remoting_command_factory(),
+                        opaque,
+                        remark.to_string(),
+                    ),
                     String::new(),
                     0,
                     0,
@@ -400,7 +404,10 @@ async fn structured_reply_store_leaf_preserves_push_hook_metadata_and_error_visi
         let built = built.as_ref().expect("Reply store error response built");
         assert_eq!(error_plan.response_code(), built.code);
         assert_eq!(built.opaque, OPAQUE);
-        assert_eq!(built.remark.as_deref(), Some("reply store not available"));
+        assert_eq!(
+            built.remark.as_deref(),
+            Some("storage.backend.unavailable: Storage backend is unavailable")
+        );
     }
     assert_eq!(
         failed.events.lock().as_slice(),

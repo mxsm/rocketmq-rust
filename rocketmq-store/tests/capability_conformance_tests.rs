@@ -35,7 +35,6 @@ use rocketmq_store_api::Durability;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::StoreContractViolation;
-use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreLifecycle;
 use rocketmq_store_api::TimerStoreMode;
@@ -320,7 +319,7 @@ where
     MS: BrokerStorePort,
     for<'a> MessageStoreHealthCapability<'a, MS>: StoreHealth<Snapshot = StoreHealthSnapshot>,
     for<'a> MessageStoreReadCapability<'a, MS>:
-        MessageReader<Request = MessageReadRequest, Output = Option<MessageReadResult>, Error = StoreError>,
+        MessageReader<Request = MessageReadRequest, Output = Option<MessageReadResult>>,
 {
     assert!(std::mem::size_of::<MessageStoreReadCapability<'_, MS>>() > 0);
 }

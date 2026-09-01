@@ -38,6 +38,8 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store_api::MessageAppender;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
@@ -119,18 +121,13 @@ struct ProbeAppender {
     state: Arc<ProbeState>,
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-struct ProbeStoreError(&'static str);
-
 impl MessageAppender<()> for ProbeAppender {
     type Receipt = StoreAppendReceipt;
-    type Error = ProbeStoreError;
 
     fn append_message(
         &mut self,
         (): (),
-    ) -> impl std::future::Future<Output = Result<Self::Receipt, Self::Error>> + Send {
+    ) -> impl std::future::Future<Output = Result<Self::Receipt, StoreError>> + Send {
         let state = Arc::clone(&self.state);
         let owner = StoreFutureOwner(Arc::clone(&self.state.store_future_drops));
         let behavior = self.behavior;
@@ -165,9 +162,12 @@ impl MessageAppender<()> for ProbeAppender {
                 }
                 StoreBehavior::ImmediateError => {
                     state.events.lock().push("store_failed");
-                    Err(ProbeStoreError("message store not available"))
+                    Err(StoreError::new(
+                        &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                        StoreOperation::Append,
+                    ))
                 }
-                StoreBehavior::Pending => std::future::pending::<Result<StoreAppendReceipt, ProbeStoreError>>().await,
+                StoreBehavior::Pending => std::future::pending::<Result<StoreAppendReceipt, StoreError>>().await,
             }
         }
     }
@@ -239,7 +239,7 @@ impl RequestProcessor for StoreProbeProcessor {
                     crate::processor::system_error_response(
                         &application_remoting_command_factory(),
                         original_opaque,
-                        remark.0,
+                        remark.to_string(),
                     ),
                     StoreHookCompletion::NoAfterHook,
                     String::new(),
@@ -431,7 +431,10 @@ async fn structured_send_store_error_is_one_visible_reply() {
         let built = built.as_ref().expect("store error response built");
         assert_eq!(plan.response_code(), built.code);
         assert_eq!(built.opaque, OPAQUE);
-        assert_eq!(built.remark.as_deref(), Some("message store not available"));
+        assert_eq!(
+            built.remark.as_deref(),
+            Some("storage.backend.unavailable: Storage backend is unavailable")
+        );
     }
     assert_eq!(
         state.events.lock().as_slice(),

@@ -16,6 +16,7 @@ use std::future::Future;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store_api::MessageAppender;
+use rocketmq_store_api::StoreError;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestControlView;
@@ -119,7 +120,7 @@ pub(crate) async fn append_message_with_control_reply<S, M, B>(
 where
     S: MessageAppender<M>,
     M: Send,
-    B: FnOnce(Result<S::Receipt, S::Error>) -> (RemotingCommand, StoreHookCompletion),
+    B: FnOnce(Result<S::Receipt, StoreError>) -> (RemotingCommand, StoreHookCompletion),
 {
     await_store_reply(control, store.append_message(message), build_response).await
 }

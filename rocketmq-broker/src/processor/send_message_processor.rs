@@ -1447,9 +1447,11 @@ where
     TS: TransactionalMessageService,
 {
     type Receipt = PutMessageResult;
-    type Error = rocketmq_store_api::StoreError;
 
-    async fn append_message(&mut self, message: MessageExtBrokerInner) -> Result<Self::Receipt, Self::Error> {
+    async fn append_message(
+        &mut self,
+        message: MessageExtBrokerInner,
+    ) -> Result<Self::Receipt, rocketmq_store_api::StoreError> {
         Ok(self.service.prepare_message(message).await)
     }
 }
@@ -1483,7 +1485,7 @@ fn set_success_response_header(
 fn append_message_with_store<'a, S, M>(
     store: &'a mut S,
     message: M,
-) -> impl Future<Output = Result<Result<S::Receipt, S::Error>, StoreAwaitStopped>> + Send + 'a
+) -> impl Future<Output = Result<Result<S::Receipt, rocketmq_store_api::StoreError>, StoreAwaitStopped>> + Send + 'a
 where
     S: MessageAppender<M> + 'a,
     M: Send + 'a,
@@ -2343,9 +2345,11 @@ mod tests {
 
     impl rocketmq_store_api::MessageAppender<()> for CapabilityStore {
         type Receipt = StoreAppendReceipt;
-        type Error = rocketmq_store_api::StoreError;
 
-        fn append_message(&mut self, (): ()) -> impl Future<Output = Result<Self::Receipt, Self::Error>> + Send {
+        fn append_message(
+            &mut self,
+            (): (),
+        ) -> impl Future<Output = Result<Self::Receipt, rocketmq_store_api::StoreError>> + Send {
             let result = self.receipt.take().ok_or_else(|| {
                 rocketmq_store_api::StoreError::new(
                     &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
