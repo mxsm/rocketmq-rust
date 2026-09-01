@@ -354,6 +354,11 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
                     .update_topic_config_cas(&self.broker_config_request_handler, metadata, request_code, request)
                     .await
             }
+            RequestCode::UpdateTopicConfigStateCas => {
+                self.topic_request_handler
+                    .update_topic_config_state_cas(&self.broker_config_request_handler, metadata, request)
+                    .await
+            }
             RequestCode::UpdateAndCreateTopicList => {
                 self.topic_request_handler
                     .update_and_create_topic_list(&self.broker_config_request_handler, metadata, request_code, request)
@@ -395,6 +400,11 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
             RequestCode::GetBrokerConfig => {
                 self.broker_config_request_handler
                     .get_broker_config(request_code, request)
+                    .await
+            }
+            RequestCode::GetBrokerMutationConfig => {
+                self.broker_config_request_handler
+                    .get_broker_mutation_config(request_code, request)
                     .await
             }
             RequestCode::UpdateColdDataFlowCtrConfig => {
@@ -468,6 +478,12 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
                 let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.subscription_group_handler
                     .update_subscription_group_config_cas(broker_runtime_inner, metadata, request_code, request)
+                    .await
+            }
+            RequestCode::UpdateSubscriptionGroupConfigStateCas => {
+                let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
+                self.subscription_group_handler
+                    .update_subscription_group_config_state_cas(broker_runtime_inner, metadata, request)
                     .await
             }
             RequestCode::UpdateAndCreateSubscriptionGroupList => {

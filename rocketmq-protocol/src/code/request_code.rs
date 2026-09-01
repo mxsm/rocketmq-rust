@@ -209,6 +209,14 @@ define_request_code! {
         UpdateTopicConfigCas = 334,
         /// Version-checked allowlisted Subscription Group update used by supervised SRE execution.
         UpdateSubscriptionGroupConfigCas = 335,
+        /// Full Topic replacement guarded by an absent-or-versioned expected state.
+        UpdateTopicConfigStateCas = 336,
+        /// Full Subscription Group replacement guarded by an absent-or-versioned expected state.
+        UpdateSubscriptionGroupConfigStateCas = 337,
+        /// Exact queue offset replacement guarded by the value observed during preflight.
+        UpdateConsumerOffsetConditional = 338,
+        /// Returns only the Broker fields allowed by the supervised mutation boundary.
+        GetBrokerMutationConfig = 339,
         GetTopicConfig = 351,
         GetSubscriptionGroupConfig = 352,
         UpdateAndGetGroupForbidden = 353,
@@ -221,6 +229,10 @@ define_request_code! {
         QueryAssignment = 400,
         SetMessageRequestMode = 401,
         GetAllMessageRequestMode = 402,
+        /// Returns one exact Topic and consumer-group request-mode state.
+        GetMessageRequestMode = 403,
+        /// Replaces one request mode only when its exact preflight state still matches.
+        SetMessageRequestModeCas = 404,
         UpdateAndCreateStaticTopic = 513,
         GetBrokerMemberGroup = 901,
         AddBroker = 902,
@@ -303,6 +315,12 @@ mod tests {
         assert_eq!(RequestCode::CancelProxyDrain.to_i32(), 333);
         assert_eq!(RequestCode::UpdateTopicConfigCas.to_i32(), 334);
         assert_eq!(RequestCode::UpdateSubscriptionGroupConfigCas.to_i32(), 335);
+        assert_eq!(RequestCode::UpdateTopicConfigStateCas.to_i32(), 336);
+        assert_eq!(RequestCode::UpdateSubscriptionGroupConfigStateCas.to_i32(), 337);
+        assert_eq!(RequestCode::UpdateConsumerOffsetConditional.to_i32(), 338);
+        assert_eq!(RequestCode::GetBrokerMutationConfig.to_i32(), 339);
+        assert_eq!(RequestCode::GetMessageRequestMode.to_i32(), 403);
+        assert_eq!(RequestCode::SetMessageRequestModeCas.to_i32(), 404);
         assert_eq!(RequestCode::AuthCreateUser.to_i32(), 3001);
         assert_eq!(RequestCode::MaintenanceCreateControllerSnapshot.to_i32(), 6002);
         assert_eq!(RequestCode::DeleteTopicInBrokerList.to_i32(), 5002);
@@ -323,6 +341,15 @@ mod tests {
         assert_eq!(RequestCode::from(333), RequestCode::CancelProxyDrain);
         assert_eq!(RequestCode::from(334), RequestCode::UpdateTopicConfigCas);
         assert_eq!(RequestCode::from(335), RequestCode::UpdateSubscriptionGroupConfigCas);
+        assert_eq!(RequestCode::from(336), RequestCode::UpdateTopicConfigStateCas);
+        assert_eq!(
+            RequestCode::from(337),
+            RequestCode::UpdateSubscriptionGroupConfigStateCas
+        );
+        assert_eq!(RequestCode::from(338), RequestCode::UpdateConsumerOffsetConditional);
+        assert_eq!(RequestCode::from(339), RequestCode::GetBrokerMutationConfig);
+        assert_eq!(RequestCode::from(403), RequestCode::GetMessageRequestMode);
+        assert_eq!(RequestCode::from(404), RequestCode::SetMessageRequestModeCas);
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
         assert_eq!(RequestCode::from(6003), RequestCode::MaintenanceCreateStoreCheckpoint);
         assert_eq!(RequestCode::from(5002), RequestCode::DeleteTopicInBrokerList);

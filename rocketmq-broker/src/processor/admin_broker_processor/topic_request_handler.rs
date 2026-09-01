@@ -27,6 +27,10 @@ use rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_protocol::protocol::body::create_topic_list_request_body::CreateTopicListRequestBody;
 use rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody;
 use rocketmq_protocol::protocol::body::group_list::GroupList;
+use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
+use rocketmq_protocol::protocol::body::supervised_mutation::MutationPersistenceState;
+use rocketmq_protocol::protocol::body::supervised_mutation::StateCasResultBody;
+use rocketmq_protocol::protocol::body::supervised_mutation::SupervisedTopicConfigCasRequestBody;
 use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
@@ -358,6 +362,13 @@ impl TopicRequestHandler {
                         .set_remark("Topic configuration version is exhausted"),
                 ));
             }
+            Err(TopicConfigCasError::StateConflict { .. } | TopicConfigCasError::PersistenceDirty { .. }) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Topic configuration state is unavailable"),
+                ));
+            }
         };
         let topic_version = match u64::try_from(update.data_version.counter()) {
             Ok(version) => version,
@@ -382,6 +393,186 @@ impl TopicRequestHandler {
             })
             .set_opaque(request.opaque())
             .set_remark(format!("Topic configuration patch committed, version={topic_version}")),
+        ))
+    }
+
+    pub async fn update_topic_config_state_cas<MS: BrokerAdminStore>(
+        &self,
+        broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
+        _metadata: &AdminRequestMetadata,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
+        let header = match request.decode_command_custom_header::<GetTopicConfigRequestHeader>() {
+            Ok(header) => header,
+            Err(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Topic state replacement requires a valid Topic"),
+                ));
+            }
+        };
+        let Some(body) = request.body() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("Topic state replacement body is required"),
+            ));
+        };
+        let body = match serde_json::from_slice::<SupervisedTopicConfigCasRequestBody>(body.as_ref()) {
+            Ok(body) => body,
+            Err(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Topic state replacement body is invalid"),
+                ));
+            }
+        };
+        let runtime = broker_config_request_handler.broker_runtime_inner();
+        let validation = TopicValidator::validate_topic(header.topic.as_str());
+        if !validation.valid()
+            || TopicValidator::is_system_topic(header.topic.as_str())
+            || runtime
+                .topic_queue_mapping_manager()
+                .get_topic_queue_mapping(header.topic.as_str())
+                .is_some()
+            || !(1..=128).contains(&body.replacement.read_queue_nums)
+            || !(1..=128).contains(&body.replacement.write_queue_nums)
+            || !(1..=7).contains(&body.replacement.perm)
+            || body.replacement.perm & 0b110 == 0
+        {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("Topic state replacement is not eligible"),
+            ));
+        }
+        let message_type = match body.replacement.message_type.trim().to_ascii_uppercase().as_str() {
+            "NORMAL" | "FIFO" | "DELAY" | "TRANSACTION" | "UNSPECIFIED" => {
+                body.replacement.message_type.trim().to_ascii_uppercase()
+            }
+            _ => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Topic message type is invalid"),
+                ));
+            }
+        };
+        let mut attributes = HashMap::new();
+        attributes.insert(
+            CheetahString::from_static_str("+message.type"),
+            CheetahString::from(message_type),
+        );
+        let replacement = TopicConfig {
+            topic_name: Some(header.topic.clone()),
+            read_queue_nums: body.replacement.read_queue_nums,
+            write_queue_nums: body.replacement.write_queue_nums,
+            perm: body.replacement.perm,
+            order: body.replacement.order,
+            attributes,
+            ..TopicConfig::default()
+        };
+        let update = match runtime.topic_config_manager().replace_topic_config_if_state(
+            &header.topic,
+            body.expected_state,
+            replacement,
+            runtime.topic_config_state_machine_version(),
+        ) {
+            Ok(update) => update,
+            Err(TopicConfigCasError::StateConflict { actual_version }) => {
+                let state = actual_version.map_or(ExpectedState::Absent, |version| ExpectedState::Present { version });
+                return Ok(Some(
+                    response.set_code(ResponseCode::InvalidParameter).set_body(
+                        StateCasResultBody {
+                            applied: false,
+                            changed: false,
+                            state,
+                            persistence: MutationPersistenceState::NotRequired,
+                        }
+                        .encode()?,
+                    ),
+                ));
+            }
+            Err(TopicConfigCasError::PersistenceDirty { actual_version }) => {
+                return Ok(Some(
+                    response.set_code(ResponseCode::SystemError).set_body(
+                        StateCasResultBody {
+                            applied: false,
+                            changed: false,
+                            state: ExpectedState::Present {
+                                version: actual_version,
+                            },
+                            persistence: MutationPersistenceState::Failed,
+                        }
+                        .encode()?,
+                    ),
+                ));
+            }
+            Err(TopicConfigCasError::NoChange) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Topic state replacement has no effect"),
+                ));
+            }
+            Err(
+                TopicConfigCasError::VersionUnavailable
+                | TopicConfigCasError::VersionExhausted
+                | TopicConfigCasError::TopicNotFound
+                | TopicConfigCasError::VersionConflict { .. },
+            ) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Topic state replacement is unavailable"),
+                ));
+            }
+        };
+        let version = u64::try_from(update.data_version.counter()).map_err(|_| {
+            rocketmq_error::RocketMQError::invariant_violated("Topic state version must remain non-negative")
+        })?;
+        if !update.changed {
+            return Ok(Some(
+                RemotingCommand::create_success_response_command()
+                    .set_opaque(request.opaque())
+                    .set_body(
+                        StateCasResultBody {
+                            applied: true,
+                            changed: false,
+                            state: ExpectedState::Present { version },
+                            persistence: MutationPersistenceState::NotRequired,
+                        }
+                        .encode()?,
+                    ),
+            ));
+        }
+        let persistence = broker_config_request_handler
+            .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
+            .await;
+        runtime
+            .topic_config_manager()
+            .complete_supervised_persistence(&header.topic, version, persistence.is_ok());
+        let (code, persistence) = if persistence.is_ok() {
+            (ResponseCode::Success, MutationPersistenceState::Persisted)
+        } else {
+            (ResponseCode::SystemError, MutationPersistenceState::Failed)
+        };
+        Ok(Some(
+            RemotingCommand::create_success_response_command()
+                .set_code(code)
+                .set_opaque(request.opaque())
+                .set_body(
+                    StateCasResultBody {
+                        applied: true,
+                        changed: true,
+                        state: ExpectedState::Present { version },
+                        persistence,
+                    }
+                    .encode()?,
+                ),
         ))
     }
 
@@ -896,7 +1087,12 @@ impl TopicRequestHandler {
                         .set_remark(format!("No topic in this broker. topic: {topic}")),
                 ));
             }
-            Err(TopicConfigCasError::VersionUnavailable | TopicConfigCasError::VersionExhausted) => {
+            Err(
+                TopicConfigCasError::VersionUnavailable
+                | TopicConfigCasError::VersionExhausted
+                | TopicConfigCasError::StateConflict { .. }
+                | TopicConfigCasError::PersistenceDirty { .. },
+            ) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
@@ -1031,12 +1227,17 @@ mod tests {
     use rocketmq_model::common::mix_all::METADATA_SCOPE_GLOBAL;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::body::supervised_mutation::{
+        ExpectedState, MutationPersistenceState, StateCasResultBody, SupervisedTopicConfig,
+        SupervisedTopicConfigCasRequestBody,
+    };
     use rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
     use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
     use rocketmq_protocol::protocol::header::update_topic_config_cas_request_header::UpdateTopicConfigCasRequestHeader;
     use rocketmq_protocol::protocol::header::update_topic_config_cas_response_header::UpdateTopicConfigCasResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_store::MessageStoreConfig;
 
@@ -1044,6 +1245,7 @@ mod tests {
     use super::AdminRequestMetadata;
     use super::TopicRequestHandler;
     use crate::broker_runtime::BrokerRuntime;
+    use crate::config::config_manager::ConfigManager;
     use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
@@ -1290,6 +1492,109 @@ mod tests {
                 .expect("Topic query should carry the current version")
                 .topic_version,
             1
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn topic_state_cas_reports_applied_when_persistence_fails() {
+        let runtime = new_test_runtime("topic-state-persist-fail").await;
+        let admin = runtime.admin_runtime_for_test();
+        let handler = TopicRequestHandler::new();
+        let broker_handler = BrokerConfigRequestHandler::new(admin.clone());
+        let topic = CheetahString::from_static_str("PersistFailureTopic");
+        let persistence_target = admin.topic_config_manager().config_file_path();
+        std::fs::create_dir_all(persistence_target.as_str()).expect("occupy persistence target with a directory");
+
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateTopicConfigStateCas,
+            GetTopicConfigRequestHeader {
+                topic: topic.clone(),
+                topic_request_header: None,
+            },
+        )
+        .set_body(
+            SupervisedTopicConfigCasRequestBody {
+                expected_state: ExpectedState::Absent,
+                replacement: SupervisedTopicConfig {
+                    read_queue_nums: 2,
+                    write_queue_nums: 2,
+                    perm: 6,
+                    order: false,
+                    message_type: "NORMAL".to_owned(),
+                },
+            }
+            .encode()
+            .expect("request body"),
+        );
+        request.make_custom_header_to_net();
+        let response = handler
+            .update_topic_config_state_cas(
+                &broker_handler,
+                &AdminRequestMetadata::network_for_test("127.0.0.1:10911".parse().expect("peer")),
+                &mut request,
+            )
+            .await
+            .expect("handler")
+            .expect("response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        let outcome = StateCasResultBody::decode(response.body().expect("body")).expect("typed outcome");
+        assert!(outcome.applied);
+        assert!(outcome.changed);
+        assert_eq!(outcome.persistence, MutationPersistenceState::Failed);
+        let ExpectedState::Present { version } = outcome.state else {
+            panic!("applied Topic state must be present");
+        };
+        assert!(admin.topic_config_manager().select_topic_config(&topic).is_some());
+
+        for queues in [2, 3] {
+            let mut follow_up = RemotingCommand::create_request_command(
+                RequestCode::UpdateTopicConfigStateCas,
+                GetTopicConfigRequestHeader {
+                    topic: topic.clone(),
+                    topic_request_header: None,
+                },
+            )
+            .set_body(
+                SupervisedTopicConfigCasRequestBody {
+                    expected_state: ExpectedState::Present { version },
+                    replacement: SupervisedTopicConfig {
+                        read_queue_nums: queues,
+                        write_queue_nums: queues,
+                        perm: 6,
+                        order: false,
+                        message_type: "NORMAL".to_owned(),
+                    },
+                }
+                .encode()
+                .expect("follow-up body"),
+            );
+            follow_up.make_custom_header_to_net();
+            let response = handler
+                .update_topic_config_state_cas(
+                    &broker_handler,
+                    &AdminRequestMetadata::network_for_test("127.0.0.1:10911".parse().expect("peer")),
+                    &mut follow_up,
+                )
+                .await
+                .expect("handler")
+                .expect("response");
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+            let follow_up = StateCasResultBody::decode(response.body().expect("body")).expect("typed outcome");
+            assert!(!follow_up.applied);
+            assert!(!follow_up.changed);
+            assert_eq!(follow_up.persistence, MutationPersistenceState::Failed);
+            assert_eq!(follow_up.state, ExpectedState::Present { version });
+        }
+        assert_eq!(
+            admin
+                .topic_config_manager()
+                .select_topic_config(&topic)
+                .expect("dirty Topic remains in memory")
+                .read_queue_nums,
+            2
         );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());

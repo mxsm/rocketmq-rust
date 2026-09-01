@@ -88,7 +88,7 @@ fn topic_config_versioned_from_response(response: &RemotingCommand) -> RocketMQR
 }
 
 #[cfg(feature = "admin-mutation")]
-fn mutation_topic_config_versioned_from_response(
+pub(super) fn mutation_topic_config_versioned_from_response(
     response: &RemotingCommand,
 ) -> RocketMQResult<MutationTopicConfigVersioned> {
     let body = response.get_body().ok_or(RocketMQError::ResponseProcessFailed {

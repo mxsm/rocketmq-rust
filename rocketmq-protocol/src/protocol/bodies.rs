@@ -93,6 +93,7 @@ pub mod subscription {
     pub use super::super::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
     pub use super::super::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
     pub use super::super::body::subscription_group_wrapper::SubscriptionGroupWrapper;
+    pub use super::super::body::supervised_mutation::*;
 }
 
 // Response Bodies

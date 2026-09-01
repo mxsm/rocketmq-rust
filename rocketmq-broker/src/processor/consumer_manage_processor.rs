@@ -22,6 +22,7 @@ use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_heade
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+use rocketmq_protocol::protocol::header::update_consumer_offset_conditional_header::UpdateConsumerOffsetConditionalHeader;
 use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
@@ -148,6 +149,7 @@ where
         match request_code {
             RequestCode::GetConsumerListByGroup => self.get_consumer_list_by_group(&request_source, request).await,
             RequestCode::UpdateConsumerOffset => self.update_consumer_offset(request_source, request).await,
+            RequestCode::UpdateConsumerOffsetConditional => self.update_consumer_offset_conditional(request).await,
             RequestCode::QueryConsumerOffset => self.query_consumer_offset(request).await,
             _ => {
                 warn!(
@@ -271,6 +273,65 @@ where
         self.consumer_offset
             .commit_offset(request_source, group, topic, queue_id, offset);
         Ok(Some(response.set_code(ResponseCode::Success)))
+    }
+
+    async fn update_consumer_offset_conditional(
+        &self,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let header = request.decode_command_custom_header::<UpdateConsumerOffsetConditionalHeader>()?;
+        let response = self.command_factory.create_success_response_command();
+        if header.queue_id < 0 || header.expected_offset < -1 || header.new_offset < 0 {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("conditional offset fields are invalid"),
+            ));
+        }
+        let topic_config = self.topic_config_manager.select_topic_config(&header.topic);
+        if !self
+            .subscription_group_lookup
+            .contains_subscription_group(&header.consumer_group)
+            || topic_config.is_none()
+            || self
+                .topic_queue_mapping_manager
+                .get_topic_queue_mapping(header.topic.as_str())
+                .is_some()
+        {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("conditional offset target is unavailable"),
+            ));
+        }
+        let queue_count = topic_config
+            .as_ref()
+            .map(|config| config.read_queue_nums)
+            .unwrap_or_default();
+        if u32::try_from(header.queue_id).map_or(true, |queue_id| queue_id >= queue_count) {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("conditional offset queue is outside the Topic range"),
+            ));
+        }
+        match self.consumer_offset.reset_offset_if_current(
+            &header.consumer_group,
+            &header.topic,
+            header.queue_id,
+            header.expected_offset,
+            header.new_offset,
+        ) {
+            Ok(offset) => Ok(Some(response.set_command_custom_header(
+                QueryConsumerOffsetResponseHeader { offset: Some(offset) },
+            ))),
+            Err(actual) => Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_command_custom_header(QueryConsumerOffsetResponseHeader { offset: Some(actual) })
+                    .set_remark("consumer offset precondition did not match"),
+            )),
+        }
     }
 
     async fn query_consumer_offset(
@@ -601,11 +662,14 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use rocketmq_model::common::config::TopicConfig;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::header::update_consumer_offset_conditional_header::UpdateConsumerOffsetConditionalHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+    use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use rocketmq_security_api::AuthenticatedRequestContext;
     use rocketmq_security_api::Decision;
     use rocketmq_security_api::Principal;
@@ -709,6 +773,81 @@ mod tests {
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::InvalidParameter);
         assert_eq!(plan.body_len(), 0);
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn conditional_offset_enforces_topic_queue_range_before_mutation() {
+        let mut runtime = new_test_runtime("conditional-offset-range").await;
+        let topic = CheetahString::from_static_str("RangeTopic");
+        let group = CheetahString::from_static_str("RangeGroup");
+        {
+            let state = runtime.runtime_state_mut();
+            state
+                .topic_config_manager()
+                .update_topic_config(TopicConfig::with_queues(topic.clone(), 2, 2), 0);
+            let mut group_config = SubscriptionGroupConfig::new(group.clone());
+            state
+                .subscription_group_manager()
+                .update_subscription_group_config(&mut group_config);
+            state
+                .consumer_offset_manager()
+                .commit_offset("test".into(), &group, &topic, 1, 40);
+        }
+        let processor = consumer_processor_for_test(&mut runtime);
+        let before_version = runtime.runtime_state_mut().consumer_offset_manager().data_version();
+
+        for queue_id in [-1, 2, i32::MAX] {
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::UpdateConsumerOffsetConditional,
+                UpdateConsumerOffsetConditionalHeader {
+                    consumer_group: group.clone(),
+                    topic: topic.clone(),
+                    queue_id,
+                    expected_offset: 40,
+                    new_offset: 3,
+                },
+            );
+            request.make_custom_header_to_net();
+            let response = processor
+                .update_consumer_offset_conditional(&mut request)
+                .await
+                .expect("handler")
+                .expect("response");
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+            let state = runtime.runtime_state_mut();
+            assert_eq!(state.consumer_offset_manager().query_offset(&group, &topic, 1), 40);
+            assert_eq!(
+                state.consumer_offset_manager().data_version().as_ref(),
+                before_version.as_ref()
+            );
+        }
+
+        let mut valid = RemotingCommand::create_request_command(
+            RequestCode::UpdateConsumerOffsetConditional,
+            UpdateConsumerOffsetConditionalHeader {
+                consumer_group: group.clone(),
+                topic: topic.clone(),
+                queue_id: 1,
+                expected_offset: 40,
+                new_offset: 3,
+            },
+        );
+        valid.make_custom_header_to_net();
+        let response = processor
+            .update_consumer_offset_conditional(&mut valid)
+            .await
+            .expect("handler")
+            .expect("response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        assert_eq!(
+            runtime
+                .runtime_state_mut()
+                .consumer_offset_manager()
+                .query_offset(&group, &topic, 1),
+            3
+        );
+
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 

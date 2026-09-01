@@ -36,6 +36,7 @@ use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::common::TopicSysFlag;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
@@ -59,6 +60,7 @@ pub(crate) struct TopicConfigManager {
     topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
     topic_config_snapshot: ArcSwap<HashMap<CheetahString, Arc<TopicConfig>>>,
     metadata_transition: parking_lot::Mutex<DataVersion>,
+    supervised_dirty_topics: DashMap<CheetahString, u64>,
     persist_lock: Arc<parking_lot::Mutex<()>>,
     config_file_path: String,
     real_time_persist_rocksdb_config: AtomicBool,
@@ -71,6 +73,7 @@ pub(crate) struct TopicConfigManager {
 pub(crate) struct TopicConfigUpdate {
     pub(crate) topic_config: Arc<TopicConfig>,
     pub(crate) data_version: DataVersion,
+    pub(crate) changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,6 +83,8 @@ pub(crate) enum TopicConfigCasError {
     VersionUnavailable,
     VersionExhausted,
     NoChange,
+    StateConflict { actual_version: Option<u64> },
+    PersistenceDirty { actual_version: u64 },
 }
 
 pub(crate) struct TopicConfigCreation {
@@ -109,6 +114,7 @@ impl TopicConfigManager {
             topic_config_table: Arc::new(DashMap::with_capacity(1024)),
             topic_config_snapshot: ArcSwap::from_pointee(HashMap::new()),
             metadata_transition: parking_lot::Mutex::new(DataVersion::default()),
+            supervised_dirty_topics: DashMap::new(),
             persist_lock: Arc::new(parking_lot::Mutex::new(())),
             config_file_path: get_topic_config_path(broker_config.store_path_root_dir.as_str()),
             real_time_persist_rocksdb_config: AtomicBool::new(message_store_config.real_time_persist_rocksdb_config),
@@ -494,6 +500,7 @@ impl TopicConfigManager {
             TopicConfigUpdate {
                 topic_config,
                 data_version: data_version.clone(),
+                changed: true,
             }
         };
 
@@ -561,6 +568,7 @@ impl TopicConfigManager {
             TopicConfigUpdate {
                 topic_config,
                 data_version: data_version.clone(),
+                changed: true,
             }
         };
 
@@ -631,6 +639,7 @@ impl TopicConfigManager {
                 TopicConfigUpdate {
                     topic_config,
                     data_version: data_version.clone(),
+                    changed: true,
                 },
                 old,
             )
@@ -697,7 +706,85 @@ impl TopicConfigManager {
         Ok(TopicConfigUpdate {
             topic_config,
             data_version: data_version.clone(),
+            changed: true,
         })
+    }
+
+    /// Atomically creates or fully replaces one supervised Topic state.
+    pub(crate) fn replace_topic_config_if_state(
+        &self,
+        topic: &CheetahString,
+        expected_state: ExpectedState,
+        mut replacement: TopicConfig,
+        state_machine_version: i64,
+    ) -> Result<TopicConfigUpdate, TopicConfigCasError> {
+        let mut data_version = self.metadata_transition.lock();
+        let counter = data_version.counter();
+        let actual_version = u64::try_from(counter).map_err(|_| TopicConfigCasError::VersionUnavailable)?;
+        let current = self
+            .topic_config_table
+            .get(topic)
+            .map(|entry| entry.value().as_ref().clone());
+        let matches = match expected_state {
+            ExpectedState::Absent => current.is_none(),
+            ExpectedState::Present { version } => current.is_some() && version == actual_version,
+        };
+        if !matches {
+            return Err(TopicConfigCasError::StateConflict {
+                actual_version: current.as_ref().map(|_| actual_version),
+            });
+        }
+        if let Some(version) = self.supervised_dirty_topics.get(topic).map(|entry| *entry.value()) {
+            return Err(TopicConfigCasError::PersistenceDirty {
+                actual_version: version,
+            });
+        }
+        if counter == i64::MAX {
+            return Err(TopicConfigCasError::VersionExhausted);
+        }
+        replacement.topic_name = Some(topic.clone());
+        if let Some(current) = current.as_ref() {
+            replacement.topic_filter_type = current.topic_filter_type;
+            replacement.topic_sys_flag = current.topic_sys_flag;
+        }
+        self.apply_topic_attributes_locked(&mut replacement);
+        if current.as_ref() == Some(&replacement) {
+            return Ok(TopicConfigUpdate {
+                topic_config: Arc::new(replacement),
+                data_version: data_version.clone(),
+                changed: false,
+            });
+        }
+
+        let topic_config = Arc::new(replacement);
+        self.topic_config_table.insert(topic.clone(), Arc::clone(&topic_config));
+        data_version.next_version_with(state_machine_version);
+        let version = u64::try_from(data_version.counter()).map_err(|_| TopicConfigCasError::VersionUnavailable)?;
+        self.supervised_dirty_topics.insert(topic.clone(), version);
+        self.rebuild_topic_config_snapshot_locked();
+        Ok(TopicConfigUpdate {
+            topic_config,
+            data_version: data_version.clone(),
+            changed: true,
+        })
+    }
+
+    pub(crate) fn complete_supervised_persistence(&self, topic: &CheetahString, version: u64, persisted: bool) {
+        if !persisted {
+            return;
+        }
+        if self
+            .supervised_dirty_topics
+            .get(topic)
+            .is_some_and(|current| *current.value() == version)
+        {
+            self.supervised_dirty_topics.remove(topic);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn supervised_dirty_version(&self, topic: &CheetahString) -> Option<u64> {
+        self.supervised_dirty_topics.get(topic).map(|entry| *entry.value())
     }
 
     fn apply_topic_attributes_locked(&self, topic_config: &mut TopicConfig) {
@@ -747,6 +834,7 @@ impl TopicConfigManager {
         Some(TopicConfigUpdate {
             topic_config,
             data_version: data_version.clone(),
+            changed: true,
         })
     }
 
@@ -829,6 +917,7 @@ impl TopicConfigManager {
             TopicConfigUpdate {
                 topic_config,
                 data_version: data_version.clone(),
+                changed: true,
             }
         };
 
@@ -962,6 +1051,7 @@ impl TopicConfigManager {
             TopicConfigUpdate {
                 topic_config,
                 data_version: data_version.clone(),
+                changed: true,
             }
         };
 
@@ -1326,6 +1416,7 @@ mod tests {
     use crate::config::config_manager::ConfigManager;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
     use rocketmq_protocol::protocol::DataVersion;
     use rocketmq_store::MessageStoreConfig;
@@ -1532,6 +1623,182 @@ mod tests {
             TopicConfigCasError::NoChange
         );
         assert_eq!(manager.data_version().counter(), created.data_version.counter());
+    }
+
+    #[test]
+    fn topic_state_cas_supports_absent_create_present_replace_and_conflict() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let topic = CheetahString::from_static_str("StateCasTopic");
+        let created = manager
+            .replace_topic_config_if_state(
+                &topic,
+                ExpectedState::Absent,
+                TopicConfig::with_queues(topic.clone(), 2, 3),
+                0,
+            )
+            .expect("absent state should create");
+        let created_version = u64::try_from(created.data_version.counter()).expect("non-negative version");
+
+        assert_eq!(
+            manager
+                .replace_topic_config_if_state(
+                    &topic,
+                    ExpectedState::Absent,
+                    TopicConfig::with_queues(topic.clone(), 8, 8),
+                    0,
+                )
+                .expect_err("a second absent create must conflict"),
+            TopicConfigCasError::StateConflict {
+                actual_version: Some(created_version),
+            }
+        );
+        manager.complete_supervised_persistence(&topic, created_version, true);
+
+        let replaced = manager
+            .replace_topic_config_if_state(
+                &topic,
+                ExpectedState::Present {
+                    version: created_version,
+                },
+                TopicConfig::with_queues(topic.clone(), 4, 6),
+                0,
+            )
+            .expect("matching present state should replace");
+        assert_eq!(replaced.topic_config.read_queue_nums, 4);
+        assert_eq!(replaced.topic_config.write_queue_nums, 6);
+        assert!(replaced.changed);
+        manager.complete_supervised_persistence(&topic, created_version + 1, true);
+        let unchanged = manager
+            .replace_topic_config_if_state(
+                &topic,
+                ExpectedState::Present {
+                    version: created_version + 1,
+                },
+                replaced.topic_config.as_ref().clone(),
+                0,
+            )
+            .expect("identical Topic replacement should be an accepted no-op");
+        assert!(!unchanged.changed);
+        assert_eq!(unchanged.data_version.counter(), replaced.data_version.counter());
+        assert_eq!(
+            manager
+                .replace_topic_config_if_state(
+                    &topic,
+                    ExpectedState::Present {
+                        version: created_version,
+                    },
+                    TopicConfig::with_queues(topic.clone(), 7, 9),
+                    0,
+                )
+                .expect_err("stale present state must conflict"),
+            TopicConfigCasError::StateConflict {
+                actual_version: Some(created_version + 1),
+            }
+        );
+    }
+
+    #[test]
+    fn topic_state_cas_preserves_internal_filter_and_system_flags() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let topic = CheetahString::from_static_str("PreserveStateCasTopic");
+        let mut initial = TopicConfig::with_queues(topic.clone(), 2, 3);
+        initial.topic_filter_type = rocketmq_model::topic::TopicFilterType::MultiTag;
+        initial.topic_sys_flag = 17;
+        manager.put_topic_config(initial);
+
+        let update = manager
+            .replace_topic_config_if_state(
+                &topic,
+                ExpectedState::Present { version: 0 },
+                TopicConfig::with_queues(topic.clone(), 4, 6),
+                0,
+            )
+            .expect("matching replacement should preserve internal fields");
+        assert_eq!(
+            update.topic_config.topic_filter_type,
+            rocketmq_model::topic::TopicFilterType::MultiTag
+        );
+        assert_eq!(update.topic_config.topic_sys_flag, 17);
+    }
+
+    #[test]
+    fn topic_state_cas_stays_fail_closed_after_persistence_failure() {
+        let (temp_dir, manager) = test_topic_config_manager();
+        manager.persist().expect("persist clean baseline");
+        let topic = CheetahString::from_static_str("DirtyStateCasTopic");
+        let created = manager
+            .replace_topic_config_if_state(
+                &topic,
+                ExpectedState::Absent,
+                TopicConfig::with_queues(topic.clone(), 2, 2),
+                0,
+            )
+            .expect("create");
+        let version = u64::try_from(created.data_version.counter()).expect("version");
+        manager.complete_supervised_persistence(&topic, version, false);
+        assert_eq!(manager.supervised_dirty_version(&topic), Some(version));
+        for replacement in [
+            created.topic_config.as_ref().clone(),
+            TopicConfig::with_queues(topic.clone(), 4, 4),
+        ] {
+            assert_eq!(
+                manager
+                    .replace_topic_config_if_state(&topic, ExpectedState::Present { version }, replacement, 0,)
+                    .expect_err("dirty state must reject same and different replacements"),
+                TopicConfigCasError::PersistenceDirty {
+                    actual_version: version,
+                }
+            );
+        }
+        assert_eq!(manager.data_version().counter(), created.data_version.counter());
+
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            ..MessageStoreConfig::default()
+        };
+        let restarted = TopicConfigManager::new(&broker_config, &message_store_config, false, None);
+        assert!(restarted.load());
+        assert!(restarted.select_topic_config(&topic).is_none());
+    }
+
+    #[test]
+    fn concurrent_absent_topic_state_cas_has_exactly_one_winner() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let manager = Arc::new(manager);
+        let barrier = Arc::new(Barrier::new(3));
+        let topic = CheetahString::from_static_str("ConcurrentStateCasTopic");
+
+        std::thread::scope(|scope| {
+            let handles = [2_u32, 4_u32].map(|queues| {
+                let manager = Arc::clone(&manager);
+                let barrier = Arc::clone(&barrier);
+                let topic = topic.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    manager.replace_topic_config_if_state(
+                        &topic,
+                        ExpectedState::Absent,
+                        TopicConfig::with_queues(topic.clone(), queues, queues),
+                        0,
+                    )
+                })
+            });
+            barrier.wait();
+            let results = handles.map(|handle| handle.join().expect("worker should not panic"));
+            assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+            assert_eq!(
+                results
+                    .iter()
+                    .filter(|result| matches!(result, Err(TopicConfigCasError::StateConflict { .. })))
+                    .count(),
+                1
+            );
+        });
     }
 
     #[test]

@@ -27,6 +27,10 @@ use serde::de::DeserializeOwned;
 
 #[cfg(feature = "admin-full")]
 mod compatibility;
+#[cfg(feature = "admin-mutation")]
+mod supervised_mutation;
+#[cfg(feature = "admin-mutation")]
+mod supervised_mutation_decode;
 mod versioned_config;
 
 fn decode_admin_json<T: DeserializeOwned>(bytes: &[u8]) -> RocketMQResult<T> {

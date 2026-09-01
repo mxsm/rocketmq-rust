@@ -198,6 +198,18 @@ where
         self.manager.query_offset(group, topic, queue_id)
     }
 
+    pub(crate) fn reset_offset_if_current(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        expected_current: i64,
+        new_offset: i64,
+    ) -> Result<i64, i64> {
+        self.manager
+            .reset_offset_if_current(group, topic, queue_id, expected_current, new_offset)
+    }
+
     pub(crate) fn query_then_erase_reset_offset(
         &self,
         group: &CheetahString,
@@ -470,6 +482,43 @@ where
 
         self.record_offset_change_with_locked();
         true
+    }
+
+    /// Installs both the durable offset and reset marker under one expected-current check.
+    pub(crate) fn reset_offset_if_current(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        expected_current: i64,
+        new_offset: i64,
+    ) -> Result<i64, i64> {
+        if new_offset < 0 {
+            return Err(self.query_offset(group, topic, queue_id));
+        }
+        let _transition = self.consumer_offset_wrapper.data_version_transition.lock();
+        let key = build_topic_group_key(topic, group);
+        let mut offsets = self.consumer_offset_wrapper.offset_table.write();
+        let current = offsets
+            .get(&key)
+            .and_then(|queues| queues.get(&queue_id))
+            .copied()
+            .unwrap_or(-1);
+        if current != expected_current {
+            return Err(current);
+        }
+        if current != new_offset {
+            offsets.entry(key.clone()).or_default().insert(queue_id, new_offset);
+            self.consumer_offset_wrapper
+                .reset_offset_table
+                .write()
+                .entry(key)
+                .or_default()
+                .insert(queue_id, new_offset);
+            drop(offsets);
+            self.record_offset_change_with_locked();
+        }
+        Ok(new_offset)
     }
 
     fn record_offset_change_with_locked(&self) {
@@ -1252,6 +1301,25 @@ mod tests {
             .reset_offset_table
             .read()
             .contains_key("topic-a@group-a"));
+    }
+
+    #[test]
+    fn conditional_reset_consumes_exact_current_offset_without_retry() {
+        let manager = new_manager();
+        let topic = CheetahString::from_static_str("topic-a");
+        let group = CheetahString::from_static_str("group-a");
+        manager.commit_offset("127.0.0.1:10911".into(), &group, &topic, 0, 42);
+
+        assert_eq!(manager.reset_offset_if_current(&group, &topic, 0, 41, 7), Err(42));
+        assert_eq!(manager.query_offset(&group, &topic, 0), 42);
+        assert!(!manager.has_offset_reset(group.as_str(), topic.as_str(), 0));
+
+        assert_eq!(manager.reset_offset_if_current(&group, &topic, 0, 42, 7), Ok(7));
+        assert_eq!(manager.query_offset(&group, &topic, 0), 7);
+        assert_eq!(manager.query_then_erase_reset_offset(&topic, &group, 0), Some(7));
+
+        assert_eq!(manager.reset_offset_if_current(&group, &topic, 0, 42, 3), Err(7));
+        assert_eq!(manager.query_offset(&group, &topic, 0), 7);
     }
 
     #[test]

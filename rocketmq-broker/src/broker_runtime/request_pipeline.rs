@@ -373,19 +373,25 @@ impl BrokerRuntime {
             .with_command_factory(self.composition.state.command_factory()),
         ));
         self.composition.state.ack_message_processor = Some(ack_message_processor.clone());
-        let query_assignment_processor = Arc::new(QueryAssignmentProcessor::new_with_metadata_io_and_factory(
-            self.composition.state.broker_config_arc(),
-            self.composition.state.message_store_config_arc(),
-            self.composition.state.topic_route_info_manager().clone(),
-            self.composition.state.consumer_manager().assignment_view(),
-            self.composition
-                .state
-                .metadata_io
-                .as_ref()
-                .and_then(|result| result.as_ref().ok())
-                .cloned(),
-            self.composition.state.command_factory(),
-        ));
+        let query_assignment_processor = Arc::new(
+            QueryAssignmentProcessor::new_with_metadata_io_and_factory(
+                self.composition.state.broker_config_arc(),
+                self.composition.state.message_store_config_arc(),
+                self.composition.state.topic_route_info_manager().clone(),
+                self.composition.state.consumer_manager().assignment_view(),
+                self.composition
+                    .state
+                    .metadata_io
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .cloned(),
+                self.composition.state.command_factory(),
+            )
+            .with_supervised_target_lookups(
+                self.composition.state.topic_config_manager_handle(),
+                self.composition.state.subscription_group_manager().config_lookup(),
+            ),
+        );
         if let Some(slave_synchronize) = self.composition.state.slave_synchronize() {
             slave_synchronize
                 .bind_message_request_mode_manager(query_assignment_processor.message_request_mode_manager());
@@ -775,6 +781,10 @@ impl BrokerRuntime {
             RequestCode::UpdateConsumerOffset as i32,
             BrokerProcessorType::ConsumerManage(consumer_manage_processor.clone()),
         );
+        broker_request_processor.register_processor(
+            RequestCode::UpdateConsumerOffsetConditional as i32,
+            BrokerProcessorType::ConsumerManage(consumer_manage_processor.clone()),
+        );
 
         broker_request_processor.register_processor(
             RequestCode::QueryConsumerOffset as i32,
@@ -788,6 +798,14 @@ impl BrokerRuntime {
         );
         broker_request_processor.register_processor(
             RequestCode::SetMessageRequestMode as i32,
+            BrokerProcessorType::QueryAssignment(query_assignment_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::GetMessageRequestMode as i32,
+            BrokerProcessorType::QueryAssignment(query_assignment_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::SetMessageRequestModeCas as i32,
             BrokerProcessorType::QueryAssignment(query_assignment_processor),
         );
 

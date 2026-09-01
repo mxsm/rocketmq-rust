@@ -14,7 +14,10 @@
 
 use crate::client::manager::consumer_manager::ConsumerAssignmentView;
 
+use crate::load_balance::message_request_mode_manager::MessageRequestModeCasError;
 use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
+use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 
@@ -29,15 +32,24 @@ use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_protocol::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
+use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedMessageRequestMode;
+use rocketmq_protocol::protocol::body::supervised_mutation::GetMessageRequestModeRequestBody;
+use rocketmq_protocol::protocol::body::supervised_mutation::MessageRequestModeMutationResultBody;
+use rocketmq_protocol::protocol::body::supervised_mutation::MessageRequestModeStateBody;
+use rocketmq_protocol::protocol::body::supervised_mutation::MutationPersistenceState;
+use rocketmq_protocol::protocol::body::supervised_mutation::SetMessageRequestModeCasRequestBody;
+use rocketmq_protocol::protocol::body::supervised_mutation::SupervisedMessageRequestMode;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::MetadataDeadline;
@@ -74,6 +86,8 @@ pub struct QueryAssignmentProcessor {
     topic_route_info_manager: TopicRouteInfoManager,
     consumer_assignment_view: ConsumerAssignmentView,
     metadata_io: Option<MetadataIoActor>,
+    supervised_topic_configs: Option<Arc<TopicConfigManager>>,
+    supervised_subscription_groups: Option<SubscriptionGroupConfigLookup>,
 }
 
 impl RequestProcessor for QueryAssignmentProcessor {
@@ -110,7 +124,10 @@ impl QueryAssignmentProcessor {
         let request_code = RequestCode::from(request.code());
         info!("QueryAssignmentProcessor received request code: {:?}", request_code);
         match request_code {
-            RequestCode::QueryAssignment | RequestCode::SetMessageRequestMode => {
+            RequestCode::QueryAssignment
+            | RequestCode::SetMessageRequestMode
+            | RequestCode::GetMessageRequestMode
+            | RequestCode::SetMessageRequestModeCas => {
                 self.process_command_inner(request_code, request, peer_label).await
             }
             _ => {
@@ -192,7 +209,19 @@ impl QueryAssignmentProcessor {
             topic_route_info_manager,
             consumer_assignment_view,
             metadata_io,
+            supervised_topic_configs: None,
+            supervised_subscription_groups: None,
         }
+    }
+
+    pub(crate) fn with_supervised_target_lookups(
+        mut self,
+        topic_configs: Arc<TopicConfigManager>,
+        subscription_groups: SubscriptionGroupConfigLookup,
+    ) -> Self {
+        self.supervised_topic_configs = Some(topic_configs);
+        self.supervised_subscription_groups = Some(subscription_groups);
+        self
     }
 
     pub fn message_request_mode_manager(&self) -> &MessageRequestModeManager {
@@ -210,6 +239,8 @@ impl Clone for QueryAssignmentProcessor {
             topic_route_info_manager: self.topic_route_info_manager.clone(),
             consumer_assignment_view: self.consumer_assignment_view.clone(),
             metadata_io: self.metadata_io.clone(),
+            supervised_topic_configs: self.supervised_topic_configs.clone(),
+            supervised_subscription_groups: self.supervised_subscription_groups.clone(),
         }
     }
 }
@@ -224,6 +255,8 @@ impl QueryAssignmentProcessor {
         match request_code {
             RequestCode::QueryAssignment => self.query_assignment(request, peer_label).await,
             RequestCode::SetMessageRequestMode => self.set_message_request_mode(request).await,
+            RequestCode::GetMessageRequestMode => self.get_message_request_mode(request).await,
+            RequestCode::SetMessageRequestModeCas => self.set_message_request_mode_cas(request).await,
             _ => Ok(None),
         }
     }
@@ -552,6 +585,227 @@ impl QueryAssignmentProcessor {
                 .create_response_command_with_code(ResponseCode::Success),
         ))
     }
+
+    async fn get_message_request_mode(
+        &self,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let Some(body) = request.body() else {
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                ResponseCode::InvalidParameter,
+                "request body is required",
+            )));
+        };
+        let query = match serde_json::from_slice::<GetMessageRequestModeRequestBody>(body.as_ref()) {
+            Ok(query) if supervised_request_mode_target_is_valid(&query.topic, &query.consumer_group) => query,
+            _ => {
+                return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::InvalidParameter,
+                    "request-mode target is invalid",
+                )));
+            }
+        };
+        let topic = CheetahString::from(&query.topic);
+        let consumer_group = CheetahString::from(&query.consumer_group);
+        if !self
+            .supervised_topic_configs
+            .as_ref()
+            .is_some_and(|topics| topics.contains_topic(&topic))
+            || !self
+                .supervised_subscription_groups
+                .as_ref()
+                .is_some_and(|groups| groups.contains_subscription_group(&consumer_group))
+        {
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                ResponseCode::InvalidParameter,
+                "request-mode target is unavailable",
+            )));
+        }
+        let current = self
+            .message_request_mode_manager
+            .get_message_request_mode(&topic, &consumer_group)
+            .map(|value| SupervisedMessageRequestMode {
+                mode: match value.mode {
+                    MessageRequestMode::Pull => "PULL".to_owned(),
+                    MessageRequestMode::Pop => "POP".to_owned(),
+                },
+                pop_share_queue_num: value.pop_share_queue_num,
+            });
+        Ok(Some(
+            self.command_factory
+                .create_success_response_command()
+                .set_body(MessageRequestModeStateBody { current }.encode()?),
+        ))
+    }
+
+    async fn set_message_request_mode_cas(
+        &self,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let Some(body) = request.body() else {
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                ResponseCode::InvalidParameter,
+                "request body is required",
+            )));
+        };
+        let body = match serde_json::from_slice::<SetMessageRequestModeCasRequestBody>(body.as_ref()) {
+            Ok(body) => body,
+            Err(_) => {
+                return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                    ResponseCode::InvalidParameter,
+                    "request-mode replacement is invalid",
+                )));
+            }
+        };
+        if !supervised_request_mode_target_is_valid(&body.topic, &body.consumer_group)
+            || body.replacement.pop_share_queue_num < 0
+        {
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                ResponseCode::InvalidParameter,
+                "request-mode replacement is not eligible",
+            )));
+        }
+        let topic = CheetahString::from(&body.topic);
+        let consumer_group = CheetahString::from(&body.consumer_group);
+        if !self
+            .supervised_topic_configs
+            .as_ref()
+            .is_some_and(|topics| topics.contains_topic(&topic))
+            || !self
+                .supervised_subscription_groups
+                .as_ref()
+                .is_some_and(|groups| groups.contains_subscription_group(&consumer_group))
+        {
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                ResponseCode::InvalidParameter,
+                "request-mode target is unavailable",
+            )));
+        }
+        let parse_mode = |mode: &str| match mode.trim().to_ascii_uppercase().as_str() {
+            "PULL" => Some(MessageRequestMode::Pull),
+            "POP" => Some(MessageRequestMode::Pop),
+            _ => None,
+        };
+        let Some(replacement_mode) = parse_mode(&body.replacement.mode) else {
+            return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                ResponseCode::InvalidParameter,
+                "request mode must be PULL or POP",
+            )));
+        };
+        let expected = match &body.expected_state {
+            ExpectedMessageRequestMode::Absent => None,
+            ExpectedMessageRequestMode::Present {
+                mode,
+                pop_share_queue_num,
+            } => {
+                let Some(mode) = parse_mode(mode) else {
+                    return Ok(Some(self.command_factory.create_response_command_with_code_remark(
+                        ResponseCode::InvalidParameter,
+                        "expected request mode is invalid",
+                    )));
+                };
+                Some(SetMessageRequestModeRequestBody {
+                    topic: CheetahString::from(&body.topic),
+                    consumer_group: CheetahString::from(&body.consumer_group),
+                    mode,
+                    pop_share_queue_num: *pop_share_queue_num,
+                })
+            }
+        };
+        let replacement = SetMessageRequestModeRequestBody {
+            topic: CheetahString::from(&body.topic),
+            consumer_group: CheetahString::from(&body.consumer_group),
+            mode: replacement_mode,
+            pop_share_queue_num: body.replacement.pop_share_queue_num,
+        };
+        let result = self.message_request_mode_manager.set_message_request_mode_if_current(
+            CheetahString::from(&body.topic),
+            CheetahString::from(&body.consumer_group),
+            expected.as_ref(),
+            replacement.clone(),
+        );
+        let (mut code, current, applied, changed, mut persistence, requires_persistence) = match result {
+            Ok(update) => (
+                ResponseCode::Success,
+                Some(update.value),
+                true,
+                update.changed,
+                if update.changed {
+                    MutationPersistenceState::Persisted
+                } else {
+                    MutationPersistenceState::NotRequired
+                },
+                update.changed,
+            ),
+            Err(MessageRequestModeCasError::Conflict(current)) => (
+                ResponseCode::InvalidParameter,
+                current,
+                false,
+                false,
+                MutationPersistenceState::NotRequired,
+                false,
+            ),
+            Err(MessageRequestModeCasError::PersistenceDirty(current)) => (
+                ResponseCode::SystemError,
+                current,
+                false,
+                false,
+                MutationPersistenceState::Failed,
+                false,
+            ),
+        };
+        if requires_persistence {
+            let persisted = if let Some(metadata_io) = &self.metadata_io {
+                metadata_io
+                    .submit_next_durable(
+                        "broker.message-request-mode",
+                        self.message_request_mode_manager.config_file_path(),
+                        self.message_request_mode_manager.encode_pretty(true).into_bytes(),
+                        MetadataDeadline::after(Duration::from_secs(5)),
+                    )
+                    .await
+                    .map_err(crate::runtime_to_rocketmq_error)
+                    .map(|_| ())
+            } else {
+                self.message_request_mode_manager.persist()
+            };
+            if persisted.is_err() {
+                code = ResponseCode::SystemError;
+                persistence = MutationPersistenceState::Failed;
+            }
+            self.message_request_mode_manager.complete_supervised_persistence(
+                &CheetahString::from(&body.topic),
+                &CheetahString::from(&body.consumer_group),
+                persisted.is_ok(),
+            );
+        }
+        let current = current.map(|value| SupervisedMessageRequestMode {
+            mode: match value.mode {
+                MessageRequestMode::Pull => "PULL".to_owned(),
+                MessageRequestMode::Pop => "POP".to_owned(),
+            },
+            pop_share_queue_num: value.pop_share_queue_num,
+        });
+        Ok(Some(
+            self.command_factory.create_response_command_with_code(code).set_body(
+                MessageRequestModeMutationResultBody {
+                    applied,
+                    changed,
+                    current,
+                    persistence,
+                }
+                .encode()?,
+            ),
+        ))
+    }
+}
+
+fn supervised_request_mode_target_is_valid(topic: &str, consumer_group: &str) -> bool {
+    TopicValidator::validate_topic(topic).valid()
+        && !TopicValidator::is_system_topic(topic)
+        && !topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
+        && validate_subscription_group_name(consumer_group).is_ok()
+        && !mix_all::is_sys_consumer_group(consumer_group)
 }
 
 fn request_peer_label(origin: &RequestOrigin) -> String {
@@ -608,12 +862,20 @@ mod tests {
     use rocketmq_model::allocation::AllocateMessageQueueAveragely;
     use rocketmq_model::allocation::AllocateMessageQueueAveragelyByCircle;
     use rocketmq_model::allocation::AllocateMessageQueueStrategy;
+    use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::message::message_queue::MessageQueue;
+    use rocketmq_model::common::topic::TopicValidator;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
+    use rocketmq_protocol::protocol::body::supervised_mutation::{
+        ExpectedMessageRequestMode, MessageRequestModeMutationResultBody, MutationPersistenceState,
+        SetMessageRequestModeCasRequestBody, SupervisedMessageRequestMode,
+    };
     use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+    use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
@@ -638,15 +900,34 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::allocate;
+    use super::supervised_request_mode_target_is_valid;
     use super::QueryAssignmentProcessor;
+    use crate::broker_runtime::BrokerRuntime;
     use crate::client::consumer_group_event::ConsumerGroupEvent;
     use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
     use crate::client::manager::consumer_manager::ConsumerManager;
     use crate::config::broker_config::BrokerConfig;
+    use crate::config::config_manager::ConfigManager;
     use crate::out_api::broker_outer_api::BrokerOuterAPI;
     use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 
     struct NoopConsumerListener;
+
+    #[test]
+    fn supervised_request_mode_target_uses_closed_non_system_names() {
+        assert!(supervised_request_mode_target_is_valid(
+            "orders_v1",
+            "%RETRY%orders_group"
+        ));
+        for (topic, group) in [
+            ("orders.v1", "orders_group"),
+            (TopicValidator::RMQ_SYS_SCHEDULE_TOPIC, "orders_group"),
+            ("orders", "orders.group"),
+            ("orders", "CID_RMQ_SYS_internal"),
+        ] {
+            assert!(!supervised_request_mode_target_is_valid(topic, group));
+        }
+    }
 
     impl ConsumerIdsChangeListener for NoopConsumerListener {
         fn handle(&self, _event: ConsumerGroupEvent, _group: &str, _args: &[&dyn Any]) {}
@@ -684,6 +965,184 @@ mod tests {
             topic_route_info_manager,
             consumer_assignment_view,
         )
+    }
+
+    fn temp_test_root(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "rocketmq-broker-request-mode-{label}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ))
+    }
+
+    async fn supervised_test_runtime(label: &str) -> BrokerRuntime {
+        let root = temp_test_root(label);
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: root.to_string_lossy().into_owned().into(),
+            auth_config_path: root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+        assert!(runtime.initialize().await.is_ok());
+        runtime
+    }
+
+    #[tokio::test]
+    async fn supervised_request_mode_requires_targets_and_reports_noop() {
+        let mut runtime = supervised_test_runtime("target-noop").await;
+        runtime.init_processor_checked().expect("processors");
+        let processor = runtime
+            .runtime_state_mut()
+            .query_assignment_processor()
+            .cloned()
+            .expect("query assignment processor");
+        let replacement = SupervisedMessageRequestMode {
+            mode: "POP".to_owned(),
+            pop_share_queue_num: 4,
+        };
+        let request_body = |expected_state| SetMessageRequestModeCasRequestBody {
+            topic: "orders".to_owned(),
+            consumer_group: "orders-consumer".to_owned(),
+            expected_state,
+            replacement: replacement.clone(),
+        };
+
+        let mut missing = RemotingCommand::create_remoting_command(RequestCode::SetMessageRequestModeCas).set_body(
+            request_body(ExpectedMessageRequestMode::Absent)
+                .encode()
+                .expect("request"),
+        );
+        let response = processor
+            .set_message_request_mode_cas(&mut missing)
+            .await
+            .expect("handler")
+            .expect("response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+        assert!(processor
+            .message_request_mode_manager()
+            .get_message_request_mode(&"orders".into(), &"orders-consumer".into())
+            .is_none());
+
+        {
+            let state = runtime.runtime_state_mut();
+            state
+                .topic_config_manager()
+                .update_topic_config(TopicConfig::with_queues("orders", 4, 4), 0);
+            let mut group = SubscriptionGroupConfig::new("orders-consumer".into());
+            state
+                .subscription_group_manager()
+                .update_subscription_group_config(&mut group);
+        }
+        let mut create = RemotingCommand::create_remoting_command(RequestCode::SetMessageRequestModeCas).set_body(
+            request_body(ExpectedMessageRequestMode::Absent)
+                .encode()
+                .expect("request"),
+        );
+        let response = processor
+            .set_message_request_mode_cas(&mut create)
+            .await
+            .expect("handler")
+            .expect("response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
+        let created = MessageRequestModeMutationResultBody::decode(response.body().expect("body")).expect("result");
+        assert!(created.applied);
+        assert!(created.changed);
+
+        let mut noop = RemotingCommand::create_remoting_command(RequestCode::SetMessageRequestModeCas).set_body(
+            request_body(ExpectedMessageRequestMode::Present {
+                mode: "POP".to_owned(),
+                pop_share_queue_num: 4,
+            })
+            .encode()
+            .expect("request"),
+        );
+        let response = processor
+            .set_message_request_mode_cas(&mut noop)
+            .await
+            .expect("handler")
+            .expect("response");
+        let noop = MessageRequestModeMutationResultBody::decode(response.body().expect("body")).expect("result");
+        assert!(noop.applied);
+        assert!(!noop.changed);
+        assert_eq!(noop.persistence, MutationPersistenceState::NotRequired);
+
+        let persistence_target = processor.message_request_mode_manager().config_file_path();
+        let _ = std::fs::remove_file(persistence_target.as_str());
+        std::fs::create_dir_all(persistence_target.as_str()).expect("occupy persistence target with a directory");
+        let mut persist_failure = RemotingCommand::create_remoting_command(RequestCode::SetMessageRequestModeCas)
+            .set_body(
+                SetMessageRequestModeCasRequestBody {
+                    topic: "orders".to_owned(),
+                    consumer_group: "orders-consumer".to_owned(),
+                    expected_state: ExpectedMessageRequestMode::Present {
+                        mode: "POP".to_owned(),
+                        pop_share_queue_num: 4,
+                    },
+                    replacement: SupervisedMessageRequestMode {
+                        mode: "PULL".to_owned(),
+                        pop_share_queue_num: 0,
+                    },
+                }
+                .encode()
+                .expect("request"),
+            );
+        let response = processor
+            .set_message_request_mode_cas(&mut persist_failure)
+            .await
+            .expect("handler")
+            .expect("response");
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        let outcome = MessageRequestModeMutationResultBody::decode(response.body().expect("body")).expect("result");
+        assert!(outcome.applied);
+        assert!(outcome.changed);
+        assert_eq!(outcome.persistence, MutationPersistenceState::Failed);
+        assert_eq!(outcome.current.expect("current").mode, "PULL");
+
+        for replacement in [
+            SupervisedMessageRequestMode {
+                mode: "PULL".to_owned(),
+                pop_share_queue_num: 0,
+            },
+            SupervisedMessageRequestMode {
+                mode: "POP".to_owned(),
+                pop_share_queue_num: 4,
+            },
+        ] {
+            let mut follow_up = RemotingCommand::create_remoting_command(RequestCode::SetMessageRequestModeCas)
+                .set_body(
+                    SetMessageRequestModeCasRequestBody {
+                        topic: "orders".to_owned(),
+                        consumer_group: "orders-consumer".to_owned(),
+                        expected_state: ExpectedMessageRequestMode::Present {
+                            mode: "PULL".to_owned(),
+                            pop_share_queue_num: 0,
+                        },
+                        replacement,
+                    }
+                    .encode()
+                    .expect("follow-up request"),
+                );
+            let response = processor
+                .set_message_request_mode_cas(&mut follow_up)
+                .await
+                .expect("handler")
+                .expect("response");
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+            let follow_up =
+                MessageRequestModeMutationResultBody::decode(response.body().expect("body")).expect("result");
+            assert!(!follow_up.applied);
+            assert!(!follow_up.changed);
+            assert_eq!(follow_up.persistence, MutationPersistenceState::Failed);
+            assert_eq!(follow_up.current.expect("current").mode, "PULL");
+        }
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
     #[test]
