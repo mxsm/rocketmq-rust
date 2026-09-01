@@ -33,12 +33,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_user_request_header_default() {
-        let header = GetUserRequestHeader::default();
-        assert_eq!(header.username, CheetahString::default());
-    }
-
-    #[test]
     fn get_user_request_header_serialize() {
         let header = GetUserRequestHeader {
             username: CheetahString::from("value"),

@@ -142,16 +142,6 @@ mod tests {
     }
 
     #[test]
-    fn clean_controller_broker_data_request_header_alias_matches_java_name() {
-        let header = CleanControllerBrokerDataRequestHeader {
-            broker_name: CheetahString::from_static_str("broker-a"),
-            ..Default::default()
-        };
-
-        assert_eq!(header.broker_name, "broker-a");
-    }
-
-    #[test]
     fn missing_invoke_time_uses_the_java_dynamic_default() {
         let before = rocketmq_model::time::current_millis();
         let map = HashMap::from([(
@@ -164,6 +154,19 @@ mod tests {
 
         assert!((before..=after).contains(&header.invoke_time));
         assert!(!header.clean_living_broker);
+    }
+
+    #[test]
+    fn clean_broker_data_request_header_default() {
+        let before = rocketmq_model::time::current_millis();
+        let header = CleanBrokerDataRequestHeader::default();
+        let after = rocketmq_model::time::current_millis();
+
+        assert!(header.cluster_name.is_none());
+        assert_eq!(header.broker_name, "");
+        assert!(header.broker_controller_ids_to_clean.is_none());
+        assert!(!header.clean_living_broker);
+        assert!((before..=after).contains(&header.invoke_time));
     }
 
     #[test]

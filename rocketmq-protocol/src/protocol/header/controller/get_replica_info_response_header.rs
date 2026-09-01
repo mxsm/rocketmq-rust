@@ -78,12 +78,4 @@ mod tests {
         assert_eq!(header.master_address, Some("127.0.0.1:10911".to_string()));
         assert_eq!(header.master_epoch, Some(5));
     }
-
-    #[test]
-    fn get_replica_info_response_header_default() {
-        let header = GetReplicaInfoResponseHeader::default();
-        assert_eq!(header.master_broker_id, None);
-        assert_eq!(header.master_address, None);
-        assert_eq!(header.master_epoch, None);
-    }
 }

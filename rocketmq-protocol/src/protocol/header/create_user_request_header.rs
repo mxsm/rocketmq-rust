@@ -47,41 +47,15 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn create_user_request_header_new() {
-        let username = CheetahString::from_static_str("test_user");
-        let header = CreateUserRequestHeader::new(username.clone());
-
-        assert_eq!(header.username, username);
-    }
-
-    #[test]
-    fn create_user_request_header_default() {
-        let header = CreateUserRequestHeader::default();
-
-        assert!(header.username.is_empty());
-    }
-
-    #[test]
-    fn create_user_request_header_set_username() {
-        let mut header = CreateUserRequestHeader::default();
-        let username = CheetahString::from_static_str("admin");
-
-        header.set_username(username.clone());
-
-        assert_eq!(header.username, username);
-    }
-
-    #[test]
     fn create_user_request_header_serializes_correctly() {
-        let header = CreateUserRequestHeader {
-            username: CheetahString::from_static_str("test_admin"),
-        };
+        let mut header = CreateUserRequestHeader::new(CheetahString::from_static_str("test_admin"));
+        assert_eq!(header.username, "test_admin");
 
+        header.set_username(CheetahString::from_static_str("updated_admin"));
         let map = header.to_map().unwrap();
-
         assert_eq!(
             map.get(&CheetahString::from_static_str("username")).unwrap(),
-            "test_admin"
+            "updated_admin"
         );
     }
 

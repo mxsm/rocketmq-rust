@@ -88,16 +88,6 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn elect_master_request_header_new() {
-        let header = ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
-        assert_eq!(header.cluster_name, "test_cluster");
-        assert_eq!(header.broker_name, "test_broker");
-        assert_eq!(header.broker_id, 123);
-        assert!(header.designate_elect);
-        assert_eq!(header.invoke_time, 1234567890);
-    }
-
-    #[test]
     fn elect_master_request_header_serializes_correctly() {
         let header = ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
         let map = header.to_map().unwrap();

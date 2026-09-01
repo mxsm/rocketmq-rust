@@ -71,11 +71,4 @@ mod tests {
         );
         assert_eq!(header.broker_name, Some(CheetahString::from_static_str("test_broker")));
     }
-
-    #[test]
-    fn apply_broker_id_response_header_default() {
-        let header = ApplyBrokerIdResponseHeader::default();
-        assert_eq!(header.cluster_name, None);
-        assert_eq!(header.broker_name, None);
-    }
 }

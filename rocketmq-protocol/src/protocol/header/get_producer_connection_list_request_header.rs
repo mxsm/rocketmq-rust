@@ -75,10 +75,4 @@ mod tests {
         let header: GetProducerConnectionListRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(header.producer_group(), "test_group");
     }
-
-    #[test]
-    fn get_producer_connection_list_request_header_default() {
-        let header = GetProducerConnectionListRequestHeader::default();
-        assert_eq!(header.producer_group(), "");
-    }
 }

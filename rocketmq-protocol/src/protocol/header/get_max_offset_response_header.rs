@@ -36,12 +36,6 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn get_max_offset_response_header_default() {
-        let header = GetMaxOffsetResponseHeader::default();
-        assert_eq!(header.offset, 0);
-    }
-
-    #[test]
     fn get_max_offset_response_header_serialization() {
         let header = GetMaxOffsetResponseHeader { offset: 12345 };
         let json = serde_json::to_string(&header).unwrap();

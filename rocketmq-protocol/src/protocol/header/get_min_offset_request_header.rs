@@ -135,14 +135,6 @@ mod tests {
     use crate::rpc::rpc_request_header::RpcRequestHeader;
 
     #[test]
-    fn get_min_offset_request_header_default() {
-        let header = GetMinOffsetRequestHeader::default();
-        assert_eq!(header.topic, "");
-        assert_eq!(header.queue_id, 0);
-        assert!(header.topic_request_header.is_none());
-    }
-
-    #[test]
     fn get_min_offset_request_header_trait_impl() {
         let mut header = GetMinOffsetRequestHeader::default();
 

@@ -58,18 +58,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_with_msg_id() {
-        let mut body = RecallMessageResponseHeader::new("some_message");
-        assert_eq!(body.msg_id(), &CheetahString::from("some_message"));
-
-        body.set_msg_id("some_new_message");
-        assert_eq!(body.msg_id(), &CheetahString::from("some_new_message"));
-
+    fn display_includes_message_id() {
+        let mut body = RecallMessageResponseHeader::new("initial_message");
+        body.set_msg_id("some_message");
         let display_output = format!("{}", body);
-        assert_eq!(
-            display_output,
-            "RecallMessageResponseHeader { msg_id: some_new_message }"
-        );
+        assert_eq!(display_output, "RecallMessageResponseHeader { msg_id: some_message }");
     }
     #[test]
     fn recall_message_serialisation() {

@@ -102,26 +102,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wipe_write_perm_of_broker_request_header_new() {
-        let header = WipeWritePermOfBrokerRequestHeader::new("broker1");
-        assert_eq!(header.broker_name, CheetahString::from("broker1"));
-    }
+    fn permission_headers_use_java_wire_names() {
+        let wipe_request = WipeWritePermOfBrokerRequestHeader::new("broker-a");
+        let wipe_response = WipeWritePermOfBrokerResponseHeader::new(3);
+        let add_request = AddWritePermOfBrokerRequestHeader::new("broker-b");
+        let add_response = AddWritePermOfBrokerResponseHeader::new(5);
 
-    #[test]
-    fn wipe_write_perm_of_broker_response_header_new_and_getters() {
-        let header = WipeWritePermOfBrokerResponseHeader::new(10);
-        assert_eq!(header.get_wipe_topic_count(), 10);
-    }
+        assert_eq!(
+            serde_json::to_string(&wipe_request).unwrap(),
+            r#"{"brokerName":"broker-a"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&wipe_response).unwrap(),
+            r#"{"wipeTopicCount":3}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&add_request).unwrap(),
+            r#"{"brokerName":"broker-b"}"#
+        );
+        assert_eq!(serde_json::to_string(&add_response).unwrap(), r#"{"addTopicCount":5}"#);
 
-    #[test]
-    fn add_write_perm_of_broker_request_header_new() {
-        let header = AddWritePermOfBrokerRequestHeader::new("broker1");
-        assert_eq!(header.broker_name, CheetahString::from("broker1"));
-    }
-
-    #[test]
-    fn add_write_perm_of_broker_response_header_new_and_getters() {
-        let header = AddWritePermOfBrokerResponseHeader::new(20);
-        assert_eq!(header.get_add_topic_count(), 20);
+        let wipe_response: WipeWritePermOfBrokerResponseHeader =
+            serde_json::from_str(r#"{"wipeTopicCount":3}"#).unwrap();
+        let add_response: AddWritePermOfBrokerResponseHeader = serde_json::from_str(r#"{"addTopicCount":5}"#).unwrap();
+        assert_eq!(wipe_response.get_wipe_topic_count(), 3);
+        assert_eq!(add_response.get_add_topic_count(), 5);
     }
 }

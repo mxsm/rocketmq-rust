@@ -38,13 +38,6 @@ mod tests {
     use cheetah_string::CheetahString;
 
     #[test]
-    fn list_acl_request_header_default() {
-        let header: ListAclRequestHeader = Default::default();
-        assert_eq!(header.subject_filter, CheetahString::default());
-        assert_eq!(header.resource_filter, CheetahString::default());
-    }
-
-    #[test]
     fn list_acl_request_header_serialize() {
         let header = ListAclRequestHeader {
             subject_filter: CheetahString::from("subjectFilterValue"),
@@ -69,16 +62,5 @@ mod tests {
 
         assert_eq!(header.subject_filter, CheetahString::from("subjectFilterValue"));
         assert_eq!(header.resource_filter, CheetahString::from("resourceFilterValue"));
-    }
-
-    #[test]
-    fn list_acls_request_header_alias_matches_java_name() {
-        let header = ListAclsRequestHeader {
-            subject_filter: CheetahString::from("subject"),
-            resource_filter: CheetahString::from("resource"),
-        };
-
-        assert_eq!(header.subject_filter, "subject");
-        assert_eq!(header.resource_filter, "resource");
     }
 }

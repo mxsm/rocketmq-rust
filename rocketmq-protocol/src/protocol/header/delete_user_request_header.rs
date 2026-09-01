@@ -47,41 +47,15 @@ mod tests {
     use crate::protocol::command_custom_header::FromMap;
 
     #[test]
-    fn delete_user_request_header_new() {
-        let username = CheetahString::from_static_str("test_user");
-        let header = DeleteUserRequestHeader::new(username.clone());
-
-        assert_eq!(header.username, username);
-    }
-
-    #[test]
-    fn delete_user_request_header_default() {
-        let header = DeleteUserRequestHeader::default();
-
-        assert!(header.username.is_empty());
-    }
-
-    #[test]
-    fn delete_user_request_header_set_username() {
-        let mut header = DeleteUserRequestHeader::default();
-        let username = CheetahString::from_static_str("admin");
-
-        header.set_username(username.clone());
-
-        assert_eq!(header.username, username);
-    }
-
-    #[test]
     fn delete_user_request_header_serializes_correctly() {
-        let header = DeleteUserRequestHeader {
-            username: CheetahString::from_static_str("test_admin"),
-        };
+        let mut header = DeleteUserRequestHeader::new(CheetahString::from_static_str("test_admin"));
+        assert_eq!(header.username, "test_admin");
 
+        header.set_username(CheetahString::from_static_str("updated_admin"));
         let map = header.to_map().unwrap();
-
         assert_eq!(
             map.get(&CheetahString::from_static_str("username")).unwrap(),
-            "test_admin"
+            "updated_admin"
         );
     }
 

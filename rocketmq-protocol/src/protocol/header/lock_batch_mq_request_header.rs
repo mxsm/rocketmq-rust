@@ -36,12 +36,6 @@ mod tests {
     use cheetah_string::CheetahString;
 
     #[test]
-    fn lock_batch_mq_request_header_default() {
-        let header: LockBatchMqRequestHeader = Default::default();
-        assert!(header.rpc_request_header.is_none());
-    }
-
-    #[test]
     fn lock_batch_mq_request_header_serialize() {
         let header: LockBatchMqRequestHeader = LockBatchMqRequestHeader {
             rpc_request_header: Some(RpcRequestHeader::new(

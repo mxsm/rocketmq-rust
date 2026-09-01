@@ -60,43 +60,32 @@ impl NotifyMinBrokerIdChangeRequestHeader {
 
 #[cfg(test)]
 mod tests {
-    use cheetah_string::CheetahString;
-
     use super::*;
 
     #[test]
-    fn new_creates_instance_with_all_fields() {
+    fn serde_preserves_the_broker_change_wire_fields() {
         let header = NotifyMinBrokerIdChangeRequestHeader::new(
             Some(1),
-            Some(CheetahString::from("broker1")),
-            Some(CheetahString::from("addr1")),
-            Some(CheetahString::from("addr2")),
-            Some(CheetahString::from("addr3")),
+            Some(CheetahString::from("broker-a")),
+            Some(CheetahString::from("127.0.0.1:10911")),
+            Some(CheetahString::from("127.0.0.2:10911")),
+            Some(CheetahString::from("127.0.0.1:10912")),
         );
-        assert_eq!(header.min_broker_id, Some(1));
-        assert_eq!(header.broker_name.as_deref(), Some("broker1"));
-        assert_eq!(header.min_broker_addr.as_deref(), Some("addr1"));
-        assert_eq!(header.offline_broker_addr.as_deref(), Some("addr2"));
-        assert_eq!(header.ha_broker_addr.as_deref(), Some("addr3"));
-    }
 
-    #[test]
-    fn new_creates_instance_with_none_fields() {
-        let header = NotifyMinBrokerIdChangeRequestHeader::new(None, None, None, None, None);
-        assert_eq!(header.min_broker_id, None);
-        assert_eq!(header.broker_name, None);
-        assert_eq!(header.min_broker_addr, None);
-        assert_eq!(header.offline_broker_addr, None);
-        assert_eq!(header.ha_broker_addr, None);
-    }
+        let json = serde_json::to_string(&header).unwrap();
+        let decoded: NotifyMinBrokerIdChangeRequestHeader = serde_json::from_str(&json).unwrap();
 
-    #[test]
-    fn default_creates_instance_with_none_fields() {
-        let header: NotifyMinBrokerIdChangeRequestHeader = Default::default();
-        assert_eq!(header.min_broker_id, None);
-        assert_eq!(header.broker_name, None);
-        assert_eq!(header.min_broker_addr, None);
-        assert_eq!(header.offline_broker_addr, None);
-        assert_eq!(header.ha_broker_addr, None);
+        assert_eq!(decoded.min_broker_id, Some(1));
+        assert_eq!(decoded.broker_name.as_deref(), Some("broker-a"));
+        assert_eq!(decoded.min_broker_addr.as_deref(), Some("127.0.0.1:10911"));
+        assert_eq!(decoded.offline_broker_addr.as_deref(), Some("127.0.0.2:10911"));
+        assert_eq!(decoded.ha_broker_addr.as_deref(), Some("127.0.0.1:10912"));
+
+        let empty = NotifyMinBrokerIdChangeRequestHeader::new(None, None, None, None, None);
+        assert!(empty.min_broker_id.is_none());
+        assert!(empty.broker_name.is_none());
+        assert!(empty.min_broker_addr.is_none());
+        assert!(empty.offline_broker_addr.is_none());
+        assert!(empty.ha_broker_addr.is_none());
     }
 }

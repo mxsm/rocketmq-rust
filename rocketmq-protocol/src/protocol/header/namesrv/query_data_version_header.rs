@@ -80,15 +80,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn query_data_version_request_header_new() {
-        let header = QueryDataVersionRequestHeader::new("broker1", "127.0.0.1", "cluster1", 1);
-        assert_eq!(header.broker_name, CheetahString::from("broker1"));
-        assert_eq!(header.broker_addr, CheetahString::from("127.0.0.1"));
-        assert_eq!(header.cluster_name, CheetahString::from("cluster1"));
-        assert_eq!(header.broker_id, 1);
-    }
-
-    #[test]
     fn query_data_version_request_header_serialization() {
         let header = QueryDataVersionRequestHeader::new("broker1", "127.0.0.1", "cluster1", 1);
         let serialized = serde_json::to_string(&header).unwrap();
@@ -106,12 +97,6 @@ mod tests {
         assert_eq!(deserialized.broker_addr, CheetahString::from("127.0.0.1"));
         assert_eq!(deserialized.cluster_name, CheetahString::from("cluster1"));
         assert_eq!(deserialized.broker_id, 1);
-    }
-
-    #[test]
-    fn query_data_version_response_header_new() {
-        let header = QueryDataVersionResponseHeader::new(true);
-        assert!(header.changed);
     }
 
     #[test]

@@ -106,30 +106,6 @@ mod tests {
     }
 
     #[test]
-    fn test_notification_request_header_default_order() {
-        let header = NotificationRequestHeader {
-            consumer_group: CheetahString::from("consumer_group_1"),
-            topic: CheetahString::from("test_topic"),
-            queue_id: 10,
-            poll_time: 1234567890,
-            born_time: 1234567891,
-            order: false, // Defaults to false
-            attempt_id: None,
-            exp_type: None,
-            exp: None,
-            is_lite_consumer: false,
-            client_id: None,
-            topic_request_header: None,
-        };
-
-        let serialized = serde_json::to_string(&header).expect("Failed to serialize header");
-
-        let deserialized: NotificationRequestHeader =
-            serde_json::from_str(&serialized).expect("Failed to deserialize header");
-        assert_eq!(header.queue_id, deserialized.queue_id);
-    }
-
-    #[test]
     fn notification_v3_defaults_and_required_fields_match_the_wire_contract() {
         let mut fields = HeaderMap::from([
             ("consumerGroup".into(), "group-a".into()),

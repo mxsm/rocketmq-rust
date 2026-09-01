@@ -133,37 +133,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_with_producer_group() {
-        let header = RecallMessageRequestHeader::new("TestTopic", "handle123", Some("ProducerGroup1"));
-
-        assert_eq!(header.topic(), &CheetahString::from("TestTopic"));
-        assert_eq!(header.recall_handle(), &CheetahString::from("handle123"));
-        assert_eq!(header.producer_group(), Some(&CheetahString::from("ProducerGroup1")));
-    }
-
-    #[test]
-    fn test_new_without_producer_group() {
-        let header = RecallMessageRequestHeader::new("TestTopic", "handle123", None::<&str>);
-
-        assert_eq!(header.topic(), &CheetahString::from("TestTopic"));
-        assert_eq!(header.recall_handle(), &CheetahString::from("handle123"));
-        assert_eq!(header.producer_group(), None);
-    }
-
-    #[test]
-    fn test_setters() {
-        let mut header = RecallMessageRequestHeader::default();
-
-        header.set_topic("NewTopic");
-        header.set_recall_handle("newHandle");
-        header.set_producer_group("NewGroup");
-
-        assert_eq!(header.topic(), &CheetahString::from("NewTopic"));
-        assert_eq!(header.recall_handle(), &CheetahString::from("newHandle"));
-        assert_eq!(header.producer_group(), Some(&CheetahString::from("NewGroup")));
-    }
-
-    #[test]
     fn test_display() {
         let header = RecallMessageRequestHeader::new("TestTopic", "handle123", Some("Group1"));
         let display = format!("{}", header);
@@ -175,7 +144,12 @@ mod tests {
 
     #[test]
     fn test_serialization() {
-        let header = RecallMessageRequestHeader::new("TestTopic", "handle123", Some("ProducerGroup1"));
+        let mut header = RecallMessageRequestHeader::new("initial-topic", "initial-handle", None::<&str>);
+        assert!(header.producer_group().is_none());
+
+        header.set_topic("TestTopic");
+        header.set_recall_handle("handle123");
+        header.set_producer_group("ProducerGroup1");
 
         let json = serde_json::to_string(&header).unwrap();
         assert!(json.contains("\"topic\":\"TestTopic\""));

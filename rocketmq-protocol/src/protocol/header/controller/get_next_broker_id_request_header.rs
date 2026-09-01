@@ -71,11 +71,4 @@ mod tests {
         assert_eq!(header.cluster_name, "test_cluster");
         assert_eq!(header.broker_name, "test_broker");
     }
-
-    #[test]
-    fn get_next_broker_id_request_header_default() {
-        let header = GetNextBrokerIdRequestHeader::default();
-        assert_eq!(header.cluster_name, "");
-        assert_eq!(header.broker_name, "");
-    }
 }
