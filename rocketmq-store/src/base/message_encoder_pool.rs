@@ -95,11 +95,8 @@ impl MessageEncoderPool {
         } else {
             0
         };
-        PreparedPayload::try_single(bytes.freeze(), crc_trailer_bytes).map_err(|validation_error| {
-            error!(
-                error = %validation_error,
-                "Message encoder produced an invalid CommitLog frame"
-            );
+        PreparedPayload::try_single(bytes.freeze(), crc_trailer_bytes).ok_or_else(|| {
+            error!("Message encoder produced an invalid CommitLog frame");
             PutMessageResult::new_default(crate::base::message_status_enum::PutMessageStatus::MessageIllegal)
         })
     }
@@ -130,11 +127,8 @@ impl MessageEncoderPool {
         } else {
             0
         };
-        PreparedPayload::try_batch(bytes.freeze(), crc_trailer_bytes).map_err(|validation_error| {
-            error!(
-                error = %validation_error,
-                "Batch encoder produced an invalid CommitLog frame partition"
-            );
+        PreparedPayload::try_batch(bytes.freeze(), crc_trailer_bytes).ok_or_else(|| {
+            error!("Batch encoder produced an invalid CommitLog frame partition");
             PutMessageResult::new_default(crate::base::message_status_enum::PutMessageStatus::MessageIllegal)
         })
     }

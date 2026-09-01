@@ -106,7 +106,8 @@ impl TimelineGcService {
                 TimelineReceiptStore::delete(&mut batch, state.route.delivery_token())?;
             }
             let payload = self.payload.read(candidate.record.payload)?;
-            let encoded_bytes = u64::try_from(payload.encoded_len()?).unwrap_or(u64::MAX);
+            let encoded_bytes =
+                u64::try_from(payload.encoded_len().ok_or(TimelineGcError::InvalidPayloadRecord)?).unwrap_or(u64::MAX);
             let keys = usage_summary_keys(&payload.real_topic, candidate.key.due_time_ms);
             for key in [keys.global, keys.topic, keys.tenant, keys.bucket] {
                 let delta = usage_deltas.entry(key).or_default();
@@ -192,12 +193,12 @@ pub(crate) enum TimelineGcError {
     InvalidFence,
     #[error("Extended usage summary would underflow")]
     UsageUnderflow,
+    #[error("persisted Timer payload record is invalid")]
+    InvalidPayloadRecord,
     #[error(transparent)]
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error(transparent)]
-    Payload(#[from] crate::store_error::StoreError),
-    #[error(transparent)]
-    PayloadRecord(#[from] rocketmq_store_local::timer::payload_record::TimerPayloadRecordViolation),
+    Store(#[from] rocketmq_store_api::StoreError),
 }
 
 #[cfg(test)]

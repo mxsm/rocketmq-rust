@@ -39,7 +39,7 @@ pub struct TransferHeader {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum HaWireViolation {
+pub(crate) enum HaWireViolation {
     #[error("transfer header underflow: expected at least {expected} bytes, got {actual}")]
     HeaderUnderflow { expected: usize, actual: usize },
     #[error("transfer header contains negative body size: {0}")]
@@ -127,6 +127,23 @@ pub fn encode_transfer_header(
     body_size: usize,
     enable_controller_mode: bool,
     confirm_offset: i64,
+) -> Option<Bytes> {
+    encode_transfer_header_checked(
+        buffer,
+        master_phy_offset,
+        body_size,
+        enable_controller_mode,
+        confirm_offset,
+    )
+    .ok()
+}
+
+fn encode_transfer_header_checked(
+    buffer: &mut BytesMut,
+    master_phy_offset: i64,
+    body_size: usize,
+    enable_controller_mode: bool,
+    confirm_offset: i64,
 ) -> Result<Bytes, HaWireViolation> {
     let body_size = i32::try_from(body_size).map_err(|_| HaWireViolation::BodySizeOverflow(body_size))?;
     buffer.clear();
@@ -152,7 +169,11 @@ pub fn encode_offset_report(
     buffer.split().freeze()
 }
 
-pub fn decode_transfer_header(src: &[u8], enable_controller_mode: bool) -> Result<TransferHeader, HaWireViolation> {
+pub fn decode_transfer_header(src: &[u8], enable_controller_mode: bool) -> Option<TransferHeader> {
+    decode_transfer_header_checked(src, enable_controller_mode).ok()
+}
+
+fn decode_transfer_header_checked(src: &[u8], enable_controller_mode: bool) -> Result<TransferHeader, HaWireViolation> {
     let header_size = transfer_header_size(enable_controller_mode);
     if src.len() < header_size {
         return Err(HaWireViolation::HeaderUnderflow {
@@ -187,6 +208,15 @@ pub fn plan_replica_frame(
     dispatch_position: usize,
     enable_controller_mode: bool,
     slave_phy_offset: i64,
+) -> Option<Option<ReplicaFramePlan>> {
+    plan_replica_frame_checked(buffer, dispatch_position, enable_controller_mode, slave_phy_offset).ok()
+}
+
+fn plan_replica_frame_checked(
+    buffer: &[u8],
+    dispatch_position: usize,
+    enable_controller_mode: bool,
+    slave_phy_offset: i64,
 ) -> Result<Option<ReplicaFramePlan>, HaWireViolation> {
     let header_size = transfer_header_size(enable_controller_mode);
     let available = buffer.len().saturating_sub(dispatch_position);
@@ -195,7 +225,7 @@ pub fn plan_replica_frame(
     }
 
     let header_end = dispatch_position + header_size;
-    let header = decode_transfer_header(&buffer[dispatch_position..header_end], enable_controller_mode)?;
+    let header = decode_transfer_header_checked(&buffer[dispatch_position..header_end], enable_controller_mode)?;
     if slave_phy_offset != 0 && slave_phy_offset != header.master_phy_offset {
         return Err(HaWireViolation::OffsetMismatch {
             slave_offset: slave_phy_offset,
@@ -251,6 +281,18 @@ mod tests {
         let mut buffer = BytesMut::new();
         let header = encode_transfer_header(&mut buffer, 0, 4, false, 0).expect("encode header");
         assert_eq!(plan_replica_frame(&header, 0, false, 0).expect("plan"), None);
+    }
+
+    #[test]
+    fn invalid_wire_contract_is_absent_from_the_public_projection() {
+        assert!(decode_transfer_header(&[], false).is_none());
+        assert!(matches!(
+            decode_transfer_header_checked(&[], false),
+            Err(HaWireViolation::HeaderUnderflow {
+                expected: TRANSFER_HEADER_SIZE,
+                actual: 0
+            })
+        ));
     }
 
     #[test]

@@ -17,9 +17,18 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreOperation;
+use rocketmq_store_api::TimerEngineId;
+use rocketmq_store_api::TimerGeneration;
+use rocketmq_store_api::TimerId;
+use rocketmq_store_api::TimerPayloadStoreLocator;
+use rocketmq_store_api::TimerSourceCqOffset;
+use tempfile::TempDir;
+
 use crate::timer::segmented_timeline::SegmentedTimeline;
 use crate::timer::segmented_timeline::SegmentedTimelineConfig;
-use crate::timer::timeline_manifest::TimelineManifestV1;
+use crate::timer::segmented_timeline::SegmentedTimelineFailure;
 use crate::timer::timeline_segment::inspect_timeline_run;
 use crate::timer::timeline_segment::write_timeline_run;
 use crate::timer::timeline_segment::TimelinePartitionKey;
@@ -27,12 +36,6 @@ use crate::timer::timeline_segment::TimelineRunKind;
 use crate::timer::timeline_segment::TimelineRunReader;
 use crate::timer::timeline_segment::TimelineSegmentKey;
 use crate::timer::timeline_segment::TimelineSegmentRecord;
-use rocketmq_store_api::TimerEngineId;
-use rocketmq_store_api::TimerGeneration;
-use rocketmq_store_api::TimerId;
-use rocketmq_store_api::TimerPayloadStoreLocator;
-use rocketmq_store_api::TimerSourceCqOffset;
-use tempfile::TempDir;
 
 fn record(sequence: u64, due_time_ms: i64) -> TimelineSegmentRecord {
     let partition = TimelinePartitionKey::from_deadline(due_time_ms, 3).expect("partition");
@@ -78,7 +81,9 @@ fn record_in_lane(sequence: u64, due_time_ms: i64, lane: u16) -> TimelineSegment
 }
 
 fn open(root: &TempDir) -> SegmentedTimeline {
-    SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default()).expect("open")
+    SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default())
+        .expect("open")
+        .expect("valid timeline configuration")
 }
 
 #[test]
@@ -95,7 +100,8 @@ fn codec_round_trips_sealed_fixed_records() {
         1,
         &records,
     )
-    .expect("write");
+    .expect("write")
+    .expect("valid timeline run");
     assert_eq!(
         inspect_timeline_run(root.path(), "delta-1.run").expect("inspect"),
         descriptor
@@ -104,6 +110,129 @@ fn codec_round_trips_sealed_fixed_records() {
     assert_eq!(reader.read_next().expect("first"), Some(records[0]));
     assert_eq!(reader.read_next().expect("second"), Some(records[1]));
     assert_eq!(reader.read_next().expect("eof"), None);
+}
+
+#[test]
+fn caller_contracts_return_sentinels_without_durable_mutation() {
+    let root = TempDir::new().expect("root");
+    let timeline = open(&root);
+    let timeline_root = root.path().join("timer-extended/timeline-segments-v1");
+    let before_manifest = timeline.manifest();
+    let before_exists = timeline_root.exists();
+    let mut before_entries = std::fs::read_dir(&timeline_root)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.expect("entry").file_name())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    before_entries.sort_unstable();
+
+    let mut invalid_record = record(1, 3_600_010);
+    invalid_record.source_size = 0;
+    assert!(timeline
+        .append_batch(&[invalid_record])
+        .expect("invalid record is a contract sentinel")
+        .is_none());
+
+    let first = record(2, 3_600_020);
+    let mut conflicting = first;
+    conflicting.state_version = 1;
+    assert!(timeline
+        .append_batch(&[first, conflicting])
+        .expect("conflicting caller records are a contract sentinel")
+        .is_none());
+
+    let invalid_key = TimelineSegmentKey {
+        due_time_ms: -1,
+        ..first.key
+    };
+    assert!(timeline
+        .scan_due(Some(invalid_key), 4_000_000, 10, 1_000, None)
+        .expect("invalid scan key is a contract sentinel")
+        .is_none());
+    assert!(timeline
+        .get(invalid_key)
+        .expect("invalid lookup key is an absent value")
+        .is_none());
+    let continuation = crate::timer::segmented_timeline::SegmentedTimelineContinuation {
+        manifest_generation: before_manifest.generation,
+        partition: first.key.partition().expect("partition"),
+        run_positions: vec![(u64::MAX, u64::MAX)],
+        last_key: Some(invalid_key),
+    };
+    assert!(timeline
+        .scan_due(None, 4_000_000, 10, 1_000, Some(continuation))
+        .expect("invalid continuation is a contract sentinel")
+        .is_none());
+    assert!(timeline
+        .pin_snapshot(0)
+        .expect("zero snapshot generation is a contract sentinel")
+        .is_none());
+
+    let mut after_entries = std::fs::read_dir(&timeline_root)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.expect("entry").file_name())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    after_entries.sort_unstable();
+    assert_eq!(timeline.manifest(), before_manifest);
+    assert_eq!(timeline_root.exists(), before_exists);
+    assert_eq!(after_entries, before_entries);
+}
+
+#[test]
+fn reader_cursor_contracts_are_none_but_persisted_corruption_keeps_the_owner_source() {
+    let run_root = TempDir::new().expect("run root");
+    let source = record(1, 3_600_010);
+    let partition = source.key.partition().expect("partition");
+    let descriptor = write_timeline_run(
+        run_root.path(),
+        "delta-1.run",
+        TimelineRunKind::Delta,
+        partition,
+        1,
+        1,
+        &[source],
+    )
+    .expect("write")
+    .expect("valid run");
+    let mut reader = TimelineRunReader::open(run_root.path(), descriptor).expect("reader");
+    assert!(reader
+        .seek_to(2)
+        .expect("past-end seek is a contract sentinel")
+        .is_none());
+    assert!(reader.skip(2).expect("past-end skip is a contract sentinel").is_none());
+
+    let timeline_root = TempDir::new().expect("timeline root");
+    let timeline = open(&timeline_root);
+    timeline.append_batch(&[source]).expect("append").expect("valid record");
+    let descriptor = timeline.manifest().active_runs[0].clone();
+    let run_path = timeline_root
+        .path()
+        .join("timer-extended/timeline-segments-v1")
+        .join(descriptor.relative_path);
+    let mut run = OpenOptions::new().write(true).open(run_path).expect("open run");
+    run.seek(SeekFrom::Start(0)).expect("seek header");
+    run.write_all(&[0]).expect("corrupt header");
+    run.sync_data().expect("sync corruption");
+    drop(run);
+
+    let error = timeline
+        .get(source.key)
+        .expect_err("persisted corruption is operational");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
+    assert_eq!(error.operation(), StoreOperation::Read);
+    assert_eq!(error.component(), StoreComponent::Store);
+    let owner = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<SegmentedTimelineFailure>())
+        .expect("segmented Timeline owner source");
+    assert!(matches!(owner, SegmentedTimelineFailure::Segment(_)), "{owner:?}");
+    assert!(std::error::Error::source(owner)
+        .and_then(|source| source.downcast_ref::<crate::timer::timeline_segment::TimelineSegmentFailure>())
+        .is_some());
 }
 
 #[test]
@@ -120,7 +249,8 @@ fn codec_rejects_unknown_version_bad_crc_and_unsealed_tail() {
             1,
             &[source],
         )
-        .expect("write");
+        .expect("write")
+        .expect("valid timeline run");
         let mut file = OpenOptions::new()
             .write(true)
             .open(root.path().join("damage.run"))
@@ -142,7 +272,8 @@ fn codec_rejects_unknown_version_bad_crc_and_unsealed_tail() {
         1,
         &[source],
     )
-    .expect("write");
+    .expect("write")
+    .expect("valid timeline run");
     OpenOptions::new()
         .write(true)
         .open(root.path().join("unsealed.run"))
@@ -156,8 +287,14 @@ fn codec_rejects_unknown_version_bad_crc_and_unsealed_tail() {
 fn recovery_falls_back_to_the_previous_manifest_and_reports_orphan_run() {
     let root = TempDir::new().expect("root");
     let timeline = open(&root);
-    timeline.append_batch(&[record(1, 3_600_010)]).expect("first");
-    timeline.append_batch(&[record(2, 3_600_020)]).expect("second");
+    timeline
+        .append_batch(&[record(1, 3_600_010)])
+        .expect("first")
+        .expect("valid batch");
+    timeline
+        .append_batch(&[record(2, 3_600_020)])
+        .expect("second")
+        .expect("valid batch");
     let latest = timeline.manifest();
     assert_eq!(latest.generation, 2);
     drop(timeline);
@@ -176,7 +313,10 @@ fn range_pages_same_millisecond_hotspot_without_loss() {
     let records = (1..=100_000)
         .map(|sequence| record(sequence, 7_200_000))
         .collect::<Vec<_>>();
-    timeline.append_batch(&records).expect("append hotspot");
+    timeline
+        .append_batch(&records)
+        .expect("append hotspot")
+        .expect("valid batch");
     let mut continuation = None;
     let mut actual = Vec::new();
     loop {
@@ -188,7 +328,8 @@ fn range_pages_same_millisecond_hotspot_without_loss() {
                 997 * TimelineSegmentRecord::encoded_size(),
                 continuation,
             )
-            .expect("scan");
+            .expect("scan")
+            .expect("valid scan budget");
         actual.extend(page.records.iter().map(|record| record.key));
         continuation = page.continuation;
         if continuation.is_none() {
@@ -207,13 +348,21 @@ fn range_restarts_from_full_key_when_manifest_changes_between_pages() {
     let timeline = open(&root);
     timeline
         .append_batch(&[record(1, 3_600_010), record(2, 3_600_020)])
-        .expect("first batch");
-    let first = timeline.scan_due(None, 4_000_000, 1, 100, None).expect("first page");
+        .expect("first batch")
+        .expect("valid batch");
+    let first = timeline
+        .scan_due(None, 4_000_000, 1, 100, None)
+        .expect("first page")
+        .expect("valid scan budget");
     assert_eq!(first.records.len(), 1);
-    timeline.append_batch(&[record(3, 3_600_030)]).expect("new delta");
+    timeline
+        .append_batch(&[record(3, 3_600_030)])
+        .expect("new delta")
+        .expect("valid batch");
     let second = timeline
         .scan_due(None, 4_000_000, 10, 1_000, first.continuation)
-        .expect("resume");
+        .expect("resume")
+        .expect("valid scan budget");
     assert_eq!(
         second
             .records
@@ -236,7 +385,10 @@ fn range_continuation_crosses_lane_partitions_without_filtering_next_lane() {
             })
         })
         .collect::<Vec<_>>();
-    timeline.append_batch(&records).expect("append lanes");
+    timeline
+        .append_batch(&records)
+        .expect("append lanes")
+        .expect("valid batch");
 
     let mut continuation = None;
     let mut actual = Vec::new();
@@ -249,7 +401,8 @@ fn range_continuation_crosses_lane_partitions_without_filtering_next_lane() {
                 2 * TimelineSegmentRecord::encoded_size(),
                 continuation,
             )
-            .expect("scan lanes");
+            .expect("scan lanes")
+            .expect("valid scan budget");
         actual.extend(page.records.iter().map(|record| record.key));
         continuation = page.continuation;
         if continuation.is_none() {
@@ -274,10 +427,20 @@ fn merge_is_bounded_and_snapshot_pin_fences_garbage_collection() {
             merge_max_output_bytes: 1_000,
         },
     )
-    .expect("open");
-    timeline.append_batch(&[record(1, 3_600_010)]).expect("first");
-    timeline.append_batch(&[record(2, 3_600_020)]).expect("second");
-    let pin = timeline.pin_snapshot(7).expect("pin");
+    .expect("open")
+    .expect("valid timeline configuration");
+    timeline
+        .append_batch(&[record(1, 3_600_010)])
+        .expect("first")
+        .expect("valid batch");
+    timeline
+        .append_batch(&[record(2, 3_600_020)])
+        .expect("second")
+        .expect("valid batch");
+    let pin = timeline
+        .pin_snapshot(7)
+        .expect("pin")
+        .expect("snapshot generation is non-zero");
     let merged = timeline.merge_one(|_| true).expect("merge");
     assert_eq!(merged.merged_runs, 2);
     assert_eq!(merged.output_records, 2);
@@ -298,9 +461,16 @@ fn merge_yields_to_due_delivery_without_publishing_partial_state() {
             merge_max_output_bytes: 1_000,
         },
     )
-    .expect("open");
-    timeline.append_batch(&[record(1, 3_600_010)]).expect("first");
-    timeline.append_batch(&[record(2, 3_600_020)]).expect("second");
+    .expect("open")
+    .expect("valid timeline configuration");
+    timeline
+        .append_batch(&[record(1, 3_600_010)])
+        .expect("first")
+        .expect("valid batch");
+    timeline
+        .append_batch(&[record(2, 3_600_020)])
+        .expect("second")
+        .expect("valid batch");
     let generation = timeline.manifest().generation;
 
     let yielded = timeline.merge_one_prioritized(|_| true, || true).expect("yield merge");
@@ -320,9 +490,12 @@ fn gc_deletes_only_unpinned_whole_partition() {
     let root = TempDir::new().expect("root");
     let timeline = open(&root);
     let source = record(1, 3_600_010);
-    timeline.append_batch(&[source]).expect("append");
+    timeline.append_batch(&[source]).expect("append").expect("valid batch");
     let partition = source.key.partition().expect("partition");
-    let pin = timeline.pin_snapshot(8).expect("pin");
+    let pin = timeline
+        .pin_snapshot(8)
+        .expect("pin")
+        .expect("snapshot generation is non-zero");
     assert!(timeline.delete_partition(partition).is_err());
     timeline.release_snapshot(pin).expect("release");
     assert_eq!(timeline.delete_partition(partition).expect("delete"), 1);
@@ -336,5 +509,14 @@ fn manifest_rejects_both_damaged_copies() {
     std::fs::create_dir_all(&manifest_root).expect("mkdir");
     std::fs::write(manifest_root.join("CURRENT.A"), b"bad-a").expect("a");
     std::fs::write(manifest_root.join("CURRENT.B"), b"bad-b").expect("b");
-    assert!(TimelineManifestV1::load(&manifest_root).is_err());
+    let error = match SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default()) {
+        Err(error) => error,
+        Ok(_) => panic!("both damaged manifest copies must fail closed"),
+    };
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
+    assert_eq!(error.operation(), StoreOperation::Load);
+    assert_eq!(error.component(), StoreComponent::Store);
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<SegmentedTimelineFailure>())
+        .is_some());
 }

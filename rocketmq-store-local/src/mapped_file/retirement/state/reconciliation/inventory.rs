@@ -32,7 +32,7 @@ use crate::mapped_file::retirement::replay::discovery::platform::EntryKind;
 use crate::mapped_file::retirement::replay::discovery::platform::InventoryEntry;
 use crate::mapped_file::retirement::replay::discovery::platform::LifecycleDirectory;
 use crate::mapped_file::retirement::replay::discovery::platform::OpenedEntry;
-use crate::mapped_file::retirement::replay::discovery::platform::PlatformError;
+use crate::mapped_file::retirement::replay::discovery::platform::PlatformFailure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReconciliationInventoryLimits {
@@ -52,16 +52,16 @@ impl Default for ReconciliationInventoryLimits {
 }
 
 impl ReconciliationInventoryLimits {
-    fn validate(self) -> Result<Self, ReconciliationInventoryError> {
+    fn validate(self) -> Result<Self, ReconciliationInventoryFailure> {
         if self.max_directories == 0 || self.max_entries == 0 || self.max_fingerprint_bytes == 0 {
-            return Err(ReconciliationInventoryError::InvalidLimits);
+            return Err(ReconciliationInventoryFailure::InvalidLimits);
         }
         Ok(self)
     }
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum ReconciliationInventoryError {
+pub(crate) enum ReconciliationInventoryFailure {
     #[error("reconciliation inventory limits must all be nonzero")]
     InvalidLimits,
     #[error("reconciliation requires {actual} directories, exceeding limit {maximum}")]
@@ -87,13 +87,13 @@ pub(crate) enum ReconciliationInventoryError {
     #[error("invalid store-relative inventory path")]
     Identity(#[source] IdentityViolation),
     #[error("handle-relative namespace inventory failed")]
-    Platform(#[source] PlatformError),
+    Platform(#[source] PlatformFailure),
     #[error("positional namespace read failed")]
     Io(#[source] io::Error),
 }
 
-impl From<PlatformError> for ReconciliationInventoryError {
-    fn from(source: PlatformError) -> Self {
+impl From<PlatformFailure> for ReconciliationInventoryFailure {
+    fn from(source: PlatformFailure) -> Self {
         Self::Platform(source)
     }
 }
@@ -103,16 +103,16 @@ pub(super) fn scan(
     store_uuid: StoreUuid,
     recovered: &RecoveredLedgerState,
     limits: ReconciliationInventoryLimits,
-) -> Result<StableNamespaceInventory, ReconciliationInventoryError> {
+) -> Result<StableNamespaceInventory, ReconciliationInventoryFailure> {
     let limits = limits.validate()?;
-    let known_paths = collect_known_paths(recovered).map_err(|_| ReconciliationInventoryError::AllocationLimit)?;
+    let known_paths = collect_known_paths(recovered).map_err(|_| ReconciliationInventoryFailure::AllocationLimit)?;
     let complete_directories = known_paths
         .iter()
         .map(parent_directory)
         .map(Box::<str>::from)
         .collect::<BTreeSet<_>>();
     if complete_directories.len() > limits.max_directories {
-        return Err(ReconciliationInventoryError::DirectoryLimit {
+        return Err(ReconciliationInventoryFailure::DirectoryLimit {
             actual: complete_directories.len(),
             maximum: limits.max_directories,
         });
@@ -158,26 +158,26 @@ fn scan_directory(
     limits: ReconciliationInventoryLimits,
     output: &mut BTreeMap<StoreRelativePath, NamespaceObject>,
     retained_files: &mut BTreeMap<StoreRelativePath, File>,
-) -> Result<(), ReconciliationInventoryError> {
+) -> Result<(), ReconciliationInventoryFailure> {
     let directory = LifecycleDirectory::open(root, directory_path)?.ok_or_else(|| {
-        ReconciliationInventoryError::MissingDirectory {
+        ReconciliationInventoryFailure::MissingDirectory {
             directory: directory_path.into(),
         }
     })?;
     let remaining = limits
         .max_entries
         .checked_sub(output.len())
-        .ok_or(ReconciliationInventoryError::AllocationLimit)?;
+        .ok_or(ReconciliationInventoryFailure::AllocationLimit)?;
     let first = directory.enumerate(remaining)?;
     let mut opened = Vec::new();
     opened
         .try_reserve_exact(first.entries.len())
-        .map_err(|_| ReconciliationInventoryError::AllocationLimit)?;
+        .map_err(|_| ReconciliationInventoryFailure::AllocationLimit)?;
     for entry in &first.entries {
         let path = join_inventory_path(directory_path, &entry.name)?;
         let handle = directory.open_entry(entry)?;
         if entry.kind == EntryKind::File && handle.stamp().link_count != 1 {
-            return Err(ReconciliationInventoryError::HardLinkAlias {
+            return Err(ReconciliationInventoryFailure::HardLinkAlias {
                 path,
                 links: handle.stamp().link_count,
             });
@@ -187,7 +187,7 @@ fn scan_directory(
 
     let second = directory.enumerate(remaining)?;
     if second != first {
-        return Err(ReconciliationInventoryError::InventoryChanged {
+        return Err(ReconciliationInventoryFailure::InventoryChanged {
             directory: directory_path.into(),
         });
     }
@@ -203,7 +203,7 @@ fn scan_directory(
                 physical_key: handle
                     .stamp()
                     .physical_key()
-                    .ok_or(ReconciliationInventoryError::UnsupportedPhysicalIdentity)?,
+                    .ok_or(ReconciliationInventoryFailure::UnsupportedPhysicalIdentity)?,
                 length: handle.stamp().length,
                 content_fingerprint,
             },
@@ -212,20 +212,20 @@ fn scan_directory(
             EntryKind::Other => NamespaceObject::Other,
         };
         if output.insert(path.clone(), object).is_some() {
-            return Err(ReconciliationInventoryError::AllocationLimit);
+            return Err(ReconciliationInventoryFailure::AllocationLimit);
         }
     }
 
     let third = directory.enumerate(remaining)?;
     if third != first {
-        return Err(ReconciliationInventoryError::InventoryChanged {
+        return Err(ReconciliationInventoryFailure::InventoryChanged {
             directory: directory_path.into(),
         });
     }
     verify_opened(&opened)?;
     for (path, entry, handle) in opened {
         if entry.kind == EntryKind::File && retained_files.insert(path, handle.into_file()).is_some() {
-            return Err(ReconciliationInventoryError::AllocationLimit);
+            return Err(ReconciliationInventoryFailure::AllocationLimit);
         }
     }
     Ok(())
@@ -233,20 +233,20 @@ fn scan_directory(
 
 fn verify_opened(
     opened: &[(StoreRelativePath, InventoryEntry, OpenedEntry)],
-) -> Result<(), ReconciliationInventoryError> {
+) -> Result<(), ReconciliationInventoryFailure> {
     for (_, expected, handle) in opened {
         handle.verify(expected)?;
     }
     Ok(())
 }
 
-fn join_inventory_path(directory: &str, name: &str) -> Result<StoreRelativePath, ReconciliationInventoryError> {
+fn join_inventory_path(directory: &str, name: &str) -> Result<StoreRelativePath, ReconciliationInventoryFailure> {
     let joined = if directory.is_empty() {
         name.to_owned()
     } else {
         format!("{directory}/{name}")
     };
-    StoreRelativePath::new(&joined).map_err(ReconciliationInventoryError::Identity)
+    StoreRelativePath::new(&joined).map_err(ReconciliationInventoryFailure::Identity)
 }
 
 fn fingerprint(
@@ -254,9 +254,9 @@ fn fingerprint(
     path: &StoreRelativePath,
     length: u64,
     limits: ReconciliationInventoryLimits,
-) -> Result<ContentFingerprint, ReconciliationInventoryError> {
+) -> Result<ContentFingerprint, ReconciliationInventoryFailure> {
     if length > limits.max_fingerprint_bytes {
-        return Err(ReconciliationInventoryError::FingerprintLimit {
+        return Err(ReconciliationInventoryFailure::FingerprintLimit {
             path: path.clone(),
             length,
             maximum: limits.max_fingerprint_bytes,
@@ -268,15 +268,16 @@ fn fingerprint(
     while offset < length {
         let remaining = length - offset;
         let requested = usize::try_from(remaining.min(buffer.len() as u64))
-            .map_err(|_| ReconciliationInventoryError::AllocationLimit)?;
-        let read = positional_read(file, &mut buffer[..requested], offset).map_err(ReconciliationInventoryError::Io)?;
+            .map_err(|_| ReconciliationInventoryFailure::AllocationLimit)?;
+        let read =
+            positional_read(file, &mut buffer[..requested], offset).map_err(ReconciliationInventoryFailure::Io)?;
         if read == 0 {
-            return Err(ReconciliationInventoryError::FingerprintLengthChanged { path: path.clone() });
+            return Err(ReconciliationInventoryFailure::FingerprintLengthChanged { path: path.clone() });
         }
         update_crc32(&mut crc, &buffer[..read]);
         offset = offset
-            .checked_add(u64::try_from(read).map_err(|_| ReconciliationInventoryError::AllocationLimit)?)
-            .ok_or(ReconciliationInventoryError::AllocationLimit)?;
+            .checked_add(u64::try_from(read).map_err(|_| ReconciliationInventoryFailure::AllocationLimit)?)
+            .ok_or(ReconciliationInventoryFailure::AllocationLimit)?;
     }
     Ok(ContentFingerprint { length, crc32: !crc })
 }

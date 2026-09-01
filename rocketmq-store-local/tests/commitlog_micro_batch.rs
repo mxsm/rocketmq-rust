@@ -159,11 +159,11 @@ fn malformed_encoded_batch_fails_before_any_reservation() {
     malformed[..4].copy_from_slice(&81_i32.to_be_bytes());
 
     let prepared = PreparedPayload::try_batch(Bytes::from(malformed), 0);
-    if prepared.is_ok() {
+    if prepared.is_some() {
         reservation_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    assert!(prepared.is_err());
+    assert!(prepared.is_none());
     assert_eq!(reservation_count.load(Ordering::Relaxed), 0);
 }
 

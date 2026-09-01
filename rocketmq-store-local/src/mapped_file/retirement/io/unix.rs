@@ -23,7 +23,7 @@ use std::os::unix::fs::MetadataExt;
 
 use super::IoOperation;
 use super::LedgerIo;
-use super::LedgerIoError;
+use super::LedgerIoFailure;
 use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_FILE_LENGTH;
 use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_SLOT_LENGTH;
 
@@ -58,7 +58,7 @@ impl FileLedgerIo {
     pub(in crate::mapped_file::retirement) fn open_from_store_root(
         store_root: &File,
         log_generation: u64,
-    ) -> Result<Self, LedgerIoError> {
+    ) -> Result<Self, LedgerIoFailure> {
         #[cfg(target_os = "linux")]
         {
             Self::open_validated(store_root, log_generation)
@@ -66,26 +66,26 @@ impl FileLedgerIo {
         #[cfg(not(target_os = "linux"))]
         {
             let _ = (store_root, log_generation);
-            Err(LedgerIoError::UnsupportedPlatform {
+            Err(LedgerIoFailure::UnsupportedPlatform {
                 platform: "unix",
                 reason: MISSING_CONTAINMENT_REASON,
             })
         }
     }
 
-    fn open_validated(store_root: &File, log_generation: u64) -> Result<Self, LedgerIoError> {
+    fn open_validated(store_root: &File, log_generation: u64) -> Result<Self, LedgerIoFailure> {
         let retained_root = store_root
             .try_clone()
-            .map_err(|source| LedgerIoError::io(IoOperation::InspectHandle, source))?;
+            .map_err(|source| LedgerIoFailure::io(IoOperation::InspectHandle, source))?;
         let root_metadata = metadata(&retained_root, IoOperation::InspectHandle)?;
         if !root_metadata.is_dir() {
-            return Err(LedgerIoError::NotDirectory { object: "Store root" });
+            return Err(LedgerIoFailure::NotDirectory { object: "Store root" });
         }
         let lifecycle_directory =
             open_existing_directory(&retained_root, LIFECYCLE_DIRECTORY, IoOperation::OpenLifecycleDirectory)?;
         let lifecycle_metadata = metadata(&lifecycle_directory, IoOperation::InspectHandle)?;
         if root_metadata.dev() != lifecycle_metadata.dev() {
-            return Err(LedgerIoError::CrossDeviceLifecycleDirectory);
+            return Err(LedgerIoFailure::CrossDeviceLifecycleDirectory);
         }
 
         let log_name = format!("retirement.log.g{log_generation:020}");
@@ -116,10 +116,10 @@ impl FileLedgerIo {
         })
     }
 
-    fn verify_bindings(&self) -> Result<(), LedgerIoError> {
+    fn verify_bindings(&self) -> Result<(), LedgerIoFailure> {
         let root_metadata = metadata(&self.store_root, IoOperation::InspectHandle)?;
         if !root_metadata.is_dir() {
-            return Err(LedgerIoError::NotDirectory { object: "Store root" });
+            return Err(LedgerIoFailure::NotDirectory { object: "Store root" });
         }
         let lifecycle_directory = open_existing_directory(
             &self.store_root,
@@ -128,7 +128,7 @@ impl FileLedgerIo {
         )?;
         let lifecycle_metadata = metadata(&lifecycle_directory, IoOperation::InspectHandle)?;
         if root_metadata.dev() != lifecycle_metadata.dev() {
-            return Err(LedgerIoError::CrossDeviceLifecycleDirectory);
+            return Err(LedgerIoFailure::CrossDeviceLifecycleDirectory);
         }
         require_identity(
             "lifecycle directory",
@@ -184,7 +184,7 @@ impl FileLedgerIo {
 
     /// Exercises the same bounded handle operations used by the production backend.
     #[cfg(test)]
-    fn open_handle_relative_for_test(store_root: &File, log_generation: u64) -> Result<Self, LedgerIoError> {
+    fn open_handle_relative_for_test(store_root: &File, log_generation: u64) -> Result<Self, LedgerIoFailure> {
         Self::open_validated(store_root, log_generation)
     }
 }
@@ -194,27 +194,27 @@ pub(in crate::mapped_file::retirement) const fn managed_lifecycle_writer_support
 }
 
 impl LedgerIo for FileLedgerIo {
-    fn append_log(&mut self, expected_offset: u64, bytes: &[u8]) -> Result<(), LedgerIoError> {
+    fn append_log(&mut self, expected_offset: u64, bytes: &[u8]) -> Result<(), LedgerIoFailure> {
         self.verify_bindings()?;
         let actual = file_len(&self.log, IoOperation::AppendLog)?;
         if actual != expected_offset {
-            return Err(LedgerIoError::OffsetMismatch {
+            return Err(LedgerIoFailure::OffsetMismatch {
                 object: "retirement log",
                 expected: expected_offset,
                 actual,
             });
         }
         let expected_end = expected_offset
-            .checked_add(u64::try_from(bytes.len()).map_err(|_| LedgerIoError::LengthOverflow {
+            .checked_add(u64::try_from(bytes.len()).map_err(|_| LedgerIoFailure::LengthOverflow {
                 object: "retirement log append",
             })?)
-            .ok_or(LedgerIoError::LengthOverflow {
+            .ok_or(LedgerIoFailure::LengthOverflow {
                 object: "retirement log append",
             })?;
         write_all_at(&self.log, bytes, expected_offset, IoOperation::AppendLog)?;
         let actual_end = file_len(&self.log, IoOperation::AppendLog)?;
         if actual_end != expected_end {
-            return Err(LedgerIoError::OffsetMismatch {
+            return Err(LedgerIoFailure::OffsetMismatch {
                 object: "retirement log EOF after append",
                 expected: expected_end,
                 actual: actual_end,
@@ -223,18 +223,18 @@ impl LedgerIo for FileLedgerIo {
         Ok(())
     }
 
-    fn sync_log(&mut self) -> Result<(), LedgerIoError> {
+    fn sync_log(&mut self) -> Result<(), LedgerIoFailure> {
         self.verify_bindings()?;
         self.log
             .sync_all()
-            .map_err(|source| LedgerIoError::io(IoOperation::SyncLog, source))
+            .map_err(|source| LedgerIoFailure::io(IoOperation::SyncLog, source))
     }
 
     fn write_acknowledgement_slot(
         &mut self,
         slot_index: u8,
         bytes: &[u8; ACKNOWLEDGEMENT_SLOT_LENGTH],
-    ) -> Result<(), LedgerIoError> {
+    ) -> Result<(), LedgerIoFailure> {
         let offset = acknowledgement_slot_offset(slot_index)?;
         self.verify_bindings()?;
         require_acknowledgement_file_length(&self.acknowledgement)?;
@@ -247,17 +247,17 @@ impl LedgerIo for FileLedgerIo {
         require_acknowledgement_file_length(&self.acknowledgement)
     }
 
-    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoError> {
+    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoFailure> {
         self.verify_bindings()?;
         self.acknowledgement
             .sync_all()
-            .map_err(|source| LedgerIoError::io(IoOperation::SyncAcknowledgementFile, source))
+            .map_err(|source| LedgerIoFailure::io(IoOperation::SyncAcknowledgementFile, source))
     }
 
     fn read_acknowledgement_slot(
         &mut self,
         slot_index: u8,
-    ) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoError> {
+    ) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoFailure> {
         let offset = acknowledgement_slot_offset(slot_index)?;
         self.verify_bindings()?;
         require_acknowledgement_file_length(&self.acknowledgement)?;
@@ -271,34 +271,34 @@ impl LedgerIo for FileLedgerIo {
         Ok(bytes)
     }
 
-    fn read_log_exact(&mut self, offset: u64, output: &mut [u8]) -> Result<(), LedgerIoError> {
+    fn read_log_exact(&mut self, offset: u64, output: &mut [u8]) -> Result<(), LedgerIoFailure> {
         self.verify_bindings()?;
         read_exact_at(&self.log, output, offset, IoOperation::ReadLog)
     }
 
-    fn log_len(&mut self) -> Result<u64, LedgerIoError> {
+    fn log_len(&mut self) -> Result<u64, LedgerIoFailure> {
         self.verify_bindings()?;
         file_len(&self.log, IoOperation::ReadLogLength)
     }
 }
 
-fn open_existing_directory(parent: &File, name: &str, operation: IoOperation) -> Result<File, LedgerIoError> {
+fn open_existing_directory(parent: &File, name: &str, operation: IoOperation) -> Result<File, LedgerIoFailure> {
     let file = open_contained(parent, name, libc::O_RDONLY | libc::O_DIRECTORY, operation)?;
     if !metadata(&file, IoOperation::InspectHandle)?.is_dir() {
-        return Err(LedgerIoError::NotDirectory {
+        return Err(LedgerIoFailure::NotDirectory {
             object: "lifecycle directory",
         });
     }
     Ok(file)
 }
 
-fn open_existing_file(parent: &File, name: &str, operation: IoOperation) -> Result<File, LedgerIoError> {
+fn open_existing_file(parent: &File, name: &str, operation: IoOperation) -> Result<File, LedgerIoFailure> {
     open_contained(parent, name, libc::O_RDWR | libc::O_NONBLOCK, operation)
 }
 
-fn open_contained(parent: &File, name: &str, flags: i32, operation: IoOperation) -> Result<File, LedgerIoError> {
+fn open_contained(parent: &File, name: &str, flags: i32, operation: IoOperation) -> Result<File, LedgerIoFailure> {
     let name = CString::new(name)
-        .map_err(|source| LedgerIoError::io(operation, io::Error::new(io::ErrorKind::InvalidInput, source)))?;
+        .map_err(|source| LedgerIoFailure::io(operation, io::Error::new(io::ErrorKind::InvalidInput, source)))?;
 
     #[cfg(target_os = "linux")]
     {
@@ -311,11 +311,11 @@ fn open_contained(parent: &File, name: &str, flags: i32, operation: IoOperation)
 }
 
 #[cfg(target_os = "linux")]
-fn openat2(parent: &File, name: &CString, flags: i32, operation: IoOperation) -> Result<File, LedgerIoError> {
+fn openat2(parent: &File, name: &CString, flags: i32, operation: IoOperation) -> Result<File, LedgerIoFailure> {
     // SAFETY: `open_how` contains only integer fields, so the all-zero bit pattern is valid.
     let mut how: libc::open_how = unsafe { std::mem::zeroed() };
     how.flags =
-        u64::try_from(flags | libc::O_CLOEXEC | libc::O_NOFOLLOW).map_err(|_| LedgerIoError::LengthOverflow {
+        u64::try_from(flags | libc::O_CLOEXEC | libc::O_NOFOLLOW).map_err(|_| LedgerIoFailure::LengthOverflow {
             object: "Linux open flags",
         })?;
     how.resolve = STRICT_RESOLVE;
@@ -331,9 +331,9 @@ fn openat2(parent: &File, name: &CString, flags: i32, operation: IoOperation) ->
         )
     };
     if result < 0 {
-        return Err(LedgerIoError::io(operation, io::Error::last_os_error()));
+        return Err(LedgerIoFailure::io(operation, io::Error::last_os_error()));
     }
-    let descriptor = i32::try_from(result).map_err(|_| LedgerIoError::LengthOverflow {
+    let descriptor = i32::try_from(result).map_err(|_| LedgerIoFailure::LengthOverflow {
         object: "Linux openat2 descriptor",
     })?;
     // SAFETY: successful openat2 returned this descriptor uniquely and it has not been wrapped or
@@ -342,7 +342,7 @@ fn openat2(parent: &File, name: &CString, flags: i32, operation: IoOperation) ->
 }
 
 #[cfg(not(target_os = "linux"))]
-fn openat(parent: &File, name: &CString, flags: i32, operation: IoOperation) -> Result<File, LedgerIoError> {
+fn openat(parent: &File, name: &CString, flags: i32, operation: IoOperation) -> Result<File, LedgerIoFailure> {
     // SAFETY: `name` is a live NUL-terminated C string, `parent` owns a valid descriptor, no
     // creation flag is supplied, and a nonnegative returned descriptor is immediately owned.
     let descriptor = unsafe {
@@ -353,30 +353,30 @@ fn openat(parent: &File, name: &CString, flags: i32, operation: IoOperation) -> 
         )
     };
     if descriptor < 0 {
-        return Err(LedgerIoError::io(operation, io::Error::last_os_error()));
+        return Err(LedgerIoFailure::io(operation, io::Error::last_os_error()));
     }
     // SAFETY: `descriptor` was just returned uniquely by `openat` and has not been wrapped or
     // closed. `File` becomes its sole owner.
     Ok(unsafe { File::from_raw_fd(descriptor) })
 }
 
-fn metadata(file: &File, operation: IoOperation) -> Result<Metadata, LedgerIoError> {
-    file.metadata().map_err(|source| LedgerIoError::io(operation, source))
+fn metadata(file: &File, operation: IoOperation) -> Result<Metadata, LedgerIoFailure> {
+    file.metadata().map_err(|source| LedgerIoFailure::io(operation, source))
 }
 
-fn validate_file(file: &File, object: &'static str, expected_device: u64) -> Result<Metadata, LedgerIoError> {
+fn validate_file(file: &File, object: &'static str, expected_device: u64) -> Result<Metadata, LedgerIoFailure> {
     let metadata = metadata(file, IoOperation::InspectHandle)?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err(LedgerIoError::NotRegularFile { object });
+        return Err(LedgerIoFailure::NotRegularFile { object });
     }
     if metadata.nlink() != 1 {
-        return Err(LedgerIoError::UnexpectedLinkCount {
+        return Err(LedgerIoFailure::UnexpectedLinkCount {
             object,
             actual: metadata.nlink(),
         });
     }
     if metadata.dev() != expected_device {
-        return Err(LedgerIoError::CrossDeviceObject { object });
+        return Err(LedgerIoFailure::CrossDeviceObject { object });
     }
     Ok(metadata)
 }
@@ -392,21 +392,21 @@ fn require_identity(
     object: &'static str,
     actual: UnixFileIdentity,
     expected: UnixFileIdentity,
-) -> Result<(), LedgerIoError> {
+) -> Result<(), LedgerIoFailure> {
     if actual != expected {
-        return Err(LedgerIoError::BindingChanged { object });
+        return Err(LedgerIoFailure::BindingChanged { object });
     }
     Ok(())
 }
 
-fn acknowledgement_slot_offset(slot_index: u8) -> Result<u64, LedgerIoError> {
+fn acknowledgement_slot_offset(slot_index: u8) -> Result<u64, LedgerIoFailure> {
     if slot_index > 1 {
-        return Err(LedgerIoError::InvalidAcknowledgementSlotIndex { slot_index });
+        return Err(LedgerIoFailure::InvalidAcknowledgementSlotIndex { slot_index });
     }
     Ok(u64::from(slot_index) * ACKNOWLEDGEMENT_SLOT_LENGTH as u64)
 }
 
-fn require_acknowledgement_file_length(file: &File) -> Result<(), LedgerIoError> {
+fn require_acknowledgement_file_length(file: &File) -> Result<(), LedgerIoFailure> {
     require_length(
         "acknowledgement file",
         file_len(file, IoOperation::InspectHandle)?,
@@ -414,9 +414,9 @@ fn require_acknowledgement_file_length(file: &File) -> Result<(), LedgerIoError>
     )
 }
 
-fn require_length(object: &'static str, actual: u64, expected: u64) -> Result<(), LedgerIoError> {
+fn require_length(object: &'static str, actual: u64, expected: u64) -> Result<(), LedgerIoFailure> {
     if actual != expected {
-        return Err(LedgerIoError::InvalidLength {
+        return Err(LedgerIoFailure::InvalidLength {
             object,
             expected,
             actual,
@@ -425,16 +425,16 @@ fn require_length(object: &'static str, actual: u64, expected: u64) -> Result<()
     Ok(())
 }
 
-fn file_len(file: &File, operation: IoOperation) -> Result<u64, LedgerIoError> {
+fn file_len(file: &File, operation: IoOperation) -> Result<u64, LedgerIoFailure> {
     Ok(metadata(file, operation)?.len())
 }
 
-fn write_all_at(file: &File, mut bytes: &[u8], mut offset: u64, operation: IoOperation) -> Result<(), LedgerIoError> {
+fn write_all_at(file: &File, mut bytes: &[u8], mut offset: u64, operation: IoOperation) -> Result<(), LedgerIoFailure> {
     let mut interrupted_retries = 0;
     while !bytes.is_empty() {
         match file.write_at(bytes, offset) {
             Ok(0) => {
-                return Err(LedgerIoError::io(
+                return Err(LedgerIoFailure::io(
                     operation,
                     io::Error::new(io::ErrorKind::WriteZero, "positional write returned zero"),
                 ));
@@ -443,20 +443,20 @@ fn write_all_at(file: &File, mut bytes: &[u8], mut offset: u64, operation: IoOpe
                 interrupted_retries = 0;
                 bytes = &bytes[written..];
                 offset = offset
-                    .checked_add(u64::try_from(written).map_err(|_| LedgerIoError::LengthOverflow {
+                    .checked_add(u64::try_from(written).map_err(|_| LedgerIoFailure::LengthOverflow {
                         object: "positional write",
                     })?)
-                    .ok_or(LedgerIoError::LengthOverflow {
+                    .ok_or(LedgerIoFailure::LengthOverflow {
                         object: "positional write",
                     })?;
             }
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {
                 interrupted_retries += 1;
                 if interrupted_retries > MAX_INTERRUPTED_RETRIES {
-                    return Err(LedgerIoError::io(operation, source));
+                    return Err(LedgerIoFailure::io(operation, source));
                 }
             }
-            Err(source) => return Err(LedgerIoError::io(operation, source)),
+            Err(source) => return Err(LedgerIoFailure::io(operation, source)),
         }
     }
     Ok(())
@@ -467,12 +467,12 @@ fn read_exact_at(
     mut output: &mut [u8],
     mut offset: u64,
     operation: IoOperation,
-) -> Result<(), LedgerIoError> {
+) -> Result<(), LedgerIoFailure> {
     let mut interrupted_retries = 0;
     while !output.is_empty() {
         match file.read_at(output, offset) {
             Ok(0) => {
-                return Err(LedgerIoError::io(
+                return Err(LedgerIoFailure::io(
                     operation,
                     io::Error::new(io::ErrorKind::UnexpectedEof, "positional read reached EOF"),
                 ));
@@ -482,20 +482,20 @@ fn read_exact_at(
                 let (_, remaining) = output.split_at_mut(read);
                 output = remaining;
                 offset = offset
-                    .checked_add(u64::try_from(read).map_err(|_| LedgerIoError::LengthOverflow {
+                    .checked_add(u64::try_from(read).map_err(|_| LedgerIoFailure::LengthOverflow {
                         object: "positional read",
                     })?)
-                    .ok_or(LedgerIoError::LengthOverflow {
+                    .ok_or(LedgerIoFailure::LengthOverflow {
                         object: "positional read",
                     })?;
             }
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {
                 interrupted_retries += 1;
                 if interrupted_retries > MAX_INTERRUPTED_RETRIES {
-                    return Err(LedgerIoError::io(operation, source));
+                    return Err(LedgerIoFailure::io(operation, source));
                 }
             }
-            Err(source) => return Err(LedgerIoError::io(operation, source)),
+            Err(source) => return Err(LedgerIoFailure::io(operation, source)),
         }
     }
     Ok(())
@@ -549,7 +549,7 @@ mod tests {
         assert!(!managed_lifecycle_writer_supported());
         assert!(matches!(
             FileLedgerIo::open_from_store_root(&fixture.root, 2),
-            Err(LedgerIoError::UnsupportedPlatform {
+            Err(LedgerIoFailure::UnsupportedPlatform {
                 platform: "unix",
                 reason,
             }) if reason.contains("openat2-equivalent")
@@ -565,7 +565,7 @@ mod tests {
 
         assert!(matches!(
             FileLedgerIo::open_handle_relative_for_test(&root, 0),
-            Err(LedgerIoError::Io {
+            Err(LedgerIoFailure::Io {
                 operation: IoOperation::OpenLifecycleDirectory,
                 ..
             })
@@ -578,7 +578,7 @@ mod tests {
 
         assert!(matches!(
             FileLedgerIo::open_handle_relative_for_test(&fixture.root, 2),
-            Err(LedgerIoError::InvalidLength {
+            Err(LedgerIoFailure::InvalidLength {
                 object: "acknowledgement file",
                 expected: 208,
                 actual: 207,
@@ -659,7 +659,7 @@ mod tests {
 
         assert!(matches!(
             FileLedgerIo::open_handle_relative_for_test(&fixture.root, 2),
-            Err(LedgerIoError::UnexpectedLinkCount {
+            Err(LedgerIoFailure::UnexpectedLinkCount {
                 object: "retirement log",
                 actual: 2,
             })

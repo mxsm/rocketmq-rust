@@ -18,7 +18,7 @@ use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_FILE_LENGTH;
 use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_SLOT_LENGTH;
 use crate::mapped_file::retirement::io::IoOperation;
 use crate::mapped_file::retirement::io::LedgerIo;
-use crate::mapped_file::retirement::io::LedgerIoError;
+use crate::mapped_file::retirement::io::LedgerIoFailure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ModelIoEvent {
@@ -91,13 +91,13 @@ impl ModelLedgerIo {
             .map(|fault| fault.action)
     }
 
-    fn injected(operation: IoOperation) -> LedgerIoError {
-        LedgerIoError::io(operation, io::Error::other("injected model I/O failure"))
+    fn injected(operation: IoOperation) -> LedgerIoFailure {
+        LedgerIoFailure::io(operation, io::Error::other("injected model I/O failure"))
     }
 }
 
 impl LedgerIo for ModelLedgerIo {
-    fn append_log(&mut self, expected_offset: u64, bytes: &[u8]) -> Result<(), LedgerIoError> {
+    fn append_log(&mut self, expected_offset: u64, bytes: &[u8]) -> Result<(), LedgerIoFailure> {
         let action = self.begin(ModelIoEvent::AppendLog {
             expected_offset,
             length: bytes.len(),
@@ -106,9 +106,9 @@ impl LedgerIo for ModelLedgerIo {
             return Err(Self::injected(IoOperation::AppendLog));
         }
         let actual =
-            u64::try_from(self.log.len()).map_err(|_| LedgerIoError::LengthOverflow { object: "model log" })?;
+            u64::try_from(self.log.len()).map_err(|_| LedgerIoFailure::LengthOverflow { object: "model log" })?;
         if actual != expected_offset {
-            return Err(LedgerIoError::OffsetMismatch {
+            return Err(LedgerIoFailure::OffsetMismatch {
                 object: "model log",
                 expected: expected_offset,
                 actual,
@@ -122,7 +122,7 @@ impl LedgerIo for ModelLedgerIo {
         Ok(())
     }
 
-    fn sync_log(&mut self) -> Result<(), LedgerIoError> {
+    fn sync_log(&mut self) -> Result<(), LedgerIoFailure> {
         let action = self.begin(ModelIoEvent::SyncLog);
         if action.is_some() {
             return Err(Self::injected(IoOperation::SyncLog));
@@ -134,7 +134,7 @@ impl LedgerIo for ModelLedgerIo {
         &mut self,
         slot_index: u8,
         bytes: &[u8; ACKNOWLEDGEMENT_SLOT_LENGTH],
-    ) -> Result<(), LedgerIoError> {
+    ) -> Result<(), LedgerIoFailure> {
         let action = self.begin(ModelIoEvent::WriteAcknowledgementSlot { slot_index });
         if matches!(action, Some(ModelFaultAction::ErrorBefore)) {
             return Err(Self::injected(IoOperation::WriteAcknowledgementSlot));
@@ -142,11 +142,11 @@ impl LedgerIo for ModelLedgerIo {
         let start = usize::from(slot_index) * ACKNOWLEDGEMENT_SLOT_LENGTH;
         let end = start
             .checked_add(ACKNOWLEDGEMENT_SLOT_LENGTH)
-            .ok_or(LedgerIoError::LengthOverflow {
+            .ok_or(LedgerIoFailure::LengthOverflow {
                 object: "model acknowledgement slot",
             })?;
         let Some(destination) = self.acknowledgement.get_mut(start..end) else {
-            return Err(LedgerIoError::OffsetMismatch {
+            return Err(LedgerIoFailure::OffsetMismatch {
                 object: "model acknowledgement slot",
                 expected: ACKNOWLEDGEMENT_FILE_LENGTH as u64,
                 actual: start as u64,
@@ -161,7 +161,7 @@ impl LedgerIo for ModelLedgerIo {
         Ok(())
     }
 
-    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoError> {
+    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoFailure> {
         let action = self.begin(ModelIoEvent::SyncAcknowledgementFile);
         if action.is_some() {
             return Err(Self::injected(IoOperation::SyncAcknowledgementFile));
@@ -172,7 +172,7 @@ impl LedgerIo for ModelLedgerIo {
     fn read_acknowledgement_slot(
         &mut self,
         slot_index: u8,
-    ) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoError> {
+    ) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoFailure> {
         let action = self.begin(ModelIoEvent::ReadAcknowledgementSlot { slot_index });
         if matches!(action, Some(ModelFaultAction::ErrorBefore)) {
             return Err(Self::injected(IoOperation::ReadAcknowledgementSlot));
@@ -180,19 +180,19 @@ impl LedgerIo for ModelLedgerIo {
         let start = usize::from(slot_index) * ACKNOWLEDGEMENT_SLOT_LENGTH;
         let end = start
             .checked_add(ACKNOWLEDGEMENT_SLOT_LENGTH)
-            .ok_or(LedgerIoError::LengthOverflow {
+            .ok_or(LedgerIoFailure::LengthOverflow {
                 object: "model acknowledgement slot",
             })?;
         let mut bytes: [u8; ACKNOWLEDGEMENT_SLOT_LENGTH] = self
             .acknowledgement
             .get(start..end)
-            .ok_or(LedgerIoError::OffsetMismatch {
+            .ok_or(LedgerIoFailure::OffsetMismatch {
                 object: "model acknowledgement slot",
                 expected: ACKNOWLEDGEMENT_FILE_LENGTH as u64,
                 actual: start as u64,
             })?
             .try_into()
-            .map_err(|_| LedgerIoError::LengthOverflow {
+            .map_err(|_| LedgerIoFailure::LengthOverflow {
                 object: "model acknowledgement slot",
             })?;
         if matches!(action, Some(ModelFaultAction::CorruptRead)) {
@@ -201,7 +201,7 @@ impl LedgerIo for ModelLedgerIo {
         Ok(bytes)
     }
 
-    fn read_log_exact(&mut self, offset: u64, output: &mut [u8]) -> Result<(), LedgerIoError> {
+    fn read_log_exact(&mut self, offset: u64, output: &mut [u8]) -> Result<(), LedgerIoFailure> {
         let action = self.begin(ModelIoEvent::ReadLog {
             offset,
             length: output.len(),
@@ -209,13 +209,13 @@ impl LedgerIo for ModelLedgerIo {
         if matches!(action, Some(ModelFaultAction::ErrorBefore)) {
             return Err(Self::injected(IoOperation::ReadLog));
         }
-        let start = usize::try_from(offset).map_err(|_| LedgerIoError::LengthOverflow {
+        let start = usize::try_from(offset).map_err(|_| LedgerIoFailure::LengthOverflow {
             object: "model log offset",
         })?;
-        let end = start.checked_add(output.len()).ok_or(LedgerIoError::LengthOverflow {
+        let end = start.checked_add(output.len()).ok_or(LedgerIoFailure::LengthOverflow {
             object: "model log read",
         })?;
-        output.copy_from_slice(self.log.get(start..end).ok_or(LedgerIoError::OffsetMismatch {
+        output.copy_from_slice(self.log.get(start..end).ok_or(LedgerIoFailure::OffsetMismatch {
             object: "model log read",
             expected: end as u64,
             actual: self.log.len() as u64,
@@ -226,17 +226,17 @@ impl LedgerIo for ModelLedgerIo {
         Ok(())
     }
 
-    fn log_len(&mut self) -> Result<u64, LedgerIoError> {
+    fn log_len(&mut self) -> Result<u64, LedgerIoFailure> {
         let action = self.begin(ModelIoEvent::ReadLogLength);
         if matches!(action, Some(ModelFaultAction::ErrorBefore)) {
             return Err(Self::injected(IoOperation::ReadLogLength));
         }
         let length =
-            u64::try_from(self.log.len()).map_err(|_| LedgerIoError::LengthOverflow { object: "model log" })?;
+            u64::try_from(self.log.len()).map_err(|_| LedgerIoFailure::LengthOverflow { object: "model log" })?;
         if let Some(ModelFaultAction::ReportExtraEof { extra }) = action {
             return length
                 .checked_add(extra)
-                .ok_or(LedgerIoError::LengthOverflow { object: "model log" });
+                .ok_or(LedgerIoFailure::LengthOverflow { object: "model log" });
         }
         Ok(length)
     }

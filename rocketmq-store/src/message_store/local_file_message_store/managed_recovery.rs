@@ -148,7 +148,7 @@ pub(super) fn stage_and_activate_managed_queues(
     mut activation: PreparedManagedLifecycleActivation,
     store_root: &Path,
     routes: Vec<ManagedQueueRoute>,
-) -> Result<ActivatedManagedQueues, StoreError> {
+) -> Result<Option<ActivatedManagedQueues>, StoreError> {
     let mut queues = Vec::new();
     queues.try_reserve_exact(routes.len()).map_err(|_| {
         StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)
@@ -156,11 +156,15 @@ pub(super) fn stage_and_activate_managed_queues(
             .with_detail("failed to reserve managed queue staging inventory")
     })?;
     for route in routes {
-        let generation = activation.stage_queue(store_root, &route.directory, route.expected_file_length)?;
+        let Some(generation) = activation.stage_queue(store_root, &route.directory, route.expected_file_length)? else {
+            return Ok(None);
+        };
         queues.push(StagedManagedQueue { route, generation });
     }
-    let runtime = activation.activate()?;
-    Ok(ActivatedManagedQueues { runtime, queues })
+    let Some(runtime) = activation.activate()? else {
+        return Ok(None);
+    };
+    Ok(Some(ActivatedManagedQueues { runtime, queues }))
 }
 
 fn plan_queue_routes<'a>(
@@ -299,13 +303,15 @@ fn parse_queue_id(directory: &str, value: &str) -> Result<i32, String> {
 }
 
 impl LocalFileMessageStore {
-    pub(super) fn activate_managed_queue_runtime(&mut self) -> Result<(), StoreError> {
+    pub(super) fn activate_managed_queue_runtime(&mut self) -> Result<bool, StoreError> {
         let Some(activation) = self.managed_lifecycle_activation.as_ref() else {
             return Err(managed_queue_install_error(
                 "managed Store has no reconciled lifecycle activation candidate",
             ));
         };
-        let descriptors = activation.queue_descriptors()?;
+        let Some(descriptors) = activation.queue_descriptors()? else {
+            return Ok(false);
+        };
         let routes = plan_managed_queue_routes(&descriptors, &self.message_store_config)?;
 
         for route in &routes {
@@ -333,7 +339,9 @@ impl LocalFileMessageStore {
             .take()
             .ok_or_else(|| managed_queue_install_error("managed lifecycle activation candidate disappeared"))?;
         let store_root = Path::new(self.message_store_config.store_path_root_dir.as_str());
-        let activated = stage_and_activate_managed_queues(activation, store_root, routes)?;
+        let Some(activated) = stage_and_activate_managed_queues(activation, store_root, routes)? else {
+            return Ok(false);
+        };
 
         let mut commit_log = None;
         let mut logical_queues = Vec::new();
@@ -438,7 +446,7 @@ impl LocalFileMessageStore {
             Arc::clone(&self.running_flags),
         ));
         self.managed_lifecycle_runtime = Some(runtime);
-        Ok(())
+        Ok(true)
     }
 }
 

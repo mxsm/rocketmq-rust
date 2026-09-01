@@ -72,17 +72,15 @@ impl fmt::Display for MappedFileOperation {
 
 /// Caller-owned admission outcome from one packed-word acquire attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[must_use]
-pub(crate) enum AcquireTransitionOutcome {
-    Acquired,
-    Rejected(AcquireTransitionRejection),
-}
-
-/// Source-free semantic rejection data for a refused acquire transition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AcquireTransitionRejection {
     Unavailable(MappedFileAdmissionState),
     LeaseCountOverflow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AcquireTransitionOutcome {
+    Acquired,
+    Rejected(AcquireTransitionRejection),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

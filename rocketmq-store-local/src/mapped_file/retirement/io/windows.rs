@@ -60,7 +60,7 @@ use windows::Win32::System::IO::IO_STATUS_BLOCK;
 
 use super::IoOperation;
 use super::LedgerIo;
-use super::LedgerIoError;
+use super::LedgerIoFailure;
 use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_FILE_LENGTH;
 use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_SLOT_LENGTH;
 use crate::mapped_file::retirement::identity::PhysicalFileKey;
@@ -87,13 +87,13 @@ impl FileLedgerIo {
     pub(in crate::mapped_file::retirement) fn open_from_store_root(
         store_root: &File,
         log_generation: u64,
-    ) -> Result<Self, LedgerIoError> {
+    ) -> Result<Self, LedgerIoFailure> {
         let retained_root = store_root
             .try_clone()
-            .map_err(|source| LedgerIoError::io(IoOperation::InspectHandle, source))?;
+            .map_err(|source| LedgerIoFailure::io(IoOperation::InspectHandle, source))?;
         validate_directory(&retained_root, "Store root")?;
         if !is_ntfs_volume(&retained_root)? {
-            return Err(LedgerIoError::UnsupportedPlatform {
+            return Err(LedgerIoFailure::UnsupportedPlatform {
                 platform: "windows",
                 reason: NON_NTFS_REASON,
             });
@@ -129,7 +129,7 @@ impl FileLedgerIo {
         })
     }
 
-    fn verify_bindings(&self) -> Result<(), LedgerIoError> {
+    fn verify_bindings(&self) -> Result<(), LedgerIoFailure> {
         validate_directory(&self.store_root, "Store root")?;
         let lifecycle_directory = open_existing_directory(
             &self.store_root,
@@ -185,27 +185,27 @@ pub(in crate::mapped_file::retirement) const fn managed_lifecycle_writer_support
 }
 
 impl LedgerIo for FileLedgerIo {
-    fn append_log(&mut self, expected_offset: u64, bytes: &[u8]) -> Result<(), LedgerIoError> {
+    fn append_log(&mut self, expected_offset: u64, bytes: &[u8]) -> Result<(), LedgerIoFailure> {
         self.verify_bindings()?;
         let actual = file_len(&self.log, IoOperation::AppendLog)?;
         if actual != expected_offset {
-            return Err(LedgerIoError::OffsetMismatch {
+            return Err(LedgerIoFailure::OffsetMismatch {
                 object: "retirement log",
                 expected: expected_offset,
                 actual,
             });
         }
         let expected_end = expected_offset
-            .checked_add(u64::try_from(bytes.len()).map_err(|_| LedgerIoError::LengthOverflow {
+            .checked_add(u64::try_from(bytes.len()).map_err(|_| LedgerIoFailure::LengthOverflow {
                 object: "retirement log append",
             })?)
-            .ok_or(LedgerIoError::LengthOverflow {
+            .ok_or(LedgerIoFailure::LengthOverflow {
                 object: "retirement log append",
             })?;
         write_all_at(&self.log, bytes, expected_offset, IoOperation::AppendLog)?;
         let actual_end = file_len(&self.log, IoOperation::AppendLog)?;
         if actual_end != expected_end {
-            return Err(LedgerIoError::OffsetMismatch {
+            return Err(LedgerIoFailure::OffsetMismatch {
                 object: "retirement log EOF after append",
                 expected: expected_end,
                 actual: actual_end,
@@ -214,18 +214,18 @@ impl LedgerIo for FileLedgerIo {
         Ok(())
     }
 
-    fn sync_log(&mut self) -> Result<(), LedgerIoError> {
+    fn sync_log(&mut self) -> Result<(), LedgerIoFailure> {
         self.verify_bindings()?;
         self.log
             .sync_all()
-            .map_err(|source| LedgerIoError::io(IoOperation::SyncLog, source))
+            .map_err(|source| LedgerIoFailure::io(IoOperation::SyncLog, source))
     }
 
     fn write_acknowledgement_slot(
         &mut self,
         slot_index: u8,
         bytes: &[u8; ACKNOWLEDGEMENT_SLOT_LENGTH],
-    ) -> Result<(), LedgerIoError> {
+    ) -> Result<(), LedgerIoFailure> {
         let offset = acknowledgement_slot_offset(slot_index)?;
         self.verify_bindings()?;
         require_acknowledgement_file_length(&self.acknowledgement)?;
@@ -238,17 +238,17 @@ impl LedgerIo for FileLedgerIo {
         require_acknowledgement_file_length(&self.acknowledgement)
     }
 
-    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoError> {
+    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoFailure> {
         self.verify_bindings()?;
         self.acknowledgement
             .sync_all()
-            .map_err(|source| LedgerIoError::io(IoOperation::SyncAcknowledgementFile, source))
+            .map_err(|source| LedgerIoFailure::io(IoOperation::SyncAcknowledgementFile, source))
     }
 
     fn read_acknowledgement_slot(
         &mut self,
         slot_index: u8,
-    ) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoError> {
+    ) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoFailure> {
         let offset = acknowledgement_slot_offset(slot_index)?;
         self.verify_bindings()?;
         require_acknowledgement_file_length(&self.acknowledgement)?;
@@ -262,36 +262,36 @@ impl LedgerIo for FileLedgerIo {
         Ok(bytes)
     }
 
-    fn read_log_exact(&mut self, offset: u64, output: &mut [u8]) -> Result<(), LedgerIoError> {
+    fn read_log_exact(&mut self, offset: u64, output: &mut [u8]) -> Result<(), LedgerIoFailure> {
         self.verify_bindings()?;
         read_exact_at(&self.log, output, offset, IoOperation::ReadLog)
     }
 
-    fn log_len(&mut self) -> Result<u64, LedgerIoError> {
+    fn log_len(&mut self) -> Result<u64, LedgerIoFailure> {
         self.verify_bindings()?;
         file_len(&self.log, IoOperation::ReadLogLength)
     }
 }
 
-fn open_existing_directory(parent: &File, name: &str, operation: IoOperation) -> Result<File, LedgerIoError> {
+fn open_existing_directory(parent: &File, name: &str, operation: IoOperation) -> Result<File, LedgerIoFailure> {
     let file = open_relative(parent, name, true, operation)?;
     validate_directory(&file, "lifecycle directory")?;
     Ok(file)
 }
 
-fn open_existing_file(parent: &File, name: &str, operation: IoOperation) -> Result<File, LedgerIoError> {
+fn open_existing_file(parent: &File, name: &str, operation: IoOperation) -> Result<File, LedgerIoFailure> {
     let file = open_relative(parent, name, false, operation)?;
     validate_file(&file, "lifecycle sidecar")?;
     Ok(file)
 }
 
-fn open_relative(parent: &File, name: &str, directory: bool, operation: IoOperation) -> Result<File, LedgerIoError> {
+fn open_relative(parent: &File, name: &str, directory: bool, operation: IoOperation) -> Result<File, LedgerIoFailure> {
     let mut wide = name.encode_utf16().collect::<Vec<_>>();
     let byte_length = wide
         .len()
         .checked_mul(size_of::<u16>())
         .and_then(|value| u16::try_from(value).ok())
-        .ok_or(LedgerIoError::LengthOverflow {
+        .ok_or(LedgerIoFailure::LengthOverflow {
             object: "Windows relative name",
         })?;
     let unicode = UNICODE_STRING {
@@ -342,10 +342,10 @@ fn open_relative(parent: &File, name: &str, directory: bool, operation: IoOperat
         )
     };
     if status.0 < 0 {
-        return Err(LedgerIoError::io(operation, status_error(status)));
+        return Err(LedgerIoFailure::io(operation, status_error(status)));
     }
     if handle.is_invalid() {
-        return Err(LedgerIoError::io(
+        return Err(LedgerIoFailure::io(
             operation,
             io::Error::other("NtCreateFile returned an invalid handle"),
         ));
@@ -354,27 +354,27 @@ fn open_relative(parent: &File, name: &str, directory: bool, operation: IoOperat
     Ok(unsafe { File::from_raw_handle(handle.0) })
 }
 
-fn validate_directory(file: &File, object: &'static str) -> Result<(), LedgerIoError> {
+fn validate_directory(file: &File, object: &'static str) -> Result<(), LedgerIoFailure> {
     let (attributes, standard) = handle_information(file)?;
     if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-        return Err(LedgerIoError::ReparsePoint { object });
+        return Err(LedgerIoFailure::ReparsePoint { object });
     }
     if !standard.Directory || attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0 {
-        return Err(LedgerIoError::NotDirectory { object });
+        return Err(LedgerIoFailure::NotDirectory { object });
     }
     Ok(())
 }
 
-fn validate_file(file: &File, object: &'static str) -> Result<PhysicalFileKey, LedgerIoError> {
+fn validate_file(file: &File, object: &'static str) -> Result<PhysicalFileKey, LedgerIoFailure> {
     let (attributes, standard) = handle_information(file)?;
     if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-        return Err(LedgerIoError::ReparsePoint { object });
+        return Err(LedgerIoFailure::ReparsePoint { object });
     }
     if standard.Directory || attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
-        return Err(LedgerIoError::NotRegularFile { object });
+        return Err(LedgerIoFailure::NotRegularFile { object });
     }
     if standard.NumberOfLinks != 1 {
-        return Err(LedgerIoError::UnexpectedLinkCount {
+        return Err(LedgerIoFailure::UnexpectedLinkCount {
             object,
             actual: u64::from(standard.NumberOfLinks),
         });
@@ -382,7 +382,7 @@ fn validate_file(file: &File, object: &'static str) -> Result<PhysicalFileKey, L
     physical_identity(file)
 }
 
-fn handle_information(file: &File) -> Result<(FILE_ATTRIBUTE_TAG_INFO, FILE_STANDARD_INFO), LedgerIoError> {
+fn handle_information(file: &File) -> Result<(FILE_ATTRIBUTE_TAG_INFO, FILE_STANDARD_INFO), LedgerIoFailure> {
     let attributes = query_information::<FILE_ATTRIBUTE_TAG_INFO>(file, FileAttributeTagInfo)?;
     let standard = query_information::<FILE_STANDARD_INFO>(file, FileStandardInfo)?;
     Ok((attributes, standard))
@@ -391,7 +391,7 @@ fn handle_information(file: &File) -> Result<(FILE_ATTRIBUTE_TAG_INFO, FILE_STAN
 fn query_information<T: Copy + Default>(
     file: &File,
     class: windows::Win32::Storage::FileSystem::FILE_INFO_BY_HANDLE_CLASS,
-) -> Result<T, LedgerIoError> {
+) -> Result<T, LedgerIoFailure> {
     let mut output = MaybeUninit::<T>::uninit();
     // SAFETY: the retained handle remains borrowed and output is aligned writable storage of the
     // exact fixed information-class size; Windows initializes it completely on success.
@@ -402,34 +402,34 @@ fn query_information<T: Copy + Default>(
             output.as_mut_ptr().cast(),
             size_of::<T>() as u32,
         )
-        .map_err(|error| LedgerIoError::io(IoOperation::InspectHandle, windows_error_to_io(error)))?;
+        .map_err(|error| LedgerIoFailure::io(IoOperation::InspectHandle, windows_error_to_io(error)))?;
         Ok(output.assume_init())
     }
 }
 
-fn physical_identity(file: &File) -> Result<PhysicalFileKey, LedgerIoError> {
-    physical_file_key(file).map_err(|source| LedgerIoError::io(IoOperation::InspectHandle, source))
+fn physical_identity(file: &File) -> Result<PhysicalFileKey, LedgerIoFailure> {
+    physical_file_key(file).map_err(|source| LedgerIoFailure::io(IoOperation::InspectHandle, source))
 }
 
 fn require_identity(
     object: &'static str,
     actual: PhysicalFileKey,
     expected: PhysicalFileKey,
-) -> Result<(), LedgerIoError> {
+) -> Result<(), LedgerIoFailure> {
     if actual != expected {
-        return Err(LedgerIoError::BindingChanged { object });
+        return Err(LedgerIoFailure::BindingChanged { object });
     }
     Ok(())
 }
 
-fn acknowledgement_slot_offset(slot_index: u8) -> Result<u64, LedgerIoError> {
+fn acknowledgement_slot_offset(slot_index: u8) -> Result<u64, LedgerIoFailure> {
     if slot_index > 1 {
-        return Err(LedgerIoError::InvalidAcknowledgementSlotIndex { slot_index });
+        return Err(LedgerIoFailure::InvalidAcknowledgementSlotIndex { slot_index });
     }
     Ok(u64::from(slot_index) * ACKNOWLEDGEMENT_SLOT_LENGTH as u64)
 }
 
-fn require_acknowledgement_file_length(file: &File) -> Result<(), LedgerIoError> {
+fn require_acknowledgement_file_length(file: &File) -> Result<(), LedgerIoFailure> {
     require_length(
         "acknowledgement file",
         file_len(file, IoOperation::InspectHandle)?,
@@ -437,9 +437,9 @@ fn require_acknowledgement_file_length(file: &File) -> Result<(), LedgerIoError>
     )
 }
 
-fn require_length(object: &'static str, actual: u64, expected: u64) -> Result<(), LedgerIoError> {
+fn require_length(object: &'static str, actual: u64, expected: u64) -> Result<(), LedgerIoFailure> {
     if actual != expected {
-        return Err(LedgerIoError::InvalidLength {
+        return Err(LedgerIoFailure::InvalidLength {
             object,
             expected,
             actual,
@@ -448,18 +448,18 @@ fn require_length(object: &'static str, actual: u64, expected: u64) -> Result<()
     Ok(())
 }
 
-fn file_len(file: &File, operation: IoOperation) -> Result<u64, LedgerIoError> {
+fn file_len(file: &File, operation: IoOperation) -> Result<u64, LedgerIoFailure> {
     file.metadata()
         .map(|metadata| metadata.len())
-        .map_err(|source| LedgerIoError::io(operation, source))
+        .map_err(|source| LedgerIoFailure::io(operation, source))
 }
 
-fn write_all_at(file: &File, mut bytes: &[u8], mut offset: u64, operation: IoOperation) -> Result<(), LedgerIoError> {
+fn write_all_at(file: &File, mut bytes: &[u8], mut offset: u64, operation: IoOperation) -> Result<(), LedgerIoFailure> {
     let mut interrupted_retries = 0;
     while !bytes.is_empty() {
         match file.seek_write(bytes, offset) {
             Ok(0) => {
-                return Err(LedgerIoError::io(
+                return Err(LedgerIoFailure::io(
                     operation,
                     io::Error::new(io::ErrorKind::WriteZero, "positional write returned zero"),
                 ));
@@ -468,20 +468,20 @@ fn write_all_at(file: &File, mut bytes: &[u8], mut offset: u64, operation: IoOpe
                 interrupted_retries = 0;
                 bytes = &bytes[written..];
                 offset = offset
-                    .checked_add(u64::try_from(written).map_err(|_| LedgerIoError::LengthOverflow {
+                    .checked_add(u64::try_from(written).map_err(|_| LedgerIoFailure::LengthOverflow {
                         object: "positional write",
                     })?)
-                    .ok_or(LedgerIoError::LengthOverflow {
+                    .ok_or(LedgerIoFailure::LengthOverflow {
                         object: "positional write",
                     })?;
             }
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {
                 interrupted_retries += 1;
                 if interrupted_retries > MAX_INTERRUPTED_RETRIES {
-                    return Err(LedgerIoError::io(operation, source));
+                    return Err(LedgerIoFailure::io(operation, source));
                 }
             }
-            Err(source) => return Err(LedgerIoError::io(operation, source)),
+            Err(source) => return Err(LedgerIoFailure::io(operation, source)),
         }
     }
     Ok(())
@@ -492,12 +492,12 @@ fn read_exact_at(
     mut output: &mut [u8],
     mut offset: u64,
     operation: IoOperation,
-) -> Result<(), LedgerIoError> {
+) -> Result<(), LedgerIoFailure> {
     let mut interrupted_retries = 0;
     while !output.is_empty() {
         match file.seek_read(output, offset) {
             Ok(0) => {
-                return Err(LedgerIoError::io(
+                return Err(LedgerIoFailure::io(
                     operation,
                     io::Error::new(io::ErrorKind::UnexpectedEof, "positional read reached EOF"),
                 ));
@@ -507,26 +507,26 @@ fn read_exact_at(
                 let (_, remaining) = output.split_at_mut(read);
                 output = remaining;
                 offset = offset
-                    .checked_add(u64::try_from(read).map_err(|_| LedgerIoError::LengthOverflow {
+                    .checked_add(u64::try_from(read).map_err(|_| LedgerIoFailure::LengthOverflow {
                         object: "positional read",
                     })?)
-                    .ok_or(LedgerIoError::LengthOverflow {
+                    .ok_or(LedgerIoFailure::LengthOverflow {
                         object: "positional read",
                     })?;
             }
             Err(source) if source.kind() == io::ErrorKind::Interrupted => {
                 interrupted_retries += 1;
                 if interrupted_retries > MAX_INTERRUPTED_RETRIES {
-                    return Err(LedgerIoError::io(operation, source));
+                    return Err(LedgerIoFailure::io(operation, source));
                 }
             }
-            Err(source) => return Err(LedgerIoError::io(operation, source)),
+            Err(source) => return Err(LedgerIoFailure::io(operation, source)),
         }
     }
     Ok(())
 }
 
-fn is_ntfs_volume(file: &File) -> Result<bool, LedgerIoError> {
+fn is_ntfs_volume(file: &File) -> Result<bool, LedgerIoFailure> {
     let mut filesystem_name = [0_u16; 32];
     // SAFETY: the retained root handle remains borrowed for this synchronous call and the fixed
     // buffer is valid writable UTF-16 storage for its complete duration.
@@ -539,7 +539,7 @@ fn is_ntfs_volume(file: &File) -> Result<bool, LedgerIoError> {
             None,
             Some(&mut filesystem_name),
         )
-        .map_err(|error| LedgerIoError::io(IoOperation::InspectHandle, windows_error_to_io(error)))?;
+        .map_err(|error| LedgerIoFailure::io(IoOperation::InspectHandle, windows_error_to_io(error)))?;
     }
     let length = filesystem_name
         .iter()
@@ -594,7 +594,7 @@ mod tests {
         let fixture = fixture((ACKNOWLEDGEMENT_FILE_LENGTH - 1) as u64);
         assert!(matches!(
             FileLedgerIo::open_from_store_root(&fixture.root, 2),
-            Err(LedgerIoError::InvalidLength {
+            Err(LedgerIoFailure::InvalidLength {
                 object: "acknowledgement file",
                 expected: 208,
                 actual: 207,

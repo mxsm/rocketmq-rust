@@ -15,7 +15,7 @@
 use std::fs::File;
 
 use super::LedgerIo;
-use super::LedgerIoError;
+use super::LedgerIoFailure;
 use crate::mapped_file::retirement::codec::ACKNOWLEDGEMENT_SLOT_LENGTH;
 
 const UNSUPPORTED_REASON: &str = "no audited handle-relative lifecycle backend exists for this target";
@@ -28,7 +28,7 @@ impl FileLedgerIo {
     pub(in crate::mapped_file::retirement) fn open_from_store_root(
         _store_root: &File,
         _log_generation: u64,
-    ) -> Result<Self, LedgerIoError> {
+    ) -> Result<Self, LedgerIoFailure> {
         Err(unsupported())
     }
 }
@@ -38,11 +38,11 @@ pub(in crate::mapped_file::retirement) const fn managed_lifecycle_writer_support
 }
 
 impl LedgerIo for FileLedgerIo {
-    fn append_log(&mut self, _expected_offset: u64, _bytes: &[u8]) -> Result<(), LedgerIoError> {
+    fn append_log(&mut self, _expected_offset: u64, _bytes: &[u8]) -> Result<(), LedgerIoFailure> {
         Err(unsupported())
     }
 
-    fn sync_log(&mut self) -> Result<(), LedgerIoError> {
+    fn sync_log(&mut self) -> Result<(), LedgerIoFailure> {
         Err(unsupported())
     }
 
@@ -50,32 +50,32 @@ impl LedgerIo for FileLedgerIo {
         &mut self,
         _slot_index: u8,
         _bytes: &[u8; ACKNOWLEDGEMENT_SLOT_LENGTH],
-    ) -> Result<(), LedgerIoError> {
+    ) -> Result<(), LedgerIoFailure> {
         Err(unsupported())
     }
 
-    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoError> {
+    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoFailure> {
         Err(unsupported())
     }
 
     fn read_acknowledgement_slot(
         &mut self,
         _slot_index: u8,
-    ) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoError> {
+    ) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoFailure> {
         Err(unsupported())
     }
 
-    fn read_log_exact(&mut self, _offset: u64, _output: &mut [u8]) -> Result<(), LedgerIoError> {
+    fn read_log_exact(&mut self, _offset: u64, _output: &mut [u8]) -> Result<(), LedgerIoFailure> {
         Err(unsupported())
     }
 
-    fn log_len(&mut self) -> Result<u64, LedgerIoError> {
+    fn log_len(&mut self) -> Result<u64, LedgerIoFailure> {
         Err(unsupported())
     }
 }
 
-fn unsupported() -> LedgerIoError {
-    LedgerIoError::UnsupportedPlatform {
+fn unsupported() -> LedgerIoFailure {
+    LedgerIoFailure::UnsupportedPlatform {
         platform: "unsupported target",
         reason: UNSUPPORTED_REASON,
     }

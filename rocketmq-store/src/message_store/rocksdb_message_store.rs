@@ -148,6 +148,7 @@ impl fmt::Debug for RocksDBMessageStore {
 impl RocksDBMessageStore {
     pub fn try_new(
         message_store_config: Arc<MessageStoreConfig>,
+        micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
         broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
@@ -156,6 +157,7 @@ impl RocksDBMessageStore {
     ) -> Result<Self, StoreError> {
         Self::try_new_with_telemetry(
             message_store_config,
+            micro_batch_policy,
             broker_config,
             topic_config_table,
             broker_stats_manager,
@@ -167,6 +169,7 @@ impl RocksDBMessageStore {
 
     pub fn try_new_with_telemetry(
         message_store_config: Arc<MessageStoreConfig>,
+        micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
         broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
@@ -193,6 +196,7 @@ impl RocksDBMessageStore {
         let rocksdb_trans_service = derived.rocksdb_trans_service();
         let mut local_file_store = Box::new(LocalFileMessageStore::try_new_with_telemetry(
             Arc::clone(&message_store_config),
+            micro_batch_policy,
             broker_config,
             topic_config_table,
             broker_stats_manager,

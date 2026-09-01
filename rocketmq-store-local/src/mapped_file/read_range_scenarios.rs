@@ -168,7 +168,10 @@ fn mapped_read_range_converts_to_a_file_range_without_releasing_admission() {
         .try_mapped_read_range(2, 4)
         .expect("range selection")
         .expect("sealed range");
-    let file_range = range.try_into_file_range().expect("checked file range");
+    let file_range = range
+        .try_into_file_range()
+        .expect("metadata read succeeds")
+        .expect("checked file range");
     assert_eq!(file_range.position(), 2);
     assert_eq!(file_range.len(), 4);
 

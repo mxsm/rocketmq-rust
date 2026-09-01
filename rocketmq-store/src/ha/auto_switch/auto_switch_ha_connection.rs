@@ -18,12 +18,13 @@ use std::sync::Arc;
 
 use tokio::net::TcpStream;
 
+use rocketmq_store_api::StoreError;
+
 use crate::ha::default_ha_connection::DefaultHAConnection;
 use crate::ha::default_ha_connection::HAConnectionRuntimeHandle;
 use crate::ha::ha_connection::HAConnection;
 use crate::ha::ha_connection::HAConnectionId;
 use crate::ha::ha_connection_state::HAConnectionState;
-use crate::store_error::StoreError;
 
 pub struct AutoSwitchHAConnection {
     delegate: DefaultHAConnection,

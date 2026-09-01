@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreOperation;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
@@ -26,20 +24,24 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use parking_lot::Mutex;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerSnapshotFile;
 use sha2::Digest;
 use sha2::Sha256;
 use thiserror::Error;
 
-use crate::timer::timeline_manifest::TimelineManifestError;
+use crate::timer::timeline_manifest::TimelineManifestFailure;
 use crate::timer::timeline_manifest::TimelineManifestV1;
-use crate::timer::timeline_segment::inspect_timeline_run;
-use crate::timer::timeline_segment::write_timeline_run;
+use crate::timer::timeline_segment::inspect_timeline_run_checked;
+use crate::timer::timeline_segment::validate_record;
+use crate::timer::timeline_segment::write_timeline_run_checked;
 use crate::timer::timeline_segment::TimelinePartitionKey;
 use crate::timer::timeline_segment::TimelineRunDescriptor;
 use crate::timer::timeline_segment::TimelineRunKind;
 use crate::timer::timeline_segment::TimelineRunReader;
-use crate::timer::timeline_segment::TimelineSegmentError;
+use crate::timer::timeline_segment::TimelineSegmentFailure;
 use crate::timer::timeline_segment::TimelineSegmentKey;
 use crate::timer::timeline_segment::TimelineSegmentRecord;
 
@@ -70,14 +72,14 @@ impl Default for SegmentedTimelineConfig {
 }
 
 impl SegmentedTimelineConfig {
-    fn validate(self) -> Result<Self, SegmentedTimelineError> {
+    fn validate(self) -> Result<Self, SegmentedTimelineFailure> {
         if self.max_open_runs == 0
             || self.merge_delta_runs < 2
             || self.merge_max_input_runs < 2
             || self.merge_max_input_runs > self.max_open_runs
             || self.merge_max_output_bytes < TimelineSegmentRecord::encoded_size()
         {
-            return Err(SegmentedTimelineError::InvalidConfiguration);
+            return Err(SegmentedTimelineFailure::InvalidConfiguration);
         }
         Ok(self)
     }
@@ -156,22 +158,17 @@ pub struct SegmentedTimeline {
 impl SegmentedTimeline {
     /// Opens the native index, validates only active run headers/footers, and retains orphan runs
     /// for explicit reconciliation.
-    /// Reports failures through the canonical storage facade.
-    pub fn open(store_root: impl AsRef<Path>, config: SegmentedTimelineConfig) -> Result<Self, StoreError> {
-        Self::open_typed(store_root, config).map_err(|error| error.into_store_error(StoreOperation::Load))
-    }
-
-    fn open_typed(
+    fn open_checked(
         store_root: impl AsRef<Path>,
         config: SegmentedTimelineConfig,
-    ) -> Result<Self, SegmentedTimelineError> {
+    ) -> Result<Self, SegmentedTimelineFailure> {
         let config = config.validate()?;
         let root = store_root.as_ref().join(TIMELINE_DIRECTORY);
         let manifest = TimelineManifestV1::load(&root)?;
         for descriptor in &manifest.active_runs {
-            let inspected = inspect_timeline_run(&root, &descriptor.relative_path)?;
+            let inspected = inspect_timeline_run_checked(&root, &descriptor.relative_path)?;
             if inspected != *descriptor {
-                return Err(SegmentedTimelineError::ManifestRunMismatch);
+                return Err(SegmentedTimelineFailure::ManifestRunMismatch);
             }
         }
         Ok(Self {
@@ -187,23 +184,12 @@ impl SegmentedTimeline {
     }
 
     /// Verifies that an overlay checkpoint cannot reference future or non-durable native bytes.
-    /// Reports failures through the canonical storage facade.
-    pub fn validate_overlay_checkpoint(
+    fn validate_overlay_checkpoint_checked(
         &self,
         manifest_generation: u64,
         durable_end: u64,
         manifest_checksum: u32,
-    ) -> Result<(), StoreError> {
-        self.validate_overlay_checkpoint_typed(manifest_generation, durable_end, manifest_checksum)
-            .map_err(|error| error.into_store_error(StoreOperation::Load))
-    }
-
-    fn validate_overlay_checkpoint_typed(
-        &self,
-        manifest_generation: u64,
-        durable_end: u64,
-        manifest_checksum: u32,
-    ) -> Result<(), SegmentedTimelineError> {
+    ) -> Result<(), SegmentedTimelineFailure> {
         let manifest = self.manifest.lock();
         if manifest_generation == 0
             || manifest_generation > manifest.generation
@@ -212,26 +198,20 @@ impl SegmentedTimeline {
             || manifest_checksum == 0
             || manifest_generation == manifest.generation && manifest.checksum()? != manifest_checksum
         {
-            return Err(SegmentedTimelineError::OverlayCheckpointMismatch);
+            return Err(SegmentedTimelineFailure::OverlayCheckpointMismatch);
         }
         Ok(())
     }
 
     /// Loads and verifies the exact archived manifest protected by a snapshot pin.
-    /// Reports failures through the canonical storage facade.
-    pub fn validate_snapshot_pin(&self, pin: NativeSnapshotPin) -> Result<(), StoreError> {
-        self.validate_snapshot_pin_typed(pin)
-            .map_err(|error| error.into_store_error(StoreOperation::Read))
-    }
-
-    fn validate_snapshot_pin_typed(&self, pin: NativeSnapshotPin) -> Result<(), SegmentedTimelineError> {
+    fn validate_snapshot_pin_checked(&self, pin: NativeSnapshotPin) -> Result<(), SegmentedTimelineFailure> {
         let manifest = self.manifest.lock();
         if manifest.snapshot_pins.get(&pin.snapshot_generation).copied() != Some(pin.manifest_generation) {
-            return Err(SegmentedTimelineError::UnknownSnapshotPin);
+            return Err(SegmentedTimelineFailure::UnknownSnapshotPin);
         }
         let archived = TimelineManifestV1::load_archive(&self.root, pin.manifest_generation)?;
         if archived.durable_end != pin.durable_end || archived.checksum()? != pin.manifest_checksum {
-            return Err(SegmentedTimelineError::SnapshotManifestMismatch);
+            return Err(SegmentedTimelineFailure::SnapshotManifestMismatch);
         }
         Ok(())
     }
@@ -240,22 +220,12 @@ impl SegmentedTimeline {
     ///
     /// The returned file identities are relative to `target_root` and can be embedded directly in
     /// a cross-media snapshot manifest.
-    /// Reports failures through the canonical storage facade.
-    pub fn create_snapshot_files(
+    fn create_snapshot_files_checked(
         &self,
         target_root: &Path,
         pin: NativeSnapshotPin,
-    ) -> Result<Vec<TimerSnapshotFile>, StoreError> {
-        self.create_snapshot_files_typed(target_root, pin)
-            .map_err(|error| error.into_store_error(StoreOperation::Admin))
-    }
-
-    fn create_snapshot_files_typed(
-        &self,
-        target_root: &Path,
-        pin: NativeSnapshotPin,
-    ) -> Result<Vec<TimerSnapshotFile>, SegmentedTimelineError> {
-        self.validate_snapshot_pin_typed(pin)?;
+    ) -> Result<Vec<TimerSnapshotFile>, SegmentedTimelineFailure> {
+        self.validate_snapshot_pin_checked(pin)?;
         let manifest = TimelineManifestV1::load_archive(&self.root, pin.manifest_generation)?;
         let mut files = Vec::with_capacity(manifest.active_runs.len().saturating_add(1));
         let manifest_relative = PathBuf::from("manifests").join(format!("{:020}.manifest", pin.manifest_generation));
@@ -279,18 +249,12 @@ impl SegmentedTimeline {
     ///
     /// Existing identical keys are reused. A conflicting replay fails closed. Newly created run
     /// files are synced before one A/B manifest publication makes them reachable.
-    /// Reports failures through the canonical storage facade.
-    pub fn append_batch(&self, records: &[TimelineSegmentRecord]) -> Result<NativeWriteReceipt, StoreError> {
-        self.append_batch_typed(records)
-            .map_err(|error| error.into_store_error(StoreOperation::Append))
-    }
-
-    fn append_batch_typed(
+    fn append_batch_checked(
         &self,
         records: &[TimelineSegmentRecord],
-    ) -> Result<NativeWriteReceipt, SegmentedTimelineError> {
+    ) -> Result<NativeWriteReceipt, SegmentedTimelineFailure> {
         if records.is_empty() {
-            return Err(SegmentedTimelineError::EmptyBatch);
+            return Err(SegmentedTimelineFailure::EmptyBatch);
         }
         let record_hash = hash_records(records);
         let mut manifest = self.manifest.lock();
@@ -308,7 +272,7 @@ impl SegmentedTimeline {
         let created_generation = manifest
             .generation
             .checked_add(1)
-            .ok_or(SegmentedTimelineError::GenerationExhausted)?;
+            .ok_or(SegmentedTimelineFailure::GenerationExhausted)?;
         let mut candidate = manifest.clone();
         for (partition, partition_records) in grouped {
             if partition_records.is_empty() {
@@ -317,13 +281,13 @@ impl SegmentedTimeline {
             let run_hash = hash_records(&partition_records);
             let run_id = stable_run_id(run_hash, candidate.next_run_id);
             let relative_path = run_path(created_generation, partition, TimelineRunKind::Delta, run_id);
-            let descriptor = match inspect_timeline_run(&self.root, &relative_path) {
+            let descriptor = match inspect_timeline_run_checked(&self.root, &relative_path) {
                 Ok(existing) => {
                     validate_existing_run(&self.root, &existing, &partition_records)?;
                     existing
                 }
-                Err(TimelineSegmentError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                    write_timeline_run(
+                Err(TimelineSegmentFailure::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                    write_timeline_run_checked(
                         &self.root,
                         &relative_path,
                         TimelineRunKind::Delta,
@@ -338,7 +302,7 @@ impl SegmentedTimeline {
             candidate.durable_end = candidate
                 .durable_end
                 .checked_add(run_physical_bytes(&descriptor)?)
-                .ok_or(SegmentedTimelineError::LengthOverflow)?;
+                .ok_or(SegmentedTimelineFailure::LengthOverflow)?;
             candidate.next_run_id = candidate.next_run_id.saturating_add(1).max(1);
             candidate.active_runs.push(descriptor);
         }
@@ -355,29 +319,16 @@ impl SegmentedTimeline {
     }
 
     /// Reads one bounded page. At most one partition's runs are open simultaneously.
-    /// Reports failures through the canonical storage facade.
-    pub fn scan_due(
+    fn scan_due_checked(
         &self,
         from_exclusive: Option<TimelineSegmentKey>,
         due_exclusive_ms: i64,
         max_records: usize,
         max_bytes: usize,
         continuation: Option<SegmentedTimelineContinuation>,
-    ) -> Result<SegmentedTimelinePage, StoreError> {
-        self.scan_due_typed(from_exclusive, due_exclusive_ms, max_records, max_bytes, continuation)
-            .map_err(|error| error.into_store_error(StoreOperation::Read))
-    }
-
-    fn scan_due_typed(
-        &self,
-        from_exclusive: Option<TimelineSegmentKey>,
-        due_exclusive_ms: i64,
-        max_records: usize,
-        max_bytes: usize,
-        continuation: Option<SegmentedTimelineContinuation>,
-    ) -> Result<SegmentedTimelinePage, SegmentedTimelineError> {
+    ) -> Result<SegmentedTimelinePage, SegmentedTimelineFailure> {
         if max_records == 0 || max_bytes < TimelineSegmentRecord::encoded_size() || due_exclusive_ms < 0 {
-            return Err(SegmentedTimelineError::InvalidScanBudget);
+            return Err(SegmentedTimelineFailure::InvalidScanBudget);
         }
         let manifest = self.manifest.lock().clone();
         let lower_due = from_exclusive.map_or(0, |key| key.due_time_ms.max(0));
@@ -391,13 +342,13 @@ impl SegmentedTimeline {
         if let Some(cursor) = continuation.as_ref() {
             partitions.retain(|partition| *partition >= cursor.partition);
         } else if let Some(from) = from_exclusive {
-            let from_partition = from.partition()?;
+            let from_partition = from.partition_checked()?;
             partitions.retain(|partition| *partition >= from_partition);
         }
         for (partition_index, partition) in partitions.iter().copied().enumerate() {
             let runs = manifest.partition_runs(partition);
             if runs.len() > self.config.max_open_runs {
-                return Err(SegmentedTimelineError::ReadAmplificationLimit {
+                return Err(SegmentedTimelineFailure::ReadAmplificationLimit {
                     runs: runs.len(),
                     limit: self.config.max_open_runs,
                 });
@@ -411,8 +362,8 @@ impl SegmentedTimeline {
                 .as_ref()
                 .filter(|cursor| cursor.partition == partition)
                 .and_then(|cursor| cursor.last_key)
-                .filter(|key| key.partition().ok() == Some(partition))
-                .or_else(|| from_exclusive.filter(|key| key.partition().ok() == Some(partition)));
+                .filter(|key| key.partition_checked().ok() == Some(partition))
+                .or_else(|| from_exclusive.filter(|key| key.partition_checked().ok() == Some(partition)));
             let mut page = self.scan_partition(
                 &manifest,
                 partition,
@@ -429,7 +380,7 @@ impl SegmentedTimeline {
                         manifest_generation: manifest.generation,
                         partition: partitions[partition_index + 1],
                         run_positions: Vec::new(),
-                        last_key: page.records.last().map(|record| record.key),
+                        last_key: None,
                     });
                 }
                 return Ok(page);
@@ -439,28 +390,22 @@ impl SegmentedTimeline {
     }
 
     /// Returns the exact active record for one full key, if present.
-    /// Reports failures through the canonical storage facade.
-    pub fn get(&self, key: TimelineSegmentKey) -> Result<Option<TimelineSegmentRecord>, StoreError> {
-        self.get_typed(key)
-            .map_err(|error| error.into_store_error(StoreOperation::Read))
-    }
-
-    fn get_typed(&self, key: TimelineSegmentKey) -> Result<Option<TimelineSegmentRecord>, SegmentedTimelineError> {
+    fn get_checked(&self, key: TimelineSegmentKey) -> Result<Option<TimelineSegmentRecord>, SegmentedTimelineFailure> {
         let manifest = self.manifest.lock().clone();
         let mut found = None;
-        for descriptor in manifest.partition_runs(key.partition()?) {
+        for descriptor in manifest.partition_runs(key.partition_checked()?) {
             if key.due_time_ms < descriptor.min_due_time_ms || key.due_time_ms > descriptor.max_due_time_ms {
                 continue;
             }
-            let mut reader = TimelineRunReader::open(&self.root, descriptor)?;
-            while let Some(record) = reader.read_next()? {
+            let mut reader = TimelineRunReader::open_checked(&self.root, descriptor)?;
+            while let Some(record) = reader.read_next_checked()? {
                 match record.key.cmp(&key) {
                     Ordering::Less => continue,
                     Ordering::Greater => break,
                     Ordering::Equal => match found {
                         None => found = Some(record),
                         Some(existing) if existing == record => {}
-                        Some(_) => return Err(SegmentedTimelineError::ConflictingDuplicate),
+                        Some(_) => return Err(SegmentedTimelineFailure::ConflictingDuplicate),
                     },
                 }
             }
@@ -469,19 +414,13 @@ impl SegmentedTimeline {
     }
 
     /// Pins the current native generation for one shared Extended snapshot.
-    /// Reports failures through the canonical storage facade.
-    pub fn pin_snapshot(&self, snapshot_generation: u64) -> Result<NativeSnapshotPin, StoreError> {
-        self.pin_snapshot_typed(snapshot_generation)
-            .map_err(|error| error.into_store_error(StoreOperation::Admin))
-    }
-
-    fn pin_snapshot_typed(&self, snapshot_generation: u64) -> Result<NativeSnapshotPin, SegmentedTimelineError> {
+    fn pin_snapshot_checked(&self, snapshot_generation: u64) -> Result<NativeSnapshotPin, SegmentedTimelineFailure> {
         if snapshot_generation == 0 {
-            return Err(SegmentedTimelineError::InvalidSnapshotGeneration);
+            return Err(SegmentedTimelineFailure::InvalidSnapshotGeneration);
         }
         let mut manifest = self.manifest.lock();
         if manifest.snapshot_pins.contains_key(&snapshot_generation) {
-            return Err(SegmentedTimelineError::SnapshotAlreadyPinned);
+            return Err(SegmentedTimelineFailure::SnapshotAlreadyPinned);
         }
         let pinned_generation = manifest.generation;
         manifest.archive(&self.root)?;
@@ -499,16 +438,10 @@ impl SegmentedTimeline {
     }
 
     /// Releases a previously persisted snapshot pin and then reclaims unreachable runs.
-    /// Reports failures through the canonical storage facade.
-    pub fn release_snapshot(&self, pin: NativeSnapshotPin) -> Result<usize, StoreError> {
-        self.release_snapshot_typed(pin)
-            .map_err(|error| error.into_store_error(StoreOperation::Admin))
-    }
-
-    fn release_snapshot_typed(&self, pin: NativeSnapshotPin) -> Result<usize, SegmentedTimelineError> {
+    fn release_snapshot_checked(&self, pin: NativeSnapshotPin) -> Result<usize, SegmentedTimelineFailure> {
         let mut manifest = self.manifest.lock();
         if manifest.snapshot_pins.get(&pin.snapshot_generation).copied() != Some(pin.manifest_generation) {
-            return Err(SegmentedTimelineError::UnknownSnapshotPin);
+            return Err(SegmentedTimelineFailure::UnknownSnapshotPin);
         }
         let mut candidate = manifest.clone();
         candidate.snapshot_pins.remove(&pin.snapshot_generation);
@@ -521,30 +454,22 @@ impl SegmentedTimeline {
     ///
     /// `retain` is evaluated only after a stable de-duplicated merge. The caller must enforce
     /// terminal, replication, grace-period, and snapshot fences before returning `false`.
-    #[allow(
-        dead_code,
-        reason = "exercised by the in-crate merge scenarios; production merge scheduling arrives with the store merge driver"
-    )]
-    pub(crate) fn merge_one<F>(&self, mut retain: F) -> Result<NativeMergeResult, SegmentedTimelineError>
+    fn merge_one_checked<F>(&self, mut retain: F) -> Result<NativeMergeResult, SegmentedTimelineFailure>
     where
         F: FnMut(&TimelineSegmentRecord) -> bool,
     {
-        self.merge_one_prioritized(&mut retain, || false)
+        self.merge_one_prioritized_checked(&mut retain, || false)
     }
 
     /// Merges one bounded partition unless due delivery currently has priority.
     ///
     /// A yielded merge publishes no run or manifest. Its immutable inputs remain reachable, so a
     /// later invocation resumes safely without a separate recovery protocol.
-    #[allow(
-        dead_code,
-        reason = "exercised by the in-crate merge scenarios; production merge scheduling arrives with the store merge driver"
-    )]
-    pub(crate) fn merge_one_prioritized<F, P>(
+    fn merge_one_prioritized_checked<F, P>(
         &self,
         mut retain: F,
         mut due_delivery_pending: P,
-    ) -> Result<NativeMergeResult, SegmentedTimelineError>
+    ) -> Result<NativeMergeResult, SegmentedTimelineFailure>
     where
         F: FnMut(&TimelineSegmentRecord) -> bool,
         P: FnMut() -> bool,
@@ -573,7 +498,7 @@ impl SegmentedTimeline {
             usize::try_from(run.logical_bytes)
                 .ok()
                 .and_then(|bytes| sum.checked_add(bytes))
-                .ok_or(SegmentedTimelineError::LengthOverflow)
+                .ok_or(SegmentedTimelineFailure::LengthOverflow)
         })?;
         if input_bytes > self.config.merge_max_output_bytes {
             return Ok(NativeMergeResult {
@@ -590,15 +515,15 @@ impl SegmentedTimeline {
         }
         let retained = records.into_iter().filter(|record| retain(record)).collect::<Vec<_>>();
         if retained.is_empty() {
-            return Err(SegmentedTimelineError::EmptyMergeOutput);
+            return Err(SegmentedTimelineFailure::EmptyMergeOutput);
         }
         let created_generation = manifest
             .generation
             .checked_add(1)
-            .ok_or(SegmentedTimelineError::GenerationExhausted)?;
+            .ok_or(SegmentedTimelineFailure::GenerationExhausted)?;
         let run_id = stable_run_id(hash_records(&retained), manifest.next_run_id);
         let relative_path = run_path(created_generation, partition, TimelineRunKind::Base, run_id);
-        let descriptor = write_timeline_run(
+        let descriptor = write_timeline_run_checked(
             &self.root,
             &relative_path,
             TimelineRunKind::Base,
@@ -619,7 +544,7 @@ impl SegmentedTimeline {
         candidate.durable_end = candidate
             .durable_end
             .checked_add(run_physical_bytes(&descriptor)?)
-            .ok_or(SegmentedTimelineError::LengthOverflow)?;
+            .ok_or(SegmentedTimelineFailure::LengthOverflow)?;
         let published = candidate.publish_next(&self.root)?;
         let result = NativeMergeResult {
             merged_runs: runs.len(),
@@ -637,16 +562,10 @@ impl SegmentedTimeline {
     }
 
     /// Deletes a whole partition only when no snapshot generation is pinned.
-    /// Reports failures through the canonical storage facade.
-    pub fn delete_partition(&self, partition: TimelinePartitionKey) -> Result<usize, StoreError> {
-        self.delete_partition_typed(partition)
-            .map_err(|error| error.into_store_error(StoreOperation::Admin))
-    }
-
-    fn delete_partition_typed(&self, partition: TimelinePartitionKey) -> Result<usize, SegmentedTimelineError> {
+    fn delete_partition_checked(&self, partition: TimelinePartitionKey) -> Result<usize, SegmentedTimelineFailure> {
         let mut manifest = self.manifest.lock();
         if !manifest.snapshot_pins.is_empty() {
-            return Err(SegmentedTimelineError::SnapshotPinned);
+            return Err(SegmentedTimelineFailure::SnapshotPinned);
         }
         let removed: Vec<_> = manifest
             .active_runs
@@ -666,11 +585,7 @@ impl SegmentedTimeline {
     }
 
     /// Lists sealed or partial run files not reachable from the current manifest.
-    #[allow(
-        dead_code,
-        reason = "exercised by the in-crate merge scenarios; production merge scheduling arrives with the store merge driver"
-    )]
-    pub(crate) fn orphan_runs(&self) -> Result<Vec<PathBuf>, SegmentedTimelineError> {
+    fn orphan_runs_checked(&self) -> Result<Vec<PathBuf>, SegmentedTimelineFailure> {
         if !self.root.exists() {
             return Ok(Vec::new());
         }
@@ -696,18 +611,18 @@ impl SegmentedTimeline {
         &self,
         manifest: &TimelineManifestV1,
         grouped: &mut BTreeMap<TimelinePartitionKey, Vec<TimelineSegmentRecord>>,
-    ) -> Result<(), SegmentedTimelineError> {
+    ) -> Result<(), SegmentedTimelineFailure> {
         for (partition, requested) in grouped {
             if requested.is_empty() {
                 continue;
             }
             let mut existing = BTreeMap::new();
             for descriptor in manifest.partition_runs(*partition) {
-                let mut reader = TimelineRunReader::open(&self.root, descriptor)?;
-                while let Some(record) = reader.read_next()? {
+                let mut reader = TimelineRunReader::open_checked(&self.root, descriptor)?;
+                while let Some(record) = reader.read_next_checked()? {
                     if let Some(previous) = existing.insert(record.key, record) {
                         if previous != record {
-                            return Err(SegmentedTimelineError::ConflictingDuplicate);
+                            return Err(SegmentedTimelineFailure::ConflictingDuplicate);
                         }
                     }
                 }
@@ -721,7 +636,7 @@ impl SegmentedTimeline {
                 .iter()
                 .any(|record| existing.get(&record.key).is_some_and(|value| value != record))
             {
-                return Err(SegmentedTimelineError::ConflictingDuplicate);
+                return Err(SegmentedTimelineFailure::ConflictingDuplicate);
             }
         }
         Ok(())
@@ -741,15 +656,15 @@ impl SegmentedTimeline {
         due_exclusive_ms: i64,
         max_records: usize,
         max_bytes: usize,
-    ) -> Result<SegmentedTimelinePage, SegmentedTimelineError> {
+    ) -> Result<SegmentedTimelinePage, SegmentedTimelineFailure> {
         let mut readers = Vec::with_capacity(runs.len());
         let mut heap = BinaryHeap::new();
         let mut consumed = BTreeMap::new();
         for descriptor in runs {
             let run_id = descriptor.run_id;
-            let mut reader = TimelineRunReader::open(&self.root, descriptor)?;
+            let mut reader = TimelineRunReader::open_checked(&self.root, descriptor)?;
             let skip = positions.get(&run_id).copied().unwrap_or_default();
-            reader.seek_to(skip)?;
+            reader.seek_to_checked(skip)?;
             consumed.insert(run_id, skip);
             let reader_index = readers.len();
             if let Some(record) = next_after(&mut reader, last_key, due_exclusive_ms)? {
@@ -771,15 +686,15 @@ impl SegmentedTimeline {
             if page.records.len() >= max_records || next_bytes > max_bytes {
                 break;
             }
-            let head = heap.pop().ok_or(SegmentedTimelineError::HeapInvariant)?;
+            let head = heap.pop().ok_or(SegmentedTimelineFailure::HeapInvariant)?;
             consumed.insert(head.run_id, readers[head.reader_index].position());
             match last_seen {
                 Some(key) if key == head.record.key => {
                     if page.records.last().is_some_and(|record| *record != head.record) {
-                        return Err(SegmentedTimelineError::ConflictingDuplicate);
+                        return Err(SegmentedTimelineFailure::ConflictingDuplicate);
                     }
                 }
-                Some(key) if key > head.record.key => return Err(SegmentedTimelineError::OrderingViolation),
+                Some(key) if key > head.record.key => return Err(SegmentedTimelineFailure::OrderingViolation),
                 _ => {
                     page.retained_bytes = next_bytes;
                     page.records.push(head.record);
@@ -818,13 +733,13 @@ impl SegmentedTimeline {
         due_exclusive_ms: i64,
         max_records: usize,
         max_bytes: usize,
-    ) -> Result<Vec<TimelineSegmentRecord>, SegmentedTimelineError> {
+    ) -> Result<Vec<TimelineSegmentRecord>, SegmentedTimelineFailure> {
         let partition = runs
             .first()
             .map(|run| run.partition)
-            .ok_or(SegmentedTimelineError::EmptyBatch)?;
+            .ok_or(SegmentedTimelineFailure::EmptyBatch)?;
         if runs.iter().any(|run| run.partition != partition) {
-            return Err(SegmentedTimelineError::PartitionMismatch);
+            return Err(SegmentedTimelineFailure::PartitionMismatch);
         }
         Ok(self
             .scan_partition(
@@ -840,7 +755,7 @@ impl SegmentedTimeline {
             .records)
     }
 
-    fn collect_garbage_locked(&self, manifest: &mut TimelineManifestV1) -> Result<usize, SegmentedTimelineError> {
+    fn collect_garbage_locked(&self, manifest: &mut TimelineManifestV1) -> Result<usize, SegmentedTimelineFailure> {
         if !manifest.snapshot_pins.is_empty() || manifest.garbage_runs.is_empty() {
             return Ok(0);
         }
@@ -858,6 +773,165 @@ impl SegmentedTimeline {
         candidate.garbage_runs.clear();
         *manifest = candidate.publish_next(&self.root)?;
         Ok(deleted)
+    }
+}
+
+impl SegmentedTimeline {
+    /// Opens and validates the native segmented Timeline.
+    pub fn open(store_root: impl AsRef<Path>, config: SegmentedTimelineConfig) -> Result<Option<Self>, StoreError> {
+        SegmentedTimelineFailure::into_public(Self::open_checked(store_root, config), StoreOperation::Load)
+    }
+
+    /// Validates a durable overlay checkpoint.
+    pub fn validate_overlay_checkpoint(
+        &self,
+        manifest_generation: u64,
+        durable_end: u64,
+        manifest_checksum: u32,
+    ) -> Result<(), StoreError> {
+        self.validate_overlay_checkpoint_checked(manifest_generation, durable_end, manifest_checksum)
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    /// Validates the archived manifest protected by a snapshot pin.
+    pub fn validate_snapshot_pin(&self, pin: NativeSnapshotPin) -> Result<(), StoreError> {
+        self.validate_snapshot_pin_checked(pin)
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    /// Copies every file reachable from a pinned native snapshot.
+    pub fn create_snapshot_files(
+        &self,
+        target_root: &Path,
+        pin: NativeSnapshotPin,
+    ) -> Result<Vec<TimerSnapshotFile>, StoreError> {
+        self.create_snapshot_files_checked(target_root, pin)
+            .map_err(|error| error.into_store_error(StoreOperation::Flush))
+    }
+
+    /// Appends one or more partition-local delta runs.
+    ///
+    /// Returns `Ok(None)` when the caller batch is empty, contains an invalid record, or contains
+    /// conflicting values for one key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when durable run or manifest I/O fails or existing persisted data
+    /// is inconsistent.
+    pub fn append_batch(&self, records: &[TimelineSegmentRecord]) -> Result<Option<NativeWriteReceipt>, StoreError> {
+        if group_and_validate(records).is_err() {
+            return Ok(None);
+        }
+        SegmentedTimelineFailure::into_public(self.append_batch_checked(records), StoreOperation::Append)
+    }
+
+    /// Reads one bounded due page.
+    ///
+    /// Returns `Ok(None)` when a caller key, continuation, or scan budget is invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when reading or validating persisted Timeline data fails.
+    pub fn scan_due(
+        &self,
+        from_exclusive: Option<TimelineSegmentKey>,
+        due_exclusive_ms: i64,
+        max_records: usize,
+        max_bytes: usize,
+        continuation: Option<SegmentedTimelineContinuation>,
+    ) -> Result<Option<SegmentedTimelinePage>, StoreError> {
+        let invalid_from = from_exclusive.is_some_and(|key| key.partition_checked().is_err());
+        let invalid_continuation = continuation.as_ref().is_some_and(|cursor| {
+            !cursor.partition.is_valid()
+                || cursor
+                    .last_key
+                    .is_some_and(|key| key.partition_checked().ok() != Some(cursor.partition))
+                || {
+                    let manifest = self.manifest.lock();
+                    cursor.manifest_generation == manifest.generation
+                        && cursor.run_positions.iter().any(|(run_id, position)| {
+                            !manifest
+                                .partition_runs(cursor.partition)
+                                .iter()
+                                .any(|run| run.run_id == *run_id && *position <= run.record_count)
+                        })
+                }
+        });
+        if invalid_from || invalid_continuation {
+            return Ok(None);
+        }
+        SegmentedTimelineFailure::into_public(
+            self.scan_due_checked(from_exclusive, due_exclusive_ms, max_records, max_bytes, continuation),
+            StoreOperation::Read,
+        )
+    }
+
+    /// Reads one exact active record.
+    ///
+    /// Returns `Ok(None)` when the caller key is invalid or no active record has that key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when reading or validating persisted Timeline data fails.
+    pub fn get(&self, key: TimelineSegmentKey) -> Result<Option<TimelineSegmentRecord>, StoreError> {
+        if key.partition_checked().is_err() {
+            return Ok(None);
+        }
+        self.get_checked(key)
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    /// Pins the current native generation.
+    ///
+    /// Returns `Ok(None)` when `snapshot_generation` is zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when persisted snapshot state is inconsistent or manifest
+    /// publication fails.
+    pub fn pin_snapshot(&self, snapshot_generation: u64) -> Result<Option<NativeSnapshotPin>, StoreError> {
+        SegmentedTimelineFailure::into_public(self.pin_snapshot_checked(snapshot_generation), StoreOperation::Flush)
+    }
+
+    /// Releases one persisted native snapshot pin.
+    pub fn release_snapshot(&self, pin: NativeSnapshotPin) -> Result<usize, StoreError> {
+        self.release_snapshot_checked(pin)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    /// Merges one eligible partition.
+    pub fn merge_one<F>(&self, retain: F) -> Result<NativeMergeResult, StoreError>
+    where
+        F: FnMut(&TimelineSegmentRecord) -> bool,
+    {
+        self.merge_one_checked(retain)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    /// Merges one eligible partition unless delivery has priority.
+    pub fn merge_one_prioritized<F, P>(
+        &self,
+        retain: F,
+        due_delivery_pending: P,
+    ) -> Result<NativeMergeResult, StoreError>
+    where
+        F: FnMut(&TimelineSegmentRecord) -> bool,
+        P: FnMut() -> bool,
+    {
+        self.merge_one_prioritized_checked(retain, due_delivery_pending)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    /// Deletes one unpinned physical partition.
+    pub fn delete_partition(&self, partition: TimelinePartitionKey) -> Result<usize, StoreError> {
+        self.delete_partition_checked(partition)
+            .map_err(|error| error.into_store_error(StoreOperation::Admin))
+    }
+
+    /// Lists run files not reachable from the current manifest.
+    pub fn orphan_runs(&self) -> Result<Vec<PathBuf>, StoreError> {
+        self.orphan_runs_checked()
+            .map_err(|error| error.into_store_error(StoreOperation::Load))
     }
 }
 
@@ -888,8 +962,8 @@ fn next_after(
     reader: &mut TimelineRunReader,
     last_key: Option<TimelineSegmentKey>,
     due_exclusive_ms: i64,
-) -> Result<Option<TimelineSegmentRecord>, SegmentedTimelineError> {
-    while let Some(record) = reader.read_next()? {
+) -> Result<Option<TimelineSegmentRecord>, SegmentedTimelineFailure> {
+    while let Some(record) = reader.read_next_checked()? {
         if record.key.due_time_ms >= due_exclusive_ms {
             return Ok(None);
         }
@@ -903,16 +977,20 @@ fn next_after(
 
 fn group_and_validate(
     records: &[TimelineSegmentRecord],
-) -> Result<BTreeMap<TimelinePartitionKey, Vec<TimelineSegmentRecord>>, SegmentedTimelineError> {
+) -> Result<BTreeMap<TimelinePartitionKey, Vec<TimelineSegmentRecord>>, SegmentedTimelineFailure> {
     let mut grouped = BTreeMap::<TimelinePartitionKey, Vec<TimelineSegmentRecord>>::new();
     for record in records {
-        grouped.entry(record.key.partition()?).or_default().push(*record);
+        validate_record(*record)?;
+        grouped
+            .entry(record.key.partition_checked()?)
+            .or_default()
+            .push(*record);
     }
     for partition_records in grouped.values_mut() {
         partition_records.sort_unstable_by_key(|record| record.key);
         for pair in partition_records.windows(2) {
             if pair[0].key == pair[1].key && pair[0] != pair[1] {
-                return Err(SegmentedTimelineError::ConflictingDuplicate);
+                return Err(SegmentedTimelineFailure::ConflictingDuplicate);
             }
         }
         partition_records.dedup();
@@ -924,18 +1002,18 @@ fn validate_existing_run(
     root: &Path,
     descriptor: &TimelineRunDescriptor,
     expected: &[TimelineSegmentRecord],
-) -> Result<(), SegmentedTimelineError> {
+) -> Result<(), SegmentedTimelineFailure> {
     if descriptor.record_count != u64::try_from(expected.len()).unwrap_or(u64::MAX) {
-        return Err(SegmentedTimelineError::RunIdCollision);
+        return Err(SegmentedTimelineFailure::RunIdCollision);
     }
-    let mut reader = TimelineRunReader::open(root, descriptor.clone())?;
+    let mut reader = TimelineRunReader::open_checked(root, descriptor.clone())?;
     for expected_record in expected {
-        if reader.read_next()? != Some(*expected_record) {
-            return Err(SegmentedTimelineError::RunIdCollision);
+        if reader.read_next_checked()? != Some(*expected_record) {
+            return Err(SegmentedTimelineFailure::RunIdCollision);
         }
     }
-    if reader.read_next()?.is_some() {
-        return Err(SegmentedTimelineError::RunIdCollision);
+    if reader.read_next_checked()?.is_some() {
+        return Err(SegmentedTimelineFailure::RunIdCollision);
     }
     Ok(())
 }
@@ -981,11 +1059,11 @@ fn run_path(generation: u64, partition: TimelinePartitionKey, kind: TimelineRunK
     )
 }
 
-fn run_physical_bytes(descriptor: &TimelineRunDescriptor) -> Result<u64, SegmentedTimelineError> {
+fn run_physical_bytes(descriptor: &TimelineRunDescriptor) -> Result<u64, SegmentedTimelineFailure> {
     descriptor
         .logical_bytes
         .checked_add(184)
-        .ok_or(SegmentedTimelineError::LengthOverflow)
+        .ok_or(SegmentedTimelineFailure::LengthOverflow)
 }
 
 fn run_order(left: &TimelineRunDescriptor, right: &TimelineRunDescriptor) -> Ordering {
@@ -1008,9 +1086,9 @@ fn collect_run_paths(directory: &Path, output: &mut Vec<PathBuf>) -> Result<(), 
     Ok(())
 }
 
-fn validate_relative_path(path: &str) -> Result<(), SegmentedTimelineError> {
+fn validate_relative_path(path: &str) -> Result<(), SegmentedTimelineFailure> {
     if path.is_empty() || path.starts_with('/') || path.contains("..") {
-        return Err(SegmentedTimelineError::UnsafePath);
+        return Err(SegmentedTimelineFailure::UnsafePath);
     }
     Ok(())
 }
@@ -1019,7 +1097,7 @@ fn copy_snapshot_file(
     source_path: &Path,
     target_path: &Path,
     relative_path: &Path,
-) -> Result<TimerSnapshotFile, SegmentedTimelineError> {
+) -> Result<TimerSnapshotFile, SegmentedTimelineFailure> {
     if let Some(parent) = target_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1046,16 +1124,20 @@ fn copy_snapshot_file(
 
 /// Native segmented Timeline failure.
 #[derive(Debug, Error)]
-pub(crate) enum SegmentedTimelineError {
+pub(crate) enum SegmentedTimelineFailure {
     /// Underlying filesystem operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
     /// Immutable run codec failed.
-    #[error(transparent)]
-    Segment(#[from] TimelineSegmentError),
+    #[error("native Timeline segment failed: {0}")]
+    Segment(
+        #[from]
+        #[source]
+        TimelineSegmentFailure,
+    ),
     /// A/B manifest failed.
     #[error(transparent)]
-    Manifest(#[from] TimelineManifestError),
+    Manifest(#[from] TimelineManifestFailure),
     /// Resource limits are zero or inconsistent.
     #[error("invalid segmented Timeline configuration")]
     InvalidConfiguration,
@@ -1125,25 +1207,57 @@ pub(crate) enum SegmentedTimelineError {
     SnapshotManifestMismatch,
 }
 
-impl SegmentedTimelineError {
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Filesystem faults keep their typed I/O source, nested segment or
-    /// manifest evidence is corrupted state, and the remaining typed failures
-    /// follow the owning operation. The complete leaf is preserved as the
-    /// typed source.
-    pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
-        let descriptor = match (&self, operation) {
-            (Self::Io(_), _) => &rocketmq_error::STORAGE_IO_FAILED,
-            (Self::Segment(_) | Self::Manifest(_), _) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-            (_, StoreOperation::Load | StoreOperation::Read | StoreOperation::QueryOffset) => {
-                &rocketmq_error::STORAGE_READ_FAILED
+impl SegmentedTimelineFailure {
+    fn is_contract_violation(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidConfiguration
+                | Self::EmptyBatch
+                | Self::InvalidScanBudget
+                | Self::InvalidSnapshotGeneration
+                | Self::UnsafePath
+        )
+    }
+
+    fn into_public<T>(result: Result<T, Self>, operation: StoreOperation) -> Result<Option<T>, StoreError> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if error.is_contract_violation() => Ok(None),
+            Err(error) => Err(error.into_store_error(operation)),
+        }
+    }
+
+    fn into_store_error(self, operation: StoreOperation) -> StoreError {
+        match self {
+            error @ Self::Io(_) => StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+                .in_component(StoreComponent::Store)
+                .with_source(error),
+            error @ (Self::ReadAmplificationLimit { .. } | Self::LengthOverflow | Self::GenerationExhausted) => {
+                StoreError::new(&rocketmq_error::STORAGE_CAPACITY_EXHAUSTED, operation)
+                    .in_component(StoreComponent::Store)
+                    .with_source(error)
             }
-            (_, StoreOperation::Append | StoreOperation::Flush | StoreOperation::AppendDerived) => {
-                &rocketmq_error::STORAGE_WRITE_FAILED
-            }
-            _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
-        };
-        StoreError::new(descriptor, operation).with_source(self)
+            error @ (Self::Segment(_)
+            | Self::Manifest(_)
+            | Self::InvalidConfiguration
+            | Self::EmptyBatch
+            | Self::InvalidScanBudget
+            | Self::InvalidSnapshotGeneration
+            | Self::UnsafePath
+            | Self::ManifestRunMismatch
+            | Self::ConflictingDuplicate
+            | Self::RunIdCollision
+            | Self::PartitionMismatch
+            | Self::EmptyMergeOutput
+            | Self::OrderingViolation
+            | Self::HeapInvariant
+            | Self::SnapshotAlreadyPinned
+            | Self::UnknownSnapshotPin
+            | Self::SnapshotPinned
+            | Self::OverlayCheckpointMismatch
+            | Self::SnapshotManifestMismatch) => StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
+                .in_component(StoreComponent::Store)
+                .with_source(error),
+        }
     }
 }

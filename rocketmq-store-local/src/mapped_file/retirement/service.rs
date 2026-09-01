@@ -35,7 +35,7 @@ use super::platform::VerifiedNamespaceRoot;
 use super::registry::reaper::drive_logical_namespace;
 use super::registry::reaper::drive_tombstone_namespace;
 use super::registry::reaper::LogicalNamespaceProgress;
-use super::registry::reaper::ReaperDriveError;
+use super::registry::reaper::ReaperDriveFailure;
 use super::registry::reaper::TombstoneNamespaceProgress;
 use super::registry::LogicalRemovedCapability;
 use super::registry::ManagedMappedFileQueueGeneration;
@@ -47,11 +47,10 @@ use super::registry::RetirementIntentBinding;
 use super::registry::RetirementRegistry;
 use super::registry::TombstonedCapability;
 use super::writer::ManagedLedgerWriter;
-use super::writer::ManagedLedgerWriterError;
+use super::writer::ManagedLedgerWriterFailure;
 use crate::mapped_file::DefaultMappedFile;
 
 mod creation;
-pub(crate) use creation::ManagedIncarnationCreationError;
 pub use creation::{ManagedIncarnationCreateRequest, ManagedIncarnationCreation};
 
 const RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
@@ -122,45 +121,62 @@ impl ManagedRetirementSubmission {
     }
 }
 
-/// Private retirement-submission leaf with its former kind folded in.
+/// Typed failure from the durable intent and queue-handoff boundary.
+#[doc(hidden)]
 #[derive(Debug, Error)]
-pub(crate) enum ManagedRetirementSubmissionError {
+pub(in crate::mapped_file::retirement) enum ManagedRetirementSubmissionFailure {
     #[error(transparent)]
     Registry(#[from] RegistryViolation),
     #[error(transparent)]
-    Writer(#[from] ManagedLedgerWriterError),
+    Writer(#[from] ManagedLedgerWriterFailure),
     #[error("managed retirement state requires replay")]
     RecoveryRequired,
     #[error("managed retirement admission is closed")]
     AdmissionClosed,
 }
 
-impl ManagedRetirementSubmissionError {
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Every rejected or failed durable retirement submission is reported as
-    /// an administrative write failure of the mapped-file component with the
-    /// complete leaf preserved as the typed source.
-    fn into_store_error(self) -> StoreError {
-        StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Admin)
-            .in_component(StoreComponent::MappedFile)
-            .with_source(self)
-    }
-
+impl ManagedRetirementSubmissionFailure {
     fn registry(source: RegistryViolation) -> Self {
         Self::Registry(source)
     }
 
-    fn writer(source: ManagedLedgerWriterError) -> Self {
+    fn writer(source: ManagedLedgerWriterFailure) -> Self {
         Self::Writer(source)
     }
 
     fn recovery_required() -> Self {
         Self::RecoveryRequired
     }
+}
 
-    fn admission_closed() -> Self {
-        Self::AdmissionClosed
+fn retirement_submission_store_error(
+    operation: StoreOperation,
+    error: ManagedRetirementSubmissionFailure,
+) -> Option<StoreError> {
+    let ManagedRetirementSubmissionFailure::Writer(source) = &error else {
+        return None;
+    };
+    if source.is_pre_io_contract() {
+        return None;
+    }
+    Some(
+        StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, operation)
+            .in_component(StoreComponent::MappedFile)
+            .with_detail("managed retirement submission failed")
+            .with_source(error),
+    )
+}
+
+fn project_retirement_submission<T>(
+    operation: StoreOperation,
+    result: Result<T, ManagedRetirementSubmissionFailure>,
+) -> Result<Option<T>, StoreError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => match retirement_submission_store_error(operation, error) {
+            Some(error) => Err(error),
+            None => Ok(None),
+        },
     }
 }
 
@@ -344,25 +360,18 @@ impl ManagedLifecycleRuntime {
     /// The simple lifecycle gate permits only `Shutdown -> StoreDestroy`; retries remain in
     /// `StoreDestroy`. This function performs blocking ledger I/O and must run inside one Store
     /// storage-IO operation.
-    /// Submits every remaining owner for Store-destroy retirement.
-    ///
-    /// # Errors
-    ///
-    /// Returns `STORAGE_WRITE_FAILED` when the durable submission fails closed.
-    pub fn submit_store_destroy_retirements(&self) -> Result<usize, StoreError> {
-        self.submit_store_destroy_retirements_typed()
-            .map_err(ManagedRetirementSubmissionError::into_store_error)
-    }
-
-    fn submit_store_destroy_retirements_typed(&self) -> Result<usize, ManagedRetirementSubmissionError> {
+    pub fn submit_store_destroy_retirements(&self) -> Result<Option<usize>, StoreError> {
         let mut inner = self.inner.lock();
         if !inner.admission.enter_store_destroy() {
-            return Err(ManagedRetirementSubmissionError::admission_closed());
+            return Ok(None);
         }
         let generations = inner.queue_generations.clone();
-        inner
-            .core
-            .submit_store_destroy_at(&generations, store_destroy_nonce, Instant::now())
+        project_retirement_submission(
+            StoreOperation::Shutdown,
+            inner
+                .core
+                .submit_store_destroy_at(&generations, store_destroy_nonce, Instant::now()),
+        )
     }
 
     /// Returns whether every tracked queue member completed namespace retirement.
@@ -403,25 +412,17 @@ impl ManagedLifecycleRuntime {
         owner: &Arc<DefaultMappedFile>,
         reason: ManagedRetirementReason,
         retirement_nonce: [u8; 16],
-    ) -> Result<ManagedRetirementSubmission, StoreError> {
-        self.submit_retirement_typed(queue, owner, reason, retirement_nonce)
-            .map_err(ManagedRetirementSubmissionError::into_store_error)
-    }
-
-    fn submit_retirement_typed(
-        &self,
-        queue: &ManagedMappedFileQueueGeneration<DefaultMappedFile>,
-        owner: &Arc<DefaultMappedFile>,
-        reason: ManagedRetirementReason,
-        retirement_nonce: [u8; 16],
-    ) -> Result<ManagedRetirementSubmission, ManagedRetirementSubmissionError> {
+    ) -> Result<Option<ManagedRetirementSubmission>, StoreError> {
         let mut inner = self.inner.lock();
         if inner.admission != RuntimeAdmission::Running {
-            return Err(ManagedRetirementSubmissionError::admission_closed());
+            return Ok(None);
         }
-        inner
-            .core
-            .submit_at(queue, owner, reason.into(), retirement_nonce, Instant::now())
+        project_retirement_submission(
+            StoreOperation::Admin,
+            inner
+                .core
+                .submit_at(queue, owner, reason.into(), retirement_nonce, Instant::now()),
+        )
     }
 }
 
@@ -458,14 +459,14 @@ pub(super) trait NamespaceDriver<I: LedgerIo, O> {
         writer: &mut ManagedLedgerWriter<I>,
         capability: LogicalRemovedCapability<O>,
         observation_time_ns: u64,
-    ) -> Result<LogicalNamespaceProgress<O>, ReaperDriveError>;
+    ) -> Result<LogicalNamespaceProgress<O>, ReaperDriveFailure>;
 
     fn drive_tombstone(
         &mut self,
         writer: &mut ManagedLedgerWriter<I>,
         capability: TombstonedCapability<O>,
         observation_time_ns: u64,
-    ) -> Result<TombstoneNamespaceProgress<O>, ReaperDriveError>;
+    ) -> Result<TombstoneNamespaceProgress<O>, ReaperDriveFailure>;
 }
 
 impl<I: LedgerIo, O> NamespaceDriver<I, O> for VerifiedNamespaceRoot {
@@ -474,7 +475,7 @@ impl<I: LedgerIo, O> NamespaceDriver<I, O> for VerifiedNamespaceRoot {
         writer: &mut ManagedLedgerWriter<I>,
         capability: LogicalRemovedCapability<O>,
         observation_time_ns: u64,
-    ) -> Result<LogicalNamespaceProgress<O>, ReaperDriveError> {
+    ) -> Result<LogicalNamespaceProgress<O>, ReaperDriveFailure> {
         drive_logical_namespace(
             self,
             writer,
@@ -489,7 +490,7 @@ impl<I: LedgerIo, O> NamespaceDriver<I, O> for VerifiedNamespaceRoot {
         writer: &mut ManagedLedgerWriter<I>,
         capability: TombstonedCapability<O>,
         observation_time_ns: u64,
-    ) -> Result<TombstoneNamespaceProgress<O>, ReaperDriveError> {
+    ) -> Result<TombstoneNamespaceProgress<O>, ReaperDriveFailure> {
         drive_tombstone_namespace(self, writer, capability, observation_time_ns)
     }
 }
@@ -616,17 +617,17 @@ impl<I: LedgerIo, D: NamespaceDriver<I, O>, O> ManagedRetirementCore<I, D, O> {
         reason: RetirementReason,
         retirement_nonce: [u8; 16],
         now: Instant,
-    ) -> Result<ManagedRetirementSubmission, ManagedRetirementSubmissionError> {
+    ) -> Result<ManagedRetirementSubmission, ManagedRetirementSubmissionFailure> {
         if self.recovery_required || self.registry.needs_recovery() {
-            return Err(ManagedRetirementSubmissionError::recovery_required());
+            return Err(ManagedRetirementSubmissionFailure::recovery_required());
         }
         let (operation, queue_identity) = queue
             .retirement_operation(owner, reason, retirement_nonce)
-            .map_err(ManagedRetirementSubmissionError::registry)?;
+            .map_err(ManagedRetirementSubmissionFailure::registry)?;
         let reservation = self
             .registry
             .prepare_retirement(operation, owner, &queue_identity)
-            .map_err(ManagedRetirementSubmissionError::registry)?;
+            .map_err(ManagedRetirementSubmissionFailure::registry)?;
         let binding = reservation.binding().clone();
         let ticket_id = binding.ticket_id().get();
         let token = self
@@ -634,13 +635,13 @@ impl<I: LedgerIo, D: NamespaceDriver<I, O>, O> ManagedRetirementCore<I, D, O> {
             .append_retirement_intent(reservation.begin_append())
             .map_err(|source| {
                 self.recovery_required = true;
-                ManagedRetirementSubmissionError::writer(source)
+                ManagedRetirementSubmissionFailure::writer(source)
             })?;
         match queue.handoff_retirement(&self.registry, token, &binding) {
             Ok(capability) => {
                 let capability = self.writer.append_logical_removed(capability).map_err(|source| {
                     self.recovery_required = true;
-                    ManagedRetirementSubmissionError::writer(source)
+                    ManagedRetirementSubmissionFailure::writer(source)
                 })?;
                 self.push_work(PendingRetirement::Namespace(capability), now);
                 Ok(ManagedRetirementSubmission {
@@ -665,7 +666,7 @@ impl<I: LedgerIo, D: NamespaceDriver<I, O>, O> ManagedRetirementCore<I, D, O> {
                 }
                 Err(source) => {
                     self.recovery_required = true;
-                    Err(ManagedRetirementSubmissionError::registry(source))
+                    Err(ManagedRetirementSubmissionFailure::registry(source))
                 }
             },
         }
@@ -676,7 +677,7 @@ impl<I: LedgerIo, D: NamespaceDriver<I, O>, O> ManagedRetirementCore<I, D, O> {
         generations: &[ManagedMappedFileQueueGeneration<O>],
         mut next_nonce: F,
         now: Instant,
-    ) -> Result<usize, ManagedRetirementSubmissionError>
+    ) -> Result<usize, ManagedRetirementSubmissionFailure>
     where
         F: FnMut() -> [u8; 16],
     {
@@ -795,10 +796,10 @@ impl<I: LedgerIo, D: NamespaceDriver<I, O>, O> ManagedRetirementCore<I, D, O> {
                     .drive_tombstone(&mut self.writer, capability, observation_time_ns)
                 {
                     Ok(TombstoneNamespaceProgress::NamespaceAbsent(capability)) => {
-                        WorkAdvance::Advanced(PendingRetirement::Completion(capability))
+                        WorkAdvance::Advanced(PendingRetirement::Completion(*capability))
                     }
                     Ok(TombstoneNamespaceProgress::Pending { capability, .. }) => {
-                        WorkAdvance::Pending(PendingRetirement::TombstoneRemoval(capability))
+                        WorkAdvance::Pending(PendingRetirement::TombstoneRemoval(*capability))
                     }
                     Err(_) => WorkAdvance::RecoveryRequired,
                 }

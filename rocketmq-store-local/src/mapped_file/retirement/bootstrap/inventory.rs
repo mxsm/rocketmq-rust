@@ -47,7 +47,7 @@ use super::super::replay::discovery::platform::InventoryEntry;
 use super::super::replay::discovery::platform::LifecycleDirectory;
 #[cfg(any(target_os = "linux", windows))]
 use super::super::replay::discovery::platform::OpenedEntry;
-use super::super::replay::discovery::platform::PlatformError;
+use super::super::replay::discovery::platform::PlatformFailure;
 #[cfg(any(target_os = "linux", windows))]
 use super::super::sidecar::decode_snapshot;
 #[cfg(any(target_os = "linux", windows))]
@@ -83,17 +83,17 @@ impl Default for BootstrapInventoryLimits {
 }
 
 impl BootstrapInventoryLimits {
-    fn validate(self) -> Result<Self, BootstrapInventoryError> {
+    fn validate(self) -> Result<Self, BootstrapInventoryFailure> {
         if self.max_directories == 0 || self.max_entries == 0 || self.max_depth == 0 {
-            return Err(BootstrapInventoryError::invalid_limits());
+            return Err(BootstrapInventoryFailure::invalid_limits());
         }
         Ok(self)
     }
 }
 
-/// Legacy-namespace bootstrap eligibility failure with its former kind folded in.
+/// Private bootstrap inventory leaf with direct typed evidence.
 #[derive(Debug, Error)]
-pub(super) enum BootstrapInventoryError {
+pub(super) enum BootstrapInventoryFailure {
     #[error("this platform has no qualified managed lifecycle writer")]
     UnsupportedPlatform,
     #[error("bootstrap inventory limits are invalid")]
@@ -111,10 +111,27 @@ pub(super) enum BootstrapInventoryError {
     #[error("bootstrap inventory snapshot is invalid")]
     Sidecar(#[source] SidecarViolation),
     #[error("handle-relative bootstrap inventory failed")]
-    Platform(#[source] PlatformError),
+    Platform(#[source] PlatformFailure),
 }
 
-impl BootstrapInventoryError {
+impl BootstrapInventoryFailure {
+    #[cfg(test)]
+    pub(super) const fn category_for_test(&self) -> &'static str {
+        match self {
+            Self::UnsupportedPlatform | Self::Platform(PlatformFailure::Unsupported) => "unsupported-platform",
+            Self::InvalidLimits | Self::Limit(_) | Self::Platform(PlatformFailure::Limit { .. }) => "limit-exceeded",
+            Self::UnsafeNamespace(_)
+            | Self::Platform(PlatformFailure::UnsafeNamespace { .. })
+            | Self::Platform(PlatformFailure::Io { .. }) => "unsafe-namespace",
+            #[cfg(windows)]
+            Self::Platform(PlatformFailure::Windows { .. }) => "unsafe-namespace",
+            Self::InventoryChanged | Self::Platform(PlatformFailure::Changed { .. }) => "inventory-changed",
+            Self::InvalidSegment(_) => "invalid-segment",
+            Self::Identity(_) => "invalid-identity",
+            Self::Sidecar(_) => "invalid-snapshot",
+        }
+    }
+
     fn unsupported() -> Self {
         Self::UnsupportedPlatform
     }
@@ -147,7 +164,7 @@ impl BootstrapInventoryError {
         Self::Sidecar(source)
     }
 
-    fn platform(source: PlatformError) -> Self {
+    fn platform(source: PlatformFailure) -> Self {
         Self::Platform(source)
     }
 }
@@ -200,7 +217,7 @@ pub(super) fn scan_bootstrap_inventory(
     root: &File,
     meta: &StoreMeta,
     limits: BootstrapInventoryLimits,
-) -> Result<StableBootstrapInventory, BootstrapInventoryError> {
+) -> Result<StableBootstrapInventory, BootstrapInventoryFailure> {
     let limits = limits.validate()?;
     #[cfg(any(target_os = "linux", windows))]
     {
@@ -209,14 +226,14 @@ pub(super) fn scan_bootstrap_inventory(
     #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = (root, meta, limits);
-        Err(BootstrapInventoryError::unsupported())
+        Err(BootstrapInventoryFailure::unsupported())
     }
 }
 
 pub(super) fn preflight_bootstrap_namespace(
     root: &File,
     limits: BootstrapInventoryLimits,
-) -> Result<(), BootstrapInventoryError> {
+) -> Result<(), BootstrapInventoryFailure> {
     let limits = limits.validate()?;
     #[cfg(any(target_os = "linux", windows))]
     {
@@ -225,7 +242,7 @@ pub(super) fn preflight_bootstrap_namespace(
     #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = (root, limits);
-        Err(BootstrapInventoryError::unsupported())
+        Err(BootstrapInventoryFailure::unsupported())
     }
 }
 
@@ -258,16 +275,16 @@ fn scan_native(
     root: &File,
     meta: &StoreMeta,
     limits: BootstrapInventoryLimits,
-) -> Result<StableBootstrapInventory, BootstrapInventoryError> {
+) -> Result<StableBootstrapInventory, BootstrapInventoryFailure> {
     let first = scan_tree(root, limits, true)?;
     let second = scan_tree(root, limits, false)?;
     if first.snapshot != second.snapshot {
-        return Err(BootstrapInventoryError::changed());
+        return Err(BootstrapInventoryFailure::changed());
     }
     verify_numeric_handles(&first.numeric_segments)?;
     let third = scan_tree(root, limits, false)?;
     if first.snapshot != third.snapshot {
-        return Err(BootstrapInventoryError::changed());
+        return Err(BootstrapInventoryFailure::changed());
     }
     verify_numeric_handles(&first.numeric_segments)?;
     materialize_inventory(meta, first.numeric_segments)
@@ -278,13 +295,13 @@ fn scan_tree(
     root: &File,
     limits: BootstrapInventoryLimits,
     retain_numeric: bool,
-) -> Result<TreeScan, BootstrapInventoryError> {
+) -> Result<TreeScan, BootstrapInventoryFailure> {
     let directory = LifecycleDirectory::open(root, "")
-        .map_err(BootstrapInventoryError::platform)?
-        .ok_or_else(|| BootstrapInventoryError::unsafe_namespace("retained Store root disappeared"))?;
+        .map_err(BootstrapInventoryFailure::platform)?
+        .ok_or_else(|| BootstrapInventoryFailure::unsafe_namespace("retained Store root disappeared"))?;
     let inventory = directory
         .enumerate(limits.max_entries)
-        .map_err(BootstrapInventoryError::platform)?;
+        .map_err(BootstrapInventoryFailure::platform)?;
     let mut output = TreeScan {
         snapshot: TreeSnapshot {
             directories: vec![(String::new(), inventory.directory_stamp.clone())],
@@ -319,13 +336,13 @@ fn walk_root_directory(
     limits: BootstrapInventoryLimits,
     retain_numeric: bool,
     output: &mut TreeScan,
-) -> Result<(), BootstrapInventoryError> {
+) -> Result<(), BootstrapInventoryFailure> {
     for entry in entries {
         let path = join_path(parent, &entry.name);
         record_entry(&path, &entry, limits, output)?;
         if parent.is_empty() && entry.name.eq_ignore_ascii_case(LIFECYCLE_DIRECTORY) {
             if entry.name != LIFECYCLE_DIRECTORY || entry.kind != EntryKind::Directory {
-                return Err(BootstrapInventoryError::unsafe_namespace(
+                return Err(BootstrapInventoryFailure::unsafe_namespace(
                     "lifecycle directory has a case-fold collision or wrong type",
                 ));
             }
@@ -333,7 +350,7 @@ fn walk_root_directory(
         }
         let opened = directory
             .open_entry(&entry)
-            .map_err(BootstrapInventoryError::platform)?;
+            .map_err(BootstrapInventoryFailure::platform)?;
         walk_opened_entry(path, entry, opened, depth, limits, retain_numeric, output)?;
     }
     Ok(())
@@ -348,23 +365,25 @@ fn walk_opened_entry(
     limits: BootstrapInventoryLimits,
     retain_numeric: bool,
     output: &mut TreeScan,
-) -> Result<(), BootstrapInventoryError> {
+) -> Result<(), BootstrapInventoryFailure> {
     match entry.kind {
         EntryKind::Directory => {
             let next_depth = depth
                 .checked_add(1)
-                .ok_or_else(|| BootstrapInventoryError::limit("depth"))?;
+                .ok_or_else(|| BootstrapInventoryFailure::limit("depth"))?;
             if next_depth > limits.max_depth {
-                return Err(BootstrapInventoryError::limit("directory depth"));
+                return Err(BootstrapInventoryFailure::limit("directory depth"));
             }
             if output.snapshot.directories.len() >= limits.max_directories {
-                return Err(BootstrapInventoryError::limit("directory count"));
+                return Err(BootstrapInventoryFailure::limit("directory count"));
             }
             let remaining = limits
                 .max_entries
                 .checked_sub(output.snapshot.entries.len())
-                .ok_or_else(|| BootstrapInventoryError::limit("entry count"))?;
-            let children = opened.enumerate(remaining).map_err(BootstrapInventoryError::platform)?;
+                .ok_or_else(|| BootstrapInventoryFailure::limit("entry count"))?;
+            let children = opened
+                .enumerate(remaining)
+                .map_err(BootstrapInventoryFailure::platform)?;
             output
                 .snapshot
                 .directories
@@ -372,7 +391,7 @@ fn walk_opened_entry(
             for child in children.entries {
                 let child_path = join_path(&path, &child.name);
                 record_entry(&child_path, &child, limits, output)?;
-                let child_opened = opened.open_entry(&child).map_err(BootstrapInventoryError::platform)?;
+                let child_opened = opened.open_entry(&child).map_err(BootstrapInventoryFailure::platform)?;
                 walk_opened_entry(
                     child_path,
                     child,
@@ -392,19 +411,19 @@ fn walk_opened_entry(
                         length.insert(entry.stamp.length);
                     }
                     std::collections::btree_map::Entry::Occupied(length) if *length.get() != entry.stamp.length => {
-                        return Err(BootstrapInventoryError::invalid_segment(
+                        return Err(BootstrapInventoryFailure::invalid_segment(
                             "one mapped-file queue contains mixed segment lengths",
                         ));
                     }
                     std::collections::btree_map::Entry::Occupied(_) => {}
                 }
                 if entry.stamp.link_count != 1 {
-                    return Err(BootstrapInventoryError::unsafe_namespace(
+                    return Err(BootstrapInventoryFailure::unsafe_namespace(
                         "numeric segment has an external hardlink alias",
                     ));
                 }
                 if entry.stamp.length == 0 {
-                    return Err(BootstrapInventoryError::invalid_segment(
+                    return Err(BootstrapInventoryFailure::invalid_segment(
                         "numeric segment has zero length",
                     ));
                 }
@@ -412,15 +431,15 @@ fn walk_opened_entry(
                     let offset = entry
                         .name
                         .parse::<u64>()
-                        .map_err(|_| BootstrapInventoryError::invalid_segment("numeric offset overflow"))?;
-                    let canonical_path = StoreRelativePath::new(&path).map_err(BootstrapInventoryError::identity)?;
+                        .map_err(|_| BootstrapInventoryFailure::invalid_segment("numeric offset overflow"))?;
+                    let canonical_path = StoreRelativePath::new(&path).map_err(BootstrapInventoryFailure::identity)?;
                     canonical_path
                         .validate_segment_binding(offset)
-                        .map_err(BootstrapInventoryError::identity)?;
+                        .map_err(BootstrapInventoryFailure::identity)?;
                     let physical_key = entry
                         .stamp
                         .physical_key()
-                        .ok_or_else(|| BootstrapInventoryError::invalid_segment("physical key is unavailable"))?;
+                        .ok_or_else(|| BootstrapInventoryFailure::invalid_segment("physical key is unavailable"))?;
                     output.numeric_segments.push(NumericSegment {
                         path: canonical_path,
                         offset,
@@ -433,7 +452,7 @@ fn walk_opened_entry(
             }
         }
         EntryKind::Reparse | EntryKind::Other => {
-            return Err(BootstrapInventoryError::unsafe_namespace(
+            return Err(BootstrapInventoryFailure::unsafe_namespace(
                 "Store tree contains a symbolic link, reparse point, or special file",
             ));
         }
@@ -447,21 +466,21 @@ fn record_entry(
     entry: &InventoryEntry,
     limits: BootstrapInventoryLimits,
     output: &mut TreeScan,
-) -> Result<(), BootstrapInventoryError> {
+) -> Result<(), BootstrapInventoryFailure> {
     if output.snapshot.entries.len() >= limits.max_entries {
-        return Err(BootstrapInventoryError::limit("entry count"));
+        return Err(BootstrapInventoryFailure::limit("entry count"));
     }
     output.snapshot.entries.push((path.to_owned(), entry.clone()));
     Ok(())
 }
 
 #[cfg(any(target_os = "linux", windows))]
-fn verify_numeric_handles(segments: &[NumericSegment]) -> Result<(), BootstrapInventoryError> {
+fn verify_numeric_handles(segments: &[NumericSegment]) -> Result<(), BootstrapInventoryFailure> {
     for segment in segments {
         segment
             .opened
             .verify(&segment.expected_entry)
-            .map_err(BootstrapInventoryError::platform)?;
+            .map_err(BootstrapInventoryFailure::platform)?;
     }
     Ok(())
 }
@@ -470,30 +489,30 @@ fn verify_numeric_handles(segments: &[NumericSegment]) -> Result<(), BootstrapIn
 fn materialize_inventory(
     meta: &StoreMeta,
     segments: Vec<NumericSegment>,
-) -> Result<StableBootstrapInventory, BootstrapInventoryError> {
+) -> Result<StableBootstrapInventory, BootstrapInventoryFailure> {
     let mut physical_keys = BTreeSet::new();
     let mut entries = Vec::new();
     let mut retained_files = BTreeMap::new();
     entries
         .try_reserve_exact(segments.len())
-        .map_err(|_| BootstrapInventoryError::limit("snapshot allocation"))?;
+        .map_err(|_| BootstrapInventoryFailure::limit("snapshot allocation"))?;
     for (index, segment) in segments.into_iter().enumerate() {
         if !physical_keys.insert(segment.physical_key) {
-            return Err(BootstrapInventoryError::unsafe_namespace(
+            return Err(BootstrapInventoryFailure::unsafe_namespace(
                 "two numeric paths resolve to one physical file",
             ));
         }
         let create_sequence = u64::try_from(index)
             .ok()
             .and_then(|value| value.checked_add(1))
-            .ok_or_else(|| BootstrapInventoryError::limit("create sequence"))?;
+            .ok_or_else(|| BootstrapInventoryFailure::limit("create sequence"))?;
         let incarnation =
-            FileIncarnationId::new(meta.store_uuid, create_sequence).map_err(BootstrapInventoryError::identity)?;
+            FileIncarnationId::new(meta.store_uuid, create_sequence).map_err(BootstrapInventoryFailure::identity)?;
         let create_nonce = derive_create_nonce(meta, &segment, create_sequence);
         let create_file_path = segment
             .path
             .create_file_path(incarnation, segment.offset, &create_nonce)
-            .map_err(BootstrapInventoryError::identity)?;
+            .map_err(BootstrapInventoryFailure::identity)?;
         let path = segment.path.clone();
         entries.push(SnapshotEntry::Incarnation(IncarnationSnapshotEntry {
             incarnation,
@@ -506,13 +525,13 @@ fn materialize_inventory(
             create_file_path,
         }));
         if retained_files.insert(path, segment.opened.into_file()).is_some() {
-            return Err(BootstrapInventoryError::unsafe_namespace(
+            return Err(BootstrapInventoryFailure::unsafe_namespace(
                 "duplicate canonical numeric segment path",
             ));
         }
     }
     let create_high_water =
-        u64::try_from(entries.len()).map_err(|_| BootstrapInventoryError::limit("create high-water"))?;
+        u64::try_from(entries.len()).map_err(|_| BootstrapInventoryFailure::limit("create high-water"))?;
     let snapshot = LifecycleSnapshot {
         mode: SnapshotMode::BootstrapInventory,
         store_uuid: meta.store_uuid,
@@ -524,15 +543,15 @@ fn materialize_inventory(
         ticket_high_water: 0,
         entries,
     };
-    let canonical_snapshot = encode_snapshot(&snapshot).map_err(BootstrapInventoryError::sidecar)?;
-    let decoded = decode_snapshot(&canonical_snapshot).map_err(BootstrapInventoryError::sidecar)?;
+    let canonical_snapshot = encode_snapshot(&snapshot).map_err(BootstrapInventoryFailure::sidecar)?;
+    let decoded = decode_snapshot(&canonical_snapshot).map_err(BootstrapInventoryFailure::sidecar)?;
     if decoded != snapshot {
-        return Err(BootstrapInventoryError::invalid_segment(
+        return Err(BootstrapInventoryFailure::invalid_segment(
             "snapshot canonical round trip changed inventory",
         ));
     }
     let inventory_count =
-        u64::try_from(decoded.entries.len()).map_err(|_| BootstrapInventoryError::limit("inventory count"))?;
+        u64::try_from(decoded.entries.len()).map_err(|_| BootstrapInventoryFailure::limit("inventory count"))?;
     Ok(StableBootstrapInventory {
         evidence: BootstrapInventoryEvidence {
             store_uuid: decoded.store_uuid,
@@ -584,8 +603,8 @@ fn is_numeric_segment_name(name: &str) -> bool {
 }
 
 #[cfg(any(target_os = "linux", windows))]
-fn validate_supported_segment_path(path: &str) -> Result<&str, BootstrapInventoryError> {
-    StoreRelativePath::new(path).map_err(BootstrapInventoryError::identity)?;
+fn validate_supported_segment_path(path: &str) -> Result<&str, BootstrapInventoryFailure> {
+    StoreRelativePath::new(path).map_err(BootstrapInventoryFailure::identity)?;
     let components = path.split('/').collect::<Vec<_>>();
     let queue_id = match components.as_slice() {
         ["commitlog", _file_name] => return Ok("commitlog"),
@@ -595,20 +614,20 @@ fn validate_supported_segment_path(path: &str) -> Result<&str, BootstrapInventor
             *queue_id
         }
         _ => {
-            return Err(BootstrapInventoryError::invalid_segment(
+            return Err(BootstrapInventoryFailure::invalid_segment(
                 "numeric file is outside a supported mapped-file queue",
             ));
         }
     };
     let parsed = queue_id
         .parse::<i32>()
-        .map_err(|_| BootstrapInventoryError::invalid_segment("queue id is not a non-negative integer"))?;
+        .map_err(|_| BootstrapInventoryFailure::invalid_segment("queue id is not a non-negative integer"))?;
     if parsed < 0 || parsed.to_string() != queue_id {
-        return Err(BootstrapInventoryError::invalid_segment("queue id is not canonical"));
+        return Err(BootstrapInventoryFailure::invalid_segment("queue id is not canonical"));
     }
     path.rsplit_once('/')
         .map(|(directory, _)| directory)
-        .ok_or_else(|| BootstrapInventoryError::invalid_segment("mapped-file segment has no queue directory"))
+        .ok_or_else(|| BootstrapInventoryFailure::invalid_segment("mapped-file segment has no queue directory"))
 }
 
 #[cfg(any(target_os = "linux", windows))]

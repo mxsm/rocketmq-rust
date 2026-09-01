@@ -17,6 +17,8 @@
 //! This module is excluded from default production builds. Consumers must opt
 //! in with the `test-support` feature.
 
+#[cfg(target_os = "linux")]
+use std::error::Error as _;
 use std::io;
 use std::io::IoSlice;
 #[cfg(target_os = "linux")]
@@ -318,7 +320,11 @@ async fn run_ha_bytes_benchmark(batch: &TransferBatch) -> HaTransferEngineRun {
     let cpu_started = process_user_cpu_nanos();
     let started = Instant::now();
     let mut engine = BytesTransferEngine::new(HaBenchmarkWriter::default());
-    let stats = engine.send_batch(batch).await.expect("bytes HA benchmark transfer");
+    let stats = engine
+        .send_batch(batch)
+        .await
+        .expect("bytes HA benchmark transfer")
+        .expect("valid bytes HA benchmark batch");
     let elapsed = started.elapsed();
     let user_cpu_nanos = elapsed_user_cpu_nanos(cpu_started, elapsed);
     let writer = engine.into_inner();
@@ -337,7 +343,11 @@ async fn run_ha_vectored_benchmark(batch: &TransferBatch) -> HaTransferEngineRun
     let cpu_started = process_user_cpu_nanos();
     let started = Instant::now();
     let mut engine = VectoredTransferEngine::new(HaBenchmarkWriter::default());
-    let stats = engine.send_batch(batch).await.expect("vectored HA benchmark transfer");
+    let stats = engine
+        .send_batch(batch)
+        .await
+        .expect("vectored HA benchmark transfer")
+        .expect("valid vectored HA benchmark batch");
     let elapsed = started.elapsed();
     let user_cpu_nanos = elapsed_user_cpu_nanos(cpu_started, elapsed);
     let writer = engine.into_inner();
@@ -396,7 +406,11 @@ async fn run_ha_vectored_file_benchmark(body: Bytes, batch_count: usize) -> io::
     let started = Instant::now();
     let mut stats = empty_repeated_ha_stats(TransferEngineKind::Vectored, batch_count);
     for _ in 0..batch_count {
-        let batch_stats = engine.send_batch(&batch).await.map_err(transfer_error_to_io)?;
+        let batch_stats = engine
+            .send_batch(&batch)
+            .await
+            .map_err(transfer_error_to_io)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid vectored transfer batch"))?;
         add_repeated_ha_stats(&mut stats, batch_stats);
     }
     let elapsed = started.elapsed();
@@ -428,7 +442,11 @@ async fn run_ha_sendfile_file_benchmark(
     let started = Instant::now();
     let mut stats = empty_repeated_ha_stats(TransferEngineKind::Sendfile, batch_count);
     for _ in 0..batch_count {
-        let batch_stats = engine.send_batch(&batch).await.map_err(transfer_error_to_io)?;
+        let batch_stats = engine
+            .send_batch(&batch)
+            .await
+            .map_err(transfer_error_to_io)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid sendfile transfer batch"))?;
         add_repeated_ha_stats(&mut stats, batch_stats);
     }
     let elapsed = started.elapsed();
@@ -526,6 +544,7 @@ fn ha_transfer_file_benchmark_batch(file: Arc<std::fs::File>, body_size: usize) 
             file,
             TransferCacheState::Hot,
         )
+        .expect("metadata read succeeds")
         .expect("checked file range")],
         total_body_len: body_size,
         start_offset,
@@ -603,7 +622,16 @@ fn percent_reduction(baseline: u128, optimized: u128) -> usize {
 
 #[cfg(target_os = "linux")]
 fn transfer_error_to_io(error: crate::store_error::StoreError) -> io::Error {
-    io::Error::other(format!("{error:?}"))
+    let mut source = error.source();
+    let mut kind = io::ErrorKind::Other;
+    while let Some(cause) = source {
+        if let Some(io_error) = cause.downcast_ref::<io::Error>() {
+            kind = io_error.kind();
+            break;
+        }
+        source = cause.source();
+    }
+    io::Error::new(kind, error)
 }
 
 #[cfg(unix)]
@@ -1184,6 +1212,8 @@ pub async fn run_store_local_file_scheduled_lifecycle_probe(
     };
     let mut store = LocalFileMessageStore::new(
         Arc::new(config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig {
             duplication_enable: true,
             ..StoreRuntimeConfig::default()

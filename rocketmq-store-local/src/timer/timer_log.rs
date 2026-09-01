@@ -27,7 +27,7 @@ use crate::timer::migration::detect_timer_log_layout;
 use crate::timer::migration::reset_migration_directory;
 use crate::timer::migration::TimerMigrationLayout;
 use crate::timer::segmented_timer_log::SegmentedTimerLog;
-use crate::timer::segmented_timer_log::SegmentedTimerLogError;
+use crate::timer::segmented_timer_log::SegmentedTimerLogFailure;
 use crate::timer::segmented_timer_log::TimerLogReadBatch;
 use crate::timer::segmented_timer_log::TimerLogV2Record;
 use crate::timer::service::TimerLogRecord;
@@ -88,7 +88,7 @@ impl TimerLog {
             }
         }
         let log = self.open_segmented(v2_root.join(V2_LOG_DIRECTORY_NAME))?;
-        log.load().map_err(as_io_error)?;
+        log.load_checked().map_err(as_io_error)?;
         *self.inner.lock() = Some(log);
         Ok(true)
     }
@@ -100,7 +100,7 @@ impl TimerLog {
 
     pub fn append_record(&self, record: TimerLogRecord, generation: u64) -> std::io::Result<u64> {
         Ok(self
-            .with_inner(|log| log.append(TimerLogV2Record::from_legacy(record, generation)))?
+            .with_inner(|log| log.append_checked(TimerLogV2Record::from_legacy(record, generation)))?
             .get())
     }
 
@@ -110,7 +110,7 @@ impl TimerLog {
             .map(|(record, generation)| TimerLogV2Record::from_legacy(*record, *generation))
             .collect();
         Ok(self
-            .with_inner(|log| log.append_batch(&records))?
+            .with_inner(|log| log.append_batch_checked(&records))?
             .into_iter()
             .map(TimerLogOffset::get)
             .collect())
@@ -126,21 +126,21 @@ impl TimerLog {
                 ),
             ));
         }
-        let record = self.with_inner(|log| log.read(TimerLogOffset::new(offset)))?;
+        let record = self.with_inner(|log| log.read_checked(TimerLogOffset::new(offset)))?;
         Ok(record.to_legacy().encode().to_vec())
     }
 
     pub fn read_record(&self, offset: u64) -> std::io::Result<(TimerLogRecord, u64)> {
-        let record = self.with_inner(|log| log.read(TimerLogOffset::new(offset)))?;
+        let record = self.with_inner(|log| log.read_checked(TimerLogOffset::new(offset)))?;
         Ok((record.to_legacy(), record.generation))
     }
 
     pub fn read_batch(&self, cursor: u64, max_messages: usize, max_bytes: usize) -> std::io::Result<TimerLogReadBatch> {
-        self.with_inner(|log| log.read_batch(TimerLogOffset::new(cursor), max_messages, max_bytes))
+        self.with_inner(|log| log.read_batch_checked(TimerLogOffset::new(cursor), max_messages, max_bytes))
     }
 
     pub fn len(&self) -> std::io::Result<u64> {
-        self.with_inner(|log| Ok::<_, SegmentedTimerLogError>(log.len()))
+        self.with_inner(|log| Ok::<_, SegmentedTimerLogFailure>(log.len()))
     }
 
     pub fn is_empty(&self) -> std::io::Result<bool> {
@@ -148,28 +148,28 @@ impl TimerLog {
     }
 
     pub fn truncate(&self, length: u64) -> std::io::Result<()> {
-        self.with_inner(|log| log.truncate(TimerLogOffset::new(length)))
+        self.with_inner(|log| log.truncate_checked(TimerLogOffset::new(length)))
     }
 
     pub fn flush(&self) -> std::io::Result<()> {
-        self.with_inner(SegmentedTimerLog::flush)
+        self.with_inner(SegmentedTimerLog::flush_checked)
     }
 
     pub fn flush_up_to(&self, offset: u64) -> std::io::Result<()> {
-        self.with_inner(|log| log.flush_up_to(TimerLogOffset::new(offset)))
+        self.with_inner(|log| log.flush_up_to_checked(TimerLogOffset::new(offset)))
     }
 
     pub fn durable_length(&self) -> std::io::Result<u64> {
-        self.with_inner(|log| Ok::<_, SegmentedTimerLogError>(log.durable_length()))
+        self.with_inner(|log| Ok::<_, SegmentedTimerLogFailure>(log.durable_length()))
     }
 
     pub fn min_live_offset(&self) -> std::io::Result<u64> {
-        self.with_inner(|log| Ok::<_, SegmentedTimerLogError>(log.min_live_offset().get()))
+        self.with_inner(|log| Ok::<_, SegmentedTimerLogFailure>(log.min_live_offset().get()))
     }
 
     pub fn gc(&self, min_live_offset: u64, checkpoint: u64, snapshot: u64) -> std::io::Result<usize> {
         self.with_inner(|log| {
-            log.gc(
+            log.gc_checked(
                 TimerLogOffset::new(min_live_offset),
                 TimerLogOffset::new(checkpoint),
                 TimerLogOffset::new(snapshot),
@@ -219,7 +219,7 @@ impl TimerLog {
         let v2_root = self.v2_root();
         std::fs::create_dir_all(migration_root.join(V2_LOG_DIRECTORY_NAME))?;
         let migrated = self.open_segmented(migration_root.join(V2_LOG_DIRECTORY_NAME))?;
-        migrated.load().map_err(as_io_error)?;
+        migrated.load_checked().map_err(as_io_error)?;
 
         let legacy_path = self.active_file_path();
         if legacy_path.exists() && legacy_path.metadata()?.len() > 0 {
@@ -245,14 +245,14 @@ impl TimerLog {
                 old_offset += TimerLogRecord::SIZE as u64;
             }
         }
-        migrated.flush().map_err(as_io_error)?;
+        migrated.flush_checked().map_err(as_io_error)?;
         write_marker(&migration_root.join(COMMITTED_MARKER))?;
         std::fs::rename(&migration_root, &v2_root)?;
         Ok(())
     }
 
     fn open_segmented(&self, directory: PathBuf) -> std::io::Result<SegmentedTimerLog> {
-        SegmentedTimerLog::new(
+        SegmentedTimerLog::new_checked(
             directory,
             self.file_size,
             DEFAULT_HANDLE_CACHE,

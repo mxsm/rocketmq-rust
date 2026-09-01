@@ -52,13 +52,13 @@ pub enum TimerPayloadPartitionState {
 }
 
 impl TimerPayloadPartitionState {
-    fn decode(value: u8) -> Result<Self, PartitionManifestError> {
+    fn decode(value: u8) -> Result<Self, PartitionManifestFailure> {
         match value {
             0 => Ok(Self::Open),
             1 => Ok(Self::Sealed),
             2 => Ok(Self::GcEligible),
             3 => Ok(Self::Deleted),
-            _ => Err(PartitionManifestError::InvalidState(value)),
+            _ => Err(PartitionManifestFailure::InvalidState(value)),
         }
     }
 }
@@ -100,13 +100,13 @@ impl TimerPayloadPartitionManifest {
     }
 
     /// Loads the newest valid A/B copy, or returns an empty manifest when neither exists.
-    pub(crate) fn load(directory: &Path, key: TimerPayloadPartitionKey) -> Result<Self, PartitionManifestError> {
+    pub(crate) fn load(directory: &Path, key: TimerPayloadPartitionKey) -> Result<Self, PartitionManifestFailure> {
         let mut candidates = Vec::with_capacity(2);
         for name in [MANIFEST_A, MANIFEST_B] {
             match std::fs::read(directory.join(name)) {
                 Ok(bytes) => match Self::decode(&bytes) {
                     Ok(manifest) if manifest.key == key => candidates.push(manifest),
-                    Ok(_) => return Err(PartitionManifestError::PartitionMismatch),
+                    Ok(_) => return Err(PartitionManifestFailure::PartitionMismatch),
                     Err(_) => continue,
                 },
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -120,7 +120,7 @@ impl TimerPayloadPartitionManifest {
     }
 
     /// Persists the next generation to the alternate manifest copy and synchronizes it.
-    pub(crate) fn persist(&mut self, directory: &Path) -> Result<(), PartitionManifestError> {
+    pub(crate) fn persist(&mut self, directory: &Path) -> Result<(), PartitionManifestFailure> {
         std::fs::create_dir_all(directory)?;
         self.generation = self.generation.saturating_add(1);
         let name = if self.generation.is_multiple_of(2) {
@@ -157,7 +157,7 @@ impl TimerPayloadPartitionManifest {
         output
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, PartitionManifestError> {
+    fn decode(bytes: &[u8]) -> Result<Self, PartitionManifestFailure> {
         let version = read_u16(bytes, 4)?;
         let legacy = version == LEGACY_MANIFEST_VERSION && bytes.len() == LEGACY_MANIFEST_SIZE;
         let current = version == MANIFEST_VERSION && bytes.len() == MANIFEST_SIZE;
@@ -167,7 +167,7 @@ impl TimerPayloadPartitionManifest {
             || usize::from(read_u16(bytes, 6)?) != bytes.len()
             || crc32c(&bytes[..checksum_offset]) != read_u32(bytes, checksum_offset)?
         {
-            return Err(PartitionManifestError::InvalidRecord);
+            return Err(PartitionManifestFailure::InvalidRecord);
         }
         Ok(Self {
             key: TimerPayloadPartitionKey {
@@ -185,32 +185,32 @@ impl TimerPayloadPartitionManifest {
     }
 }
 
-fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], PartitionManifestError> {
+fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], PartitionManifestFailure> {
     bytes
         .get(offset..offset.saturating_add(N))
         .and_then(|value| value.try_into().ok())
-        .ok_or(PartitionManifestError::InvalidRecord)
+        .ok_or(PartitionManifestFailure::InvalidRecord)
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, PartitionManifestError> {
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, PartitionManifestFailure> {
     Ok(u16::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, PartitionManifestError> {
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, PartitionManifestFailure> {
     Ok(u32::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, PartitionManifestError> {
+fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, PartitionManifestFailure> {
     Ok(i32::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, PartitionManifestError> {
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, PartitionManifestFailure> {
     Ok(u64::from_be_bytes(read_array(bytes, offset)?))
 }
 
 /// Partition manifest error.
 #[derive(Debug, Error)]
-pub(crate) enum PartitionManifestError {
+pub(crate) enum PartitionManifestFailure {
     /// Underlying filesystem operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),

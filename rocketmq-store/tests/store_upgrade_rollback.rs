@@ -14,7 +14,7 @@
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_store::decode_commit_log_record;
+use rocketmq_store::inspect_commit_log_record;
 use rocketmq_store::CommitLogRecordBodyMode;
 use rocketmq_store::CommitLogRecordChecksum;
 use rocketmq_store::CommitLogRecordOutcome;
@@ -44,11 +44,10 @@ fn v0_9_local_file_fixture_remains_readable_without_rewrite() {
             break;
         }
         let frame = Bytes::copy_from_slice(&bytes[position..position + size]);
-        match decode_commit_log_record(&frame, CommitLogRecordBodyMode::ReadAndVerify, &FixtureChecksum)
-            .expect("decode v0.9.0 frame")
-        {
+        match inspect_commit_log_record(&frame, CommitLogRecordBodyMode::ReadAndVerify, &FixtureChecksum) {
             CommitLogRecordOutcome::Message(record) => records.push(record),
             CommitLogRecordOutcome::Blank { .. } => break,
+            status => panic!("decode v0.9.0 frame failed: {status:?}"),
         }
         position += size;
     }

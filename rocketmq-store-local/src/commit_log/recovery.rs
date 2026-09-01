@@ -21,7 +21,6 @@ mod normal_window;
 
 pub use completion::CommitLogRecoveryCompletion;
 pub use confirm_candidate::abnormal_confirm_candidate_end;
-pub use confirm_candidate::AbnormalRecoveryConfirmCandidateViolation;
 pub use consume_queue::should_truncate_recovery_consume_queue;
 pub use normal_window::plan_normal_recovery_file_window;
 pub use normal_window::NormalRecoveryFileWindow;
@@ -92,7 +91,7 @@ pub enum AbnormalRecoveryAction {
 
 /// Checked offset failure while applying an abnormal recovery event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum AbnormalRecoveryOffsetViolation {
+pub(crate) enum AbnormalRecoveryOffsetViolation {
     /// Segment base plus relative frame start overflowed `u64`.
     #[error("segment base {base_offset} plus relative start {relative_start} overflowed")]
     BaseRelativeOverflow {
@@ -150,7 +149,7 @@ impl AbnormalRecoveryState {
     ///
     /// Returns [`AbnormalRecoveryOffsetViolation::OffsetExceedsI64`] when the seed cannot be
     /// represented by Store's signed offsets.
-    pub const fn try_new(
+    pub(crate) const fn try_new_checked(
         initial_offset: u64,
         policy: AbnormalRecoveryPolicy,
     ) -> Result<Self, AbnormalRecoveryOffsetViolation> {
@@ -171,7 +170,7 @@ impl AbnormalRecoveryState {
     ///
     /// Returns [`AbnormalRecoveryOffsetViolation`] when checked arithmetic fails, a confirm candidate
     /// is negative, or a resulting watermark exceeds `i64::MAX`. State is unchanged on error.
-    pub fn apply(
+    pub(crate) fn apply_checked(
         &mut self,
         event: AbnormalRecoveryEvent,
     ) -> Result<AbnormalRecoveryAction, AbnormalRecoveryOffsetViolation> {
@@ -290,6 +289,16 @@ impl AbnormalRecoveryState {
             truncate_offset: self.truncate_offset,
         }
     }
+
+    /// Creates a state machine with all watermarks at the supplied compatibility seed.
+    pub fn try_new(initial_offset: u64, policy: AbnormalRecoveryPolicy) -> Option<Self> {
+        Self::try_new_checked(initial_offset, policy).ok()
+    }
+
+    /// Applies one event transactionally and returns the next Store action.
+    pub fn apply(&mut self, event: AbnormalRecoveryEvent) -> Option<AbnormalRecoveryAction> {
+        self.apply_checked(event).ok()
+    }
 }
 
 /// Compatibility policy for normal CommitLog recovery paths.
@@ -337,7 +346,7 @@ pub enum NormalRecoveryAction {
 
 /// Checked offset failure while applying a normal recovery event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum NormalRecoveryOffsetViolation {
+pub(crate) enum NormalRecoveryOffsetViolation {
     /// Segment base plus relative frame start overflowed `u64`.
     #[error("segment base {base_offset} plus relative start {relative_start} overflowed")]
     BaseRelativeOverflow {
@@ -386,7 +395,7 @@ impl NormalRecoveryState {
     ///
     /// Returns [`NormalRecoveryOffsetViolation::OffsetExceedsI64`] when the initial offset cannot be
     /// represented by Store's signed offsets.
-    pub const fn try_new(
+    pub(crate) const fn try_new_checked(
         initial_offset: u64,
         policy: NormalRecoveryPolicy,
     ) -> Result<Self, NormalRecoveryOffsetViolation> {
@@ -406,7 +415,10 @@ impl NormalRecoveryState {
     ///
     /// Returns [`NormalRecoveryOffsetViolation`] when checked offset arithmetic fails or a resulting
     /// watermark exceeds `i64::MAX`. The state is unchanged on error.
-    pub fn apply(&mut self, event: NormalRecoveryEvent) -> Result<NormalRecoveryAction, NormalRecoveryOffsetViolation> {
+    pub(crate) fn apply_checked(
+        &mut self,
+        event: NormalRecoveryEvent,
+    ) -> Result<NormalRecoveryAction, NormalRecoveryOffsetViolation> {
         let (action, next_last_valid, next_truncate) = match event {
             NormalRecoveryEvent::SegmentStarted { base_offset } => match self.policy {
                 NormalRecoveryPolicy::Standard => (
@@ -470,6 +482,16 @@ impl NormalRecoveryState {
             last_valid_offset: self.last_valid_offset,
             truncate_offset: self.truncate_offset,
         }
+    }
+
+    /// Creates a state machine with both watermarks at the supplied confirmed offset.
+    pub fn try_new(initial_offset: u64, policy: NormalRecoveryPolicy) -> Option<Self> {
+        Self::try_new_checked(initial_offset, policy).ok()
+    }
+
+    /// Applies one event transactionally and returns the next scan action.
+    pub fn apply(&mut self, event: NormalRecoveryEvent) -> Option<NormalRecoveryAction> {
+        self.apply_checked(event).ok()
     }
 }
 

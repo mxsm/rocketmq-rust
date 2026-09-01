@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::TryReserveError;
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -702,10 +703,6 @@ pub(crate) enum RegistryViolation {
     OwnerAlreadyRegistered { incumbent: FileIncarnationId },
     #[error("managed queue member has no complete reconciled identity binding")]
     ManagedQueueBindingMissing,
-    #[error("managed queue registration allocation failed")]
-    RegistrationAllocationFailed,
-    #[error("recovered retirement registry allocation failed")]
-    RecoveryAllocationFailed,
     #[error("replay-validated retirement ticket {ticket_id:?} cannot be represented by the registry")]
     InvalidRecoveredRetirement { ticket_id: TicketId },
     #[error("file incarnation is not registered")]
@@ -758,4 +755,13 @@ pub(crate) enum RegistryViolation {
     DurableStageEvidenceMismatch { ticket_id: TicketId },
     #[error("namespace proof does not match durable ticket {ticket_id:?}")]
     NamespaceProofMismatch { ticket_id: TicketId },
+}
+
+/// Private owner failure for registry construction and registration.
+#[derive(Debug, Error)]
+pub(in crate::mapped_file::retirement) enum RegistryFault {
+    #[error("registry allocation failed")]
+    Allocation(#[source] TryReserveError),
+    #[error(transparent)]
+    Contract(#[from] RegistryViolation),
 }

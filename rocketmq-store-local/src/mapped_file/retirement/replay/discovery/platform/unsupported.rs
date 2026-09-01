@@ -18,38 +18,38 @@ use super::FileStamp;
 use super::InventoryEntry;
 use super::InventorySnapshot;
 use super::OpenedEntry;
-use super::PlatformError;
+use super::PlatformFailure;
 
 pub(in crate::mapped_file::retirement) struct LifecycleDirectory;
 
 impl LifecycleDirectory {
-    pub(in crate::mapped_file::retirement) fn open(_root: &File, _name: &str) -> Result<Option<Self>, PlatformError> {
-        Err(PlatformError::unsupported())
+    pub(in crate::mapped_file::retirement) fn open(_root: &File, _name: &str) -> Result<Option<Self>, PlatformFailure> {
+        Err(PlatformFailure::unsupported())
     }
 
     pub(in crate::mapped_file::retirement) fn enumerate(
         &self,
         _maximum: usize,
-    ) -> Result<InventorySnapshot, PlatformError> {
-        Err(PlatformError::unsupported())
+    ) -> Result<InventorySnapshot, PlatformFailure> {
+        Err(PlatformFailure::unsupported())
     }
 
     pub(in crate::mapped_file::retirement) fn open_entry(
         &self,
         _entry: &InventoryEntry,
-    ) -> Result<OpenedEntry, PlatformError> {
-        Err(PlatformError::unsupported())
+    ) -> Result<OpenedEntry, PlatformFailure> {
+        Err(PlatformFailure::unsupported())
     }
 }
 
-pub(super) fn stamp(_file: &File) -> Result<FileStamp, PlatformError> {
-    Err(PlatformError::unsupported())
+pub(super) fn stamp(_file: &File) -> Result<FileStamp, PlatformFailure> {
+    Err(PlatformFailure::unsupported())
 }
 
-pub(super) fn enumerate_directory(_directory: &File, _maximum: usize) -> Result<Vec<InventoryEntry>, PlatformError> {
-    Err(PlatformError::unsupported())
+pub(super) fn enumerate_directory(_directory: &File, _maximum: usize) -> Result<Vec<InventoryEntry>, PlatformFailure> {
+    Err(PlatformFailure::unsupported())
 }
 
-pub(super) fn open_entry(_parent: &File, _entry: &InventoryEntry) -> Result<OpenedEntry, PlatformError> {
-    Err(PlatformError::unsupported())
+pub(super) fn open_entry(_parent: &File, _entry: &InventoryEntry) -> Result<OpenedEntry, PlatformFailure> {
+    Err(PlatformFailure::unsupported())
 }

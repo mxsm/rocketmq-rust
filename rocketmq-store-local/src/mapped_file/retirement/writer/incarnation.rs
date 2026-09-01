@@ -14,7 +14,7 @@
 
 use thiserror::Error;
 
-use super::{LedgerIo, ManagedLedgerWriter, WriterError};
+use super::{LedgerIo, ManagedLedgerWriter, WriterFailure};
 use crate::mapped_file::retirement::codec::LedgerRecord;
 use crate::mapped_file::retirement::identity::{
     FileIncarnationId, IdentityViolation, PhysicalFileKey, StoreRelativePath,
@@ -35,14 +35,16 @@ impl IncarnationAllocationPlan {
         create_nonce: [u8; 16],
         canonical_path: StoreRelativePath,
         create_file_path: StoreRelativePath,
-    ) -> Result<Self, IncarnationWriteError> {
+    ) -> Result<Self, IncarnationWriteFailure> {
         if expected_length == 0 {
-            return Err(IncarnationWriteError::new(
-                IncarnationWriteErrorSource::ZeroExpectedLength,
+            return Err(IncarnationWriteFailure::new(
+                IncarnationWriteFailureSource::ZeroExpectedLength,
             ));
         }
         if create_nonce == [0; 16] {
-            return Err(IncarnationWriteError::new(IncarnationWriteErrorSource::ZeroCreateNonce));
+            return Err(IncarnationWriteFailure::new(
+                IncarnationWriteFailureSource::ZeroCreateNonce,
+            ));
         }
         canonical_path.validate_create_binding(&create_file_path, incarnation, segment_offset, &create_nonce)?;
         Ok(Self {
@@ -242,10 +244,10 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
     pub(in crate::mapped_file::retirement) fn append_allocate_incarnation(
         &mut self,
         plan: IncarnationAllocationPlan,
-    ) -> Result<AllocatedIncarnationReceipt, IncarnationWriteError> {
+    ) -> Result<AllocatedIncarnationReceipt, IncarnationWriteFailure> {
         if plan.binding.incarnation.store_uuid() != self.writer.cursor.store_uuid {
-            return Err(IncarnationWriteError::new(
-                IncarnationWriteErrorSource::StoreUuidMismatch,
+            return Err(IncarnationWriteFailure::new(
+                IncarnationWriteFailureSource::StoreUuidMismatch,
             ));
         }
         let receipt = self.writer.append(&plan.binding.allocate_record())?;
@@ -260,7 +262,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
         &mut self,
         allocated: AllocatedIncarnationReceipt,
         physical_key: PhysicalFileKey,
-    ) -> Result<BoundIncarnationReceipt, IncarnationWriteError> {
+    ) -> Result<BoundIncarnationReceipt, IncarnationWriteFailure> {
         let expected_sequence = immediate_successor(allocated.allocate_sequence)?;
         self.require_next_sequence(expected_sequence)?;
         let receipt = self.writer.append(&allocated.binding.bind_record(physical_key))?;
@@ -276,7 +278,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
     pub(in crate::mapped_file::retirement) fn append_publish_incarnation(
         &mut self,
         bound: BoundIncarnationReceipt,
-    ) -> Result<PublishedIncarnationReceipt, IncarnationWriteError> {
+    ) -> Result<PublishedIncarnationReceipt, IncarnationWriteFailure> {
         let expected_sequence = immediate_successor(bound.bind_sequence)?;
         self.require_next_sequence(expected_sequence)?;
         let receipt = self.writer.append(&bound.binding.publish_record(bound.physical_key))?;
@@ -289,38 +291,38 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
         })
     }
 
-    fn require_next_sequence(&self, expected: u64) -> Result<(), IncarnationWriteError> {
+    fn require_next_sequence(&self, expected: u64) -> Result<(), IncarnationWriteFailure> {
         let actual = self.writer.cursor.next_sequence();
         if actual != expected {
-            return Err(IncarnationWriteError::new(
-                IncarnationWriteErrorSource::InterleavedLedgerRecord { expected, actual },
+            return Err(IncarnationWriteFailure::new(
+                IncarnationWriteFailureSource::InterleavedLedgerRecord { expected, actual },
             ));
         }
         Ok(())
     }
 }
 
-fn immediate_successor(sequence: u64) -> Result<u64, IncarnationWriteError> {
+fn immediate_successor(sequence: u64) -> Result<u64, IncarnationWriteFailure> {
     sequence
         .checked_add(1)
-        .ok_or_else(|| IncarnationWriteError::new(IncarnationWriteErrorSource::SequenceDomainExhausted))
+        .ok_or_else(|| IncarnationWriteFailure::new(IncarnationWriteFailureSource::SequenceDomainExhausted))
 }
 
 /// Failure while validating or durably advancing a creation typestate.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub(crate) struct IncarnationWriteError {
-    source: IncarnationWriteErrorSource,
+pub(in crate::mapped_file::retirement) struct IncarnationWriteFailure {
+    source: IncarnationWriteFailureSource,
 }
 
-impl IncarnationWriteError {
-    fn new(source: IncarnationWriteErrorSource) -> Self {
+impl IncarnationWriteFailure {
+    fn new(source: IncarnationWriteFailureSource) -> Self {
         Self { source }
     }
 }
 
 #[derive(Debug, Error)]
-enum IncarnationWriteErrorSource {
+enum IncarnationWriteFailureSource {
     #[error("new incarnation expected length is zero")]
     ZeroExpectedLength,
     #[error("new incarnation create nonce is zero")]
@@ -334,18 +336,18 @@ enum IncarnationWriteErrorSource {
     #[error(transparent)]
     Identity(#[from] IdentityViolation),
     #[error(transparent)]
-    Writer(#[from] WriterError),
+    Writer(#[from] WriterFailure),
 }
 
-impl From<IdentityViolation> for IncarnationWriteError {
+impl From<IdentityViolation> for IncarnationWriteFailure {
     fn from(source: IdentityViolation) -> Self {
-        Self::new(IncarnationWriteErrorSource::Identity(source))
+        Self::new(IncarnationWriteFailureSource::Identity(source))
     }
 }
 
-impl From<WriterError> for IncarnationWriteError {
-    fn from(source: WriterError) -> Self {
-        Self::new(IncarnationWriteErrorSource::Writer(source))
+impl From<WriterFailure> for IncarnationWriteFailure {
+    fn from(source: WriterFailure) -> Self {
+        Self::new(IncarnationWriteFailureSource::Writer(source))
     }
 }
 

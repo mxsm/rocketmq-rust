@@ -30,7 +30,7 @@ use super::codec::COMMIT_SEAL_LENGTH;
 use super::identity::StoreUuid;
 use super::io::FileLedgerIo;
 use super::io::LedgerIo;
-use super::io::LedgerIoError;
+use super::io::LedgerIoFailure;
 use super::registry::CompletedRetirementReceipt;
 use super::registry::DurableRetirementToken;
 use super::registry::LogicalRemovedCapability;
@@ -48,7 +48,7 @@ mod incarnation;
     reason = "M3 stages creation receipts before the managed allocation service consumes them"
 )]
 pub(super) use incarnation::{
-    AllocatedIncarnationReceipt, BoundIncarnationReceipt, IncarnationAllocationPlan, IncarnationWriteError,
+    AllocatedIncarnationReceipt, BoundIncarnationReceipt, IncarnationAllocationPlan, IncarnationWriteFailure,
     PublishedIncarnationReceipt,
 };
 
@@ -71,9 +71,9 @@ enum WriterStage {
 pub(in crate::mapped_file::retirement) fn open_managed_lifecycle_writer(
     retained_root: &std::fs::File,
     frontier: &WriterRecoveryFrontier,
-) -> Result<ManagedLedgerWriter<FileLedgerIo>, ManagedLedgerWriterError> {
+) -> Result<ManagedLedgerWriter<FileLedgerIo>, ManagedLedgerWriterFailure> {
     let io = FileLedgerIo::open_from_store_root(retained_root, frontier.log_generation()).map_err(|source| {
-        WriterError::Io {
+        WriterFailure::Io {
             stage: WriterStage::OpenBackend,
             source,
         }
@@ -103,7 +103,7 @@ struct WriterCursor {
 }
 
 impl WriterCursor {
-    fn from_recovery_frontier(frontier: &WriterRecoveryFrontier) -> Result<Self, WriterError> {
+    fn from_recovery_frontier(frontier: &WriterRecoveryFrontier) -> Result<Self, WriterFailure> {
         Self::new(
             frontier.store_uuid(),
             frontier.bootstrap_id(),
@@ -129,24 +129,24 @@ impl WriterCursor {
         sealed_log_length: u64,
         activated: bool,
         marker_epoch: u64,
-    ) -> Result<Self, WriterError> {
+    ) -> Result<Self, WriterFailure> {
         if bootstrap_id == [0; 16] {
-            return Err(WriterError::InvalidCursor {
+            return Err(WriterFailure::InvalidCursor {
                 reason: "bootstrap identifier is zero",
             });
         }
         if next_sequence == 0 {
-            return Err(WriterError::InvalidCursor {
+            return Err(WriterFailure::InvalidCursor {
                 reason: "next sequence is zero",
             });
         }
         if next_acknowledgement_epoch == 0 {
-            return Err(WriterError::InvalidCursor {
+            return Err(WriterFailure::InvalidCursor {
                 reason: "next acknowledgement epoch is zero",
             });
         }
         if activated != (marker_epoch != 0) {
-            return Err(WriterError::InvalidCursor {
+            return Err(WriterFailure::InvalidCursor {
                 reason: "activation flag and marker epoch disagree",
             });
         }
@@ -194,7 +194,7 @@ enum WriterVerificationViolation {
 
 /// Failure from the bounded durable writer.
 #[derive(Debug, Error)]
-enum WriterError {
+enum WriterFailure {
     #[error("record cannot be encoded before I/O: {0}")]
     Codec(#[from] CodecViolation),
     #[error("invalid replay cursor: {reason}")]
@@ -203,7 +203,7 @@ enum WriterError {
     Io {
         stage: WriterStage,
         #[source]
-        source: LedgerIoError,
+        source: LedgerIoFailure,
     },
     #[error("writer verification failed during {stage:?}: {source}")]
     Verification {
@@ -281,27 +281,27 @@ impl<I: LedgerIo> LedgerWriter<I> {
     ///
     /// Encoding and all bounded offset calculations finish before the first I/O. Once I/O begins,
     /// any write, sync, reread, or EOF failure changes the status to [`WriterStatus::NeedsRecovery`].
-    fn append(&mut self, record: &LedgerRecord) -> Result<DurableAppendReceipt, WriterError> {
+    fn append(&mut self, record: &LedgerRecord) -> Result<DurableAppendReceipt, WriterFailure> {
         match self.status {
             WriterStatus::Ready => {}
             WriterStatus::NeedsRecovery { failed_stage } => {
-                return Err(WriterError::NeedsRecovery { failed_stage });
+                return Err(WriterFailure::NeedsRecovery { failed_stage });
             }
-            WriterStatus::Exhausted => return Err(WriterError::MonotonicDomainExhausted),
+            WriterStatus::Exhausted => return Err(WriterFailure::MonotonicDomainExhausted),
         }
 
         let sequence = self.cursor.next_sequence();
         let acknowledgement_epoch = self.cursor.next_acknowledgement_epoch();
         let frame_start_offset = self.cursor.sealed_log_length();
         let frame = encode_ledger_frame(record, sequence, self.cursor.log_generation)?;
-        let frame_length = u64::try_from(frame.len()).map_err(|_| WriterError::OffsetOverflow)?;
+        let frame_length = u64::try_from(frame.len()).map_err(|_| WriterFailure::OffsetOverflow)?;
         let frame_end_offset = frame_start_offset
             .checked_add(frame_length)
-            .ok_or(WriterError::OffsetOverflow)?;
+            .ok_or(WriterFailure::OffsetOverflow)?;
         let sealed_log_length = frame_end_offset
             .checked_add(COMMIT_SEAL_LENGTH as u64)
-            .ok_or(WriterError::OffsetOverflow)?;
-        let slot_index = u8::try_from((acknowledgement_epoch - 1) & 1).map_err(|_| WriterError::OffsetOverflow)?;
+            .ok_or(WriterFailure::OffsetOverflow)?;
+        let slot_index = u8::try_from((acknowledgement_epoch - 1) & 1).map_err(|_| WriterFailure::OffsetOverflow)?;
         let slot = AcknowledgementSlot {
             slot_index,
             activated: self.cursor.activated,
@@ -420,14 +420,14 @@ impl<I: LedgerIo> LedgerWriter<I> {
         })
     }
 
-    fn poison_io(&mut self, stage: WriterStage, source: LedgerIoError) -> WriterError {
+    fn poison_io(&mut self, stage: WriterStage, source: LedgerIoFailure) -> WriterFailure {
         self.status = WriterStatus::NeedsRecovery { failed_stage: stage };
-        WriterError::Io { stage, source }
+        WriterFailure::Io { stage, source }
     }
 
-    fn poison_verification(&mut self, stage: WriterStage, source: WriterVerificationViolation) -> WriterError {
+    fn poison_verification(&mut self, stage: WriterStage, source: WriterVerificationViolation) -> WriterFailure {
         self.status = WriterStatus::NeedsRecovery { failed_stage: stage };
-        WriterError::Verification { stage, source }
+        WriterFailure::Verification { stage, source }
     }
 }
 
@@ -470,7 +470,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
     pub(super) fn from_recovery_frontier(
         mut io: I,
         frontier: &WriterRecoveryFrontier,
-    ) -> Result<Self, ManagedLedgerWriterError> {
+    ) -> Result<Self, ManagedLedgerWriterFailure> {
         let cursor = WriterCursor::from_recovery_frontier(frontier)?;
         verify_recovery_frontier(&mut io, frontier)?;
         Ok(Self {
@@ -486,7 +486,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
     pub(super) fn append_retirement_intent<O>(
         &mut self,
         intent: RetirementIntentAppend<'_, O>,
-    ) -> Result<DurableRetirementToken<O>, ManagedLedgerWriterError> {
+    ) -> Result<DurableRetirementToken<O>, ManagedLedgerWriterFailure> {
         let record = intent.intent_record();
         let receipt = self.writer.append(&record)?;
         let proof = WriterDurabilityProof {
@@ -501,7 +501,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
     pub(super) fn append_logical_removed<O>(
         &mut self,
         capability: RetirementHandoffCapability<O>,
-    ) -> Result<LogicalRemovedCapability<O>, ManagedLedgerWriterError> {
+    ) -> Result<LogicalRemovedCapability<O>, ManagedLedgerWriterFailure> {
         let record = capability.logical_removed_record();
         let receipt = self.writer.append(&record)?;
         let proof = WriterDurabilityProof {
@@ -517,7 +517,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
         &mut self,
         capability: LogicalRemovedCapability<O>,
         observed_replacement_key: super::identity::PhysicalFileKey,
-    ) -> Result<LogicalRemovedCapability<O>, ManagedLedgerWriterError> {
+    ) -> Result<LogicalRemovedCapability<O>, ManagedLedgerWriterFailure> {
         let record = super::registry::superseded_path_record(&capability, observed_replacement_key)?;
         let receipt = self.writer.append(&record)?;
         let proof = WriterDurabilityProof {
@@ -534,7 +534,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
         capability: LogicalRemovedCapability<O>,
         proof: super::platform::NamespaceAbsenceProof,
         observation_time_ns: u64,
-    ) -> Result<NamespaceAbsentCapability<O>, ManagedLedgerWriterError> {
+    ) -> Result<NamespaceAbsentCapability<O>, ManagedLedgerWriterFailure> {
         let observed_replacement_key = proof.replacement_key();
         let record = super::registry::namespace_absent_record(&capability, &proof, observation_time_ns)?;
         let receipt = self.writer.append(&record)?;
@@ -551,7 +551,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
         &mut self,
         capability: LogicalRemovedCapability<O>,
         proof: super::platform::NamespaceTombstoneProof,
-    ) -> Result<TombstonedCapability<O>, ManagedLedgerWriterError> {
+    ) -> Result<TombstonedCapability<O>, ManagedLedgerWriterFailure> {
         let observed_replacement_key = proof.replacement_key();
         let record = super::registry::tombstoned_record(&capability, &proof)?;
         let receipt = self.writer.append(&record)?;
@@ -569,7 +569,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
         capability: TombstonedCapability<O>,
         proof: super::platform::NamespaceAbsenceProof,
         observation_time_ns: u64,
-    ) -> Result<NamespaceAbsentCapability<O>, ManagedLedgerWriterError> {
+    ) -> Result<NamespaceAbsentCapability<O>, ManagedLedgerWriterFailure> {
         let observed_replacement_key = proof.replacement_key();
         let record =
             super::registry::namespace_absent_after_tombstone_record(&capability, &proof, observation_time_ns)?;
@@ -588,7 +588,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
         &mut self,
         capability: NamespaceAbsentCapability<O>,
         completion_time_ns: u64,
-    ) -> Result<CompletedRetirementReceipt, ManagedLedgerWriterError> {
+    ) -> Result<CompletedRetirementReceipt, ManagedLedgerWriterFailure> {
         let record = super::registry::completed_record(&capability, completion_time_ns);
         let receipt = self.writer.append(&record)?;
         let proof = WriterDurabilityProof {
@@ -614,7 +614,7 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
         sealed_log_length: u64,
         activated: bool,
         marker_epoch: u64,
-    ) -> Result<Self, ManagedLedgerWriterError> {
+    ) -> Result<Self, ManagedLedgerWriterFailure> {
         let cursor = WriterCursor::new(
             store_uuid,
             bootstrap_id,
@@ -637,13 +637,13 @@ impl<I: LedgerIo> ManagedLedgerWriter<I> {
     }
 }
 
-fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFrontier) -> Result<(), WriterError> {
-    let actual_log_length = io.log_len().map_err(|source| WriterError::Io {
+fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFrontier) -> Result<(), WriterFailure> {
+    let actual_log_length = io.log_len().map_err(|source| WriterFailure::Io {
         stage: WriterStage::VerifyEof,
         source,
     })?;
     if actual_log_length != frontier.sealed_log_length() {
-        return Err(WriterError::Verification {
+        return Err(WriterFailure::Verification {
             stage: WriterStage::VerifyEof,
             source: WriterVerificationViolation::EofMismatch {
                 expected: frontier.sealed_log_length(),
@@ -656,43 +656,43 @@ fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFr
         frontier
             .next_acknowledgement_epoch()
             .checked_sub(1)
-            .ok_or(WriterError::InvalidCursor {
+            .ok_or(WriterFailure::InvalidCursor {
                 reason: "recovery frontier has no acknowledged predecessor",
             })?;
     let frame_sequence = frontier
         .next_sequence()
         .checked_sub(1)
-        .ok_or(WriterError::InvalidCursor {
+        .ok_or(WriterFailure::InvalidCursor {
             reason: "recovery frontier has no sealed predecessor",
         })?;
     if acknowledgement_epoch == 0 || frame_sequence == 0 {
-        return Err(WriterError::InvalidCursor {
+        return Err(WriterFailure::InvalidCursor {
             reason: "recovery frontier predecessor coordinates are zero",
         });
     }
-    let slot_index = u8::try_from((acknowledgement_epoch - 1) & 1).map_err(|_| WriterError::OffsetOverflow)?;
+    let slot_index = u8::try_from((acknowledgement_epoch - 1) & 1).map_err(|_| WriterFailure::OffsetOverflow)?;
     let encoded_slot = io
         .read_acknowledgement_slot(slot_index)
-        .map_err(|source| WriterError::Io {
+        .map_err(|source| WriterFailure::Io {
             stage: WriterStage::ReadAcknowledgementSlot,
             source,
         })?;
     let slot = match decode_acknowledgement_slot(&encoded_slot) {
         Ok(AcknowledgementSlotState::Populated(slot)) => slot,
         Ok(AcknowledgementSlotState::Unused) => {
-            return Err(WriterError::Verification {
+            return Err(WriterFailure::Verification {
                 stage: WriterStage::ReadAcknowledgementSlot,
                 source: WriterVerificationViolation::AcknowledgementStateMismatch,
             });
         }
         Err(source) => {
-            return Err(WriterError::Verification {
+            return Err(WriterFailure::Verification {
                 stage: WriterStage::ReadAcknowledgementSlot,
                 source: WriterVerificationViolation::InvalidAcknowledgement(source),
             });
         }
     };
-    let slot_sealed_log_length = slot.sealed_log_length().map_err(|source| WriterError::Verification {
+    let slot_sealed_log_length = slot.sealed_log_length().map_err(|source| WriterFailure::Verification {
         stage: WriterStage::ReadAcknowledgementSlot,
         source: WriterVerificationViolation::InvalidAcknowledgement(source),
     })?;
@@ -706,7 +706,7 @@ fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFr
         && slot.frame_sequence == frame_sequence
         && slot_sealed_log_length == frontier.sealed_log_length();
     if !slot_matches {
-        return Err(WriterError::Verification {
+        return Err(WriterFailure::Verification {
             stage: WriterStage::ReadAcknowledgementSlot,
             source: WriterVerificationViolation::AcknowledgementStateMismatch,
         });
@@ -714,15 +714,15 @@ fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFr
 
     let mut encoded_seal = [0_u8; COMMIT_SEAL_LENGTH];
     io.read_log_exact(slot.frame_end_offset, &mut encoded_seal)
-        .map_err(|source| WriterError::Io {
+        .map_err(|source| WriterFailure::Io {
             stage: WriterStage::ReadSeal,
             source,
         })?;
-    let seal = decode_commit_seal(&encoded_seal).map_err(|source| WriterError::Verification {
+    let seal = decode_commit_seal(&encoded_seal).map_err(|source| WriterFailure::Verification {
         stage: WriterStage::ReadSeal,
         source: WriterVerificationViolation::InvalidCommitSeal(source),
     })?;
-    validate_commit_seal_against_slot(&seal, &slot, &encoded_slot).map_err(|source| WriterError::Verification {
+    validate_commit_seal_against_slot(&seal, &slot, &encoded_slot).map_err(|source| WriterFailure::Verification {
         stage: WriterStage::ReadSeal,
         source: WriterVerificationViolation::InvalidCommitSeal(source),
     })
@@ -731,30 +731,45 @@ fn verify_recovery_frontier<I: LedgerIo>(io: &mut I, frontier: &WriterRecoveryFr
 /// Failure from the registry-integrated writer boundary.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub(crate) struct ManagedLedgerWriterError {
-    source: ManagedLedgerWriterErrorSource,
+pub(super) struct ManagedLedgerWriterFailure {
+    source: ManagedLedgerWriterFailureSource,
+}
+
+impl ManagedLedgerWriterFailure {
+    pub(super) const fn is_pre_io_contract(&self) -> bool {
+        matches!(
+            &self.source,
+            ManagedLedgerWriterFailureSource::Registry(_)
+                | ManagedLedgerWriterFailureSource::Writer(
+                    WriterFailure::Codec(_)
+                        | WriterFailure::InvalidCursor { .. }
+                        | WriterFailure::MonotonicDomainExhausted
+                        | WriterFailure::OffsetOverflow
+                )
+        )
+    }
 }
 
 #[derive(Debug, Error)]
-enum ManagedLedgerWriterErrorSource {
+enum ManagedLedgerWriterFailureSource {
     #[error(transparent)]
-    Writer(WriterError),
+    Writer(WriterFailure),
     #[error(transparent)]
     Registry(RegistryViolation),
 }
 
-impl From<WriterError> for ManagedLedgerWriterError {
-    fn from(source: WriterError) -> Self {
+impl From<WriterFailure> for ManagedLedgerWriterFailure {
+    fn from(source: WriterFailure) -> Self {
         Self {
-            source: ManagedLedgerWriterErrorSource::Writer(source),
+            source: ManagedLedgerWriterFailureSource::Writer(source),
         }
     }
 }
 
-impl From<RegistryViolation> for ManagedLedgerWriterError {
+impl From<RegistryViolation> for ManagedLedgerWriterFailure {
     fn from(source: RegistryViolation) -> Self {
         Self {
-            source: ManagedLedgerWriterErrorSource::Registry(source),
+            source: ManagedLedgerWriterFailureSource::Registry(source),
         }
     }
 }
@@ -826,7 +841,7 @@ mod tests {
 
         assert!(matches!(
             error.source,
-            ManagedLedgerWriterErrorSource::Writer(WriterError::Verification {
+            ManagedLedgerWriterFailureSource::Writer(WriterFailure::Verification {
                 stage: WriterStage::VerifyEof,
                 source: WriterVerificationViolation::EofMismatch {
                     expected: 172,
@@ -847,7 +862,7 @@ mod tests {
 
         assert!(matches!(
             error.source,
-            ManagedLedgerWriterErrorSource::Writer(WriterError::Verification {
+            ManagedLedgerWriterFailureSource::Writer(WriterFailure::Verification {
                 stage: WriterStage::ReadAcknowledgementSlot,
                 source: WriterVerificationViolation::InvalidAcknowledgement(_),
             })
@@ -865,7 +880,7 @@ mod tests {
 
         assert!(matches!(
             error.source,
-            ManagedLedgerWriterErrorSource::Writer(WriterError::Verification {
+            ManagedLedgerWriterFailureSource::Writer(WriterFailure::Verification {
                 stage: WriterStage::ReadSeal,
                 source: WriterVerificationViolation::InvalidCommitSeal(_),
             })
@@ -979,7 +994,7 @@ mod tests {
 
             assert!(matches!(
                 writer.append(&completed_record()),
-                Err(WriterError::Io {
+                Err(WriterFailure::Io {
                     stage,
                     ..
                 }) if stage == expected_stage
@@ -993,7 +1008,7 @@ mod tests {
             let event_count = writer.io.events().len();
             assert!(matches!(
                 writer.append(&completed_record()),
-                Err(WriterError::NeedsRecovery { failed_stage }) if failed_stage == expected_stage
+                Err(WriterFailure::NeedsRecovery { failed_stage }) if failed_stage == expected_stage
             ));
             assert_eq!(writer.io.events().len(), event_count);
         }
@@ -1011,7 +1026,7 @@ mod tests {
 
             assert!(matches!(
                 writer.append(&completed_record()),
-                Err(WriterError::Io { stage, .. }) if stage == expected_stage
+                Err(WriterFailure::Io { stage, .. }) if stage == expected_stage
             ));
             assert_eq!(
                 writer.status(),
@@ -1034,7 +1049,7 @@ mod tests {
 
             assert!(matches!(
                 writer.append(&completed_record()),
-                Err(WriterError::Verification { stage, .. }) if stage == expected_stage
+                Err(WriterFailure::Verification { stage, .. }) if stage == expected_stage
             ));
             assert_eq!(
                 writer.status(),
@@ -1055,7 +1070,7 @@ mod tests {
             namespace_absent_sequence: 100,
         };
 
-        assert!(matches!(writer.append(&invalid), Err(WriterError::Codec(_))));
+        assert!(matches!(writer.append(&invalid), Err(WriterFailure::Codec(_))));
         assert_eq!(writer.status(), WriterStatus::Ready);
         assert!(writer.io.events().is_empty());
         assert!(writer.append(&completed_record()).is_ok());
@@ -1074,7 +1089,7 @@ mod tests {
         let event_count = writer.io.events().len();
         assert!(matches!(
             writer.append(&completed_record()),
-            Err(WriterError::MonotonicDomainExhausted)
+            Err(WriterFailure::MonotonicDomainExhausted)
         ));
         assert_eq!(writer.io.events().len(), event_count);
     }
@@ -1092,7 +1107,7 @@ mod tests {
         let event_count = writer.io.events().len();
         assert!(matches!(
             writer.append(&completed_record()),
-            Err(WriterError::MonotonicDomainExhausted)
+            Err(WriterFailure::MonotonicDomainExhausted)
         ));
         assert_eq!(writer.io.events().len(), event_count);
     }
@@ -1141,7 +1156,7 @@ mod tests {
                     activated,
                     marker_epoch,
                 ),
-                Err(WriterError::InvalidCursor { reason: actual }) if actual == reason
+                Err(WriterFailure::InvalidCursor { reason: actual }) if actual == reason
             ));
         }
     }
@@ -1154,7 +1169,7 @@ mod tests {
 
         assert!(matches!(
             writer.append(&completed_record()),
-            Err(WriterError::OffsetOverflow)
+            Err(WriterFailure::OffsetOverflow)
         ));
         assert_eq!(writer.status(), WriterStatus::Ready);
         assert!(writer.io.events().is_empty());
@@ -1172,7 +1187,7 @@ mod tests {
             "enum WriterStatus",
             "struct WriterCursor",
             "enum WriterVerificationViolation",
-            "enum WriterError",
+            "enum WriterFailure",
             "struct DurableAppendReceipt",
             "struct LedgerWriter",
             "fn new(",

@@ -93,12 +93,12 @@ pub struct CommitLogFrameCursor<S> {
 
 /// Invalid starting position for a bounded CommitLog frame cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CursorStartContractViolation {
+pub(crate) struct FrameCursorStartViolation {
     start_offset: usize,
     source_len: usize,
 }
 
-impl std::fmt::Display for CursorStartContractViolation {
+impl std::fmt::Display for FrameCursorStartViolation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
@@ -108,7 +108,7 @@ impl std::fmt::Display for CursorStartContractViolation {
     }
 }
 
-impl std::error::Error for CursorStartContractViolation {}
+impl std::error::Error for FrameCursorStartViolation {}
 
 impl<S: CommitLogFrameSource> CommitLogFrameCursor<S> {
     /// Creates a cursor at offset zero using the source's fixed length snapshot.
@@ -126,11 +126,11 @@ impl<S: CommitLogFrameSource> CommitLogFrameCursor<S> {
     ///
     /// # Errors
     ///
-    /// Returns [`CursorStartContractViolation`] when the checkpoint is beyond the fixed source snapshot.
-    pub fn try_from_offset(source: S, start_offset: usize) -> Result<Self, CursorStartContractViolation> {
+    /// Returns [`FrameCursorStartViolation`] when the checkpoint is beyond the fixed source snapshot.
+    pub(crate) fn try_from_offset(source: S, start_offset: usize) -> Result<Self, FrameCursorStartViolation> {
         let source_len = source.source_len();
         if start_offset > source_len {
-            return Err(CursorStartContractViolation {
+            return Err(FrameCursorStartViolation {
                 start_offset,
                 source_len,
             });

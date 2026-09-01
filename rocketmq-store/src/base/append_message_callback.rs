@@ -235,7 +235,13 @@ impl DefaultAppendMessageCallback {
 
         if AppendFrameKernel::segment_append_decision(encoded_len_i32, max_blank) == SegmentAppendDecision::Roll {
             let mut lease = match mapped_file.reserve_write(reservation_size) {
-                Ok(lease) => lease,
+                Ok(Some(lease)) => lease,
+                Ok(None) => {
+                    return AppendMessageResult {
+                        status: AppendMessageStatus::UnknownError,
+                        ..Default::default()
+                    };
+                }
                 Err(error) => {
                     error!(%error, "Failed to reserve mapped-file rollover marker");
                     return AppendMessageResult {
@@ -250,12 +256,21 @@ impl DefaultAppendMessageCallback {
                 lease.buffer_mut()[..BLANK_MARKER_LENGTH].copy_from_slice(marker.bytes());
             }
             let committed_bytes = lease.capacity();
-            if let Err(error) = lease.commit(committed_bytes, Some(store_timestamp as u64)) {
-                error!(%error, "Failed to publish mapped-file rollover marker");
-                return AppendMessageResult {
-                    status: AppendMessageStatus::UnknownError,
-                    ..Default::default()
-                };
+            match lease.commit(committed_bytes, Some(store_timestamp as u64)) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return AppendMessageResult {
+                        status: AppendMessageStatus::UnknownError,
+                        ..Default::default()
+                    };
+                }
+                Err(error) => {
+                    error!(%error, "Failed to publish mapped-file rollover marker");
+                    return AppendMessageResult {
+                        status: AppendMessageStatus::UnknownError,
+                        ..Default::default()
+                    };
+                }
             }
             return AppendMessageResult {
                 status: AppendMessageStatus::EndOfFile,
@@ -271,9 +286,9 @@ impl DefaultAppendMessageCallback {
         }
 
         let finalized = match FinalizedAppend::try_new(prepared, queue_offset, wrote_offset, store_timestamp) {
-            Ok(finalized) => finalized,
-            Err(error) => {
-                error!(%error, "Failed to finalize PreparedPayload before mapped-file reservation");
+            Some(finalized) => finalized,
+            None => {
+                error!("Failed to finalize PreparedPayload before mapped-file reservation");
                 return AppendMessageResult {
                     status: AppendMessageStatus::UnknownError,
                     ..Default::default()
@@ -282,7 +297,13 @@ impl DefaultAppendMessageCallback {
         };
         let physical_offsets = finalized.physical_offsets().collect::<Vec<_>>();
         let mut lease = match mapped_file.reserve_write(reservation_size) {
-            Ok(lease) => lease,
+            Ok(Some(lease)) => lease,
+            Ok(None) => {
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
             Err(error) => {
                 error!(%error, "Failed to reserve mapped-file prepared append");
                 return AppendMessageResult {
@@ -314,19 +335,28 @@ impl DefaultAppendMessageCallback {
                 create_crc32(&mut frame[trailer_start..trailer_end], checksum);
             }
         });
-        if let Err(error) = write_result {
-            error!(%error, "Prepared append staging buffer rejected a preflighted payload");
+        if write_result.is_none() {
+            error!("Prepared append staging buffer rejected a preflighted payload");
             return AppendMessageResult {
                 status: AppendMessageStatus::UnknownError,
                 ..Default::default()
             };
         }
-        if let Err(error) = lease.commit(encoded_len, Some(store_timestamp as u64)) {
-            error!(%error, "Failed to commit mapped-file prepared append");
-            return AppendMessageResult {
-                status: AppendMessageStatus::UnknownError,
-                ..Default::default()
-            };
+        match lease.commit(encoded_len, Some(store_timestamp as u64)) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
+            Err(error) => {
+                error!(%error, "Failed to commit mapped-file prepared append");
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
         }
         publish_physical_offsets(&physical_offsets);
         AppendMessageResult {
@@ -375,7 +405,14 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             };
         };
         let mut lease = match mapped_file.reserve_write(reservation_size) {
-            Ok(lease) => lease,
+            Ok(Some(lease)) => lease,
+            Ok(None) => {
+                msg_inner.encoded_buff = Some(pre_encode_buffer);
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
             Err(error) => {
                 msg_inner.encoded_buff = Some(pre_encode_buffer);
                 error!(%error, "Failed to reserve mapped-file append");
@@ -406,13 +443,23 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 lease.buffer_mut()[..BLANK_MARKER_LENGTH].copy_from_slice(marker.bytes());
             }
             let commit_bytes = lease.capacity();
-            if let Err(error) = lease.commit(commit_bytes, Some(msg_inner.store_timestamp() as u64)) {
-                msg_inner.encoded_buff = Some(pre_encode_buffer);
-                error!(%error, "Failed to publish mapped-file end marker");
-                return AppendMessageResult {
-                    status: AppendMessageStatus::UnknownError,
-                    ..Default::default()
-                };
+            match lease.commit(commit_bytes, Some(msg_inner.store_timestamp() as u64)) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    msg_inner.encoded_buff = Some(pre_encode_buffer);
+                    return AppendMessageResult {
+                        status: AppendMessageStatus::UnknownError,
+                        ..Default::default()
+                    };
+                }
+                Err(error) => {
+                    msg_inner.encoded_buff = Some(pre_encode_buffer);
+                    error!(%error, "Failed to publish mapped-file end marker");
+                    return AppendMessageResult {
+                        status: AppendMessageStatus::UnknownError,
+                        ..Default::default()
+                    };
+                }
             }
             msg_inner.encoded_buff = Some(pre_encode_buffer);
             return AppendMessageResult {
@@ -453,13 +500,23 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
 
         let instant = Instant::now();
-        if let Err(error) = lease.commit(msg_len_usize, Some(msg_inner.store_timestamp() as u64)) {
-            msg_inner.encoded_buff = Some(pre_encode_buffer);
-            error!(%error, "Failed to commit mapped-file append");
-            return AppendMessageResult {
-                status: AppendMessageStatus::UnknownError,
-                ..Default::default()
-            };
+        match lease.commit(msg_len_usize, Some(msg_inner.store_timestamp() as u64)) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                msg_inner.encoded_buff = Some(pre_encode_buffer);
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
+            Err(error) => {
+                msg_inner.encoded_buff = Some(pre_encode_buffer);
+                error!(%error, "Failed to commit mapped-file append");
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
         }
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,
@@ -498,7 +555,14 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             };
         };
         let mut lease = match mapped_file.reserve_write(reservation_size) {
-            Ok(lease) => lease,
+            Ok(Some(lease)) => lease,
+            Ok(None) => {
+                msg_batch.encoded_buff = Some(messages_byte_buffer);
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
             Err(error) => {
                 msg_batch.encoded_buff = Some(messages_byte_buffer);
                 error!(%error, "Failed to reserve mapped-file batch append");
@@ -538,16 +602,26 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 lease.buffer_mut()[..BLANK_MARKER_LENGTH].copy_from_slice(marker.bytes());
             }
             let commit_bytes = lease.capacity();
-            if let Err(error) = lease.commit(
+            match lease.commit(
                 commit_bytes,
                 Some(msg_batch.message_ext_broker_inner.store_timestamp() as u64),
             ) {
-                msg_batch.encoded_buff = Some(messages_byte_buffer);
-                error!(%error, "Failed to publish mapped-file batch end marker");
-                return AppendMessageResult {
-                    status: AppendMessageStatus::UnknownError,
-                    ..Default::default()
-                };
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    msg_batch.encoded_buff = Some(messages_byte_buffer);
+                    return AppendMessageResult {
+                        status: AppendMessageStatus::UnknownError,
+                        ..Default::default()
+                    };
+                }
+                Err(error) => {
+                    msg_batch.encoded_buff = Some(messages_byte_buffer);
+                    error!(%error, "Failed to publish mapped-file batch end marker");
+                    return AppendMessageResult {
+                        status: AppendMessageStatus::UnknownError,
+                        ..Default::default()
+                    };
+                }
             }
             msg_batch.encoded_buff = Some(messages_byte_buffer);
             return AppendMessageResult {
@@ -589,16 +663,26 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 ..Default::default()
             };
         };
-        if let Err(error) = lease.commit(
+        match lease.commit(
             committed_bytes_usize,
             Some(msg_batch.message_ext_broker_inner.store_timestamp() as u64),
         ) {
-            msg_batch.encoded_buff = Some(messages_byte_buffer);
-            error!(%error, "Failed to commit mapped-file batch append");
-            return AppendMessageResult {
-                status: AppendMessageStatus::UnknownError,
-                ..Default::default()
-            };
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                msg_batch.encoded_buff = Some(messages_byte_buffer);
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
+            Err(error) => {
+                msg_batch.encoded_buff = Some(messages_byte_buffer);
+                error!(%error, "Failed to commit mapped-file batch append");
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
         }
         AppendMessageResult {
             status: AppendMessageStatus::PutOk,

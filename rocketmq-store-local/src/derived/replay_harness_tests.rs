@@ -20,9 +20,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::rc::Rc;
 
-use super::owner::DerivedCursorOwnerError;
 use super::replay::replay_derived;
-use super::replay::DerivedReplayError;
 use crate::commit_log::record::CommitLogFrameSource;
 use crate::commit_log::record::MESSAGE_MAGIC_CODE;
 use crate::derived::CheckpointPersistence;
@@ -36,7 +34,10 @@ use rocketmq_store_api::DerivedCursor;
 use rocketmq_store_api::DerivedEngine;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_store_api::LegacyDerivedCursorV0;
+use rocketmq_store_api::StoreComponent;
 use rocketmq_store_api::StoreContractViolation;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::DERIVED_CHECKPOINT_ENCODED_LEN;
 
 const SOURCE_EPOCH: u64 = 41;
@@ -154,6 +155,27 @@ impl fmt::Display for TestError {
 
 impl StdError for TestError {}
 
+fn source_chain_contains<T: StdError + 'static>(error: &(dyn StdError + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error.downcast_ref::<T>().is_some() {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+fn assert_store_error(
+    error: &StoreError,
+    descriptor: &'static rocketmq_error::ErrorDescriptor,
+    operation: StoreOperation,
+) {
+    assert_eq!(error.descriptor(), descriptor);
+    assert_eq!(error.operation(), operation);
+    assert_eq!(error.component(), StoreComponent::Store);
+}
+
 #[derive(Default)]
 struct IdempotentSink {
     visible: HashSet<DerivedRecordId>,
@@ -185,7 +207,9 @@ fn golden_replay_commits_every_frame_contiguously_without_payload_metadata() {
         .expect("owner opens at genesis");
     let mut sink = IdempotentSink::default();
 
-    let report = replay_derived(BytesSource::new(golden_log()), &mut owner, &mut sink).expect("golden replay succeeds");
+    let report = replay_derived(BytesSource::new(golden_log()), &mut owner, &mut sink)
+        .expect("golden replay succeeds")
+        .expect("golden replay satisfies the replay contract");
 
     assert_eq!(3, report.applied());
     assert_eq!(0, report.duplicates());
@@ -222,14 +246,19 @@ fn crash_after_apply_replays_the_same_key_idempotently_without_a_hole() {
 
     let error = replay_derived(BytesSource::new(golden_log()), &mut owner, &mut sink)
         .expect_err("injected crash must stop replay");
-    assert!(matches!(error, DerivedReplayError::Sink(TestError(_))));
+    assert_store_error(&error, &rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Read);
+    assert!(source_chain_contains::<TestError>(&error));
+    assert!(!error.to_string().contains("injected crash"));
+    assert!(!format!("{error:?}").contains("injected crash"));
     assert_eq!(0, owner.cursor().next_offset());
     assert_eq!(1, sink.visible.len());
 
     let persistence = owner.into_persistence();
     let mut restarted = DerivedCursorOwner::open(DerivedEngine::Tiered, SOURCE_EPOCH, persistence)
         .expect("restart reloads genesis cursor");
-    let report = replay_derived(BytesSource::new(golden_log()), &mut restarted, &mut sink).expect("restart catches up");
+    let report = replay_derived(BytesSource::new(golden_log()), &mut restarted, &mut sink)
+        .expect("restart catches up")
+        .expect("restart input satisfies the replay contract");
 
     assert_eq!(2, report.applied());
     assert_eq!(1, report.duplicates());
@@ -249,17 +278,27 @@ fn uncertain_checkpoint_result_is_resolved_by_reload_without_regression() {
 
     let error = replay_derived(BytesSource::new(golden_log()), &mut owner, &mut sink)
         .expect_err("uncertain persistence result must stop replay");
-    assert!(matches!(
-        error,
-        DerivedReplayError::Owner(DerivedCursorOwnerError::Persistence(TestError(_)))
-    ));
+    assert_store_error(
+        &error,
+        &rocketmq_error::STORAGE_WRITE_FAILED,
+        StoreOperation::AppendDerived,
+    );
+    assert!(source_chain_contains::<TestError>(&error));
+    let persistence_cause = error
+        .source()
+        .and_then(StdError::source)
+        .and_then(StdError::source)
+        .and_then(|source| source.downcast_ref::<TestError>())
+        .expect("replay and owner layers retain the typed persistence cause");
+    assert_eq!(persistence_cause, &TestError("injected uncertain checkpoint result"));
     assert_eq!(0, owner.cursor().next_offset());
 
     let mut restarted = DerivedCursorOwner::open(DerivedEngine::RocksDb, SOURCE_EPOCH, persistence)
         .expect("restart observes the durable checkpoint");
     assert_eq!(8, restarted.cursor().next_offset());
-    let report =
-        replay_derived(BytesSource::new(golden_log()), &mut restarted, &mut sink).expect("remaining frames replay");
+    let report = replay_derived(BytesSource::new(golden_log()), &mut restarted, &mut sink)
+        .expect("remaining frames replay")
+        .expect("remaining input satisfies the replay contract");
     assert_eq!(2, report.applied());
     assert_eq!(0, report.duplicates());
     assert_eq!(36, report.committed_offset());
@@ -279,14 +318,16 @@ fn dirty_tail_stops_at_last_complete_frame_and_resumes_after_repair() {
         .expect("owner opens at genesis");
     let mut sink = IdempotentSink::default();
 
-    let dirty_report =
-        replay_derived(BytesSource::new(dirty), &mut owner, &mut sink).expect("complete prefix is replayable");
+    let dirty_report = replay_derived(BytesSource::new(dirty), &mut owner, &mut sink)
+        .expect("complete prefix is replayable")
+        .expect("complete prefix satisfies the replay contract");
     assert_eq!(DerivedReplayStop::DirtyTail, dirty_report.stop());
     assert_eq!(8, dirty_report.committed_offset());
     assert_eq!(1, sink.visible.len());
 
-    let clean_report =
-        replay_derived(BytesSource::new(clean), &mut owner, &mut sink).expect("repaired tail resumes from checkpoint");
+    let clean_report = replay_derived(BytesSource::new(clean), &mut owner, &mut sink)
+        .expect("repaired tail resumes from checkpoint")
+        .expect("repaired tail satisfies the replay contract");
     assert_eq!(DerivedReplayStop::EndOfSource, clean_report.stop());
     assert_eq!(1, clean_report.applied());
     assert_eq!(20, clean_report.committed_offset());
@@ -299,17 +340,18 @@ fn corrupted_checkpoint_fails_closed_without_replaying_from_zero() {
     let mut owner = DerivedCursorOwner::open(DerivedEngine::Compaction, SOURCE_EPOCH, persistence.clone())
         .expect("owner opens at genesis");
     let first = DerivedRecordId::try_new(SOURCE_EPOCH, 0, 8).expect("record is valid");
-    owner.commit(first).expect("checkpoint commit succeeds");
+    owner
+        .commit(first)
+        .expect("checkpoint commit succeeds")
+        .expect("contiguous cursor");
     persistence.corrupt(DerivedEngine::Compaction, 20);
 
     let error = match DerivedCursorOwner::open(DerivedEngine::Compaction, SOURCE_EPOCH, persistence) {
         Ok(_) => panic!("corruption must fail readiness"),
         Err(error) => error,
     };
-    assert!(matches!(
-        error,
-        DerivedCursorOwnerError::Checkpoint(StoreContractViolation::DerivedCheckpointChecksumMismatch)
-    ));
+    assert_store_error(&error, &rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Read);
+    assert!(source_chain_contains::<StoreContractViolation>(&error));
 }
 
 #[test]
@@ -336,10 +378,16 @@ fn each_engine_owns_an_isolated_checkpoint_namespace() {
         DerivedCursorOwner::open(DerivedEngine::Tiered, SOURCE_EPOCH, persistence.clone()).expect("tiered owner opens");
     let first = DerivedRecordId::try_new(SOURCE_EPOCH, 0, 8).expect("record is valid");
 
-    index.commit(first).expect("index checkpoint commits");
+    index
+        .commit(first)
+        .expect("index checkpoint commits")
+        .expect("contiguous cursor");
     assert!(persistence.raw_checkpoint(DerivedEngine::Index).is_some());
     assert!(persistence.raw_checkpoint(DerivedEngine::Tiered).is_none());
 
-    tiered.commit(first).expect("tiered checkpoint commits independently");
+    tiered
+        .commit(first)
+        .expect("tiered checkpoint commits independently")
+        .expect("contiguous cursor");
     assert!(persistence.raw_checkpoint(DerivedEngine::Tiered).is_some());
 }

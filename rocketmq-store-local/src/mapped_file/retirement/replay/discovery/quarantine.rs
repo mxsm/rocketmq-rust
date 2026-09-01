@@ -29,8 +29,7 @@ use super::map_codec_error;
 use super::map_sidecar_error;
 use super::platform;
 use super::read_exact_file;
-use super::ManagedLifecycleReadError;
-use super::ManagedLifecycleReadSource;
+use super::ManagedLifecycleReadFailure;
 use super::OwnedGeneration;
 use super::GENERATION_DIGITS;
 use super::LOG_PREFIX;
@@ -63,7 +62,7 @@ impl QuarantinePlan {
     pub(super) fn parse(
         root: &platform::InventorySnapshot,
         quarantine: &platform::InventorySnapshot,
-    ) -> Result<Self, ManagedLifecycleReadError> {
+    ) -> Result<Self, ManagedLifecycleReadFailure> {
         let mut case_folded = BTreeMap::<String, &str>::new();
         let mut physical_files = BTreeMap::<(u64, [u8; 16]), &str>::new();
         for entry in &root.entries {
@@ -77,28 +76,22 @@ impl QuarantinePlan {
             .map_err(|_| limit_error("quarantine entries", quarantine.entries.len(), quarantine.entries.len()))?;
         for (index, entry) in quarantine.entries.iter().enumerate() {
             if entry.kind == platform::EntryKind::Reparse {
-                return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadSource::UnsafeNamespace(format!(
-                        "quarantine entry {:?} is a symlink or reparse point",
-                        entry.name
-                    )),
-                ));
+                return Err(ManagedLifecycleReadFailure::UnsafeNamespace(format!(
+                    "quarantine entry {:?} is a symlink or reparse point",
+                    entry.name
+                )));
             }
             if entry.kind != platform::EntryKind::File {
-                return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadSource::UnsafeNamespace(format!(
-                        "quarantine entry {:?} is not a regular file",
-                        entry.name
-                    )),
-                ));
+                return Err(ManagedLifecycleReadFailure::UnsafeNamespace(format!(
+                    "quarantine entry {:?} is not a regular file",
+                    entry.name
+                )));
             }
             if entry.stamp.link_count != 1 {
-                return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadSource::UnsafeNamespace(format!(
-                        "quarantine file {:?} has {} hard links; exactly one is required",
-                        entry.name, entry.stamp.link_count
-                    )),
-                ));
+                return Err(ManagedLifecycleReadFailure::UnsafeNamespace(format!(
+                    "quarantine file {:?} has {} hard links; exactly one is required",
+                    entry.name, entry.stamp.link_count
+                )));
             }
             let folded = entry.name.to_ascii_lowercase();
             if let Some(previous) = case_folded.insert(folded, &entry.name) {
@@ -109,12 +102,10 @@ impl QuarantinePlan {
             }
             let physical_id = (entry.stamp.volume, entry.stamp.file_id);
             if let Some(previous) = physical_files.insert(physical_id, &entry.name) {
-                return Err(ManagedLifecycleReadError::new(
-                    ManagedLifecycleReadSource::UnsafeNamespace(format!(
-                        "lifecycle/quarantine files {previous:?} and {:?} are hard-link aliases",
-                        entry.name
-                    )),
-                ));
+                return Err(ManagedLifecycleReadFailure::UnsafeNamespace(format!(
+                    "lifecycle/quarantine files {previous:?} and {:?} are hard-link aliases",
+                    entry.name
+                )));
             }
             if let Some(coordinates) = tail_evidence_coordinates(&entry.name)? {
                 if coordinates.length == 0
@@ -133,7 +124,7 @@ impl QuarantinePlan {
     }
 }
 
-fn tail_evidence_coordinates(name: &str) -> Result<Option<TailEvidenceCoordinates>, ManagedLifecycleReadError> {
+fn tail_evidence_coordinates(name: &str) -> Result<Option<TailEvidenceCoordinates>, ManagedLifecycleReadFailure> {
     let Some(rest) = name.strip_prefix(LOG_PREFIX) else {
         return Ok(None);
     };
@@ -188,7 +179,7 @@ pub(super) fn read_tail_evidence(
     opened: &mut [platform::OpenedEntry],
     total_read: &mut u64,
     max_total_read_bytes: u64,
-) -> Result<Vec<OwnedTailEvidence>, ManagedLifecycleReadError> {
+) -> Result<Vec<OwnedTailEvidence>, ManagedLifecycleReadFailure> {
     let mut evidence = Vec::new();
     evidence
         .try_reserve_exact(plan.tails.len())
@@ -222,7 +213,7 @@ pub(super) fn read_tail_evidence(
 pub(super) fn validate_required_tail_evidence(
     generations: &[OwnedGeneration],
     evidence: &[OwnedTailEvidence],
-) -> Result<(), ManagedLifecycleReadError> {
+) -> Result<(), ManagedLifecycleReadFailure> {
     for generation in generations {
         let snapshot = decode_snapshot(&generation.snapshot).map_err(map_sidecar_error)?;
         if snapshot.mode != SnapshotMode::TailRepair {

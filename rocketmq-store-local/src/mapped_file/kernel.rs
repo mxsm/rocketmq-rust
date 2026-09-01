@@ -22,7 +22,6 @@ use std::time::UNIX_EPOCH;
 
 use parking_lot::Mutex;
 
-use super::lifecycle::BorrowedMappedFileLease;
 use super::lifecycle::MappedFileLease;
 use super::lifecycle::SegmentLifecycle;
 use super::MappedFileLifecycleSnapshot;
@@ -444,7 +443,12 @@ pub trait ReferenceResource: Send + Sync {
 
     #[inline]
     fn hold(&self) -> bool {
-        let Some(lease) = self.base().lifecycle.try_acquire(MappedFileOperation::Read).acquired() else {
+        let Ok(lease) = self
+            .base()
+            .lifecycle
+            .try_acquire(MappedFileOperation::Read)
+            .into_result()
+        else {
             return false;
         };
         self.base().legacy_holds.lock().push(lease);
@@ -544,32 +548,13 @@ impl ReferenceResourceCounter {
     ///
     /// The lease remains valid if close starts after acquisition and releases admission on drop.
     ///
-    /// # Errors
-    ///
-    /// Returns [`super::MappedFileError::Unavailable`] when the lifecycle rejects the operation,
-    /// or [`super::MappedFileError::LeaseCountOverflow`] when the active lease count is exhausted.
     #[doc(hidden)]
     #[inline]
-    pub(crate) fn try_acquire(
+    pub fn try_acquire(
         &self,
         operation: MappedFileOperation,
-    ) -> Result<MappedFileLease, super::MappedFileError> {
-        match self.base.lifecycle.try_acquire(operation) {
-            super::lifecycle::LifecycleAcquireOutcome::Acquired(lease) => Ok(lease),
-            super::lifecycle::LifecycleAcquireOutcome::Rejected(rejection) => Err(rejection.into()),
-        }
-    }
-
-    /// Acquires a borrowed operation lease without cloning the lifecycle owner.
-    #[inline]
-    pub(crate) fn try_acquire_borrowed(
-        &self,
-        operation: MappedFileOperation,
-    ) -> Result<BorrowedMappedFileLease<'_>, super::MappedFileError> {
-        match self.base.lifecycle.try_acquire_borrowed(operation) {
-            super::lifecycle::LifecycleAcquireOutcome::Acquired(lease) => Ok(lease),
-            super::lifecycle::LifecycleAcquireOutcome::Rejected(rejection) => Err(rejection.into()),
-        }
+    ) -> super::lifecycle::LifecycleAcquireOutcome<MappedFileLease> {
+        self.base.lifecycle.try_acquire(operation)
     }
 
     #[inline]

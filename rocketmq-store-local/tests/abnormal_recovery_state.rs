@@ -15,7 +15,6 @@
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryAction;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryEvent;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryOffsetViolation;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoverySummary;
@@ -24,6 +23,13 @@ const I64_MAX_U64: u64 = 9_223_372_036_854_775_807;
 
 fn state(policy: AbnormalRecoveryPolicy, initial_offset: u64) -> AbnormalRecoveryState {
     AbnormalRecoveryState::try_new(initial_offset, policy).expect("test recovery offset must fit i64")
+}
+
+fn apply_result(
+    recovery: &mut AbnormalRecoveryState,
+    event: AbnormalRecoveryEvent,
+) -> Result<AbnormalRecoveryAction, ()> {
+    recovery.apply(event).ok_or(())
 }
 
 fn message(
@@ -66,20 +72,18 @@ fn constructor_freezes_standard_and_windowed_optimized_seed_model() {
         }
     );
 
-    assert_eq!(
-        AbnormalRecoveryState::try_new(I64_MAX_U64 + 1, AbnormalRecoveryPolicy::Standard),
-        Err(AbnormalRecoveryOffsetViolation::OffsetExceedsI64 {
-            offset: I64_MAX_U64 + 1,
-        })
-    );
-    assert!(AbnormalRecoveryState::try_new(I64_MAX_U64, AbnormalRecoveryPolicy::Optimized).is_ok());
+    assert!(AbnormalRecoveryState::try_new(I64_MAX_U64 + 1, AbnormalRecoveryPolicy::Standard).is_none());
+    assert!(AbnormalRecoveryState::try_new(I64_MAX_U64, AbnormalRecoveryPolicy::Optimized).is_some());
 }
 
 #[test]
 fn segment_start_preserves_policy_specific_watermarks() {
     let mut standard = state(AbnormalRecoveryPolicy::Standard, 5);
     assert_eq!(
-        standard.apply(AbnormalRecoveryEvent::SegmentStarted { base_offset: 100 }),
+        apply_result(
+            &mut standard,
+            AbnormalRecoveryEvent::SegmentStarted { base_offset: 100 }
+        ),
         Ok(AbnormalRecoveryAction::ContinueRecord)
     );
     assert_eq!(
@@ -93,7 +97,10 @@ fn segment_start_preserves_policy_specific_watermarks() {
 
     let mut optimized = state(AbnormalRecoveryPolicy::Optimized, 5);
     assert_eq!(
-        optimized.apply(AbnormalRecoveryEvent::SegmentStarted { base_offset: 100 }),
+        apply_result(
+            &mut optimized,
+            AbnormalRecoveryEvent::SegmentStarted { base_offset: 100 }
+        ),
         Ok(AbnormalRecoveryAction::ContinueRecord)
     );
     assert_eq!(
@@ -164,7 +171,10 @@ fn message_gate_matrix_keeps_input_candidate_distinct_from_validated_size() {
         recovery
             .apply(AbnormalRecoveryEvent::SegmentStarted { base_offset: 100 })
             .expect("segment start must succeed");
-        assert_eq!(recovery.apply(message(40, 7, 150, gate)), Ok(expected_action));
+        assert_eq!(
+            apply_result(&mut recovery, message(40, 7, 150, gate)),
+            Ok(expected_action)
+        );
         assert_eq!(
             recovery.summary(),
             AbnormalRecoverySummary {
@@ -183,11 +193,14 @@ fn standard_uses_validated_accumulator_while_optimized_uses_relative_start() {
         .apply(AbnormalRecoveryEvent::SegmentStarted { base_offset: 100 })
         .expect("segment start must succeed");
     assert_eq!(
-        standard.apply(message(30, 7, 37, AbnormalRecoveryDispatchGate::Ungated)),
+        apply_result(&mut standard, message(30, 7, 37, AbnormalRecoveryDispatchGate::Ungated),),
         Ok(AbnormalRecoveryAction::DispatchMessage)
     );
     assert_eq!(
-        standard.apply(message(200, 5, 205, AbnormalRecoveryDispatchGate::Ungated)),
+        apply_result(
+            &mut standard,
+            message(200, 5, 205, AbnormalRecoveryDispatchGate::Ungated),
+        ),
         Ok(AbnormalRecoveryAction::DispatchMessage)
     );
     assert_eq!(
@@ -201,11 +214,17 @@ fn standard_uses_validated_accumulator_while_optimized_uses_relative_start() {
 
     let mut optimized = state(AbnormalRecoveryPolicy::Optimized, 100);
     assert_eq!(
-        optimized.apply(message(30, 7, 137, AbnormalRecoveryDispatchGate::Ungated)),
+        apply_result(
+            &mut optimized,
+            message(30, 7, 137, AbnormalRecoveryDispatchGate::Ungated),
+        ),
         Ok(AbnormalRecoveryAction::DispatchMessage)
     );
     assert_eq!(
-        optimized.apply(message(200, 5, 305, AbnormalRecoveryDispatchGate::Ungated)),
+        apply_result(
+            &mut optimized,
+            message(200, 5, 305, AbnormalRecoveryDispatchGate::Ungated),
+        ),
         Ok(AbnormalRecoveryAction::DispatchMessage)
     );
     assert_eq!(
@@ -226,21 +245,27 @@ fn fresh_confirm_limit_is_applied_for_every_message() {
             .apply(AbnormalRecoveryEvent::SegmentStarted { base_offset: 100 })
             .expect("segment start must succeed");
         assert_eq!(
-            recovery.apply(message(
-                0,
-                10,
-                110,
-                AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset: 110 },
-            )),
+            apply_result(
+                &mut recovery,
+                message(
+                    0,
+                    10,
+                    110,
+                    AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset: 110 },
+                ),
+            ),
             Ok(AbnormalRecoveryAction::DispatchMessage)
         );
         assert_eq!(
-            recovery.apply(message(
-                10,
-                10,
-                120,
-                AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset: 119 },
-            )),
+            apply_result(
+                &mut recovery,
+                message(
+                    10,
+                    10,
+                    120,
+                    AbnormalRecoveryDispatchGate::ConfirmBounded { confirm_offset: 119 },
+                ),
+            ),
             Ok(AbnormalRecoveryAction::SkipMessageDispatch)
         );
         assert_eq!(recovery.summary().confirm_valid_offset, 110);
@@ -256,7 +281,7 @@ fn blank_invalid_and_source_end_action_matrix_is_stable() {
         };
         for event in [AbnormalRecoveryEvent::InvalidRecord, AbnormalRecoveryEvent::SourceEnded] {
             let mut recovery = state(policy, 17);
-            assert_eq!(recovery.apply(event), Ok(expected_terminal));
+            assert_eq!(apply_result(&mut recovery, event), Ok(expected_terminal));
             assert_eq!(
                 recovery.summary(),
                 AbnormalRecoverySummary {
@@ -269,7 +294,7 @@ fn blank_invalid_and_source_end_action_matrix_is_stable() {
 
         let mut recovery = state(policy, 17);
         assert_eq!(
-            recovery.apply(AbnormalRecoveryEvent::Blank),
+            apply_result(&mut recovery, AbnormalRecoveryEvent::Blank),
             Ok(AbnormalRecoveryAction::NotifyFileEndAndContinueNextSegment)
         );
         assert_eq!(
@@ -287,43 +312,29 @@ fn blank_invalid_and_source_end_action_matrix_is_stable() {
 fn offset_errors_are_transactional_for_both_policies() {
     for policy in [AbnormalRecoveryPolicy::Standard, AbnormalRecoveryPolicy::Optimized] {
         let mut cases = vec![
-            (
-                AbnormalRecoveryEvent::MessageAccepted {
-                    segment_base: I64_MAX_U64,
-                    relative_start: 0,
-                    validated_size: 1,
-                    confirm_candidate_end: 0,
-                    dispatch_gate: AbnormalRecoveryDispatchGate::Ungated,
-                },
-                AbnormalRecoveryOffsetViolation::OffsetExceedsI64 {
-                    offset: I64_MAX_U64 + 1,
-                },
-            ),
-            (
-                message(0, 1, -1, AbnormalRecoveryDispatchGate::Ungated),
-                AbnormalRecoveryOffsetViolation::NegativeConfirmCandidate { candidate: -1 },
-            ),
+            AbnormalRecoveryEvent::MessageAccepted {
+                segment_base: I64_MAX_U64,
+                relative_start: 0,
+                validated_size: 1,
+                confirm_candidate_end: 0,
+                dispatch_gate: AbnormalRecoveryDispatchGate::Ungated,
+            },
+            message(0, 1, -1, AbnormalRecoveryDispatchGate::Ungated),
         ];
         if policy == AbnormalRecoveryPolicy::Optimized {
             cases.insert(
                 0,
-                (
-                    AbnormalRecoveryEvent::MessageAccepted {
-                        segment_base: u64::MAX,
-                        relative_start: 1,
-                        validated_size: 0,
-                        confirm_candidate_end: 0,
-                        dispatch_gate: AbnormalRecoveryDispatchGate::Ungated,
-                    },
-                    AbnormalRecoveryOffsetViolation::BaseRelativeOverflow {
-                        base_offset: u64::MAX,
-                        relative_start: 1,
-                    },
-                ),
+                AbnormalRecoveryEvent::MessageAccepted {
+                    segment_base: u64::MAX,
+                    relative_start: 1,
+                    validated_size: 0,
+                    confirm_candidate_end: 0,
+                    dispatch_gate: AbnormalRecoveryDispatchGate::Ungated,
+                },
             );
         }
 
-        for (event, expected_error) in cases {
+        for event in cases {
             let mut recovery = state(policy, 23);
             if policy == AbnormalRecoveryPolicy::Standard {
                 recovery
@@ -333,7 +344,7 @@ fn offset_errors_are_transactional_for_both_policies() {
                     .expect("segment start at i64::MAX must succeed");
             }
             let before = recovery.summary();
-            assert_eq!(recovery.apply(event), Err(expected_error));
+            assert!(recovery.apply(event).is_none(), "invalid offset must fail closed");
             assert_eq!(recovery.summary(), before);
         }
     }

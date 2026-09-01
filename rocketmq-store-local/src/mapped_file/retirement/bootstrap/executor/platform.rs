@@ -19,7 +19,7 @@ use std::io;
 use thiserror::Error;
 
 use super::super::inventory::scan_bootstrap_inventory;
-use super::super::inventory::BootstrapInventoryError;
+use super::super::inventory::BootstrapInventoryFailure;
 use super::super::inventory::BootstrapInventoryLimits;
 use super::super::plan::InitialBootstrapInventoryPlan;
 use super::super::proof::BootstrapFoundationEvidence;
@@ -36,13 +36,13 @@ use super::super::types::PlannedAcknowledgedUnit;
 use super::super::types::PlannedInitialMarker;
 use super::super::types::PlannedSnapshot;
 use super::super::types::ReconciliationPhase;
-use super::durable_unit::DurableUnitError;
+use super::durable_unit::DurableUnitFailure;
 use super::durable_unit::DurableUnitMachine;
 use super::private;
 use super::InitialBootstrapBackend;
 use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::io::FileLedgerIo;
-use crate::mapped_file::retirement::io::LedgerIoError;
+use crate::mapped_file::retirement::io::LedgerIoFailure;
 use crate::mapped_file::retirement::sidecar::LifecycleSnapshot;
 use crate::mapped_file::retirement::sidecar::SidecarViolation;
 use crate::mapped_file::retirement::sidecar::StoreMeta;
@@ -57,9 +57,9 @@ mod native;
 #[path = "platform/unsupported.rs"]
 mod native;
 
-/// Bootstrap-foundation failure with its former kind folded in.
+/// Private foundation leaf with direct typed sources.
 #[derive(Debug, Error)]
-pub(in crate::mapped_file::retirement::bootstrap) enum InitialBootstrapFoundationError {
+pub(in crate::mapped_file::retirement::bootstrap) enum InitialBootstrapFoundationFailure {
     #[error("managed lifecycle bootstrap is unsupported on this platform: {0}")]
     UnsupportedPlatform(&'static str),
     #[error("bootstrap artifact is not the exact resumable prefix: {0}")]
@@ -67,16 +67,26 @@ pub(in crate::mapped_file::retirement::bootstrap) enum InitialBootstrapFoundatio
     #[error("bootstrap sidecar validation failed")]
     Sidecar(#[source] SidecarViolation),
     #[error("bootstrap ledger handle validation failed")]
-    Ledger(#[source] LedgerIoError),
+    Ledger(#[source] LedgerIoFailure),
     #[error("bootstrap frame/acknowledgement/seal transition failed")]
-    DurableUnit(#[source] DurableUnitError),
+    DurableUnit(#[source] DurableUnitFailure),
     #[error("bootstrap numeric-segment inventory failed")]
-    Inventory(#[source] BootstrapInventoryError),
+    Inventory(#[source] BootstrapInventoryFailure),
     #[error("bootstrap filesystem operation failed")]
     Io(#[source] io::Error),
 }
 
-impl InitialBootstrapFoundationError {
+impl InitialBootstrapFoundationFailure {
+    #[cfg(test)]
+    pub(in crate::mapped_file::retirement::bootstrap) const fn category_for_test(&self) -> &'static str {
+        match self {
+            Self::UnsupportedPlatform(_) => "unsupported-platform",
+            Self::Inventory(_) => "inventory",
+            Self::Io(_) => "io",
+            Self::InvalidArtifact(_) | Self::Sidecar(_) | Self::Ledger(_) | Self::DurableUnit(_) => "invalid-artifact",
+        }
+    }
+
     fn unsupported(reason: &'static str) -> Self {
         Self::UnsupportedPlatform(reason)
     }
@@ -89,15 +99,15 @@ impl InitialBootstrapFoundationError {
         Self::Sidecar(source)
     }
 
-    fn ledger(source: LedgerIoError) -> Self {
+    fn ledger(source: LedgerIoFailure) -> Self {
         Self::Ledger(source)
     }
 
-    fn durable_unit(source: DurableUnitError) -> Self {
+    fn durable_unit(source: DurableUnitFailure) -> Self {
         Self::DurableUnit(source)
     }
 
-    fn inventory(source: BootstrapInventoryError) -> Self {
+    fn inventory(source: BootstrapInventoryFailure) -> Self {
         Self::Inventory(source)
     }
 
@@ -209,9 +219,9 @@ impl PreparedInitialBootstrapFoundation {
 
 pub(in crate::mapped_file::retirement::bootstrap) fn execute_prepared_initial_bootstrap(
     mut prepared: PreparedInitialBootstrapFoundation,
-) -> Result<InitialBootstrapCompletion, super::InitialBootstrapExecutionError<InitialBootstrapFoundationError>> {
+) -> Result<InitialBootstrapCompletion, super::InitialBootstrapExecutionFailure<InitialBootstrapFoundationFailure>> {
     let foundation = prepared.foundation.take().ok_or_else(|| {
-        super::InitialBootstrapExecutionError::Backend(InitialBootstrapFoundationError::invalid(
+        super::InitialBootstrapExecutionFailure::Backend(InitialBootstrapFoundationFailure::invalid(
             "bootstrap foundation was already consumed",
         ))
     })?;
@@ -222,7 +232,7 @@ pub(in crate::mapped_file::retirement::bootstrap) fn execute_prepared_initial_bo
 impl private::Sealed for PreparedInitialBootstrapFoundation {}
 
 impl InitialBootstrapBackend for PreparedInitialBootstrapFoundation {
-    type Error = InitialBootstrapFoundationError;
+    type Error = InitialBootstrapFoundationFailure;
 
     fn inspect_store_initialized(
         &mut self,
@@ -230,7 +240,7 @@ impl InitialBootstrapBackend for PreparedInitialBootstrapFoundation {
     ) -> Result<DurableUnitProgress, Self::Error> {
         self.ledger
             .inspect(BootstrapRecord::StoreInitialized, planned)
-            .map_err(InitialBootstrapFoundationError::durable_unit)
+            .map_err(InitialBootstrapFoundationFailure::durable_unit)
     }
 
     fn scan_inventory(&mut self) -> Result<BootstrapInventoryEvidence, Self::Error> {
@@ -239,7 +249,7 @@ impl InitialBootstrapBackend for PreparedInitialBootstrapFoundation {
             &self.expected_meta,
             BootstrapInventoryLimits::default(),
         )
-        .map_err(InitialBootstrapFoundationError::inventory)?;
+        .map_err(InitialBootstrapFoundationFailure::inventory)?;
         self.expected_inventory = Some(stable.snapshot().clone());
         let (evidence, retained_files) = stable.into_parts();
         self.retained_files = retained_files;
@@ -257,7 +267,7 @@ impl InitialBootstrapBackend for PreparedInitialBootstrapFoundation {
         let bootstrap_installed = self
             .ledger
             .inspect(BootstrapRecord::BootstrapInstalled, &planned.bootstrap_installed)
-            .map_err(InitialBootstrapFoundationError::durable_unit)?;
+            .map_err(InitialBootstrapFoundationFailure::durable_unit)?;
         if bootstrap_installed != DurableUnitProgress::Committed || !self.pre_marker_reconciled {
             return Ok(InitialBootstrapProgress::BootstrapInstalled(bootstrap_installed));
         }
@@ -272,7 +282,7 @@ impl InitialBootstrapBackend for PreparedInitialBootstrapFoundation {
         let marker_committed = self
             .ledger
             .inspect(BootstrapRecord::MarkerCommitted, &planned.marker_committed)
-            .map_err(InitialBootstrapFoundationError::durable_unit)?;
+            .map_err(InitialBootstrapFoundationFailure::durable_unit)?;
         if marker_committed == DurableUnitProgress::Missing {
             return Ok(InitialBootstrapProgress::InitialMarker(marker));
         }
@@ -290,7 +300,7 @@ impl InitialBootstrapBackend for PreparedInitialBootstrapFoundation {
     ) -> Result<(), Self::Error> {
         self.ledger
             .advance(record, planned, step)
-            .map_err(InitialBootstrapFoundationError::durable_unit)
+            .map_err(InitialBootstrapFoundationFailure::durable_unit)
     }
 
     fn advance_snapshot(&mut self, planned: &PlannedSnapshot, step: ImmutableArtifactStep) -> Result<(), Self::Error> {
@@ -307,17 +317,17 @@ impl InitialBootstrapBackend for PreparedInitialBootstrapFoundation {
 
     fn reconcile(&mut self, phase: ReconciliationPhase) -> Result<(), Self::Error> {
         let expected = self.expected_inventory.as_ref().ok_or_else(|| {
-            InitialBootstrapFoundationError::invalid("inventory was not retained before reconciliation")
+            InitialBootstrapFoundationFailure::invalid("inventory was not retained before reconciliation")
         })?;
         let stable = scan_bootstrap_inventory(
             &self.store_root,
             &self.expected_meta,
             BootstrapInventoryLimits::default(),
         )
-        .map_err(InitialBootstrapFoundationError::inventory)?;
+        .map_err(InitialBootstrapFoundationFailure::inventory)?;
         if stable.snapshot() != expected || stable.retained_file_count_for_reconciliation() != self.retained_files.len()
         {
-            return Err(InitialBootstrapFoundationError::invalid(
+            return Err(InitialBootstrapFoundationFailure::invalid(
                 "numeric segment inventory changed before bootstrap reconciliation",
             ));
         }
@@ -332,6 +342,6 @@ impl InitialBootstrapBackend for PreparedInitialBootstrapFoundation {
 pub(in crate::mapped_file::retirement::bootstrap) fn prepare_initial_bootstrap_foundation(
     store_root: File,
     expected_meta: &StoreMeta,
-) -> Result<PreparedInitialBootstrapFoundation, InitialBootstrapFoundationError> {
+) -> Result<PreparedInitialBootstrapFoundation, InitialBootstrapFoundationFailure> {
     native::prepare(store_root, expected_meta)
 }

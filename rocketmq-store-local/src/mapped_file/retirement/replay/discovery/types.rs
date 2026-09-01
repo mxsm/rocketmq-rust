@@ -15,13 +15,9 @@
 use std::fs::File;
 use std::sync::Arc;
 
-use rocketmq_store_api::StoreComponent;
-use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
 use super::platform;
-use super::platform::PlatformError;
 use super::RecoveryDecision;
 use super::ReplayLimits;
 use super::MAX_DIRECTORY_ENTRIES;
@@ -159,7 +155,7 @@ impl Default for ManagedLifecycleReadLimits {
 }
 
 impl ManagedLifecycleReadLimits {
-    pub(super) fn validate(self) -> Result<Self, ManagedLifecycleReadError> {
+    pub(super) fn validate(self) -> Result<Self, ManagedLifecycleReadFailure> {
         for (name, value) in [
             ("max_directory_entries", self.max_directory_entries),
             ("max_generations", self.max_generations),
@@ -179,18 +175,27 @@ impl ManagedLifecycleReadLimits {
     }
 }
 
+/// Private read leaf retaining the exact filesystem or contract source.
 #[derive(Debug, Error)]
-pub(super) enum ManagedLifecycleReadSource {
+pub(crate) enum ManagedLifecycleReadFailure {
     #[error(transparent)]
-    Platform(#[from] platform::PlatformError),
+    Platform(#[from] platform::PlatformFailure),
     #[error("filesystem read failed: {0}")]
     Io(#[source] std::io::Error),
     #[error("sidecar decode failed: {0}")]
     Sidecar(#[source] SidecarViolation),
+    #[error("unsupported sidecar version: {0}")]
+    UnknownSidecarVersion(#[source] SidecarViolation),
     #[error("ledger codec failed: {0}")]
     Codec(#[source] CodecViolation),
+    #[error("unsupported ledger codec version: {0}")]
+    UnknownCodecVersion(#[source] CodecViolation),
     #[error("ledger replay failed: {0}")]
     Replay(#[source] ReplayViolation),
+    #[error("ledger replay limit exceeded: {0}")]
+    ReplayLimit(#[source] ReplayViolation),
+    #[error("unsupported replay format version: {0}")]
+    ReplayUnknownVersion(#[source] ReplayViolation),
     #[error("lifecycle evidence is corrupt: {0}")]
     Corruption(String),
     #[error("unsafe lifecycle namespace: {0}")]
@@ -203,69 +208,44 @@ pub(super) enum ManagedLifecycleReadSource {
     Limit(String),
 }
 
-/// Private lifecycle-read leaf retained as the typed StoreError source.
-#[derive(Debug, Error)]
-#[error("managed lifecycle read failed: {source}")]
-pub(crate) struct ManagedLifecycleReadError {
-    #[source]
-    source: ManagedLifecycleReadSource,
-}
-
-impl ManagedLifecycleReadError {
-    pub(super) fn new(source: ManagedLifecycleReadSource) -> Self {
-        Self { source }
-    }
-
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Descriptor selection preserves the reviewed lifecycle-read mapping:
-    /// filesystem faults are I/O failures, a changed inventory is backend
-    /// unavailability, an exceeded work bound is exhausted capacity, an
-    /// unsupported platform is unimplemented, and unsafe-namespace or
-    /// corruption evidence is corrupted state. The complete leaf is preserved
-    /// as the typed source.
-    pub(crate) fn into_store_error(self) -> StoreError {
-        let descriptor = match &self.source {
-            ManagedLifecycleReadSource::Platform(platform) => match platform {
-                PlatformError::Io { .. } => &rocketmq_error::STORAGE_IO_FAILED,
-                #[cfg(windows)]
-                PlatformError::Windows { .. } => &rocketmq_error::STORAGE_IO_FAILED,
-                PlatformError::UnsafeNamespace { .. } => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-                PlatformError::Changed { .. } => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-                PlatformError::Limit { .. } => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
-                PlatformError::Unsupported => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
-            },
-            ManagedLifecycleReadSource::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
-            ManagedLifecycleReadSource::Replay(ReplayViolation::LimitExceeded { .. })
-            | ManagedLifecycleReadSource::Limit(_) => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
-            ManagedLifecycleReadSource::Sidecar(_)
-            | ManagedLifecycleReadSource::Codec(_)
-            | ManagedLifecycleReadSource::Replay(_)
-            | ManagedLifecycleReadSource::Corruption(_)
-            | ManagedLifecycleReadSource::UnsafeNamespace(_)
-            | ManagedLifecycleReadSource::UnknownVersion(_) => &rocketmq_error::STORAGE_STATE_CORRUPTED,
-            ManagedLifecycleReadSource::InventoryChanged(_) => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-        };
-        StoreError::new(descriptor, StoreOperation::Load)
-            .in_component(StoreComponent::MappedFile)
-            .with_source(self)
+#[cfg(test)]
+impl ManagedLifecycleReadFailure {
+    pub(super) const fn category_for_test(&self) -> &'static str {
+        match self {
+            Self::UnknownSidecarVersion(_)
+            | Self::UnknownCodecVersion(_)
+            | Self::ReplayUnknownVersion(_)
+            | Self::UnknownVersion(_) => "unknown-version-corruption",
+            Self::InventoryChanged(_) | Self::Platform(platform::PlatformFailure::Changed { .. }) => {
+                "inventory-changed"
+            }
+            Self::Limit(_) | Self::ReplayLimit(_) | Self::Platform(platform::PlatformFailure::Limit { .. }) => {
+                "limit-exceeded"
+            }
+            Self::UnsafeNamespace(_) | Self::Platform(platform::PlatformFailure::UnsafeNamespace { .. }) => {
+                "unsafe-namespace"
+            }
+            Self::Platform(platform::PlatformFailure::Unsupported) => "unsupported-platform",
+            Self::Io(_) | Self::Platform(platform::PlatformFailure::Io { .. }) => "io",
+            #[cfg(windows)]
+            Self::Platform(platform::PlatformFailure::Windows { .. }) => "io",
+            Self::Sidecar(_) | Self::Codec(_) | Self::Replay(_) | Self::Corruption(_) => "corruption",
+        }
     }
 }
 
-pub(super) fn corruption(detail: impl Into<String>) -> ManagedLifecycleReadError {
-    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Corruption(detail.into()))
+pub(super) fn corruption(detail: impl Into<String>) -> ManagedLifecycleReadFailure {
+    ManagedLifecycleReadFailure::Corruption(detail.into())
 }
 
-pub(super) fn io_error(error: std::io::Error) -> ManagedLifecycleReadError {
-    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Io(error))
+pub(super) fn io_error(error: std::io::Error) -> ManagedLifecycleReadFailure {
+    ManagedLifecycleReadFailure::Io(error)
 }
 
 pub(super) fn limit_error(
     resource: &'static str,
     actual: impl std::fmt::Display,
     maximum: impl std::fmt::Display,
-) -> ManagedLifecycleReadError {
-    ManagedLifecycleReadError::new(ManagedLifecycleReadSource::Limit(format!(
-        "{resource} bound exceeded: actual {actual}, maximum {maximum}"
-    )))
+) -> ManagedLifecycleReadFailure {
+    ManagedLifecycleReadFailure::Limit(format!("{resource} bound exceeded: actual {actual}, maximum {maximum}"))
 }

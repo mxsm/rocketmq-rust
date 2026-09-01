@@ -153,7 +153,8 @@ impl ShadowTimelineMaterializer {
         payload_config.batch_bytes = config.payload_batch_bytes;
         payload_config.max_record_bytes = config.payload_record_bytes;
         payload_config.max_partition_live_bytes = config.payload_partition_live_bytes;
-        let payload_store = Arc::new(TimerPayloadStore::new(payload_config)?);
+        let payload_store =
+            Arc::new(TimerPayloadStore::new(payload_config)?.ok_or(TimelineMaterializerError::InvalidPayloadConfig)?);
         payload_store.load()?;
         let timeline = Arc::new(RocksDbTimelineIndex::open(store_root)?);
         let reconciler = Arc::new(ShadowReconciler::new(
@@ -375,7 +376,10 @@ impl ShadowTimelineMaterializer {
                 PreparedSource::New(source) => Some(source.payload.clone()),
             })
             .collect::<Vec<_>>();
-        let locators = self.payload_store.append_batch(&payload_records)?;
+        let locators = self
+            .payload_store
+            .append_batch(&payload_records)?
+            .ok_or(TimelineMaterializerError::InvalidPayloadRecord)?;
         let mut locator_iter = locators.into_iter();
         let mut batch = RocksDbWriteBatch::with_capacity(prepared.len().saturating_mul(3).saturating_add(1));
         let mut formal_entries = Vec::new();
@@ -484,7 +488,13 @@ impl ShadowTimelineMaterializer {
                             },
                         )?;
                     }
-                    let encoded_bytes = u64::try_from(source.payload.encoded_len()?).unwrap_or(u64::MAX);
+                    let encoded_bytes = u64::try_from(
+                        source
+                            .payload
+                            .encoded_len()
+                            .ok_or(TimelineMaterializerError::InvalidPayloadRecord)?,
+                    )
+                    .unwrap_or(u64::MAX);
                     let keys = super::usage_summary_keys(&source.payload.real_topic, source.key.due_time_ms);
                     for key in [keys.global, keys.topic, keys.tenant, keys.bucket] {
                         let delta = usage_deltas.entry(key).or_default();
@@ -844,10 +854,8 @@ fn config_fingerprint(config: &TimerStoreConfig) -> u64 {
 pub(crate) enum TimelineMaterializerError {
     #[error("invalid Extended Timeline configuration: {0}")]
     Config(#[from] crate::config::timer_store_config::TimerStoreConfigError),
-    #[error("payload store failure: {0}")]
-    Payload(#[from] crate::store_error::StoreError),
-    #[error("payload record failure: {0}")]
-    PayloadRecord(#[from] rocketmq_store_local::timer::payload_record::TimerPayloadRecordViolation),
+    #[error("local store failure: {0}")]
+    Store(#[from] rocketmq_store_api::StoreError),
     #[error("Timeline store failure: {0}")]
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error("Timeline index migration failure: {0}")]
@@ -862,6 +870,10 @@ pub(crate) enum TimelineMaterializerError {
     InvalidSourceIdentity,
     #[error("Timer source CommitLog frame is invalid")]
     InvalidCommitLogFrame,
+    #[error("derived Timer payload configuration is invalid")]
+    InvalidPayloadConfig,
+    #[error("derived Timer payload record is invalid")]
+    InvalidPayloadRecord,
     #[error("Timer source is missing required property {0}")]
     MissingProperty(&'static str),
     #[error("Timer lane cannot fit the persisted format")]

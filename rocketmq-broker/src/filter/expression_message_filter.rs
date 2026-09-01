@@ -249,6 +249,7 @@ mod tests {
                 timer_wheel_enable: false,
                 ..MessageStoreConfig::default()
             }),
+            rocketmq_store::MicroBatchPolicy::disabled(1).expect("valid test policy"),
             Arc::new(rocketmq_store::StoreRuntimeConfig::default()),
             topic_table,
             None,

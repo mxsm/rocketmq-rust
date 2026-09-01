@@ -64,6 +64,7 @@ pub(crate) use types::LogicalRemovedCapability;
 pub(crate) use types::NamespaceAbsentCapability;
 pub(crate) use types::PublishedFileRegistration;
 pub(crate) use types::QueueIdentity;
+pub(in crate::mapped_file::retirement) use types::RegistryFault;
 use types::RegistrySeal;
 pub(crate) use types::RegistryViolation;
 pub(crate) use types::RetirementHandoffCapability;

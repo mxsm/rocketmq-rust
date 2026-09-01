@@ -105,14 +105,13 @@ pub use crate::ha::transfer_engine::TransferStats;
 pub use crate::ha::transfer_metrics::HaTransferMetrics;
 pub use crate::ha::transfer_metrics::TransferFallbackSnapshot;
 pub use crate::hook::put_message_hook::PutMessageHook;
-pub use crate::inspection::decode_commit_log_record;
+pub use crate::inspection::inspect_commit_log_record;
 pub use crate::inspection::CommitLogRecord;
 pub use crate::inspection::CommitLogRecordBodyMode;
 pub use crate::inspection::CommitLogRecordChecksum;
 pub use crate::inspection::CommitLogRecordField;
 pub use crate::inspection::CommitLogRecordOutcome;
 pub use crate::inspection::CommitLogRecordVersion;
-pub use crate::inspection::CommitLogRecordViolation;
 pub use crate::log_file::commit_log::check_message_and_return_size;
 pub use crate::log_file::commit_log::get_cq_type;
 pub use crate::log_file::commit_log::get_message_num;
@@ -135,14 +134,12 @@ pub use crate::log_file::mapped_file::io_uring_impl::probe_io_uring_runtime_capa
 pub use crate::log_file::mapped_file::io_uring_impl::IoUringRuntimeCapability;
 pub use crate::log_file::mapped_file::DirectIoBuffer;
 pub use crate::log_file::mapped_file::DirectIoRequest;
-pub use crate::log_file::mapped_file::DirectIoValidationViolation;
 pub use crate::log_file::mapped_file::FlushStrategy;
 pub use crate::log_file::mapped_file::IoUringBackendStatus;
 pub use crate::log_file::mapped_file::MappedBuffer;
 pub use crate::log_file::mapped_file::MappedFile;
 pub use crate::log_file::mapped_file::MappedFileBuilder;
 pub use crate::log_file::mapped_file::MappedFileMetrics;
-pub use crate::log_file::mapped_file::MmapRangeViolation;
 pub use crate::log_file::mapped_file::MmapRegionSlice;
 pub use crate::log_file::mapped_file::StoreMappedMemory;
 pub use crate::log_file::MAX_PULL_MSG_SIZE;
@@ -220,6 +217,7 @@ pub use crate::transfer::segment::FileRangeLease;
 pub use crate::transfer::segment::FileRangeTransferHandle;
 pub use crate::transfer::segment::SegmentLease;
 pub use crate::transfer::segment::TransferCacheState;
+pub use rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy;
 
 #[cfg(feature = "rocksdb_store")]
 mod rocksdb_api {

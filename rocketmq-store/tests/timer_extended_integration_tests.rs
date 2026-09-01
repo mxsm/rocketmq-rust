@@ -103,6 +103,8 @@ fn new_store(root: &TempDir) -> LocalFileMessageStore {
     );
     let mut store = LocalFileMessageStore::new(
         Arc::new(config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         topics,
         None,
@@ -222,8 +224,9 @@ async fn materializer_payload_first_shadow_restart_keeps_one_year_payload_idempo
             .expect("ready lookup")
             .is_none());
 
-        let payloads =
-            TimerPayloadStore::new(TimerPayloadStoreConfig::for_store_root(root.path())).expect("payload store");
+        let payloads = TimerPayloadStore::new(TimerPayloadStoreConfig::for_store_root(root.path()))
+            .expect("payload store")
+            .expect("valid payload configuration");
         payloads.load().expect("payload recovery");
         let payload = payloads.read(page.entries[0].record.payload).expect("durable payload");
         assert_eq!(payload.due_time_ms, deliver_at_ms);
@@ -256,7 +259,9 @@ async fn materializer_payload_first_shadow_restart_keeps_one_year_payload_idempo
     replay.shutdown().await;
     drop(replay);
 
-    let payloads = TimerPayloadStore::new(TimerPayloadStoreConfig::for_store_root(root.path())).expect("payload store");
+    let payloads = TimerPayloadStore::new(TimerPayloadStoreConfig::for_store_root(root.path()))
+        .expect("payload store")
+        .expect("valid payload configuration");
     payloads.load().expect("payload recovery");
     assert_eq!(
         payloads.metrics().record_count,
@@ -312,7 +317,9 @@ async fn materializer_gap_keeps_checkpoint_and_cleanup_fence_at_first_failed_sou
         .checkpoint(TimelineCheckpointKind::MaterializedSource, 0)
         .expect("checkpoint")
         .is_none());
-    let payloads = TimerPayloadStore::new(TimerPayloadStoreConfig::for_store_root(root.path())).expect("payload store");
+    let payloads = TimerPayloadStore::new(TimerPayloadStoreConfig::for_store_root(root.path()))
+        .expect("payload store")
+        .expect("valid payload configuration");
     payloads.load().expect("payload recovery");
     assert_eq!(payloads.metrics().record_count, 0);
 }

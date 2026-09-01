@@ -14,11 +14,10 @@
 
 //! Compatibility entrypoints for inspecting Local CommitLog records.
 
-pub use rocketmq_store_local::commit_log::record_parser::decode_commit_log_record;
+pub use rocketmq_store_local::commit_log::record_parser::inspect_commit_log_record;
 pub use rocketmq_store_local::commit_log::record_parser::CommitLogRecord;
 pub use rocketmq_store_local::commit_log::record_parser::CommitLogRecordBodyMode;
 pub use rocketmq_store_local::commit_log::record_parser::CommitLogRecordChecksum;
 pub use rocketmq_store_local::commit_log::record_parser::CommitLogRecordField;
 pub use rocketmq_store_local::commit_log::record_parser::CommitLogRecordOutcome;
 pub use rocketmq_store_local::commit_log::record_parser::CommitLogRecordVersion;
-pub use rocketmq_store_local::commit_log::record_parser::CommitLogRecordViolation;

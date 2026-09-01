@@ -50,13 +50,6 @@ pub(crate) struct CommitLogCleanupHandle {
     pub(super) mapped_file_queue: MappedFileQueueCleanupHandle,
 }
 
-/// Builds the invalid-request storage error for one replication selection input violation.
-pub(super) fn replication_input_error(detail: impl Into<String>) -> StoreError {
-    StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::Replicate)
-        .in_component(StoreComponent::HighAvailability)
-        .with_detail(detail)
-}
-
 impl CommitLogCleanupHandle {
     #[inline]
     pub(crate) fn get_min_offset(&self) -> i64 {
@@ -188,20 +181,16 @@ impl CommitLogReadHandle {
         offset: i64,
         max_bytes: usize,
         allow_cross_file: bool,
-    ) -> Result<Vec<SegmentLease>, StoreError> {
+    ) -> Result<Option<Vec<SegmentLease>>, StoreError> {
         if offset < 0 {
-            return Err(replication_input_error(format!(
-                "offset must be non-negative: {offset}"
-            )));
+            return Ok(None);
         }
         if max_bytes == 0 {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
         if mapped_file_size == 0 {
-            return Err(replication_input_error(
-                "mapped_file_size_commit_log must be greater than zero",
-            ));
+            return Ok(None);
         }
 
         let mut max_bytes = max_bytes.min(i32::MAX as usize);
@@ -211,9 +200,11 @@ impl CommitLogReadHandle {
         }
 
         let Some(results) = self.mapped_file_queue.get_bulk_transfer_data(offset, max_bytes as i32) else {
-            return Ok(Vec::new());
+            return Ok(Some(Vec::new()));
         };
-        Ok(results.into_iter().filter_map(SegmentLease::from_selection).collect())
+        Ok(Some(
+            results.into_iter().filter_map(SegmentLease::from_selection).collect(),
+        ))
     }
 }
 
@@ -319,7 +310,7 @@ impl CommitLogReplicaHandle {
         offset: i64,
         max_bytes: usize,
         allow_cross_file: bool,
-    ) -> Result<Vec<SegmentLease>, StoreError> {
+    ) -> Result<Option<Vec<SegmentLease>>, StoreError> {
         self.read.select_segments(offset, max_bytes, allow_cross_file)
     }
 

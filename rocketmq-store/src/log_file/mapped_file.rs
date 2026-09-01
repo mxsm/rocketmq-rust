@@ -30,14 +30,12 @@ mod builder;
 mod memory;
 
 pub use builder::MappedFileBuilder;
-pub use memory::MmapRangeViolation;
 pub use memory::MmapRegionSlice;
 pub use memory::StoreMappedMemory;
 pub use rocketmq_store_local::mapped_file::io_uring_backend_status;
 pub use rocketmq_store_local::mapped_file::io_uring_impl;
 pub use rocketmq_store_local::mapped_file::DirectIoBuffer;
 pub use rocketmq_store_local::mapped_file::DirectIoRequest;
-pub use rocketmq_store_local::mapped_file::DirectIoValidationViolation;
 pub use rocketmq_store_local::mapped_file::FlushStrategy;
 pub use rocketmq_store_local::mapped_file::IoUringBackendStatus;
 pub use rocketmq_store_local::mapped_file::MappedBuffer;
@@ -163,9 +161,12 @@ mod tests {
             _msg: &mut MessageExtBrokerInner,
             _put_message_context: &PutMessageContext,
         ) -> AppendMessageResult {
-            let mut lease = mapped_file.reserve_write(4).expect("write reservation");
+            let mut lease = mapped_file
+                .reserve_write(4)
+                .expect("write reservation")
+                .expect("valid reservation");
             lease.buffer_mut().copy_from_slice(b"once");
-            lease.commit(4, Some(7)).expect("write commit");
+            lease.commit(4, Some(7)).expect("write commit").expect("valid commit");
             AppendMessageResult {
                 status: AppendMessageStatus::PutOk,
                 wrote_bytes: 4,
@@ -183,9 +184,12 @@ mod tests {
             _put_message_context: &mut PutMessageContext,
             _enabled_append_prop_crc: bool,
         ) -> AppendMessageResult {
-            let mut lease = mapped_file.reserve_write(4).expect("write reservation");
+            let mut lease = mapped_file
+                .reserve_write(4)
+                .expect("write reservation")
+                .expect("valid reservation");
             lease.buffer_mut().copy_from_slice(b"once");
-            lease.commit(4, Some(7)).expect("write commit");
+            lease.commit(4, Some(7)).expect("write commit").expect("valid commit");
             AppendMessageResult {
                 status: AppendMessageStatus::PutOk,
                 wrote_bytes: 4,

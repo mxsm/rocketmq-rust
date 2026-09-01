@@ -91,7 +91,7 @@ pub(super) enum IoOperation {
 
 /// Failure from a handle-relative ledger storage backend.
 #[derive(Debug, Error)]
-pub(super) enum LedgerIoError {
+pub(super) enum LedgerIoFailure {
     #[cfg(any(unix, windows, test))]
     #[error("ledger I/O operation {operation:?} failed: {source}")]
     Io {
@@ -147,7 +147,7 @@ pub(super) enum LedgerIoError {
     },
 }
 
-impl LedgerIoError {
+impl LedgerIoFailure {
     #[cfg(any(unix, windows, test))]
     pub(super) fn io(operation: IoOperation, source: io::Error) -> Self {
         Self::Io { operation, source }
@@ -159,24 +159,26 @@ impl LedgerIoError {
 /// Implementations must use already-opened handles or handle-relative, no-follow opens. A method
 /// error is always ambiguous to the writer: it may have changed durable bytes before failing.
 pub(super) trait LedgerIo: private::Sealed {
-    fn append_log(&mut self, expected_offset: u64, bytes: &[u8]) -> Result<(), LedgerIoError>;
+    fn append_log(&mut self, expected_offset: u64, bytes: &[u8]) -> Result<(), LedgerIoFailure>;
 
-    fn sync_log(&mut self) -> Result<(), LedgerIoError>;
+    fn sync_log(&mut self) -> Result<(), LedgerIoFailure>;
 
     fn write_acknowledgement_slot(
         &mut self,
         slot_index: u8,
         bytes: &[u8; ACKNOWLEDGEMENT_SLOT_LENGTH],
-    ) -> Result<(), LedgerIoError>;
+    ) -> Result<(), LedgerIoFailure>;
 
-    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoError>;
+    fn sync_acknowledgement_file(&mut self) -> Result<(), LedgerIoFailure>;
 
-    fn read_acknowledgement_slot(&mut self, slot_index: u8)
-        -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoError>;
+    fn read_acknowledgement_slot(
+        &mut self,
+        slot_index: u8,
+    ) -> Result<[u8; ACKNOWLEDGEMENT_SLOT_LENGTH], LedgerIoFailure>;
 
-    fn read_log_exact(&mut self, offset: u64, output: &mut [u8]) -> Result<(), LedgerIoError>;
+    fn read_log_exact(&mut self, offset: u64, output: &mut [u8]) -> Result<(), LedgerIoFailure>;
 
-    fn log_len(&mut self) -> Result<u64, LedgerIoError>;
+    fn log_len(&mut self) -> Result<u64, LedgerIoFailure>;
 }
 
 #[cfg(test)]

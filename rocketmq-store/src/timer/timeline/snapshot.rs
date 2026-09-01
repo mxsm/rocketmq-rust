@@ -119,11 +119,14 @@ impl TimelineSnapshotManager {
             timer_id: TimerId::new(0),
             generation: TimerGeneration::new(0),
         };
-        let native_pin = self
-            .native_timeline
-            .as_ref()
-            .map(|native| native.pin_snapshot(generation))
-            .transpose()?;
+        let native_pin = match self.native_timeline.as_ref() {
+            Some(native) => Some(
+                native
+                    .pin_snapshot(generation)?
+                    .expect("snapshot generation is generated as non-zero"),
+            ),
+            None => None,
+        };
         let pin = self.timeline.pin_snapshot_generation(gc_fence, generation)?;
         let mut native_files = match (self.native_timeline.as_ref(), native_pin) {
             (Some(native), Some(native_pin)) => native.create_snapshot_files(&building.join("native"), native_pin)?,

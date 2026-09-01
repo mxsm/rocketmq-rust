@@ -74,7 +74,7 @@ pub(crate) use types::NamespaceTombstoneProof;
 pub(crate) use types::NamespaceTransition;
 pub(crate) use types::NamespaceTransitionOutcome;
 
-pub(in crate::mapped_file::retirement) use creation::IncarnationCreationError;
+pub(in crate::mapped_file::retirement) use creation::IncarnationCreationFailure;
 #[cfg(test)]
 pub(in crate::mapped_file::retirement) use creation::IncarnationCreationStage;
 
@@ -255,10 +255,6 @@ impl VerifiedNamespaceRoot {
     /// Production construction remains unavailable until Wave-B can consume the retained Store
     /// lock, root-identity, activation-fence, and replay-inventory proofs as one opaque capability.
     #[cfg(test)]
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(crate) fn open(file: File, store_uuid: StoreUuid) -> Result<Self, NamespaceTransitionOutcome> {
         let native = native::NamespaceRoot::open(file)?;
         Ok(Self { store_uuid, native })

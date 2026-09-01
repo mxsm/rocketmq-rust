@@ -15,6 +15,7 @@
 #[cfg(unix)]
 use crate::ha::transfer_engine::sendfile::SendfileWriteTarget;
 use ::bytes::Bytes;
+use rocketmq_store_api::StoreError;
 use tokio::io::AsyncWrite;
 
 use crate::ha::transfer_engine::bytes::BytesTransferEngine;
@@ -22,8 +23,8 @@ use crate::ha::transfer_engine::bytes::BytesTransferEngine;
 use crate::ha::transfer_engine::sendfile::SendfileTransferEngine;
 use crate::ha::transfer_engine::vectored::VectoredTransferEngine;
 use crate::transfer::batch::TransferBatch;
-use crate::transfer::error::TransferError;
-use rocketmq_store_api::StoreError;
+use crate::transfer::error::TransferFailure;
+use crate::transfer::error::TransferViolation;
 
 pub mod bytes;
 pub mod sendfile;
@@ -190,13 +191,14 @@ impl<W> HaTransferEngine<W>
 where
     W: AsyncWrite + SendfileWriteTarget + Unpin,
 {
-    /// Sends one framed batch through the selected engine.
+    /// Sends one validated transfer batch.
+    ///
+    /// Returns `Ok(None)` when the batch is rejected by the transfer contract before I/O.
     ///
     /// # Errors
     ///
-    /// Returns `STORAGE_IO_FAILED` for replication write failures and
-    /// `STORAGE_REQUEST_INVALID` for malformed batches.
-    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<TransferStats, StoreError> {
+    /// Returns a storage error when an operational HA write fails.
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<Option<TransferStats>, StoreError> {
         match self {
             Self::Bytes(engine) => engine.send_batch(batch).await,
             Self::Vectored(engine) => engine.send_batch(batch).await,
@@ -210,13 +212,14 @@ impl<W> HaTransferEngine<W>
 where
     W: AsyncWrite + Unpin,
 {
-    /// Sends one framed batch through the selected engine.
+    /// Sends one validated transfer batch.
+    ///
+    /// Returns `Ok(None)` when the batch is rejected by the transfer contract before I/O.
     ///
     /// # Errors
     ///
-    /// Returns `STORAGE_IO_FAILED` for replication write failures and
-    /// `STORAGE_REQUEST_INVALID` for malformed batches.
-    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<TransferStats, StoreError> {
+    /// Returns a storage error when an operational HA write fails.
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<Option<TransferStats>, StoreError> {
         match self {
             Self::Bytes(engine) => engine.send_batch(batch).await,
             Self::Vectored(engine) => engine.send_batch(batch).await,
@@ -224,37 +227,41 @@ where
     }
 }
 
-pub(crate) fn batch_body_bytes(batch: &TransferBatch) -> Result<Bytes, TransferError> {
-    let mut chunks = batch_body_chunks(batch)?;
+pub(crate) fn batch_body_bytes(batch: &TransferBatch) -> Result<Option<Bytes>, TransferFailure> {
+    let Some(mut chunks) = batch_body_chunks(batch)? else {
+        return Ok(None);
+    };
     match chunks.len() {
-        0 => Ok(Bytes::new()),
-        1 => Ok(chunks.remove(0)),
+        0 => Ok(Some(Bytes::new())),
+        1 => Ok(Some(chunks.remove(0))),
         _ => {
             let mut body = Vec::with_capacity(batch.total_body_len);
             for chunk in chunks {
                 body.extend_from_slice(&chunk);
             }
-            Ok(Bytes::from(body))
+            Ok(Some(Bytes::from(body)))
         }
     }
 }
 
-pub(crate) fn batch_body_chunks(batch: &TransferBatch) -> Result<Vec<Bytes>, TransferError> {
+pub(crate) fn batch_body_chunks(batch: &TransferBatch) -> Result<Option<Vec<Bytes>>, TransferFailure> {
     let mut remaining = batch.total_body_len;
     if remaining == 0 {
-        return Ok(Vec::new());
+        return Ok(Some(Vec::new()));
     }
 
     let mut chunks = Vec::with_capacity(batch.segments.len());
     for segment in &batch.segments {
         let bytes = match segment.as_bytes() {
             Some(bytes) => bytes,
-            None => segment
-                .as_file_range()
-                .ok_or(TransferError::UnsupportedSegmentSource(
-                    "HA segment has neither bytes nor a file range",
-                ))?
-                .to_bytes()?,
+            None => {
+                let Some(range) = segment.as_file_range() else {
+                    let _ =
+                        TransferViolation::UnsupportedSegmentSource("HA segment has neither bytes nor a file range");
+                    return Ok(None);
+                };
+                range.to_bytes()?
+            }
         };
         let len = bytes.len().min(remaining);
         if len > 0 {
@@ -267,17 +274,18 @@ pub(crate) fn batch_body_chunks(batch: &TransferBatch) -> Result<Vec<Bytes>, Tra
     }
 
     if remaining != 0 {
-        return Err(TransferError::InvalidInput(format!(
+        let _ = TransferViolation::InvalidInput(format!(
             "transfer batch body underflow: expected {} bytes, missing {} bytes",
             batch.total_body_len, remaining
-        )));
+        ));
+        return Ok(None);
     }
 
-    Ok(chunks)
+    Ok(Some(chunks))
 }
 
-pub(crate) fn write_zero_error() -> TransferError {
-    TransferError::Io(std::io::Error::new(
+pub(crate) fn write_zero_error() -> TransferFailure {
+    TransferFailure::Io(std::io::Error::new(
         std::io::ErrorKind::WriteZero,
         "transfer writer returned zero bytes",
     ))

@@ -98,7 +98,7 @@ use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
 use crate::mapped_file::retirement::writer::BoundIncarnationReceipt;
 
-use super::creation::IncarnationCreationError;
+use super::creation::IncarnationCreationFailure;
 use super::creation::IncarnationCreationStage;
 
 const UNSUPPORTED_REASON: &str = "Windows direct unlink is forbidden; v1 requires the unique tombstone transition";
@@ -110,10 +110,6 @@ pub(super) struct NamespaceRoot {
 }
 
 impl NamespaceRoot {
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(super) fn open(file: File) -> Result<Self, NamespaceTransitionOutcome> {
         let attributes =
             query_attributes(&file, NamespaceOperation::VerifyRoot).map_err(BackendFailure::into_verification_error)?;
@@ -233,9 +229,9 @@ impl NamespaceRoot {
     pub(super) fn create_incarnation_temp(
         &self,
         allocated: &AllocatedIncarnationReceipt,
-    ) -> Result<CreatedIncarnationTemp, IncarnationCreationError> {
+    ) -> Result<CreatedIncarnationTemp, IncarnationCreationFailure> {
         if !self.writer_qualified {
-            return Err(IncarnationCreationError::unsupported(
+            return Err(IncarnationCreationFailure::unsupported(
                 IncarnationCreationStage::OpenParent,
                 "windows",
                 UNQUALIFIED_WRITER_REASON,
@@ -244,33 +240,36 @@ impl NamespaceRoot {
         let (parent_path, canonical_name) = split_parent(allocated.canonical_path().as_str());
         let (create_parent, create_name) = split_parent(allocated.create_file_path().as_str());
         if parent_path != create_parent {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyNames,
                 "canonical and create-file paths have different parents",
             ));
         }
         let parent = open_or_create_parent(&self.file, parent_path)
-            .map_err(|error| IncarnationCreationError::namespace(IncarnationCreationStage::OpenParent, error))?;
+            .map_err(|error| IncarnationCreationFailure::namespace(IncarnationCreationStage::OpenParent, error))?;
         require_missing(&parent, canonical_name, IncarnationCreationStage::VerifyNames)?;
         require_missing(&parent, create_name, IncarnationCreationStage::VerifyNames)?;
         let file = create_relative(&parent, create_name)?;
         let attributes = query_attributes(&file, NamespaceOperation::VerifyCanonical).map_err(|failure| {
-            IncarnationCreationError::namespace(IncarnationCreationStage::CreateTemp, failure.into_verification_error())
+            IncarnationCreationFailure::namespace(
+                IncarnationCreationStage::CreateTemp,
+                failure.into_verification_error(),
+            )
         })?;
         if attributes.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_DIRECTORY.0) != 0 {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::CreateTemp,
                 "created namespace object is not a regular non-reparse file",
             ));
         }
         file.set_len(allocated.expected_length())
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::SizeTemp, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::SizeTemp, error))?;
         file.sync_all()
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::SyncTemp, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::SyncTemp, error))?;
         let physical_key = physical_key::capture(&file)
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::CapturePhysicalKey, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::CapturePhysicalKey, error))?;
         if !matches!(physical_key, PhysicalFileKey::Windows(_)) {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::CapturePhysicalKey,
                 "created file returned a non-Windows physical key",
             ));
@@ -289,9 +288,9 @@ impl NamespaceRoot {
         &self,
         created: CreatedIncarnationTemp,
         bound: &BoundIncarnationReceipt,
-    ) -> Result<(File, PhysicalFileKey), IncarnationCreationError> {
+    ) -> Result<(File, PhysicalFileKey), IncarnationCreationFailure> {
         if bound.physical_key() != created.physical_key || bound.expected_length() != created.expected_length {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyNames,
                 "BindIncarnation differs from the created file",
             ));
@@ -302,14 +301,14 @@ impl NamespaceRoot {
             || created.canonical_name != bound_canonical_name
             || created.create_name != bound_create_name
         {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyNames,
                 "BindIncarnation paths differ from the created file",
             ));
         }
 
         rename_handle_no_replace(&created.file, &created.parent, &created.canonical_name).map_err(|failure| {
-            IncarnationCreationError::namespace(
+            IncarnationCreationFailure::namespace(
                 IncarnationCreationStage::RenameNoReplace,
                 failure.into_verification_error(),
             )
@@ -318,24 +317,24 @@ impl NamespaceRoot {
         // names relative to the retained parent and bind the observed key and length.
         drop(created.file);
         let canonical = open_created_relative(&created.parent, &created.canonical_name, FILE_OPEN)
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::ReopenCanonical, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::ReopenCanonical, error))?;
         let attributes = query_attributes(&canonical, NamespaceOperation::VerifyCanonical).map_err(|failure| {
-            IncarnationCreationError::namespace(
+            IncarnationCreationFailure::namespace(
                 IncarnationCreationStage::VerifyCanonical,
                 failure.into_verification_error(),
             )
         })?;
         let reopened_key = physical_key::capture(&canonical)
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::VerifyCanonical, error))?;
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::VerifyCanonical, error))?;
         let actual_length = canonical
             .metadata()
-            .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::VerifyCanonical, error))?
+            .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::VerifyCanonical, error))?
             .len();
         if attributes.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_DIRECTORY.0) != 0
             || reopened_key != created.physical_key
             || actual_length != created.expected_length
         {
-            return Err(IncarnationCreationError::policy(
+            return Err(IncarnationCreationFailure::policy(
                 IncarnationCreationStage::VerifyCanonical,
                 "reopened canonical file differs from the durable binding",
             ));
@@ -488,10 +487,6 @@ fn observe_entry(
     })
 }
 
-#[allow(
-    clippy::result_large_err,
-    reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-)]
 fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceTransitionOutcome> {
     let mut parent = root
         .try_clone()
@@ -526,10 +521,6 @@ fn open_parent(root: &File, parent_path: &str) -> Result<File, NamespaceTransiti
     Ok(parent)
 }
 
-#[allow(
-    clippy::result_large_err,
-    reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-)]
 fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, NamespaceTransitionOutcome> {
     let mut parent = root
         .try_clone()
@@ -577,10 +568,6 @@ fn open_or_create_parent(root: &File, parent_path: &str) -> Result<File, Namespa
     Ok(parent)
 }
 
-#[allow(
-    clippy::result_large_err,
-    reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-)]
 fn open_or_create_directory_component(parent: &File, name: &str) -> Result<File, NamespaceTransitionOutcome> {
     let mut wide = name.encode_utf16().collect::<Vec<_>>();
     let byte_length = wide
@@ -707,9 +694,9 @@ fn open_relative(
     Ok(Some(unsafe { File::from_raw_handle(handle.0) }))
 }
 
-fn create_relative(parent: &File, name: &str) -> Result<File, IncarnationCreationError> {
+fn create_relative(parent: &File, name: &str) -> Result<File, IncarnationCreationFailure> {
     open_created_relative(parent, name, FILE_CREATE)
-        .map_err(|error| IncarnationCreationError::io(IncarnationCreationStage::CreateTemp, error))
+        .map_err(|error| IncarnationCreationFailure::io(IncarnationCreationStage::CreateTemp, error))
 }
 
 fn open_created_relative(
@@ -782,14 +769,18 @@ fn open_writable_relative(
     Ok(unsafe { File::from_raw_handle(handle.0) })
 }
 
-fn require_missing(parent: &File, name: &str, stage: IncarnationCreationStage) -> Result<(), IncarnationCreationError> {
+fn require_missing(
+    parent: &File,
+    name: &str,
+    stage: IncarnationCreationStage,
+) -> Result<(), IncarnationCreationFailure> {
     match open_relative(parent, name, false, NamespaceOperation::VerifyCanonical) {
         Ok(None) => Ok(()),
-        Ok(Some(_)) => Err(IncarnationCreationError::io(
+        Ok(Some(_)) => Err(IncarnationCreationFailure::io(
             stage,
             io::Error::new(io::ErrorKind::AlreadyExists, "managed creation name already exists"),
         )),
-        Err(failure) => Err(IncarnationCreationError::namespace(
+        Err(failure) => Err(IncarnationCreationFailure::namespace(
             stage,
             failure.into_verification_error(),
         )),

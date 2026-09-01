@@ -2165,6 +2165,8 @@ mod tests {
         topic_config_table.insert(topic.clone(), Arc::new(TopicConfig::new(topic.clone())));
         let message_store = LocalFileMessageStore::new(
             message_store_config.clone(),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             broker_config.clone(),
             topic_config_table,
             None,
@@ -2239,6 +2241,8 @@ mod tests {
         topic_config_table.insert(topic.clone(), Arc::new(TopicConfig::new(topic.clone())));
         let message_store = LocalFileMessageStore::new(
             message_store_config.clone(),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             broker_config.clone(),
             topic_config_table,
             None,
@@ -2304,6 +2308,8 @@ mod tests {
         topic_config_table.insert(topic.clone(), Arc::new(topic_config));
         let message_store = LocalFileMessageStore::new(
             message_store_config.clone(),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             broker_config.clone(),
             topic_config_table,
             None,
@@ -2341,6 +2347,8 @@ mod tests {
         let topic_config_table = Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new());
         let message_store = LocalFileMessageStore::new(
             message_store_config.clone(),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             broker_config.clone(),
             topic_config_table,
             None,

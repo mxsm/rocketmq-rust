@@ -152,8 +152,8 @@ impl CommitLogAppendPort {
         self.sender.snapshot()
     }
 
-    fn admission_status(reason: AppendAdmissionRejection) -> PutMessageStatus {
-        match reason {
+    fn admission_status(kind: AppendAdmissionRejection) -> PutMessageStatus {
+        match kind {
             AppendAdmissionRejection::Saturated => PutMessageStatus::OsPageCacheBusy,
             AppendAdmissionRejection::Closed => PutMessageStatus::ServiceNotAvailable,
         }

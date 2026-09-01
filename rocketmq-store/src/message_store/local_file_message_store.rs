@@ -348,7 +348,7 @@ impl HAReplicaStoreHandle {
         offset: i64,
         max_bytes: usize,
         allow_cross_file: bool,
-    ) -> Result<Vec<SegmentLease>, StoreError> {
+    ) -> Result<Option<Vec<SegmentLease>>, StoreError> {
         self.commit_log.select_segments(offset, max_bytes, allow_cross_file)
     }
 

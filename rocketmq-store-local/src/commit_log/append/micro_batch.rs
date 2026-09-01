@@ -32,10 +32,15 @@ pub struct MicroBatchPolicy {
 impl MicroBatchPolicy {
     /// Creates an enabled micro-batch policy.
     ///
-    /// # Errors
-    ///
-    /// Returns [`MicroBatchPolicyViolation`] when either hard limit is zero.
-    pub const fn try_new(
+    /// Returns `None` when either hard limit is zero.
+    pub const fn try_new(max_items: usize, max_bytes: usize, max_wait: Duration) -> Option<Self> {
+        match Self::try_new_checked(max_items, max_bytes, max_wait) {
+            Ok(policy) => Some(policy),
+            Err(MicroBatchPolicyViolation::ZeroMaxItems | MicroBatchPolicyViolation::ZeroMaxBytes) => None,
+        }
+    }
+
+    const fn try_new_checked(
         max_items: usize,
         max_bytes: usize,
         max_wait: Duration,
@@ -55,10 +60,8 @@ impl MicroBatchPolicy {
 
     /// Creates a policy that preserves sequencer ownership without request aggregation.
     ///
-    /// # Errors
-    ///
-    /// Returns [`MicroBatchPolicyViolation::ZeroMaxBytes`] when the queue has no byte capacity.
-    pub const fn disabled(max_payload_bytes: usize) -> Result<Self, MicroBatchPolicyViolation> {
+    /// Returns `None` when the queue has no byte capacity.
+    pub const fn disabled(max_payload_bytes: usize) -> Option<Self> {
         Self::try_new(1, max_payload_bytes, Duration::ZERO)
     }
 
@@ -83,7 +86,7 @@ impl MicroBatchPolicy {
 
 /// Invalid micro-batch policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum MicroBatchPolicyViolation {
+pub(crate) enum MicroBatchPolicyViolation {
     /// A batch cannot have a zero item limit.
     #[error("CommitLog micro-batch max-items must be greater than zero")]
     ZeroMaxItems,

@@ -22,7 +22,7 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_store::decode_commit_log_record;
+use rocketmq_store::inspect_commit_log_record;
 use rocketmq_store::CommitLogRecord;
 use rocketmq_store::CommitLogRecordBodyMode;
 use rocketmq_store::CommitLogRecordChecksum;
@@ -82,8 +82,8 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
         }
         current_pos += size;
         let msg_bytes = Bytes::from(message);
-        if let Ok(CommitLogRecordOutcome::Message(record)) =
-            decode_commit_log_record(&msg_bytes, CommitLogRecordBodyMode::Skip, &InspectionChecksum)
+        if let CommitLogRecordOutcome::Message(record) =
+            inspect_commit_log_record(&msg_bytes, CommitLogRecordBodyMode::Skip, &InspectionChecksum)
         {
             table.push(message_print(&record));
         }

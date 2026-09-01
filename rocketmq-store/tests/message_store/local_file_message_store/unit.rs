@@ -228,6 +228,8 @@ fn try_new_owned_test_store_at_root(
     message_store_config.timer_wheel_enable = false;
     let mut store = LocalFileMessageStore::try_new(
         Arc::new(message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(broker_config),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
@@ -246,6 +248,8 @@ fn new_configured_test_store_with_broker(
     message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
     let mut store = LocalFileMessageStore::new(
         Arc::new(message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(broker_config),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
@@ -857,6 +861,8 @@ fn new_unwired_test_store(temp_dir: &tempfile::TempDir) -> LocalFileMessageStore
     };
     LocalFileMessageStore::new(
         Arc::new(message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
@@ -893,6 +899,8 @@ fn new_owned_wiring_test_store(
     message_store_config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
     LocalFileMessageStore::new(
         Arc::new(message_store_config),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(broker_config),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,
@@ -1022,7 +1030,8 @@ async fn ha_replica_handle_shares_transfer_and_replication_progress() {
 
     let segments = handle
         .select_segments(0, 4, false)
-        .expect("select replica transfer segment");
+        .expect("select replica transfer segment")
+        .expect("valid selector input");
     assert_eq!(segments.len(), 1);
     assert_eq!(segments[0].segment().global_offset(), 0);
     assert_eq!(handle.get_confirm_offset(), 4);
@@ -3475,6 +3484,8 @@ fn master_store_in_process_round_trips_concrete_store_reference() {
                 .into(),
             ..MessageStoreConfig::default()
         }),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+            .expect("valid test policy"),
         Arc::new(StoreRuntimeConfig::default()),
         Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
         None,

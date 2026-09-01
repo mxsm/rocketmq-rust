@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 
@@ -20,9 +23,7 @@ use crate::ha::transfer_engine::write_zero_error;
 use crate::ha::transfer_engine::TransferEngineKind;
 use crate::ha::transfer_engine::TransferStats;
 use crate::transfer::batch::TransferBatch;
-use crate::transfer::error::TransferError;
-use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreOperation;
+use crate::transfer::error::TransferFailure;
 
 pub struct BytesTransferEngine<W> {
     writer: W,
@@ -42,20 +43,26 @@ impl<W> BytesTransferEngine<W>
 where
     W: AsyncWrite + Unpin,
 {
-    /// Sends one framed batch, reporting failures through the storage facade.
+    /// Sends one batch through the byte-buffer engine.
+    ///
+    /// Returns `Ok(None)` when the batch is rejected by the transfer contract before I/O.
     ///
     /// # Errors
     ///
-    /// Returns `STORAGE_IO_FAILED` for replication write failures and
-    /// `STORAGE_REQUEST_INVALID` for malformed batches.
-    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<TransferStats, StoreError> {
-        self.send_batch_typed(batch)
+    /// Returns a storage error when an operational HA write fails.
+    pub async fn send_batch(&mut self, batch: &TransferBatch) -> Result<Option<TransferStats>, StoreError> {
+        self.send_batch_checked(batch)
             .await
-            .map_err(|error| error.into_store_error(StoreOperation::Replicate))
+            .map_err(|error| error.into_store_error(StoreOperation::Replicate, StoreComponent::HighAvailability))
     }
 
-    pub(crate) async fn send_batch_typed(&mut self, batch: &TransferBatch) -> Result<TransferStats, TransferError> {
-        let body = batch_body_bytes(batch)?;
+    pub(crate) async fn send_batch_checked(
+        &mut self,
+        batch: &TransferBatch,
+    ) -> Result<Option<TransferStats>, TransferFailure> {
+        let Some(body) = batch_body_bytes(batch)? else {
+            return Ok(None);
+        };
         let expected_write_calls = usize::from(!batch.frame_header.is_empty()) + usize::from(!body.is_empty());
         let mut bytes_written = 0;
         let mut write_call_count = 0;
@@ -70,7 +77,7 @@ where
 
         self.writer.flush().await?;
 
-        Ok(TransferStats {
+        Ok(Some(TransferStats {
             engine: TransferEngineKind::Bytes,
             bytes_written,
             body_bytes: batch.total_body_len,
@@ -80,11 +87,11 @@ where
             sendfile_bytes: 0,
             fallback_bytes: 0,
             partial_write_count: write_call_count.saturating_sub(expected_write_calls),
-        })
+        }))
     }
 }
 
-pub(crate) async fn write_all_counted<W>(writer: &mut W, mut bytes: &[u8]) -> Result<(usize, usize), TransferError>
+pub(crate) async fn write_all_counted<W>(writer: &mut W, mut bytes: &[u8]) -> Result<(usize, usize), TransferFailure>
 where
     W: AsyncWrite + Unpin,
 {

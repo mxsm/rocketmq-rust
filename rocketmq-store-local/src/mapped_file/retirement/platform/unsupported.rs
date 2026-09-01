@@ -28,7 +28,7 @@ use crate::mapped_file::retirement::identity::StoreRelativePath;
 use crate::mapped_file::retirement::writer::AllocatedIncarnationReceipt;
 use crate::mapped_file::retirement::writer::BoundIncarnationReceipt;
 
-use super::creation::IncarnationCreationError;
+use super::creation::IncarnationCreationFailure;
 use super::creation::IncarnationCreationStage;
 
 const REASON: &str = "no audited handle-relative managed-retirement backend exists for this target";
@@ -36,10 +36,6 @@ const REASON: &str = "no audited handle-relative managed-retirement backend exis
 pub(super) struct NamespaceRoot;
 
 impl NamespaceRoot {
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(super) fn open(_file: File) -> Result<Self, NamespaceTransitionOutcome> {
         Err(NamespaceTransitionOutcome::Unsupported {
             platform: "unsupported target",
@@ -78,31 +74,23 @@ impl NamespaceRoot {
         })
     }
 
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(super) fn create_incarnation_temp(
         &self,
         _allocated: &AllocatedIncarnationReceipt,
-    ) -> Result<CreatedIncarnationTemp, IncarnationCreationError> {
-        Err(IncarnationCreationError::unsupported(
+    ) -> Result<CreatedIncarnationTemp, IncarnationCreationFailure> {
+        Err(IncarnationCreationFailure::unsupported(
             IncarnationCreationStage::CreateTemp,
             "unsupported target",
             REASON,
         ))
     }
 
-    #[allow(
-        clippy::result_large_err,
-        reason = "the merged namespace outcome intentionally retains typed proof and disposition data"
-    )]
     pub(super) fn publish_bound_incarnation(
         &self,
         _created: CreatedIncarnationTemp,
         _bound: &BoundIncarnationReceipt,
-    ) -> Result<(File, PhysicalFileKey), IncarnationCreationError> {
-        Err(IncarnationCreationError::unsupported(
+    ) -> Result<(File, PhysicalFileKey), IncarnationCreationFailure> {
+        Err(IncarnationCreationFailure::unsupported(
             IncarnationCreationStage::RenameNoReplace,
             "unsupported target",
             REASON,

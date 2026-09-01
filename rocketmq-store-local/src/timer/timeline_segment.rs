@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreOperation;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -22,6 +20,9 @@ use std::io::SeekFrom;
 use std::io::Write;
 use std::path::Path;
 
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
@@ -52,19 +53,14 @@ pub struct TimelinePartitionKey {
 
 impl TimelinePartitionKey {
     /// Derives the physical partition from a deadline and lane.
-    /// Reports failures through the canonical storage facade.
-    pub fn from_deadline(due_time_ms: i64, lane: u16) -> Result<Self, StoreError> {
-        Self::from_deadline_typed(due_time_ms, lane).map_err(|error| error.into_store_error(StoreOperation::Read))
-    }
-
-    fn from_deadline_typed(due_time_ms: i64, lane: u16) -> Result<Self, TimelineSegmentError> {
+    pub(crate) fn from_deadline_checked(due_time_ms: i64, lane: u16) -> Result<Self, TimelineSegmentFailure> {
         if due_time_ms < 0 {
-            return Err(TimelineSegmentError::InvalidDeadline(due_time_ms));
+            return Err(TimelineSegmentFailure::InvalidDeadline(due_time_ms));
         }
         let due_day_utc = i32::try_from(due_time_ms.div_euclid(86_400_000))
-            .map_err(|_| TimelineSegmentError::InvalidDeadline(due_time_ms))?;
+            .map_err(|_| TimelineSegmentFailure::InvalidDeadline(due_time_ms))?;
         let due_hour_utc = u8::try_from(due_time_ms.rem_euclid(86_400_000).div_euclid(3_600_000))
-            .map_err(|_| TimelineSegmentError::InvalidDeadline(due_time_ms))?;
+            .map_err(|_| TimelineSegmentFailure::InvalidDeadline(due_time_ms))?;
         Ok(Self {
             due_day_utc,
             due_hour_utc,
@@ -74,7 +70,11 @@ impl TimelinePartitionKey {
 
     /// Returns whether the deadline belongs to this partition.
     pub fn contains(self, due_time_ms: i64) -> bool {
-        Self::from_deadline(due_time_ms, self.lane).is_ok_and(|candidate| candidate == self)
+        Self::from_deadline_checked(due_time_ms, self.lane).is_ok_and(|candidate| candidate == self)
+    }
+
+    pub(crate) const fn is_valid(self) -> bool {
+        self.due_day_utc >= 0 && self.due_hour_utc < 24
     }
 }
 
@@ -93,8 +93,8 @@ pub struct TimelineSegmentKey {
 
 impl TimelineSegmentKey {
     /// Returns this key's physical partition.
-    pub(crate) fn partition(self) -> Result<TimelinePartitionKey, TimelineSegmentError> {
-        TimelinePartitionKey::from_deadline_typed(self.due_time_ms, self.lane)
+    pub(crate) fn partition_checked(self) -> Result<TimelinePartitionKey, TimelineSegmentFailure> {
+        TimelinePartitionKey::from_deadline_checked(self.due_time_ms, self.lane)
     }
 }
 
@@ -125,7 +125,7 @@ impl TimelineSegmentRecord {
         RUN_RECORD_SIZE
     }
 
-    fn encode(self) -> Result<[u8; RUN_RECORD_SIZE], TimelineSegmentError> {
+    fn encode(self) -> Result<[u8; RUN_RECORD_SIZE], TimelineSegmentFailure> {
         validate_record(self)?;
         let mut output = [0u8; RUN_RECORD_SIZE];
         output[0..8].copy_from_slice(&self.key.due_time_ms.to_be_bytes());
@@ -152,19 +152,19 @@ impl TimelineSegmentRecord {
         Ok(output)
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, TimelineSegmentError> {
+    fn decode(bytes: &[u8]) -> Result<Self, TimelineSegmentFailure> {
         if bytes.len() != RUN_RECORD_SIZE
             || crc32c(&bytes[..RUN_RECORD_SIZE - 4]) != read_u32(bytes, RUN_RECORD_SIZE - 4)?
         {
-            return Err(TimelineSegmentError::RecordChecksumMismatch);
+            return Err(TimelineSegmentFailure::RecordChecksumMismatch);
         }
         let owner_engine = match bytes[92] {
             0 => TimerEngineId::JavaCompat,
             1 => TimerEngineId::ExtendedTimeline,
-            value => return Err(TimelineSegmentError::InvalidOwner(value)),
+            value => return Err(TimelineSegmentFailure::InvalidOwner(value)),
         };
         if bytes[93] > 1 {
-            return Err(TimelineSegmentError::InvalidFlags);
+            return Err(TimelineSegmentFailure::InvalidFlags);
         }
         let payload = TimerPayloadStoreLocator::try_new(
             read_i32(bytes, 34)?,
@@ -174,7 +174,7 @@ impl TimelineSegmentRecord {
             read_u32(bytes, 56)?,
             read_u32(bytes, 60)?,
         )
-        .map_err(|_| TimelineSegmentError::InvalidPayloadLocator)?;
+        .map_err(|_| TimelineSegmentFailure::InvalidPayloadLocator)?;
         let record = Self {
             key: TimelineSegmentKey {
                 due_time_ms: read_i64(bytes, 0)?,
@@ -206,11 +206,11 @@ pub enum TimelineRunKind {
 }
 
 impl TimelineRunKind {
-    fn decode(value: u8) -> Result<Self, TimelineSegmentError> {
+    fn decode(value: u8) -> Result<Self, TimelineSegmentFailure> {
         match value {
             0 => Ok(Self::Base),
             1 => Ok(Self::Delta),
-            value => Err(TimelineSegmentError::InvalidRunKind(value)),
+            value => Err(TimelineSegmentFailure::InvalidRunKind(value)),
         }
     }
 }
@@ -245,7 +245,7 @@ pub struct TimelineRunDescriptor {
 }
 
 /// Writes one sorted, sealed immutable run and synchronizes it before returning.
-pub(crate) fn write_timeline_run(
+pub(crate) fn write_timeline_run_checked(
     root: &Path,
     relative_path: &str,
     kind: TimelineRunKind,
@@ -253,9 +253,9 @@ pub(crate) fn write_timeline_run(
     run_id: u64,
     created_generation: u64,
     records: &[TimelineSegmentRecord],
-) -> Result<TimelineRunDescriptor, TimelineSegmentError> {
+) -> Result<TimelineRunDescriptor, TimelineSegmentFailure> {
     if records.is_empty() || relative_path.is_empty() {
-        return Err(TimelineSegmentError::EmptyRun);
+        return Err(TimelineSegmentFailure::EmptyRun);
     }
     validate_sorted_partition(records, partition)?;
     let body = records
@@ -287,17 +287,17 @@ pub(crate) fn write_timeline_run(
 }
 
 /// Reads only the fixed header/footer and validates the sealed file shape.
-pub(crate) fn inspect_timeline_run(
+pub(crate) fn inspect_timeline_run_checked(
     root: &Path,
     relative_path: &str,
-) -> Result<TimelineRunDescriptor, TimelineSegmentError> {
+) -> Result<TimelineRunDescriptor, TimelineSegmentFailure> {
     let path = root.join(relative_path);
     let mut file = OpenOptions::new().read(true).open(path)?;
     let length = file.metadata()?.len();
     let minimum = u64::try_from(RUN_HEADER_SIZE + RUN_RECORD_SIZE + RUN_FOOTER_SIZE)
-        .map_err(|_| TimelineSegmentError::LengthOverflow)?;
+        .map_err(|_| TimelineSegmentFailure::LengthOverflow)?;
     if length < minimum {
-        return Err(TimelineSegmentError::UnsealedRun);
+        return Err(TimelineSegmentFailure::UnsealedRun);
     }
     let mut header = [0u8; RUN_HEADER_SIZE];
     file.read_exact(&mut header)?;
@@ -307,10 +307,10 @@ pub(crate) fn inspect_timeline_run(
     let mut descriptor = decode_header(&header, relative_path)?;
     decode_and_validate_footer(&footer, &descriptor)?;
     let expected = u64::try_from(RUN_HEADER_SIZE + RUN_FOOTER_SIZE)
-        .map_err(|_| TimelineSegmentError::LengthOverflow)?
+        .map_err(|_| TimelineSegmentFailure::LengthOverflow)?
         .saturating_add(descriptor.logical_bytes);
     if expected != length {
-        return Err(TimelineSegmentError::RunLengthMismatch {
+        return Err(TimelineSegmentFailure::RunLengthMismatch {
             expected,
             actual: length,
         });
@@ -330,10 +330,10 @@ pub struct TimelineRunReader {
 
 impl TimelineRunReader {
     /// Opens a sealed run without scanning its body.
-    pub(crate) fn open(root: &Path, descriptor: TimelineRunDescriptor) -> Result<Self, TimelineSegmentError> {
-        let inspected = inspect_timeline_run(root, &descriptor.relative_path)?;
+    pub(crate) fn open_checked(root: &Path, descriptor: TimelineRunDescriptor) -> Result<Self, TimelineSegmentFailure> {
+        let inspected = inspect_timeline_run_checked(root, &descriptor.relative_path)?;
         if inspected != descriptor {
-            return Err(TimelineSegmentError::ManifestDescriptorMismatch);
+            return Err(TimelineSegmentFailure::ManifestDescriptorMismatch);
         }
         let mut file = OpenOptions::new()
             .read(true)
@@ -349,10 +349,10 @@ impl TimelineRunReader {
     }
 
     /// Returns the next verified record, or `None` after validating the full body checksum.
-    pub(crate) fn read_next(&mut self) -> Result<Option<TimelineSegmentRecord>, TimelineSegmentError> {
+    pub(crate) fn read_next_checked(&mut self) -> Result<Option<TimelineSegmentRecord>, TimelineSegmentFailure> {
         if self.next_record == self.descriptor.record_count {
             if self.verifies_full_body && self.body_crc.finish() != self.descriptor.body_checksum {
-                return Err(TimelineSegmentError::BodyChecksumMismatch);
+                return Err(TimelineSegmentFailure::BodyChecksumMismatch);
             }
             return Ok(None);
         }
@@ -360,19 +360,18 @@ impl TimelineRunReader {
         self.file.read_exact(&mut bytes)?;
         self.body_crc.update(&bytes);
         let record = TimelineSegmentRecord::decode(&bytes)?;
-        if record.key.partition()? != self.descriptor.partition {
-            return Err(TimelineSegmentError::PartitionMismatch);
+        if record.key.partition_checked()? != self.descriptor.partition {
+            return Err(TimelineSegmentFailure::PartitionMismatch);
         }
         self.next_record = self.next_record.saturating_add(1);
         Ok(Some(record))
     }
 
     /// Skips a bounded number of records while retaining checksum verification.
-    #[allow(dead_code, reason = "exercised by the in-crate timeline scenarios")]
-    pub(crate) fn skip(&mut self, count: u64) -> Result<(), TimelineSegmentError> {
+    pub(crate) fn skip_checked(&mut self, count: u64) -> Result<(), TimelineSegmentFailure> {
         for _ in 0..count {
-            if self.read_next()?.is_none() {
-                return Err(TimelineSegmentError::CursorPastEnd);
+            if self.read_next_checked()?.is_none() {
+                return Err(TimelineSegmentFailure::CursorPastEnd);
             }
         }
         Ok(())
@@ -380,14 +379,14 @@ impl TimelineRunReader {
 
     /// Seeks to an exact fixed-record cursor. Subsequent records retain their individual CRC
     /// checks; the aggregate body CRC is checked only for scans that start at record zero.
-    pub(crate) fn seek_to(&mut self, position: u64) -> Result<(), TimelineSegmentError> {
+    pub(crate) fn seek_to_checked(&mut self, position: u64) -> Result<(), TimelineSegmentFailure> {
         if position > self.descriptor.record_count {
-            return Err(TimelineSegmentError::CursorPastEnd);
+            return Err(TimelineSegmentFailure::CursorPastEnd);
         }
         let byte_offset = position
             .checked_mul(RUN_RECORD_SIZE as u64)
             .and_then(|offset| offset.checked_add(RUN_HEADER_SIZE as u64))
-            .ok_or(TimelineSegmentError::LengthOverflow)?;
+            .ok_or(TimelineSegmentFailure::LengthOverflow)?;
         self.file.seek(SeekFrom::Start(byte_offset))?;
         self.next_record = position;
         self.body_crc = RunningCrc32c::new();
@@ -409,9 +408,9 @@ fn descriptor_for(
     created_generation: u64,
     records: &[TimelineSegmentRecord],
     body_checksum: u32,
-) -> Result<TimelineRunDescriptor, TimelineSegmentError> {
-    let first = records.first().ok_or(TimelineSegmentError::EmptyRun)?;
-    let last = records.last().ok_or(TimelineSegmentError::EmptyRun)?;
+) -> Result<TimelineRunDescriptor, TimelineSegmentFailure> {
+    let first = records.first().ok_or(TimelineSegmentFailure::EmptyRun)?;
+    let last = records.last().ok_or(TimelineSegmentFailure::EmptyRun)?;
     let (min_source_cq_offset, max_source_cq_offset) =
         records.iter().fold((i64::MAX, i64::MIN), |(minimum, maximum), record| {
             (
@@ -424,13 +423,13 @@ fn descriptor_for(
         kind,
         run_id,
         created_generation,
-        record_count: u64::try_from(records.len()).map_err(|_| TimelineSegmentError::LengthOverflow)?,
+        record_count: u64::try_from(records.len()).map_err(|_| TimelineSegmentFailure::LengthOverflow)?,
         min_due_time_ms: first.key.due_time_ms,
         max_due_time_ms: last.key.due_time_ms,
         min_source_cq_offset,
         max_source_cq_offset,
         logical_bytes: u64::try_from(records.len().saturating_mul(RUN_RECORD_SIZE))
-            .map_err(|_| TimelineSegmentError::LengthOverflow)?,
+            .map_err(|_| TimelineSegmentFailure::LengthOverflow)?,
         body_checksum,
         relative_path: relative_path.to_owned(),
     })
@@ -439,9 +438,9 @@ fn descriptor_for(
 fn encode_header(
     descriptor: &TimelineRunDescriptor,
     records: &[TimelineSegmentRecord],
-) -> Result<[u8; RUN_HEADER_SIZE], TimelineSegmentError> {
-    let first = records.first().ok_or(TimelineSegmentError::EmptyRun)?;
-    let last = records.last().ok_or(TimelineSegmentError::EmptyRun)?;
+) -> Result<[u8; RUN_HEADER_SIZE], TimelineSegmentFailure> {
+    let first = records.first().ok_or(TimelineSegmentFailure::EmptyRun)?;
+    let last = records.last().ok_or(TimelineSegmentFailure::EmptyRun)?;
     let mut output = [0u8; RUN_HEADER_SIZE];
     output[0..4].copy_from_slice(&RUN_MAGIC.to_be_bytes());
     output[4..6].copy_from_slice(&RUN_VERSION.to_be_bytes());
@@ -468,18 +467,18 @@ fn encode_header(
     Ok(output)
 }
 
-fn decode_header(bytes: &[u8], relative_path: &str) -> Result<TimelineRunDescriptor, TimelineSegmentError> {
+fn decode_header(bytes: &[u8], relative_path: &str) -> Result<TimelineRunDescriptor, TimelineSegmentFailure> {
     if bytes.len() != RUN_HEADER_SIZE
         || read_u32(bytes, 0)? != RUN_MAGIC
         || read_u16(bytes, 4)? != RUN_VERSION
         || usize::from(read_u16(bytes, 6)?) != RUN_HEADER_SIZE
         || crc32c(&bytes[..RUN_HEADER_SIZE - 4]) != read_u32(bytes, RUN_HEADER_SIZE - 4)?
     {
-        return Err(TimelineSegmentError::InvalidHeader);
+        return Err(TimelineSegmentFailure::InvalidHeader);
     }
     let due_hour_utc = bytes[14];
     if due_hour_utc > 23 || read_u64(bytes, 34)? == 0 || read_u64(bytes, 122)? == 0 {
-        return Err(TimelineSegmentError::InvalidHeader);
+        return Err(TimelineSegmentFailure::InvalidHeader);
     }
     Ok(TimelineRunDescriptor {
         partition: TimelinePartitionKey {
@@ -515,7 +514,7 @@ fn encode_footer(descriptor: &TimelineRunDescriptor) -> [u8; RUN_FOOTER_SIZE] {
     output
 }
 
-fn decode_and_validate_footer(bytes: &[u8], descriptor: &TimelineRunDescriptor) -> Result<(), TimelineSegmentError> {
+fn decode_and_validate_footer(bytes: &[u8], descriptor: &TimelineRunDescriptor) -> Result<(), TimelineSegmentFailure> {
     if bytes.len() != RUN_FOOTER_SIZE
         || read_u32(bytes, 0)? != RUN_FOOTER_MAGIC
         || read_u16(bytes, 4)? != RUN_VERSION
@@ -526,7 +525,7 @@ fn decode_and_validate_footer(bytes: &[u8], descriptor: &TimelineRunDescriptor) 
         || read_u64(bytes, 24)? != RUN_SEALED_MARKER
         || crc32c(&bytes[..RUN_FOOTER_SIZE - 4]) != read_u32(bytes, RUN_FOOTER_SIZE - 4)?
     {
-        return Err(TimelineSegmentError::UnsealedRun);
+        return Err(TimelineSegmentFailure::UnsealedRun);
     }
     Ok(())
 }
@@ -534,30 +533,30 @@ fn decode_and_validate_footer(bytes: &[u8], descriptor: &TimelineRunDescriptor) 
 fn validate_sorted_partition(
     records: &[TimelineSegmentRecord],
     partition: TimelinePartitionKey,
-) -> Result<(), TimelineSegmentError> {
+) -> Result<(), TimelineSegmentFailure> {
     let mut previous = None;
     for record in records {
         validate_record(*record)?;
-        if record.key.partition()? != partition {
-            return Err(TimelineSegmentError::PartitionMismatch);
+        if record.key.partition_checked()? != partition {
+            return Err(TimelineSegmentFailure::PartitionMismatch);
         }
         if previous.is_some_and(|key| key >= record.key) {
-            return Err(TimelineSegmentError::RecordsNotStrictlySorted);
+            return Err(TimelineSegmentFailure::RecordsNotStrictlySorted);
         }
         previous = Some(record.key);
     }
     Ok(())
 }
 
-fn validate_record(record: TimelineSegmentRecord) -> Result<(), TimelineSegmentError> {
+pub(crate) fn validate_record(record: TimelineSegmentRecord) -> Result<(), TimelineSegmentFailure> {
     if record.key.due_time_ms < 0
         || record.source_cq_offset.get() < 0
         || record.source_physical_offset < 0
         || record.source_size == 0
         || record.payload.lane() != record.key.lane
-        || record.payload.due_day_utc() != record.key.partition()?.due_day_utc
+        || record.payload.due_day_utc() != record.key.partition_checked()?.due_day_utc
     {
-        return Err(TimelineSegmentError::InvalidRecord);
+        return Err(TimelineSegmentFailure::InvalidRecord);
     }
     Ok(())
 }
@@ -587,40 +586,40 @@ impl RunningCrc32c {
     }
 }
 
-fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], TimelineSegmentError> {
+fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], TimelineSegmentFailure> {
     bytes
         .get(offset..offset.saturating_add(N))
         .and_then(|value| value.try_into().ok())
-        .ok_or(TimelineSegmentError::Truncated)
+        .ok_or(TimelineSegmentFailure::Truncated)
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, TimelineSegmentError> {
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, TimelineSegmentFailure> {
     Ok(u16::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, TimelineSegmentError> {
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, TimelineSegmentFailure> {
     Ok(u32::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, TimelineSegmentError> {
+fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, TimelineSegmentFailure> {
     Ok(i32::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, TimelineSegmentError> {
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, TimelineSegmentFailure> {
     Ok(u64::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, TimelineSegmentError> {
+fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, TimelineSegmentFailure> {
     Ok(i64::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, TimelineSegmentError> {
+fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, TimelineSegmentFailure> {
     Ok(u128::from_be_bytes(read_array(bytes, offset)?))
 }
 
 /// Native Timeline run codec failure.
 #[derive(Debug, Error)]
-pub(crate) enum TimelineSegmentError {
+pub(crate) enum TimelineSegmentFailure {
     /// Underlying file operation failed.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -685,23 +684,117 @@ pub(crate) enum TimelineSegmentError {
     LengthOverflow,
 }
 
-impl TimelineSegmentError {
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Filesystem faults keep their typed I/O source, and the remaining
-    /// record/run evidence follows the owning operation as read or write
-    /// failure evidence. The complete leaf is preserved as the typed source.
+impl TimelineSegmentFailure {
+    fn into_public<T>(result: Result<T, Self>, operation: StoreOperation) -> Result<Option<T>, StoreError> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(Self::Io(error)) => Err(Self::Io(error).into_store_error(operation)),
+            Err(_) if matches!(operation, StoreOperation::Append) => Ok(None),
+            Err(error) => Err(error.into_store_error(operation)),
+        }
+    }
+
     pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
-        let descriptor = match (&self, operation) {
-            (Self::Io(_), _) => &rocketmq_error::STORAGE_IO_FAILED,
-            (_, StoreOperation::Load | StoreOperation::Read | StoreOperation::QueryOffset) => {
-                &rocketmq_error::STORAGE_READ_FAILED
-            }
-            (_, StoreOperation::Append | StoreOperation::Flush | StoreOperation::AppendDerived) => {
-                &rocketmq_error::STORAGE_WRITE_FAILED
-            }
-            _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
-        };
-        StoreError::new(descriptor, operation).with_source(self)
+        match self {
+            error @ Self::Io(_) => StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+                .in_component(StoreComponent::Store)
+                .with_source(error),
+            error => StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
+                .in_component(StoreComponent::Store)
+                .with_source(error),
+        }
+    }
+}
+
+impl TimelinePartitionKey {
+    /// Creates the V1 partition for a deadline and lane.
+    pub fn from_deadline(due_time_ms: i64, lane: u16) -> Option<Self> {
+        Self::from_deadline_checked(due_time_ms, lane).ok()
+    }
+}
+
+impl TimelineSegmentKey {
+    /// Returns the physical partition containing this key.
+    pub fn partition(self) -> Option<TimelinePartitionKey> {
+        self.partition_checked().ok()
+    }
+}
+
+/// Writes and seals one immutable native Timeline run.
+///
+/// Returns `Ok(None)` when the caller supplies an invalid path, descriptor field, partition, or
+/// record sequence.
+///
+/// # Errors
+///
+/// Returns a storage error when run-file I/O fails.
+pub fn write_timeline_run(
+    root: &Path,
+    relative_path: &str,
+    kind: TimelineRunKind,
+    partition: TimelinePartitionKey,
+    run_id: u64,
+    created_generation: u64,
+    records: &[TimelineSegmentRecord],
+) -> Result<Option<TimelineRunDescriptor>, StoreError> {
+    TimelineSegmentFailure::into_public(
+        write_timeline_run_checked(
+            root,
+            relative_path,
+            kind,
+            partition,
+            run_id,
+            created_generation,
+            records,
+        ),
+        StoreOperation::Append,
+    )
+}
+
+/// Inspects and verifies one immutable native Timeline run.
+pub fn inspect_timeline_run(root: &Path, relative_path: &str) -> Result<TimelineRunDescriptor, StoreError> {
+    inspect_timeline_run_checked(root, relative_path).map_err(|error| error.into_store_error(StoreOperation::Read))
+}
+
+impl TimelineRunReader {
+    /// Opens one verified immutable run.
+    pub fn open(root: &Path, descriptor: TimelineRunDescriptor) -> Result<Self, StoreError> {
+        Self::open_checked(root, descriptor).map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    /// Reads the next record from the run.
+    pub fn read_next(&mut self) -> Result<Option<TimelineSegmentRecord>, StoreError> {
+        self.read_next_checked()
+            .map_err(|error| error.into_store_error(StoreOperation::Read))
+    }
+
+    /// Skips a bounded number of records.
+    ///
+    /// Returns `Ok(None)` when `count` extends past the run end.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when run I/O or persisted record validation fails.
+    pub fn skip(&mut self, count: u64) -> Result<Option<()>, StoreError> {
+        match self.skip_checked(count) {
+            Ok(()) => Ok(Some(())),
+            Err(TimelineSegmentFailure::CursorPastEnd) => Ok(None),
+            Err(error) => Err(error.into_store_error(StoreOperation::Read)),
+        }
+    }
+
+    /// Seeks to a previously validated record position.
+    ///
+    /// Returns `Ok(None)` when `position` is past the run end.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the underlying run seek fails.
+    pub fn seek_to(&mut self, position: u64) -> Result<Option<()>, StoreError> {
+        match self.seek_to_checked(position) {
+            Ok(()) => Ok(Some(())),
+            Err(TimelineSegmentFailure::CursorPastEnd | TimelineSegmentFailure::LengthOverflow) => Ok(None),
+            Err(error) => Err(error.into_store_error(StoreOperation::Read)),
+        }
     }
 }

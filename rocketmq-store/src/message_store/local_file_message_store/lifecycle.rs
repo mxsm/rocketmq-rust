@@ -434,7 +434,7 @@ impl LocalFileMessageStore {
         );
         let mut result = if managed {
             match self.activate_managed_queue_runtime() {
-                Ok(()) => true,
+                Ok(activated) => activated,
                 Err(error) => {
                     error!(error = %error, "managed queue activation failed before recovery");
                     return false;

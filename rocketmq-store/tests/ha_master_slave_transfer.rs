@@ -102,7 +102,7 @@ fn master_plans_single_slave_batch() -> TransferBatch {
         assert_eq!(offset, 4096);
         assert_eq!(max_bytes, 26);
         assert!(!allow_cross_file);
-        Ok(vec![
+        Ok(Some(vec![
             SegmentLease::from_bytes(
                 offset,
                 offset as u64,
@@ -115,9 +115,10 @@ fn master_plans_single_slave_batch() -> TransferBatch {
                 Bytes::from_static(b"single-slave"),
                 TransferCacheState::Hot,
             ),
-        ])
+        ]))
     })
-    .expect("master should plan one slave transfer batch");
+    .expect("master should plan one slave transfer batch")
+    .expect("valid transfer plan");
 
     match plan {
         TransferPlan::Data(batch) => batch,
@@ -125,13 +126,17 @@ fn master_plans_single_slave_batch() -> TransferBatch {
     }
 }
 
-async fn send_with_bytes_engine(batch: &TransferBatch) -> TransferResultSnapshot {
+async fn send_with_bytes_engine(batch: &TransferBatch) -> TransferFailureSnapshot {
     let mut engine = BytesTransferEngine::new(RecordingWriter::default());
-    let stats = engine.send_batch(batch).await.expect("bytes HA transfer");
+    let stats = engine
+        .send_batch(batch)
+        .await
+        .expect("bytes HA transfer")
+        .expect("valid bytes transfer batch");
     let writer = engine.into_inner();
     let slave_frame = SlaveFrame::decode(&writer.written);
 
-    TransferResultSnapshot {
+    TransferFailureSnapshot {
         written: writer.written.clone(),
         writer,
         stats,
@@ -139,13 +144,17 @@ async fn send_with_bytes_engine(batch: &TransferBatch) -> TransferResultSnapshot
     }
 }
 
-async fn send_with_vectored_engine(batch: &TransferBatch) -> TransferResultSnapshot {
+async fn send_with_vectored_engine(batch: &TransferBatch) -> TransferFailureSnapshot {
     let mut engine = VectoredTransferEngine::new(RecordingWriter::default());
-    let stats = engine.send_batch(batch).await.expect("vectored HA transfer");
+    let stats = engine
+        .send_batch(batch)
+        .await
+        .expect("vectored HA transfer")
+        .expect("valid vectored transfer batch");
     let writer = engine.into_inner();
     let slave_frame = SlaveFrame::decode(&writer.written);
 
-    TransferResultSnapshot {
+    TransferFailureSnapshot {
         written: writer.written.clone(),
         writer,
         stats,
@@ -164,7 +173,7 @@ fn slave_report(offset: i64) -> [u8; 8] {
     offset.to_be_bytes()
 }
 
-struct TransferResultSnapshot {
+struct TransferFailureSnapshot {
     written: Vec<u8>,
     writer: RecordingWriter,
     stats: TransferStats,

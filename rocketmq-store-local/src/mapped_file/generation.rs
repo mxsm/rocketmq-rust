@@ -422,7 +422,7 @@ impl<W, R> PublishedGeneration<W, R> {
 
 /// Failure to initialize or atomically publish a mapping generation.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub(crate) enum MappingPublicationError<E> {
+pub(crate) enum MappingPublicationFailure<E> {
     /// The concrete mapping initializer failed.
     #[error("mapping initialization failed: {0}")]
     Initialization(E),
@@ -684,45 +684,45 @@ impl<W: MappedMemory, R> MappedFileMapping<W, R> {
         initializer: F,
         can_build: V,
         publish_gate: P,
-    ) -> Result<Arc<WritableMappingGeneration<W>>, MappingPublicationError<E>>
+    ) -> Result<Arc<WritableMappingGeneration<W>>, MappingPublicationFailure<E>>
     where
         F: FnOnce() -> Result<(W, Arc<FileOwner>), E>,
         V: FnOnce() -> bool,
         P: FnOnce(WritableGenerationPublication<'_, W, R>) -> Option<PublishedGenerationToken<W, WritableAccess>>,
     {
         if self.is_detached() {
-            return Err(MappingPublicationError::Detached);
+            return Err(MappingPublicationFailure::Detached);
         }
         if let Some(current) = self.slot.load_full() {
             return match current.as_ref() {
                 PublishedGeneration::Writable(generation) => Ok(Arc::clone(generation)),
-                PublishedGeneration::ReadOnly(_) => Err(MappingPublicationError::AlreadyReadOnly),
+                PublishedGeneration::ReadOnly(_) => Err(MappingPublicationFailure::AlreadyReadOnly),
             };
         }
 
         let _guard = self.init_lock.lock();
         if self.is_detached() {
-            return Err(MappingPublicationError::Detached);
+            return Err(MappingPublicationFailure::Detached);
         }
         if let Some(current) = self.slot.load_full() {
             return match current.as_ref() {
                 PublishedGeneration::Writable(generation) => Ok(Arc::clone(generation)),
-                PublishedGeneration::ReadOnly(_) => Err(MappingPublicationError::AlreadyReadOnly),
+                PublishedGeneration::ReadOnly(_) => Err(MappingPublicationFailure::AlreadyReadOnly),
             };
         }
         if !can_build() {
             self.record_map_failure();
-            return Err(MappingPublicationError::PublicationRejected);
+            return Err(MappingPublicationFailure::PublicationRejected);
         }
 
         let started = Instant::now();
         let id = self.generation_ids.next().map_err(|error| {
             self.record_map_failure();
-            MappingPublicationError::GenerationExhausted(error)
+            MappingPublicationFailure::GenerationExhausted(error)
         })?;
         let (mapping, file_owner) = initializer().map_err(|error| {
             self.record_map_failure();
-            MappingPublicationError::Initialization(error)
+            MappingPublicationFailure::Initialization(error)
         })?;
         let candidate = Arc::new(WritableMappingGeneration::new(
             id,
@@ -735,7 +735,7 @@ impl<W: MappedMemory, R> MappedFileMapping<W, R> {
         let candidate = publish_gate(publication)
             .ok_or_else(|| {
                 self.record_map_failure();
-                MappingPublicationError::PublicationRejected
+                MappingPublicationFailure::PublicationRejected
             })?
             .into_generation();
         if self.lazy_enabled {
@@ -761,7 +761,7 @@ impl<W, R: ReadOnlyMappedMemory> MappedFileMapping<W, R> {
         initializer: F,
         can_build: V,
         publish_gate: P,
-    ) -> Result<Arc<ReadOnlyMappingGeneration<R>>, MappingPublicationError<E>>
+    ) -> Result<Arc<ReadOnlyMappingGeneration<R>>, MappingPublicationFailure<E>>
     where
         F: FnOnce() -> Result<R, E>,
         V: FnOnce() -> bool,
@@ -769,24 +769,24 @@ impl<W, R: ReadOnlyMappedMemory> MappedFileMapping<W, R> {
     {
         let _guard = self.init_lock.lock();
         if self.is_detached() {
-            return Err(MappingPublicationError::Detached);
+            return Err(MappingPublicationFailure::Detached);
         }
         let current = self
             .slot
             .load_full()
-            .ok_or(MappingPublicationError::NoPublishedGeneration)?;
+            .ok_or(MappingPublicationFailure::NoPublishedGeneration)?;
         if current.id() != expected {
-            return Err(MappingPublicationError::ExpectedGenerationMismatch {
+            return Err(MappingPublicationFailure::ExpectedGenerationMismatch {
                 expected,
                 actual: current.id(),
             });
         }
         if !can_build() {
-            return Err(MappingPublicationError::PublicationRejected);
+            return Err(MappingPublicationFailure::PublicationRejected);
         }
 
         let id = self.generation_ids.next()?;
-        let mapping = initializer().map_err(MappingPublicationError::Initialization)?;
+        let mapping = initializer().map_err(MappingPublicationFailure::Initialization)?;
         let candidate = Arc::new(ReadOnlyMappingGeneration::new(
             id,
             mapping,
@@ -794,7 +794,7 @@ impl<W, R: ReadOnlyMappedMemory> MappedFileMapping<W, R> {
             Arc::clone(&self.metrics),
         ));
         publish_gate(ReadOnlyGenerationPublication { owner: self, candidate })
-            .ok_or(MappingPublicationError::PublicationRejected)
+            .ok_or(MappingPublicationFailure::PublicationRejected)
             .map(PublishedGenerationToken::into_generation)
     }
 }
@@ -903,7 +903,8 @@ mod tests {
     ) -> MappedReadLease<DropObservedReadOnlyMemory> {
         let operation = lifecycle
             .try_acquire(MappedFileOperation::Read)
-            .expect_acquired("read admission succeeds");
+            .into_result()
+            .expect("read admission succeeds");
         let len = bytes.len();
         let generation = Arc::new(ReadOnlyMappingGeneration::new(
             MappingGenerationId::FIRST,
@@ -955,7 +956,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(MappingPublicationError::GenerationExhausted(
+            Err(MappingPublicationFailure::GenerationExhausted(
                 MappingGenerationIdExhausted
             ))
         ));
@@ -1164,7 +1165,7 @@ mod tests {
 
         assert!(matches!(
             worker.join().expect("initializer thread does not panic"),
-            Err(MappingPublicationError::PublicationRejected)
+            Err(MappingPublicationFailure::PublicationRejected)
         ));
         assert!(!mapping.is_mapped());
         assert_eq!(mapping.stats().map_failures, 1);
@@ -1194,7 +1195,7 @@ mod tests {
                 || true,
                 |publication| Some(publication.publish()),
             ),
-            Err(MappingPublicationError::Detached)
+            Err(MappingPublicationFailure::Detached)
         ));
 
         assert_eq!(metrics.mapped_generations_live(), 1);
@@ -1234,7 +1235,8 @@ mod tests {
         let dropped_before_operation = Arc::new(AtomicBool::new(false));
         let operation = lifecycle
             .try_acquire(MappedFileOperation::Read)
-            .expect_acquired("read admission succeeds");
+            .into_result()
+            .expect("read admission succeeds");
         let generation = Arc::new(ReadOnlyMappingGeneration::new(
             MappingGenerationId::FIRST,
             DropObservedReadOnlyMemory {
@@ -1261,7 +1263,8 @@ mod tests {
 
         let operation = lifecycle
             .try_acquire(MappedFileOperation::Read)
-            .expect_acquired("second read admission succeeds");
+            .into_result()
+            .expect("second read admission succeeds");
         let generation = Arc::new(ReadOnlyMappingGeneration::new(
             MappingGenerationId::FIRST,
             DropObservedReadOnlyMemory {

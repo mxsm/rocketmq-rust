@@ -277,9 +277,9 @@ impl TimerMessageStore {
             return false;
         }
         let fingerprint = match self.timer_storage_fingerprint() {
-            Ok(fingerprint) => fingerprint,
-            Err(error) => {
-                error!("load timer storage format failed: {error}");
+            Some(fingerprint) => fingerprint,
+            None => {
+                error!("load timer storage format rejected the configured policy");
                 return false;
             }
         };
@@ -2218,7 +2218,7 @@ impl TimerMessageStore {
         )
     }
 
-    fn timer_storage_fingerprint(&self) -> Result<TimerStorageFingerprint, crate::store_error::StoreError> {
+    fn timer_storage_fingerprint(&self) -> Option<TimerStorageFingerprint> {
         TimerStorageFingerprint {
             precision_ms: self.message_store_config.timer_precision_ms,
             wheel_slots: (TIMER_WHEEL_TTL_DAY as u64) * (DAY_SECS as u64) * 2,
@@ -2588,6 +2588,8 @@ mod tests {
 
         let mut store = LocalFileMessageStore::new(
             Arc::clone(&config),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             broker_config,
             topic_config_table,
             None,

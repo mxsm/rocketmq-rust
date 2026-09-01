@@ -18,14 +18,16 @@ use std::fmt;
 use bytes::Bytes;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_store_api::StoreContractViolation;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 use super::owner::CheckpointPersistence;
 use super::owner::DerivedCursorOwner;
-use super::owner::DerivedCursorOwnerError;
+use super::owner::DerivedCursorOwnerFailure;
 use crate::commit_log::record::is_blank_message;
 use crate::commit_log::record::CommitLogFrameCursor;
 use crate::commit_log::record::CommitLogFrameSource;
-use crate::commit_log::record::CursorStartContractViolation;
+use crate::commit_log::record::FrameCursorStartViolation;
 
 /// Idempotent application boundary for one derived view.
 pub trait DerivedReplaySink {
@@ -100,8 +102,8 @@ impl DerivedReplayReport {
 ///
 /// # Errors
 ///
-/// Fails closed on an invalid start cursor, unrepresentable record identity, sink error, or cursor
-/// persistence error.
+/// Returns `Ok(None)` when replay input or cursor state violates a deterministic contract. Returns
+/// an operational error only for source reads, sink failures, or checkpoint persistence failures.
 #[allow(
     dead_code,
     reason = "exercised by the in-crate replay harness; the store-side derived owner arrives with E3-4"
@@ -110,17 +112,57 @@ pub(crate) fn replay_derived<S, P, K>(
     source: S,
     owner: &mut DerivedCursorOwner<P>,
     sink: &mut K,
-) -> Result<DerivedReplayReport, DerivedReplayError<K::Error, P::Error>>
+) -> Result<Option<DerivedReplayReport>, StoreError>
+where
+    S: CommitLogFrameSource,
+    P: CheckpointPersistence,
+    K: DerivedReplaySink,
+{
+    match replay_derived_checked(source, owner, sink) {
+        Ok(report) => Ok(Some(report)),
+        Err(
+            DerivedReplayFailure::StartCursor(_)
+            | DerivedReplayFailure::OffsetNotRepresentable(_)
+            | DerivedReplayFailure::FrameTooLarge(_)
+            | DerivedReplayFailure::Record(_)
+            | DerivedReplayFailure::Owner(
+                DerivedCursorOwnerFailure::Checkpoint(_)
+                | DerivedCursorOwnerFailure::Cursor(_)
+                | DerivedCursorOwnerFailure::SourceEpochMismatch { .. },
+            ),
+        ) => Ok(None),
+        Err(DerivedReplayFailure::Owner(DerivedCursorOwnerFailure::Store(error))) => Err(error),
+        Err(DerivedReplayFailure::Owner(owner @ DerivedCursorOwnerFailure::Persist(_))) => Err(StoreError::new(
+            &rocketmq_error::STORAGE_WRITE_FAILED,
+            StoreOperation::AppendDerived,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::Store)
+        .with_source(DerivedReplayFailure::<K::Error, P::Error>::Owner(owner))),
+        Err(
+            error @ (DerivedReplayFailure::Sink(_) | DerivedReplayFailure::Owner(DerivedCursorOwnerFailure::Read(_))),
+        ) => Err(
+            StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Read)
+                .in_component(rocketmq_store_api::StoreComponent::Store)
+                .with_source(error),
+        ),
+    }
+}
+
+fn replay_derived_checked<S, P, K>(
+    source: S,
+    owner: &mut DerivedCursorOwner<P>,
+    sink: &mut K,
+) -> Result<DerivedReplayReport, DerivedReplayFailure<K::Error, P::Error>>
 where
     S: CommitLogFrameSource,
     P: CheckpointPersistence,
     K: DerivedReplaySink,
 {
     let start_offset = usize::try_from(owner.cursor().next_offset())
-        .map_err(|_| DerivedReplayError::OffsetNotRepresentable(owner.cursor().next_offset()))?;
+        .map_err(|_| DerivedReplayFailure::OffsetNotRepresentable(owner.cursor().next_offset()))?;
     let source_epoch = owner.cursor().source_epoch();
     let mut cursor =
-        CommitLogFrameCursor::try_from_offset(source, start_offset).map_err(DerivedReplayError::StartCursor)?;
+        CommitLogFrameCursor::try_from_offset(source, start_offset).map_err(DerivedReplayFailure::StartCursor)?;
     let mut applied = 0_u64;
     let mut duplicates = 0_u64;
     let mut committed_records = 0_u64;
@@ -133,15 +175,15 @@ where
         }
 
         let physical_offset =
-            u64::try_from(offset).map_err(|_| DerivedReplayError::OffsetNotRepresentable(offset as u64))?;
-        let length = u32::try_from(frame_size).map_err(|_| DerivedReplayError::FrameTooLarge(frame_size))?;
+            u64::try_from(offset).map_err(|_| DerivedReplayFailure::OffsetNotRepresentable(offset as u64))?;
+        let length = u32::try_from(frame_size).map_err(|_| DerivedReplayFailure::FrameTooLarge(frame_size))?;
         let record =
-            DerivedRecordId::try_new(source_epoch, physical_offset, length).map_err(DerivedReplayError::Record)?;
-        match sink.apply(record, &frame).map_err(DerivedReplayError::Sink)? {
+            DerivedRecordId::try_new(source_epoch, physical_offset, length).map_err(DerivedReplayFailure::Record)?;
+        match sink.apply(record, &frame).map_err(DerivedReplayFailure::Sink)? {
             DerivedReplayApply::Applied => applied = applied.saturating_add(1),
             DerivedReplayApply::Duplicate => duplicates = duplicates.saturating_add(1),
         }
-        owner.commit(record).map_err(DerivedReplayError::Owner)?;
+        owner.commit_checked(record).map_err(DerivedReplayFailure::Owner)?;
         committed_records = committed_records.saturating_add(1);
     }
 
@@ -164,18 +206,17 @@ where
 
 /// Failure while replaying the authoritative CommitLog into one derived view.
 #[derive(Debug)]
-#[allow(dead_code, reason = "exercised by the in-crate replay harness")]
-pub(crate) enum DerivedReplayError<SinkError, PersistenceError> {
-    StartCursor(CursorStartContractViolation),
+pub(crate) enum DerivedReplayFailure<SinkError, PersistenceError> {
+    StartCursor(FrameCursorStartViolation),
     OffsetNotRepresentable(u64),
     FrameTooLarge(usize),
     Record(StoreContractViolation),
     Sink(SinkError),
-    Owner(DerivedCursorOwnerError<PersistenceError>),
+    Owner(DerivedCursorOwnerFailure<PersistenceError>),
 }
 
 impl<SinkError: fmt::Display, PersistenceError: fmt::Display> fmt::Display
-    for DerivedReplayError<SinkError, PersistenceError>
+    for DerivedReplayFailure<SinkError, PersistenceError>
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -196,7 +237,7 @@ impl<SinkError: fmt::Display, PersistenceError: fmt::Display> fmt::Display
     }
 }
 
-impl<SinkError, PersistenceError> StdError for DerivedReplayError<SinkError, PersistenceError>
+impl<SinkError, PersistenceError> StdError for DerivedReplayFailure<SinkError, PersistenceError>
 where
     SinkError: StdError + 'static,
     PersistenceError: StdError + 'static,

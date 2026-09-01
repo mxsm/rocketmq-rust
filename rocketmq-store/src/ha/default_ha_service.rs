@@ -822,7 +822,7 @@ impl AcceptSocketService {
         stream: TcpStream,
         addr: SocketAddr,
         is_auto_switch: bool,
-    ) -> Result<GeneralHAConnection, crate::store_error::StoreError> {
+    ) -> Result<GeneralHAConnection, crate::ha::HAServiceFailure> {
         let default_connection =
             DefaultHAConnection::new(runtime_scope, connection_context, stream, message_store_config, addr).await?;
         let general_connection = if is_auto_switch {

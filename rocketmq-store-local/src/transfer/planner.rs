@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreOperation;
-
 use crate::transfer::batch::TransferBatch;
 use crate::transfer::batch::TransferPlan;
-use crate::transfer::error::TransferError;
+use crate::transfer::error::TransferViolation;
 use crate::transfer::segment::SegmentLease;
+use rocketmq_store_api::StoreError;
 
 pub const DEFAULT_TRANSFER_BATCH_SIZE: usize = 256 * 1024;
 
@@ -37,55 +35,62 @@ pub struct TransferPlanInput {
 pub struct TransferPlanner;
 
 impl TransferPlanner {
-    /// Plans one replication batch from the caller-provided segment selection.
+    /// Builds one bounded transfer plan from caller limits and selected mapped segments.
+    ///
+    /// Returns `Ok(None)` when the input or mapped-segment selection is invalid.
     ///
     /// # Errors
     ///
-    /// Returns `STORAGE_REQUEST_INVALID` for invalid planner input or a
-    /// selection that exceeds its planned budget, and forwards the caller's
-    /// selection error unchanged.
-    pub fn plan<F>(input: TransferPlanInput, select_segments: F) -> Result<TransferPlan, StoreError>
+    /// Returns the selector's operational storage error unchanged.
+    pub fn plan<F>(input: TransferPlanInput, select_segments: F) -> Result<Option<TransferPlan>, StoreError>
     where
-        F: FnOnce(i64, usize, bool) -> Result<Vec<SegmentLease>, StoreError>,
+        F: FnOnce(i64, usize, bool) -> Result<Option<Vec<SegmentLease>>, StoreError>,
+    {
+        Self::plan_checked(input, select_segments)
+    }
+
+    fn plan_checked<F>(input: TransferPlanInput, select_segments: F) -> Result<Option<TransferPlan>, StoreError>
+    where
+        F: FnOnce(i64, usize, bool) -> Result<Option<Vec<SegmentLease>>, StoreError>,
     {
         if input.mapped_file_size == 0 {
-            return Err(
-                TransferError::InvalidInput("mapped_file_size must be greater than zero".to_string())
-                    .into_store_error(StoreOperation::Replicate),
-            );
+            let _ = TransferViolation::InvalidInput("mapped_file_size must be greater than zero".to_string());
+            return Ok(None);
         }
 
         let next_offset = Self::resolve_next_offset(input);
         if next_offset < 0 {
-            return Ok(TransferPlan::NoData);
+            return Ok(Some(TransferPlan::NoData));
         }
         if next_offset >= input.max_commit_log_offset {
-            return Ok(Self::no_data_or_heartbeat(input.heartbeat_due, next_offset));
+            return Ok(Some(Self::no_data_or_heartbeat(input.heartbeat_due, next_offset)));
         }
 
         let max_body_bytes = Self::max_body_bytes(input, next_offset);
         if max_body_bytes == 0 {
-            return Ok(TransferPlan::NoData);
+            return Ok(Some(TransferPlan::NoData));
         }
 
-        let segments = select_segments(next_offset, max_body_bytes, input.allow_cross_file_batch)?;
+        let Some(segments) = select_segments(next_offset, max_body_bytes, input.allow_cross_file_batch)? else {
+            return Ok(None);
+        };
         if segments.is_empty() {
-            return Ok(Self::no_data_or_heartbeat(input.heartbeat_due, next_offset));
+            return Ok(Some(Self::no_data_or_heartbeat(input.heartbeat_due, next_offset)));
         }
 
         let total_body_len = segments.iter().map(SegmentLease::len).sum::<usize>();
         if total_body_len == 0 {
-            return Ok(TransferPlan::NoData);
+            return Ok(Some(TransferPlan::NoData));
         }
         if total_body_len > max_body_bytes {
-            return Err(TransferError::SegmentSelection(format!(
+            let _ = TransferViolation::SegmentSelection(format!(
                 "selected {} bytes exceeds planned max {} bytes",
                 total_body_len, max_body_bytes
-            ))
-            .into_store_error(StoreOperation::Replicate));
+            ));
+            return Ok(None);
         }
 
-        Ok(TransferPlan::Data(TransferBatch::data(next_offset, segments)))
+        Ok(Some(TransferPlan::Data(TransferBatch::data(next_offset, segments))))
     }
 
     fn resolve_next_offset(input: TransferPlanInput) -> i64 {

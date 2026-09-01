@@ -20,7 +20,6 @@ use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryObserva
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoveryRecord;
 use rocketmq_store_local::commit_log::abnormal_recovery::AbnormalRecoverySegmentOutcome;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryDispatchGate;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryOffsetViolation;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryPolicy;
 use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryState;
 
@@ -67,12 +66,7 @@ fn segment_state_error_skips_started_and_preserves_adapter_error_identity() {
         || events.borrow_mut().push("started".into()),
         |_, _: &mut Record| panic!("observe must not run"),
     );
-    assert_eq!(
-        outcome,
-        AbnormalRecoverySegmentOutcome::StateFailed(AbnormalRecoveryOffsetViolation::OffsetExceedsI64 {
-            offset: i64::MAX as u64 + 1,
-        })
-    );
+    assert_eq!(outcome, AbnormalRecoverySegmentOutcome::StateFailed);
     assert!(events.borrow().is_empty());
 
     let mut recovery = state(AbnormalRecoveryPolicy::Standard);
@@ -232,13 +226,7 @@ fn message_state_failure_drops_unobserved_payload_and_stops_reading() {
         || events.borrow_mut().push("started".into()),
         |_, _| events.borrow_mut().push("observe".into()),
     );
-    assert_eq!(
-        outcome,
-        AbnormalRecoverySegmentOutcome::StateFailed(AbnormalRecoveryOffsetViolation::BaseRelativeOverflow {
-            base_offset: u64::MAX,
-            relative_start: 1,
-        })
-    );
+    assert_eq!(outcome, AbnormalRecoverySegmentOutcome::StateFailed);
     assert_eq!(calls, 1);
     assert_eq!(records.len(), 1);
     assert_eq!(&*events.borrow(), &["started", "drop:overflow:false"]);

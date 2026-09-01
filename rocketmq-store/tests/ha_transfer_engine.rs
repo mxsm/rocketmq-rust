@@ -41,7 +41,11 @@ async fn bytes_transfer_engine_matches_existing_ha_frame_bytes() {
     let batch = transfer_batch(header.clone(), body.clone());
     let mut engine = BytesTransferEngine::new(ChunkedWriter::new(usize::MAX));
 
-    let stats = engine.send_batch(&batch).await.expect("bytes transfer");
+    let stats = engine
+        .send_batch(&batch)
+        .await
+        .expect("bytes transfer")
+        .expect("valid bytes transfer batch");
 
     let writer = engine.into_inner();
     let mut expected = header.to_vec();
@@ -63,7 +67,11 @@ async fn vectored_transfer_engine_handles_partial_writes_without_reordering_fram
     let batch = transfer_batch(header.clone(), body.clone());
     let mut engine = VectoredTransferEngine::new(ChunkedWriter::new(5));
 
-    let stats = engine.send_batch(&batch).await.expect("vectored transfer");
+    let stats = engine
+        .send_batch(&batch)
+        .await
+        .expect("vectored transfer")
+        .expect("valid vectored transfer batch");
 
     let writer = engine.into_inner();
     let mut expected = header.to_vec();
@@ -83,11 +91,19 @@ async fn vectored_transfer_engine_reduces_write_calls_for_complete_frame_writes(
     let batch = transfer_batch(header, body);
 
     let mut bytes_engine = BytesTransferEngine::new(ChunkedWriter::new(usize::MAX));
-    let bytes_stats = bytes_engine.send_batch(&batch).await.expect("bytes transfer");
+    let bytes_stats = bytes_engine
+        .send_batch(&batch)
+        .await
+        .expect("bytes transfer")
+        .expect("valid bytes transfer batch");
     let bytes_writer = bytes_engine.into_inner();
 
     let mut vectored_engine = VectoredTransferEngine::new(ChunkedWriter::new(usize::MAX));
-    let vectored_stats = vectored_engine.send_batch(&batch).await.expect("vectored transfer");
+    let vectored_stats = vectored_engine
+        .send_batch(&batch)
+        .await
+        .expect("vectored transfer")
+        .expect("valid vectored transfer batch");
     let vectored_writer = vectored_engine.into_inner();
 
     assert_eq!(bytes_stats.write_call_count, 2);
@@ -106,7 +122,11 @@ async fn vectored_transfer_engine_falls_back_to_bytes_when_first_vectored_write_
     let batch = transfer_batch(header.clone(), body.clone());
     let mut engine = VectoredTransferEngine::new(FailingVectoredWriter::fail_before_write());
 
-    let stats = engine.send_batch(&batch).await.expect("fallback transfer");
+    let stats = engine
+        .send_batch(&batch)
+        .await
+        .expect("fallback transfer")
+        .expect("valid fallback transfer batch");
 
     let writer = engine.into_inner();
     let mut expected = header.to_vec();

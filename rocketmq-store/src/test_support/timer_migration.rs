@@ -58,8 +58,11 @@ pub struct TimerIndexMigrationProbe {
 pub fn run_timer_index_migration_probe() -> TimerIndexMigrationProbe {
     let root = tempfile::tempdir().expect("migration root");
     let rocks = Arc::new(RocksDbTimelineIndex::open(root.path()).expect("rocks Timeline"));
-    let native =
-        Arc::new(SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default()).expect("native Timeline"));
+    let native = Arc::new(
+        SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default())
+            .expect("native Timeline")
+            .expect("valid native Timeline configuration"),
+    );
     seed(&rocks, 0..12);
 
     let manager = TimelineIndexMigrationManager::new(root.path(), Arc::clone(&rocks), Arc::clone(&native));
@@ -89,7 +92,10 @@ pub fn run_timer_index_migration_probe() -> TimerIndexMigrationProbe {
         TimelineIndexMigrationPhase::Shadowing
     );
 
-    let pin = native.pin_snapshot(17).expect("native snapshot pin");
+    let pin = native
+        .pin_snapshot(17)
+        .expect("native snapshot pin")
+        .expect("snapshot generation is non-zero");
     let native_files = native
         .create_snapshot_files(&root.path().join("migration-snapshot-native"), pin)
         .expect("copy native snapshot files");

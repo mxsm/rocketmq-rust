@@ -13,60 +13,21 @@
 // limitations under the License.
 
 use rocketmq_store_local::commit_log::recovery::abnormal_confirm_candidate_end;
-use rocketmq_store_local::commit_log::recovery::AbnormalRecoveryConfirmCandidateViolation;
 
 #[test]
 fn confirm_candidate_preserves_checked_offset_semantics() {
-    assert_eq!(abnormal_confirm_candidate_end(7, 5), Ok(12));
-    assert_eq!(abnormal_confirm_candidate_end(i64::MAX, 0), Ok(i64::MAX));
-    assert_eq!(abnormal_confirm_candidate_end(0, i64::MAX as usize), Ok(i64::MAX));
+    assert_eq!(abnormal_confirm_candidate_end(7, 5), Some(12));
+    assert_eq!(abnormal_confirm_candidate_end(i64::MAX, 0), Some(i64::MAX));
+    assert_eq!(abnormal_confirm_candidate_end(0, i64::MAX as usize), Some(i64::MAX));
 
     for offset in [-1, i64::MIN] {
-        assert_eq!(
-            abnormal_confirm_candidate_end(offset, 1),
-            Err(AbnormalRecoveryConfirmCandidateViolation::NegativeCommitLogOffset { offset })
-        );
+        assert_eq!(abnormal_confirm_candidate_end(offset, 1), None);
     }
-    assert_eq!(
-        abnormal_confirm_candidate_end(i64::MAX, 1),
-        Err(AbnormalRecoveryConfirmCandidateViolation::ConfirmCandidateOverflow {
-            offset: i64::MAX,
-            size: 1,
-        })
-    );
+    assert_eq!(abnormal_confirm_candidate_end(i64::MAX, 1), None);
 }
 
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn confirm_candidate_rejects_input_size_above_i64_max() {
-    let size = (i64::MAX as usize) + 1;
-    assert_eq!(
-        abnormal_confirm_candidate_end(0, size),
-        Err(AbnormalRecoveryConfirmCandidateViolation::InputSizeExceedsI64 { size })
-    );
-}
-
-#[test]
-fn confirm_candidate_errors_preserve_store_visible_messages() {
-    let cases = [
-        (
-            AbnormalRecoveryConfirmCandidateViolation::NegativeCommitLogOffset { offset: -7 },
-            "commitlog offset -7 is negative",
-        ),
-        (
-            AbnormalRecoveryConfirmCandidateViolation::InputSizeExceedsI64 { size: 11 },
-            "input frame size 11 exceeds i64::MAX",
-        ),
-        (
-            AbnormalRecoveryConfirmCandidateViolation::ConfirmCandidateOverflow {
-                offset: i64::MAX,
-                size: 1,
-            },
-            "commitlog offset 9223372036854775807 plus input frame size 1 overflowed",
-        ),
-    ];
-
-    for (error, expected) in cases {
-        assert_eq!(error.to_string(), expected);
-    }
+    assert_eq!(abnormal_confirm_candidate_end(0, (i64::MAX as usize) + 1), None);
 }

@@ -111,10 +111,10 @@ impl OpenedEntry {
         self.file
     }
 
-    pub(in crate::mapped_file::retirement) fn verify(&self, expected: &InventoryEntry) -> Result<(), PlatformError> {
+    pub(in crate::mapped_file::retirement) fn verify(&self, expected: &InventoryEntry) -> Result<(), PlatformFailure> {
         let actual = imp::stamp(&self.file)?;
         if actual != self.stamp || actual != expected.stamp {
-            return Err(PlatformError::changed(format!(
+            return Err(PlatformFailure::changed(format!(
                 "entry {:?} changed after its retained handle was opened",
                 expected.name
             )));
@@ -125,22 +125,22 @@ impl OpenedEntry {
     pub(in crate::mapped_file::retirement) fn enumerate(
         &self,
         maximum: usize,
-    ) -> Result<InventorySnapshot, PlatformError> {
+    ) -> Result<InventorySnapshot, PlatformFailure> {
         if self.stamp.kind != EntryKind::Directory {
-            return Err(PlatformError::unsafe_namespace(
+            return Err(PlatformFailure::unsafe_namespace(
                 "retained lifecycle entry is not a directory",
             ));
         }
         let before = imp::stamp(&self.file)?;
         if before != self.stamp {
-            return Err(PlatformError::changed(
+            return Err(PlatformFailure::changed(
                 "retained lifecycle directory changed before enumeration",
             ));
         }
         let mut entries = imp::enumerate_directory(&self.file, maximum)?;
         let after = imp::stamp(&self.file)?;
         if after != before {
-            return Err(PlatformError::changed(
+            return Err(PlatformFailure::changed(
                 "retained lifecycle directory changed during one complete enumeration",
             ));
         }
@@ -151,9 +151,12 @@ impl OpenedEntry {
         })
     }
 
-    pub(in crate::mapped_file::retirement) fn open_entry(&self, entry: &InventoryEntry) -> Result<Self, PlatformError> {
+    pub(in crate::mapped_file::retirement) fn open_entry(
+        &self,
+        entry: &InventoryEntry,
+    ) -> Result<Self, PlatformFailure> {
         if self.stamp.kind != EntryKind::Directory {
-            return Err(PlatformError::unsafe_namespace(
+            return Err(PlatformFailure::unsafe_namespace(
                 "retained lifecycle entry is not a directory",
             ));
         }
@@ -162,7 +165,7 @@ impl OpenedEntry {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum PlatformError {
+pub(crate) enum PlatformFailure {
     #[error("{context}: {source}")]
     Io {
         context: &'static str,
@@ -186,7 +189,7 @@ pub(crate) enum PlatformError {
     Unsupported,
 }
 
-impl PlatformError {
+impl PlatformFailure {
     pub(super) fn io(context: &'static str, error: std::io::Error) -> Self {
         Self::Io { context, source: error }
     }

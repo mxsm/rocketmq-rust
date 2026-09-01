@@ -88,7 +88,9 @@ fn active_segment_claim_preflights_every_binding_before_consuming_handles() {
     );
     assert!(matches!(
         ready.take_active_segments_in_directory("commitlog", 1_024),
-        Err(ManagedSegmentClaimViolation::MissingRetainedHandle)
+        Err(ManagedSegmentClaimFault::Contract(
+            ManagedSegmentClaimViolation::MissingRetainedHandle
+        ))
     ));
     assert_eq!(ready.active_count(), 2);
     assert_eq!(ready.retained_files.len(), 1);
@@ -99,10 +101,12 @@ fn active_segment_claim_preflights_every_binding_before_consuming_handles() {
     );
     assert!(matches!(
         ready.take_active_segments_in_directory("commitlog", 2_048),
-        Err(ManagedSegmentClaimViolation::ConfiguredLengthMismatch {
-            expected: 1_024,
-            configured: 2_048,
-        })
+        Err(ManagedSegmentClaimFault::Contract(
+            ManagedSegmentClaimViolation::ConfiguredLengthMismatch {
+                expected: 1_024,
+                configured: 2_048,
+            }
+        ))
     ));
     assert_eq!(ready.active_count(), 2);
     assert_eq!(ready.retained_files.len(), 2);

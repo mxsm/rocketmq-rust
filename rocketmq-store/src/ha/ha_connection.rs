@@ -17,8 +17,9 @@ use std::fmt::Display;
 use tokio::net::TcpStream;
 use uuid::Uuid;
 
+use rocketmq_store_api::StoreError;
+
 use crate::ha::ha_connection_state::HAConnectionState;
-use crate::store_error::StoreError;
 
 #[trait_variant::make(HAConnection: Send)]
 pub trait RocketmqHAConnection: Sync {

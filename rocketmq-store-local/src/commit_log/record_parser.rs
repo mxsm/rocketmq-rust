@@ -94,15 +94,12 @@ pub enum CommitLogRecordField {
     Record,
 }
 
-/// Structural or body-checksum decoding contract violation.
-///
-/// Every variant retains the declared record size when the four-byte size
-/// prefix was available, together with the specific decoding evidence.
+/// Structural or body-checksum contract evidence retained inside Store Local.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CommitLogRecordViolation {
+pub(crate) enum CommitLogRecordViolation {
     /// A bounded field did not fit in the declared record frame.
     Truncated {
-        /// Declared size when the four-byte size prefix was available.
+        /// Declared size when the four-byte prefix was available.
         declared_size: Option<i32>,
         /// Field whose bytes were unavailable.
         field: CommitLogRecordField,
@@ -113,7 +110,7 @@ pub enum CommitLogRecordViolation {
     },
     /// A signed length was negative and therefore rejected before conversion.
     NegativeLength {
-        /// Declared size when the four-byte size prefix was available.
+        /// Declared size when the four-byte prefix was available.
         declared_size: Option<i32>,
         /// Length field that was negative.
         field: CommitLogRecordField,
@@ -122,54 +119,20 @@ pub enum CommitLogRecordViolation {
     },
     /// The magic code is neither a supported message nor blank marker.
     IllegalMagic {
-        /// Declared size when the four-byte size prefix was available.
-        declared_size: Option<i32>,
+        /// Declared size from the record prefix.
+        declared_size: i32,
         /// Unsupported magic value.
         magic_code: i32,
     },
     /// A requested non-empty body checksum verification failed.
     BodyCrcMismatch {
-        /// Declared size when the four-byte size prefix was available.
-        declared_size: Option<i32>,
+        /// Declared size from the record prefix.
+        declared_size: i32,
         /// Checksum computed from the bounded body.
         computed: u32,
         /// Checksum stored in the record header.
         stored: u32,
     },
-}
-
-impl CommitLogRecordViolation {
-    /// Records the declared size once the size prefix has been decoded.
-    fn with_declared_size(self, size: i32) -> Self {
-        let declared = Some(size);
-        match self {
-            Self::Truncated {
-                field,
-                needed,
-                remaining,
-                ..
-            } => Self::Truncated {
-                declared_size: declared,
-                field,
-                needed,
-                remaining,
-            },
-            Self::NegativeLength { field, value, .. } => Self::NegativeLength {
-                declared_size: declared,
-                field,
-                value,
-            },
-            Self::IllegalMagic { magic_code, .. } => Self::IllegalMagic {
-                declared_size: declared,
-                magic_code,
-            },
-            Self::BodyCrcMismatch { computed, stored, .. } => Self::BodyCrcMismatch {
-                declared_size: declared,
-                computed,
-                stored,
-            },
-        }
-    }
 }
 
 /// Fully decoded, runtime-neutral CommitLog message record.
@@ -226,7 +189,7 @@ impl CommitLogRecord {
     }
 }
 
-/// Successful blank-marker or message decoding result.
+/// Source-free result of inspecting one CommitLog record.
 #[allow(
     clippy::large_enum_variant,
     reason = "CommitLog decoding is a per-message hot path; retaining the record inline avoids a heap allocation"
@@ -240,6 +203,70 @@ pub enum CommitLogRecordOutcome {
     },
     /// Decoded CommitLog message.
     Message(CommitLogRecord),
+    /// A bounded field did not fit in the declared frame.
+    Truncated {
+        declared_size: Option<i32>,
+        field: CommitLogRecordField,
+        needed: usize,
+        remaining: usize,
+    },
+    /// A signed length was negative.
+    NegativeLength {
+        declared_size: Option<i32>,
+        field: CommitLogRecordField,
+        value: i64,
+    },
+    /// The record used an unsupported magic code.
+    IllegalMagic { declared_size: i32, magic_code: i32 },
+    /// Body checksum verification failed.
+    BodyCrcMismatch {
+        declared_size: i32,
+        computed: u32,
+        stored: u32,
+    },
+}
+
+impl From<CommitLogRecordViolation> for CommitLogRecordOutcome {
+    fn from(violation: CommitLogRecordViolation) -> Self {
+        match violation {
+            CommitLogRecordViolation::Truncated {
+                declared_size,
+                field,
+                needed,
+                remaining,
+            } => Self::Truncated {
+                declared_size,
+                field,
+                needed,
+                remaining,
+            },
+            CommitLogRecordViolation::NegativeLength {
+                declared_size,
+                field,
+                value,
+            } => Self::NegativeLength {
+                declared_size,
+                field,
+                value,
+            },
+            CommitLogRecordViolation::IllegalMagic {
+                declared_size,
+                magic_code,
+            } => Self::IllegalMagic {
+                declared_size,
+                magic_code,
+            },
+            CommitLogRecordViolation::BodyCrcMismatch {
+                declared_size,
+                computed,
+                stored,
+            } => Self::BodyCrcMismatch {
+                declared_size,
+                computed,
+                stored,
+            },
+        }
+    }
 }
 
 struct RecordReader {
@@ -330,7 +357,7 @@ fn top_level_i32(input: &Bytes, offset: usize, field: CommitLogRecordField) -> R
 ///
 /// Every field read is bounded by the declared record size. Signed lengths are
 /// rejected before conversion, and body verification is delegated to `checksum`.
-pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
+pub(crate) fn decode_commit_log_record<C: CommitLogRecordChecksum>(
     input: &Bytes,
     body_mode: CommitLogRecordBodyMode,
     checksum: &C,
@@ -344,8 +371,20 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
         });
     }
     let declared_len = declared_size as usize;
-    let magic_code = top_level_i32(input, 4, CommitLogRecordField::MagicCode)
-        .map_err(|error| error.with_declared_size(declared_size))?;
+    let magic_code = top_level_i32(input, 4, CommitLogRecordField::MagicCode).map_err(|error| match error {
+        CommitLogRecordViolation::Truncated {
+            field,
+            needed,
+            remaining,
+            ..
+        } => CommitLogRecordViolation::Truncated {
+            declared_size: Some(declared_size),
+            field,
+            needed,
+            remaining,
+        },
+        other => other,
+    })?;
     if magic_code == BLANK_MAGIC_CODE {
         return Ok(CommitLogRecordOutcome::Blank { declared_size });
     }
@@ -362,7 +401,7 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
         MESSAGE_MAGIC_CODE_V2 => CommitLogRecordVersion::V2,
         _ => {
             return Err(CommitLogRecordViolation::IllegalMagic {
-                declared_size: Some(declared_size),
+                declared_size,
                 magic_code,
             });
         }
@@ -401,7 +440,7 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
                 let stored = body_crc as u32;
                 if computed != stored {
                     return Err(CommitLogRecordViolation::BodyCrcMismatch {
-                        declared_size: Some(declared_size),
+                        declared_size,
                         computed,
                         stored,
                     });
@@ -459,6 +498,18 @@ pub fn decode_commit_log_record<C: CommitLogRecordChecksum>(
         properties_len,
         properties,
     }))
+}
+
+/// Inspects one CommitLog frame without exposing Store Local contract types.
+pub fn inspect_commit_log_record<C: CommitLogRecordChecksum>(
+    input: &Bytes,
+    body_mode: CommitLogRecordBodyMode,
+    checksum: &C,
+) -> CommitLogRecordOutcome {
+    match decode_commit_log_record(input, body_mode, checksum) {
+        Ok(outcome) => outcome,
+        Err(violation) => violation.into(),
+    }
 }
 
 #[cfg(test)]

@@ -60,7 +60,7 @@ fn bench_sequential_write(c: &mut Criterion) {
 
             b.iter(|| {
                 for offset in (0..MAPPED_BUFFER_SIZE - size).step_by(size) {
-                    buffer.write(offset, &data).unwrap();
+                    assert!(buffer.write(offset, &data));
                 }
             });
         });
@@ -87,7 +87,7 @@ fn bench_random_write(c: &mut Criterion) {
 
         b.iter(|| {
             for &offset in &offsets {
-                buffer.write(offset, &data).unwrap();
+                assert!(buffer.write(offset, &data));
             }
         });
     });
@@ -107,7 +107,7 @@ fn bench_batch_write(c: &mut Criterion) {
 
         b.iter(|| {
             for i in 0..100 {
-                buffer.write(i * 1024, &data).unwrap();
+                assert!(buffer.write(i * 1024, &data));
             }
         });
     });
@@ -160,7 +160,7 @@ fn bench_flush(c: &mut Criterion) {
         // Write some data
         let data = vec![0xDDu8; 1024];
         for i in 0..1024 {
-            buffer.write(i * 1024, &data).unwrap();
+            assert!(buffer.write(i * 1024, &data));
         }
 
         b.iter(|| {
@@ -175,7 +175,7 @@ fn bench_flush(c: &mut Criterion) {
 
         // Write some data
         let data = vec![0xDDu8; 4096];
-        buffer.write(0, &data).unwrap();
+        assert!(buffer.write(0, &data));
 
         b.iter(|| {
             buffer.flush_range(0..4096).unwrap();
@@ -203,7 +203,7 @@ fn bench_concurrent(c: &mut Criterion) {
                         let data = vec![i as u8; 1024];
 
                         for j in 0..1024 {
-                            buffer.write(j * 1024, &data).unwrap();
+                            assert!(buffer.write(j * 1024, &data));
                         }
                     })
                 })

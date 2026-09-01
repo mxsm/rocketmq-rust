@@ -352,7 +352,8 @@ async fn segmented_pages_checkpoints_cancel_visibility_and_gc() {
             directory.path(),
             rocketmq_store_local::timer::segmented_timeline::SegmentedTimelineConfig::default(),
         )
-        .expect("open native Timeline"),
+        .expect("open native Timeline")
+        .expect("valid native Timeline configuration"),
     );
     let overlay = std::sync::Arc::new(
         rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex::open(directory.path())

@@ -56,15 +56,16 @@ fn local_planner_owns_offset_resolution_flow_budget_and_file_boundary() {
             assert_eq!(offset, 900);
             assert_eq!(max_bytes, 124);
             assert!(!allow_cross_file);
-            Ok(vec![SegmentLease::from_bytes(
+            Ok(Some(vec![SegmentLease::from_bytes(
                 offset,
                 offset as u64,
                 Bytes::from(vec![7; max_bytes]),
                 TransferCacheState::Hot,
-            )])
+            )]))
         },
     )
-    .expect("plan transfer");
+    .expect("plan transfer")
+    .expect("valid transfer plan");
 
     let TransferPlan::Data(batch) = plan else {
         panic!("expected data batch");
@@ -87,22 +88,27 @@ async fn local_vectored_engine_preserves_frame_order_across_partial_writes() {
             heartbeat_due: false,
         },
         |_, _, _| {
-            Ok(vec![SegmentLease::from_bytes(
+            Ok(Some(vec![SegmentLease::from_bytes(
                 0,
                 0,
                 Bytes::from_static(b"abcdefgh"),
                 TransferCacheState::Hot,
-            )])
+            )]))
         },
     )
-    .expect("plan transfer");
+    .expect("plan transfer")
+    .expect("valid transfer plan");
     let TransferPlan::Data(mut batch) = plan else {
         panic!("expected data batch");
     };
     batch.frame_header = Bytes::from_static(b"header");
 
     let mut engine = VectoredTransferEngine::new(ChunkedWriter::new(3));
-    let stats = engine.send_batch(&batch).await.expect("send partial frame");
+    let stats = engine
+        .send_batch(&batch)
+        .await
+        .expect("send partial frame")
+        .expect("valid transfer batch");
     let writer = engine.into_inner();
     assert_eq!(writer.bytes, b"headerabcdefgh");
     assert_eq!(stats.engine, TransferEngineKind::Vectored);
@@ -143,9 +149,14 @@ async fn owning_file_range_and_bytes_fallback_emit_identical_frames() {
     let file_range_stats = file_range_fallback
         .send_batch(&file_range_batch)
         .await
-        .expect("file-range fallback");
+        .expect("file-range fallback")
+        .expect("valid file-range batch");
     let mut copied = VectoredTransferEngine::new(ChunkedWriter::new(4));
-    let copied_stats = copied.send_batch(&copied_batch).await.expect("copied fallback");
+    let copied_stats = copied
+        .send_batch(&copied_batch)
+        .await
+        .expect("copied fallback")
+        .expect("valid copied batch");
 
     assert_eq!(file_range_fallback.into_inner().bytes, copied.into_inner().bytes);
     assert_eq!(file_range_stats.bytes_written, copied_stats.bytes_written);
@@ -158,13 +169,18 @@ async fn sendfile_and_owning_bytes_fallback_emit_identical_frames() {
     let mut input = tempfile::tempfile().expect("temporary input file");
     std::io::Write::write_all(&mut input, b"sendfile-parity").expect("write input");
     let file_segment = SegmentLease::try_from_file_range(0, 0, 0, 15, Arc::new(input), TransferCacheState::Cold)
+        .expect("metadata read succeeds")
         .expect("checked file range");
     let mut file_batch = TransferBatch::data(0, vec![file_segment]);
     file_batch.frame_header = Bytes::from_static(b"frame:");
     let operation = RecordingSendfile::new(Bytes::from_static(b"sendfile-parity"), 3);
     let mut sendfile = SendfileTransferEngine::with_operation(ChunkedWriter::new(4), operation);
 
-    let sendfile_stats = sendfile.send_batch(&file_batch).await.expect("sendfile frame");
+    let sendfile_stats = sendfile
+        .send_batch(&file_batch)
+        .await
+        .expect("sendfile frame")
+        .expect("valid sendfile batch");
     let (writer, operation) = sendfile.into_parts();
     let mut sendfile_frame = writer.bytes;
     sendfile_frame.extend_from_slice(&operation.emitted);
@@ -184,7 +200,8 @@ async fn sendfile_and_owning_bytes_fallback_emit_identical_frames() {
     let fallback_stats = fallback
         .send_batch(&fallback_batch)
         .await
-        .expect("owning bytes fallback");
+        .expect("owning bytes fallback")
+        .expect("valid fallback batch");
     let (fallback_writer, _) = fallback.into_parts();
 
     assert_eq!(sendfile_frame, fallback_writer.bytes);

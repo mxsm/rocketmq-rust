@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
-use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_read_only;
+use rocketmq_store_local::mapped_file::inspect_managed_lifecycle_read_only_for_store;
 use rocketmq_store_local::mapped_file::ManagedLifecycleReadOutcome;
 
 #[test]
@@ -26,7 +26,7 @@ fn legacy_probe_is_read_only_and_does_not_create_lifecycle_state() {
     let handle = open_root(root.path()).expect("open Store root without following aliases");
 
     assert_eq!(
-        inspect_managed_lifecycle_read_only(&handle).expect("legacy probe succeeds"),
+        inspect_managed_lifecycle_read_only_for_store(&handle).expect("legacy probe succeeds"),
         ManagedLifecycleReadOutcome::LegacyAbsent
     );
     assert_eq!(fs::read_dir(root.path()).expect("read Store root").count(), 0);
@@ -41,9 +41,9 @@ fn unknown_lifecycle_evidence_fails_closed_without_mutation() {
     fs::write(&unknown, b"preserve-for-forensics").expect("write unknown evidence");
     let handle = open_root(root.path()).expect("open Store root without following aliases");
 
-    let error = inspect_managed_lifecycle_read_only(&handle).expect_err("unknown evidence must fail closed");
+    let error = inspect_managed_lifecycle_read_only_for_store(&handle).expect_err("unknown evidence must fail closed");
 
-    assert_eq!(error.code().as_str(), "storage.state.corrupted");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
     assert_eq!(
         fs::read(&unknown).expect("unknown evidence remains"),
         b"preserve-for-forensics"

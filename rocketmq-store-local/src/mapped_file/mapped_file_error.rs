@@ -19,9 +19,9 @@ use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 
-use crate::transfer::segment::FileRangeError;
+use crate::transfer::segment::FileRangeFailure;
+use crate::transfer::segment::FileRangeViolation;
 
-use super::MappedFileAdmissionState;
 use super::MappedFileOperation;
 
 /// Errors that can occur during mapped file operations.
@@ -30,7 +30,7 @@ use super::MappedFileOperation;
 /// when working with memory-mapped files, including I/O errors, bounds violations,
 /// and resource exhaustion.
 #[derive(Error, Debug)]
-pub(crate) enum MappedFileError {
+pub(crate) enum MappedFileFailure {
     /// Standard I/O error occurred during file operations.
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
@@ -39,19 +39,12 @@ pub(crate) enum MappedFileError {
     ///
     /// This error occurs when trying to read or write at an offset + size that
     /// exceeds the file's mapped region.
-    #[error("Out of bounds access: offset={offset}, size={size}, file_size={file_size}")]
-    OutOfBounds {
-        /// The starting offset of the attempted access
-        offset: usize,
-        /// The size of the attempted access in bytes
-        size: usize,
-        /// The total size of the mapped file in bytes
-        file_size: u64,
-    },
+    #[error("{0}")]
+    Violation(MappedFileViolation),
 
     /// A checked file range could not be constructed for the mapped file.
     #[error("File range operation failed: {0}")]
-    FileRange(#[from] FileRangeError),
+    FileRange(#[source] FileRangeFailure),
 
     /// The mapped file has reached its capacity and cannot accept more writes.
     ///
@@ -63,31 +56,6 @@ pub(crate) enum MappedFileError {
         wrote: usize,
         /// Maximum capacity of the file in bytes
         capacity: u64,
-    },
-
-    /// The stored write position cannot identify a valid byte in this segment.
-    #[error("Invalid write position: position={position}, capacity={capacity}")]
-    InvalidWritePosition {
-        /// Current signed write position.
-        position: i32,
-        /// Maximum capacity of the file in bytes.
-        capacity: u64,
-    },
-
-    /// A write lease was committed with an invalid byte count.
-    #[error("Invalid write lease commit: reserved={reserved}, actual={actual}")]
-    InvalidWriteCommit {
-        /// Number of bytes reserved by the lease.
-        reserved: usize,
-        /// Number of bytes requested for publication.
-        actual: usize,
-    },
-
-    /// The next write position exceeds the signed position representation used by the store.
-    #[error("Write position cannot be represented: position={position}")]
-    WritePositionOverflow {
-        /// Unrepresentable file-local position.
-        position: usize,
     },
 
     /// Memory mapping operation failed.
@@ -112,80 +80,147 @@ pub(crate) enum MappedFileError {
     #[error("Mapped-memory unlock failed: {0}")]
     MemoryUnlockFailed(#[source] rocketmq_error::RocketMQError),
 
-    /// The mapped-file lifecycle rejected a new operation after admission changed state.
-    #[error("Mapped-file operation unavailable: operation={operation}, state={state}")]
-    Unavailable {
-        /// Lifecycle state observed by the rejected operation.
-        state: MappedFileAdmissionState,
-        /// Kind of operation that was rejected.
-        operation: MappedFileOperation,
-    },
-
-    /// The packed lifecycle cannot represent another total or writer lease.
-    ///
-    /// Total and writer counters are each limited to 32,767 on 32-bit targets and 2,147,483,647 on
-    /// 64-bit targets. Admission fails closed with this typed error before either field wraps.
-    #[error("Mapped-file active lease count overflow")]
-    LeaseCountOverflow,
-
     /// Transient store pool exhausted.
     ///
     /// No buffers available in the transient store pool for write operations.
     #[error("Transient store pool exhausted")]
     TransientStoreExhausted,
-
-    /// Configuration error.
-    ///
-    /// Indicates invalid configuration parameters were provided
-    #[error("Configuration error: {0}")]
-    Configuration(String),
-
-    /// Generic error with custom message.
-    #[error("{0}")]
-    Custom(String),
 }
 
-impl From<super::lifecycle::LifecycleAcquireRejection> for MappedFileError {
-    fn from(rejection: super::lifecycle::LifecycleAcquireRejection) -> Self {
-        match rejection {
-            super::lifecycle::LifecycleAcquireRejection::Unavailable { state, operation } => {
-                Self::Unavailable { state, operation }
+/// Deterministic mapped-file contract rejection retained inside store-local.
+#[derive(Debug)]
+pub(crate) enum MappedFileViolation {
+    OutOfBounds { offset: usize, size: usize, file_size: u64 },
+    FileRange(FileRangeViolation),
+    InvalidWritePosition { position: i32, capacity: u64 },
+    InvalidWriteCommit { reserved: usize, actual: usize },
+    WritePositionOverflow { position: usize },
+    InvalidLease { operation: MappedFileOperation },
+    Configuration(String),
+}
+
+impl std::fmt::Display for MappedFileViolation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OutOfBounds {
+                offset,
+                size,
+                file_size,
+            } => write!(
+                formatter,
+                "out of bounds access: offset={offset}, size={size}, file_size={file_size}"
+            ),
+            Self::FileRange(error) => error.fmt(formatter),
+            Self::InvalidWritePosition { position, capacity } => {
+                write!(
+                    formatter,
+                    "invalid write position: position={position}, capacity={capacity}"
+                )
             }
-            super::lifecycle::LifecycleAcquireRejection::LeaseCountOverflow => Self::LeaseCountOverflow,
+            Self::InvalidWriteCommit { reserved, actual } => {
+                write!(
+                    formatter,
+                    "invalid write lease commit: reserved={reserved}, actual={actual}"
+                )
+            }
+            Self::WritePositionOverflow { position } => {
+                write!(formatter, "write position cannot be represented: position={position}")
+            }
+            Self::InvalidLease { operation } => {
+                write!(formatter, "lease does not admit mapped-file operation {operation}")
+            }
+            Self::Configuration(message) => write!(formatter, "configuration error: {message}"),
         }
     }
 }
 
-impl MappedFileError {
-    /// Promotes this leaf into the canonical storage facade exactly once.
-    ///
-    /// Filesystem, mapping, flush, expansion, and memory-lock faults are I/O
-    /// failures; capacity, position, commit, name, and configuration
-    /// violations are invalid requests; lifecycle rejections and exhausted
-    /// resources are backend unavailability. The complete leaf is preserved
-    /// as the typed source.
+impl MappedFileViolation {
+    pub(crate) fn out_of_bounds(offset: usize, size: usize, file_size: u64) -> Self {
+        Self::OutOfBounds {
+            offset,
+            size,
+            file_size,
+        }
+    }
+}
+
+impl From<MappedFileViolation> for MappedFileFailure {
+    fn from(error: MappedFileViolation) -> Self {
+        Self::Violation(error)
+    }
+}
+
+impl From<FileRangeFailure> for MappedFileFailure {
+    fn from(error: FileRangeFailure) -> Self {
+        match error {
+            FileRangeFailure::Violation(error) => Self::Violation(MappedFileViolation::FileRange(error)),
+            error @ FileRangeFailure::Metadata(_) => Self::FileRange(error),
+        }
+    }
+}
+
+impl MappedFileFailure {
+    pub(crate) fn is_contract(&self) -> bool {
+        matches!(
+            self,
+            Self::Violation(_) | Self::FileRange(FileRangeFailure::Violation(_))
+        )
+    }
+
+    pub(crate) fn into_public_option<T>(
+        result: Result<Option<T>, Self>,
+        operation: StoreOperation,
+    ) -> Result<Option<T>, StoreError> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(Self::Violation(_) | Self::FileRange(FileRangeFailure::Violation(_))) => Ok(None),
+            Err(error) => Err(error.into_store_error(operation)),
+        }
+    }
+
+    pub(crate) fn into_public_bool(result: Result<bool, Self>, operation: StoreOperation) -> Result<bool, StoreError> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) if error.is_contract() => Ok(false),
+            Err(error) => Err(error.into_store_error(operation)),
+        }
+    }
+
+    pub(crate) fn into_public_watermark(
+        result: Result<i32, Self>,
+        watermark: i32,
+        operation: StoreOperation,
+    ) -> Result<i32, StoreError> {
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) if error.is_contract() => Ok(watermark),
+            Err(error) => Err(error.into_store_error(operation)),
+        }
+    }
+
     pub(crate) fn into_store_error(self, operation: StoreOperation) -> StoreError {
-        let descriptor = match &self {
-            Self::Io(_)
+        match self {
+            error @ (Self::Io(_)
             | Self::MmapFailed(_)
             | Self::FlushFailed(_)
             | Self::MemoryLockFailed(_)
-            | Self::MemoryUnlockFailed(_) => &rocketmq_error::STORAGE_IO_FAILED,
-            Self::OutOfBounds { .. }
-            | Self::FileRange(_)
-            | Self::FileFull { .. }
-            | Self::InvalidWritePosition { .. }
-            | Self::InvalidWriteCommit { .. }
-            | Self::WritePositionOverflow { .. }
-            | Self::Configuration(_) => &rocketmq_error::STORAGE_REQUEST_INVALID,
-            Self::Unavailable { .. } | Self::LeaseCountOverflow | Self::TransientStoreExhausted => {
-                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
+            | Self::MemoryUnlockFailed(_)) => StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+                .in_component(StoreComponent::MappedFile)
+                .with_source(error),
+            Self::FileRange(error @ FileRangeFailure::Metadata(_)) => {
+                StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_source(Self::FileRange(error))
             }
-            Self::Custom(_) => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
-        };
-        StoreError::new(descriptor, operation)
-            .in_component(StoreComponent::MappedFile)
-            .with_source(self)
+            error @ (Self::FileFull { .. } | Self::TransientStoreExhausted) => {
+                StoreError::new(&rocketmq_error::STORAGE_CAPACITY_EXHAUSTED, operation)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_source(error)
+            }
+            Self::Violation(_) | Self::FileRange(FileRangeFailure::Violation(_)) => {
+                unreachable!("mapped-file violations do not cross the public contract projection")
+            }
+        }
     }
 
     /// Creates an `OutOfBounds` error from the given parameters.
@@ -198,14 +233,30 @@ impl MappedFileError {
     ///
     /// # Returns
     ///
-    /// A new `MappedFileError::OutOfBounds` variant
+    /// A new `MappedFileFailure::OutOfBounds` variant
     #[inline]
     pub fn out_of_bounds(offset: usize, size: usize, file_size: u64) -> Self {
-        Self::OutOfBounds {
-            offset,
-            size,
-            file_size,
-        }
+        Self::Violation(MappedFileViolation::out_of_bounds(offset, size, file_size))
+    }
+
+    pub(crate) fn invalid_write_position(position: i32, capacity: u64) -> Self {
+        Self::Violation(MappedFileViolation::InvalidWritePosition { position, capacity })
+    }
+
+    pub(crate) fn invalid_write_commit(reserved: usize, actual: usize) -> Self {
+        Self::Violation(MappedFileViolation::InvalidWriteCommit { reserved, actual })
+    }
+
+    pub(crate) fn write_position_overflow(position: usize) -> Self {
+        Self::Violation(MappedFileViolation::WritePositionOverflow { position })
+    }
+
+    pub(crate) fn invalid_lease(operation: MappedFileOperation) -> Self {
+        Self::Violation(MappedFileViolation::InvalidLease { operation })
+    }
+
+    pub(crate) fn configuration(message: String) -> Self {
+        Self::Violation(MappedFileViolation::Configuration(message))
     }
 
     /// Creates a `FileFull` error from the given parameters.
@@ -217,7 +268,7 @@ impl MappedFileError {
     ///
     /// # Returns
     ///
-    /// A new `MappedFileError::FileFull` variant
+    /// A new `MappedFileFailure::FileFull` variant
     #[inline]
     pub fn file_full(wrote: usize, capacity: u64) -> Self {
         Self::FileFull { wrote, capacity }
@@ -231,18 +282,14 @@ impl MappedFileError {
     /// # Returns
     ///
     /// `true` if the error is recoverable, `false` otherwise
-    #[allow(
-        dead_code,
-        reason = "recovery classification retained for the typed leaf and its unit tests"
-    )]
+    #[cfg(test)]
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
-            Self::OutOfBounds { .. }
+            Self::Violation(MappedFileViolation::OutOfBounds { .. })
                 | Self::FileFull { .. }
-                | Self::InvalidWritePosition { .. }
-                | Self::InvalidWriteCommit { .. }
-                | Self::Unavailable { .. }
+                | Self::Violation(MappedFileViolation::InvalidWritePosition { .. })
+                | Self::Violation(MappedFileViolation::InvalidWriteCommit { .. })
                 | Self::TransientStoreExhausted
         )
     }
@@ -252,10 +299,7 @@ impl MappedFileError {
     /// # Returns
     ///
     /// `true` if the underlying cause is an I/O error
-    #[allow(
-        dead_code,
-        reason = "recovery classification retained for the typed leaf and its unit tests"
-    )]
+    #[cfg(test)]
     pub fn is_io_error(&self) -> bool {
         matches!(self, Self::Io(_))
     }
@@ -268,14 +312,14 @@ mod tests {
 
     #[test]
     fn test_out_of_bounds_error() {
-        let err = MappedFileError::out_of_bounds(1000, 500, 1024);
+        let err = MappedFileFailure::out_of_bounds(1000, 500, 1024);
         assert!(err.is_recoverable());
-        assert!(err.to_string().contains("Out of bounds"));
+        assert!(err.to_string().contains("out of bounds"));
     }
 
     #[test]
     fn test_file_full_error() {
-        let err = MappedFileError::file_full(1024, 1024);
+        let err = MappedFileFailure::file_full(1024, 1024);
         assert!(err.is_recoverable());
         assert!(err.to_string().contains("File full"));
     }
@@ -283,13 +327,13 @@ mod tests {
     #[test]
     fn test_io_error() {
         let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
-        let err = MappedFileError::from(io_err);
+        let err = MappedFileFailure::from(io_err);
         assert!(err.is_io_error());
     }
 
     #[test]
     fn test_unrecoverable_error() {
-        let err = MappedFileError::MmapFailed(io::Error::other("out of memory"));
+        let err = MappedFileFailure::MmapFailed(io::Error::other("out of memory"));
 
         assert!(!err.is_recoverable());
         assert!(err.source().is_some());
@@ -297,28 +341,71 @@ mod tests {
 
     #[test]
     fn file_range_errors_preserve_the_typed_source() {
-        let err = MappedFileError::from(FileRangeError::OutOfBounds {
-            position: 1024,
-            len: 512,
-            file_len: 1280,
-        });
+        let err = MappedFileFailure::from(FileRangeFailure::Metadata(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "short metadata read",
+        )));
 
-        assert!(matches!(err, MappedFileError::FileRange(_)));
+        assert!(matches!(err, MappedFileFailure::FileRange(_)));
         assert!(err.source().is_some());
     }
 
     #[test]
     fn memory_lock_errors_preserve_the_typed_source() {
-        let lock = MappedFileError::MemoryLockFailed(rocketmq_error::RocketMQError::internal(
+        let lock = MappedFileFailure::MemoryLockFailed(rocketmq_error::RocketMQError::internal(
             "lock mapped memory",
             io::Error::other("lock failed"),
         ));
-        let unlock = MappedFileError::MemoryUnlockFailed(rocketmq_error::RocketMQError::internal(
+        let unlock = MappedFileFailure::MemoryUnlockFailed(rocketmq_error::RocketMQError::internal(
             "unlock mapped memory",
             io::Error::other("unlock failed"),
         ));
 
         assert!(lock.source().is_some());
         assert!(unlock.source().is_some());
+    }
+
+    #[test]
+    fn deterministic_mapped_file_violation_stays_on_the_contract_channel() {
+        let result = MappedFileFailure::into_public_option::<()>(
+            Err(MappedFileFailure::out_of_bounds(8, 4, 10)),
+            StoreOperation::Read,
+        );
+
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[test]
+    fn mapped_file_io_mapping_retains_the_typed_cause() {
+        let error = MappedFileFailure::Io(io::Error::new(io::ErrorKind::UnexpectedEof, "short read"))
+            .into_store_error(StoreOperation::Read);
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+        let mapped = error
+            .source()
+            .and_then(|source| source.downcast_ref::<MappedFileFailure>())
+            .expect("mapped-file failure remains typed");
+        assert_eq!(
+            mapped
+                .source()
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .map(io::Error::kind),
+            Some(io::ErrorKind::UnexpectedEof)
+        );
+    }
+
+    #[test]
+    fn file_full_mapping_retains_the_typed_capacity_cause() {
+        let error = MappedFileFailure::file_full(8, 8).into_store_error(StoreOperation::Append);
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED);
+        assert_eq!(error.operation(), StoreOperation::Append);
+        assert_eq!(error.component(), StoreComponent::MappedFile);
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<MappedFileFailure>()),
+            Some(MappedFileFailure::FileFull { wrote: 8, capacity: 8 })
+        ));
     }
 }

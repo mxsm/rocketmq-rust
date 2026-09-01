@@ -23,9 +23,8 @@ fn quarantine_cannot_appear_before_activation() {
     assert_eq!(
         inspect_managed_lifecycle_read_only(&handle)
             .expect_err("quarantine is not an initial-bootstrap artifact")
-            .code()
-            .as_str(),
-        "storage.state.corrupted"
+            .category_for_test(),
+        "corruption"
     );
 }
 
@@ -44,7 +43,7 @@ fn mutation_inside_quarantine_invalidates_the_nested_inventory_proof() {
         || fs::write(&evidence, b"after!!").expect("mutate nested evidence"),
     )
     .expect_err("quarantine must have its own A/B/C proof");
-    assert_eq!(error.into_store_error().code().as_str(), "storage.backend.unavailable");
+    assert_eq!(error.category_for_test(), "inventory-changed");
 }
 
 #[test]
@@ -63,11 +62,7 @@ fn quarantine_tail_filename_length_and_crc_are_authoritative() {
 
     let error = inspect_managed_lifecycle_read_only(&handle)
         .expect_err("tail content must match the CRC embedded in its exact filename");
-    assert_eq!(
-        error.code().as_str(),
-        "storage.state.corrupted",
-        "unexpected failure: {error}"
-    );
+    assert_eq!(error.category_for_test(), "corruption", "unexpected failure: {error}");
 }
 
 #[test]
@@ -116,10 +111,8 @@ fn every_tail_repair_snapshot_requires_exact_quarantine_evidence() {
     assert_eq!(
         validate_required_tail_evidence(&generations, &[])
             .expect_err("tail repair without copied suffix evidence is corrupt")
-            .into_store_error()
-            .code()
-            .as_str(),
-        "storage.state.corrupted"
+            .category_for_test(),
+        "corruption"
     );
     validate_required_tail_evidence(
         &generations,

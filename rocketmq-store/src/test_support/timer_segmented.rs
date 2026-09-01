@@ -78,7 +78,9 @@ pub struct SegmentedSnapshotProbe {
 pub fn run_segmented_commit_crash_probe(crash: SegmentedCommitTestCrashPoint) -> SegmentedCommitCrashProbe {
     let root = tempfile::tempdir().expect("segmented commit root");
     let native = Arc::new(
-        SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default()).expect("open native Timeline"),
+        SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default())
+            .expect("open native Timeline")
+            .expect("valid native Timeline configuration"),
     );
     let timeline = Arc::new(RocksDbTimelineIndex::open(root.path()).expect("open overlay"));
     let coordinator = SegmentedCommitCoordinator::new(Arc::clone(&native), Arc::clone(&timeline));
@@ -128,13 +130,18 @@ pub fn run_segmented_commit_crash_probe(crash: SegmentedCommitTestCrashPoint) ->
 pub fn run_segmented_snapshot_probe() -> SegmentedSnapshotProbe {
     let root = tempfile::tempdir().expect("segmented snapshot root");
     let native = Arc::new(
-        SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default()).expect("open native Timeline"),
+        SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default())
+            .expect("open native Timeline")
+            .expect("valid native Timeline configuration"),
     );
     let timeline = Arc::new(RocksDbTimelineIndex::open(root.path()).expect("open overlay"));
     SegmentedCommitCoordinator::new(Arc::clone(&native), Arc::clone(&timeline))
         .commit(&[entry()], state_batch(entry()), checkpoint())
         .expect("commit");
-    let pin = native.pin_snapshot(23).expect("pin native");
+    let pin = native
+        .pin_snapshot(23)
+        .expect("pin native")
+        .expect("snapshot generation is non-zero");
     let native_snapshot_root = root.path().join("native-snapshot");
     let native_files = native
         .create_snapshot_files(&native_snapshot_root, pin)

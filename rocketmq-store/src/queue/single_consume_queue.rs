@@ -1192,6 +1192,8 @@ mod tests {
         config.store_path_root_dir = temp_dir.path().to_string_lossy().to_string().into();
         LocalFileMessageStore::new(
             Arc::new(config),
+            rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
+                .expect("valid test policy"),
             Arc::new(StoreRuntimeConfig::default()),
             Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
             None,

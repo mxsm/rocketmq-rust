@@ -134,7 +134,8 @@ fn benchmark(c: &mut Criterion) {
                 || tempfile::tempdir().expect("segmented ingest root"),
                 |root| {
                     let index = SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default())
-                        .expect("open segmented Timeline");
+                        .expect("open segmented Timeline")
+                        .expect("valid segmented Timeline configuration");
                     populate_segmented(&index, count, workload);
                     black_box(index.manifest().durable_end);
                 },
@@ -154,7 +155,8 @@ fn benchmark_scan(c: &mut Criterion, records: u64, workload: Workload) {
     populate_rocks(&rocks, records, workload);
     let native_root = tempfile::tempdir().expect("native scan root");
     let native = SegmentedTimeline::open(native_root.path(), SegmentedTimelineConfig::default())
-        .expect("open native scan Timeline");
+        .expect("open native scan Timeline")
+        .expect("valid native scan configuration");
     populate_segmented(&native, records, workload);
 
     let mut scan = c.benchmark_group("timer-timeline-index/full-range-scan");
@@ -186,7 +188,10 @@ fn populate_segmented(index: &SegmentedTimeline, count: u64, workload: Workload)
         let entries = (start..end)
             .map(|sequence| native_record(entry(sequence, count, workload)))
             .collect::<Vec<_>>();
-        index.append_batch(&entries).expect("segmented ingest");
+        index
+            .append_batch(&entries)
+            .expect("segmented ingest")
+            .expect("valid generated segmented batch");
     }
 }
 
@@ -209,7 +214,7 @@ fn scan_segmented(index: &SegmentedTimeline) -> usize {
     let mut continuation = None;
     let mut records = 0usize;
     loop {
-        let page = index
+        let Some(page) = index
             .scan_due(
                 None,
                 i64::MAX,
@@ -217,7 +222,10 @@ fn scan_segmented(index: &SegmentedTimeline) -> usize {
                 BATCH_RECORDS * TimelineSegmentRecord::encoded_size(),
                 continuation,
             )
-            .expect("segmented scan");
+            .expect("segmented scan")
+        else {
+            return records;
+        };
         records = records.saturating_add(page.records.len());
         continuation = page.continuation;
         if continuation.is_none() {
@@ -277,7 +285,8 @@ fn report_physical_bytes(records: u64, workload: Workload) {
 
     let native_root = tempfile::tempdir().expect("native size root");
     let native = SegmentedTimeline::open(native_root.path(), SegmentedTimelineConfig::default())
-        .expect("open native size Timeline");
+        .expect("open native size Timeline")
+        .expect("valid native size configuration");
     populate_segmented(&native, records, workload);
     let native_bytes = directory_bytes(native_root.path());
     eprintln!("timer-index raw size: records={records}, rocksdb_bytes={rocks_bytes}, segmented_bytes={native_bytes}");

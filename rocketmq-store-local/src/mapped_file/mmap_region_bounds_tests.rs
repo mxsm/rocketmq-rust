@@ -14,7 +14,6 @@
 
 use crate::mapped_file::DefaultMappedFile;
 use crate::mapped_file::MappedFile;
-use crate::mapped_file::MappedFileError;
 use crate::mapped_file::NativeMappedMemory;
 use cheetah_string::CheetahString;
 use std::panic::catch_unwind;
@@ -61,15 +60,8 @@ fn safe_region_construction_never_panics_and_classifies_invalid_ranges() {
             }
             Expected::Overflow => {
                 assert!(
-                    matches!(
-                        result,
-                        Err(MappedFileError::OutOfBounds {
-                            offset: actual_offset,
-                            size: actual_len,
-                            file_size: 8,
-                        }) if actual_offset == offset && actual_len == len
-                    ),
-                    "expected overflow for offset={offset}, len={len}"
+                    matches!(result, Ok(None)),
+                    "expected source-free overflow contract result for offset={offset}, len={len}"
                 );
             }
             Expected::NotReadable => {

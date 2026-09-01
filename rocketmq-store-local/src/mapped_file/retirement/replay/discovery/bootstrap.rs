@@ -37,7 +37,7 @@ use super::corruption;
 use super::map_codec_error;
 use super::map_replay_error;
 use super::map_sidecar_error;
-use super::ManagedLifecycleReadError;
+use super::ManagedLifecycleReadFailure;
 use super::ManagedLifecycleReadLimits;
 use super::OwnedGeneration;
 
@@ -55,7 +55,7 @@ fn planned_bootstrap_unit(
     sequence: u64,
     acknowledgement_epoch: u64,
     unit_start: usize,
-) -> Result<PlannedBootstrapUnit, ManagedLifecycleReadError> {
+) -> Result<PlannedBootstrapUnit, ManagedLifecycleReadFailure> {
     let frame = encode_ledger_frame(record, sequence, 0).map_err(map_codec_error)?;
     let frame_end = unit_start
         .checked_add(frame.len())
@@ -139,7 +139,7 @@ fn validate_bootstrap_acknowledgement(
     initialized: &PlannedBootstrapUnit,
     installed: Option<&PlannedBootstrapUnit>,
     seal_evidence: &[SealEvidence],
-) -> Result<(), ManagedLifecycleReadError> {
+) -> Result<(), ManagedLifecycleReadFailure> {
     let zero = [0_u8; ACKNOWLEDGEMENT_FILE_LENGTH];
     let mut after_initialized = zero;
     let initialized_start = initialized.slot_index * ACKNOWLEDGEMENT_SLOT_LENGTH;
@@ -197,7 +197,7 @@ pub(super) fn validate_marker_absent_bootstrap(
     generations: &[OwnedGeneration],
     bootstrap_log: Option<&[u8]>,
     limits: ManagedLifecycleReadLimits,
-) -> Result<(), ManagedLifecycleReadError> {
+) -> Result<(), ManagedLifecycleReadFailure> {
     if generations.len() > 1 || (!generations.is_empty() && bootstrap_log.is_some()) {
         return Err(corruption(
             "preactivation bootstrap has multiple generation-0 representations",

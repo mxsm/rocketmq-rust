@@ -52,9 +52,12 @@ fn benchmark_mapped_write_lease(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("explicit_lease", size), &size, |b, _| {
             b.iter(|| {
                 lease_file.set_wrote_position(0);
-                let mut lease = lease_file.reserve_write(size).expect("write reservation");
+                let mut lease = lease_file
+                    .reserve_write(size)
+                    .expect("write reservation")
+                    .expect("valid reservation");
                 lease.buffer_mut().copy_from_slice(black_box(&payload));
-                black_box(lease.commit(size, None).expect("write commit"));
+                black_box(lease.commit(size, None).expect("write commit").expect("valid commit"));
             });
         });
     }
