@@ -484,8 +484,15 @@ fn rocksdb_message_store_try_new_rejects_conflicting_consume_queue_path() {
     )
     .expect_err("conflicting consume queue rocksdb path should be rejected");
 
-    assert!(error.to_string().contains("incompatible path"));
-    assert!(error.to_string().contains("consumequeue"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+    assert_eq!(error.component(), rocketmq_store::StoreComponent::Configuration);
+    assert!(!error.to_string().contains("consumequeue"));
+    assert!(error
+        .public_view()
+        .expect("valid public projection")
+        .fields()
+        .next()
+        .is_none());
 }
 
 #[test]
@@ -549,7 +556,9 @@ fn rocksdb_message_store_try_new_rejects_non_rocksdb_store_type() {
     )
     .expect_err("rocksdb message store should reject local file store type");
 
-    assert!(error.to_string().contains("requires store_type=RocksDB"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+    assert_eq!(error.component(), rocketmq_store::StoreComponent::Configuration);
+    assert!(!error.to_string().contains("store_type"));
 }
 
 #[test]

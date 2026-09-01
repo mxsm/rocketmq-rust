@@ -16,6 +16,7 @@ use std::future::ready;
 use std::future::Future;
 
 use bytes::Bytes;
+use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
 use rocketmq_model::message::MessageQueue;
 use rocketmq_store_api::AdminStore;
 use rocketmq_store_api::DerivedRecordSink;
@@ -24,7 +25,6 @@ use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::OffsetIndex;
 use rocketmq_store_api::ReplicationControl;
 use rocketmq_store_api::StoreError;
-use rocketmq_store_api::StoreErrorKind;
 use rocketmq_store_api::StoreHealth;
 use rocketmq_store_api::StoreLifecycle;
 use rocketmq_store_api::StoreOperation;
@@ -153,10 +153,13 @@ fn capabilities_are_associated_type_contracts_with_static_append_future() {
 }
 
 #[test]
-fn store_error_uses_closed_operation_and_neutral_kind_vocabularies() {
-    let error = StoreError::new(StoreErrorKind::Unavailable, StoreOperation::Append);
+fn store_error_uses_catalog_identity_and_closed_operation_vocabulary() {
+    let error = StoreError::new(&STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Append);
 
-    assert_eq!(StoreErrorKind::Unavailable, error.kind());
+    assert_eq!(&STORAGE_BACKEND_UNAVAILABLE, error.descriptor());
     assert_eq!(StoreOperation::Append, error.operation());
-    assert_eq!("store operation append failed: unavailable", error.to_string());
+    assert_eq!(
+        "storage.backend.unavailable: Storage backend is unavailable",
+        error.to_string()
+    );
 }

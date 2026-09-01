@@ -17,6 +17,54 @@ use super::*;
 const EXTENDED_TIMER_OWNER_MARKER: &str = "config/timer-store-owner.meta";
 const EXTENDED_TIMER_OWNER_PREFIX: &str = "extended_timeline:v1:";
 
+fn store_config_error(operation: StoreOperation, detail: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
+        .in_component(StoreComponent::Configuration)
+        .with_detail(detail)
+}
+
+fn store_unsupported_error(operation: StoreOperation, detail: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, operation)
+        .in_component(StoreComponent::Configuration)
+        .with_detail(detail)
+}
+
+fn store_internal_error(operation: StoreOperation, detail: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, operation).with_detail(detail)
+}
+
+fn store_read_error(operation: StoreOperation, detail: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, operation).with_detail(detail)
+}
+
+fn store_write_error(operation: StoreOperation, detail: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, operation).with_detail(detail)
+}
+
+fn store_read_source_error(
+    operation: StoreOperation,
+    detail: impl Into<String>,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> StoreError {
+    store_read_error(operation, detail).with_source(source)
+}
+
+fn store_config_source_error(
+    operation: StoreOperation,
+    detail: impl Into<String>,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> StoreError {
+    store_config_error(operation, detail).with_source(source)
+}
+
+fn store_internal_source_error(
+    operation: StoreOperation,
+    detail: impl Into<String>,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> StoreError {
+    store_internal_error(operation, detail).with_source(source)
+}
+
 #[cfg(feature = "extended_timeline")]
 use crate::timer::timeline::TimelinePromotionObservation;
 
@@ -27,7 +75,7 @@ impl LocalFileMessageStore {
             Ok(encoded) => encoded,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
-                return Err(StoreError::storage(
+                return Err(store_read_error(
                     StoreOperation::Load,
                     "failed to read the Extended Timeline owner marker",
                 )
@@ -40,7 +88,7 @@ impl LocalFileMessageStore {
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|epoch| *epoch > 0)
             .ok_or_else(|| {
-                StoreError::config(
+                store_config_error(
                     StoreOperation::Load,
                     "the Extended Timeline owner marker is corrupt or incompatible",
                 )
@@ -57,7 +105,7 @@ impl LocalFileMessageStore {
             if persisted == epoch {
                 return Ok(());
             }
-            return Err(StoreError::config(
+            return Err(store_config_error(
                 StoreOperation::Load,
                 format!("Extended Timeline activation epoch {epoch} does not match persisted owner epoch {persisted}"),
             ));
@@ -65,9 +113,9 @@ impl LocalFileMessageStore {
         let path = Path::new(self.message_store_config.store_path_root_dir.as_str()).join(EXTENDED_TIMER_OWNER_MARKER);
         let parent = path
             .parent()
-            .ok_or_else(|| StoreError::config(StoreOperation::Load, "Extended Timeline owner marker has no parent"))?;
+            .ok_or_else(|| store_config_error(StoreOperation::Load, "Extended Timeline owner marker has no parent"))?;
         fs::create_dir_all(parent).map_err(|error| {
-            StoreError::storage(
+            store_write_error(
                 StoreOperation::Load,
                 "failed to create the Extended Timeline owner marker directory",
             )
@@ -87,7 +135,7 @@ impl LocalFileMessageStore {
             fs::rename(&temporary, &path)
         };
         persist().map_err(|error| {
-            StoreError::storage(
+            store_write_error(
                 StoreOperation::Load,
                 "failed to persist the Extended Timeline owner marker",
             )
@@ -191,7 +239,7 @@ impl LocalFileMessageStore {
         let store_checkpoint = Arc::new(
             StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).map_err(
                 |error| {
-                    StoreError::storage(
+                    store_read_error(
                         StoreOperation::Load,
                         format!(
                             "failed to create store checkpoint under {}",
@@ -637,7 +685,7 @@ impl LocalFileMessageStore {
         {
             let formal = self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline;
             self.extended_timeline_role.load().map_err(|error| {
-                StoreError::storage(StoreOperation::Load, "failed to recover Extended Timeline owner epoch")
+                store_read_error(StoreOperation::Load, "failed to recover Extended Timeline owner epoch")
                     .with_source(error)
             })?;
             let admission_epoch = TimerEngineEpoch::new(self.message_store_config.timer_extended_activation_epoch);
@@ -660,10 +708,7 @@ impl LocalFileMessageStore {
                 )
             };
             let materializer = Arc::new(open_result.map_err(|error| {
-                StoreError::storage(
-                    StoreOperation::Load,
-                    format!("failed to open Extended Timeline storage: {error}"),
-                )
+                store_read_source_error(StoreOperation::Load, "failed to open Extended Timeline storage", error)
             })?);
             let timeline = materializer.timeline();
             let due_scanner = Arc::new(if formal {
@@ -709,9 +754,10 @@ impl LocalFileMessageStore {
                     timer_config.delivery_lease_ms,
                 )
                 .map_err(|error| {
-                    StoreError::storage(
+                    store_read_source_error(
                         StoreOperation::Load,
-                        format!("failed to construct Extended Timeline delivery: {error}"),
+                        "failed to construct Extended Timeline delivery",
+                        error,
                     )
                 })?;
                 let snapshot = Arc::new(TimelineSnapshotManager::new(
@@ -725,9 +771,10 @@ impl LocalFileMessageStore {
                     admission_epoch,
                 ));
                 let (_, _, format_fingerprint) = materializer.snapshot_source_cursors().map_err(|error| {
-                    StoreError::storage(
+                    store_read_source_error(
                         StoreOperation::Load,
-                        format!("failed to read Extended Timeline promotion identity: {error}"),
+                        "failed to read Extended Timeline promotion identity",
+                        error,
                     )
                 })?;
                 let promotion_gate = Arc::new(TimelinePromotionGate::new(
@@ -737,15 +784,17 @@ impl LocalFileMessageStore {
                     Arc::clone(&self.extended_timeline_clock),
                 ));
                 if let Some(manifest) = snapshot.latest_published().map_err(|error| {
-                    StoreError::storage(
+                    store_read_source_error(
                         StoreOperation::Load,
-                        format!("failed to restore Extended Timeline snapshot identity: {error}"),
+                        "failed to restore Extended Timeline snapshot identity",
+                        error,
                     )
                 })? {
                     promotion_gate.mark_snapshot_installed(manifest).map_err(|error| {
-                        StoreError::config(
+                        store_config_source_error(
                             StoreOperation::Load,
-                            format!("latest Extended Timeline snapshot is not promotable: {error}"),
+                            "latest Extended Timeline snapshot is not promotable",
+                            error,
                         )
                     })?;
                 }
@@ -850,23 +899,26 @@ impl LocalFileMessageStore {
 
     pub(super) fn validate_supported_configuration(&self) -> Result<(), StoreError> {
         if Self::is_dledger_commit_log_enabled_config(self.message_store_config.as_ref()) {
-            return Err(StoreError::dledger(
-                StoreOperation::Load,
-                "DLedger commit log is Java-specific and is intentionally unsupported in rocketmq-rust".to_string(),
-            ));
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, StoreOperation::Load)
+                    .in_component(StoreComponent::DLedger)
+                    .with_detail(
+                        "DLedger commit log is Java-specific and is intentionally unsupported in rocketmq-rust",
+                    ),
+            );
         }
         if let Some(persisted_epoch) =
             Self::read_extended_timer_owner(self.message_store_config.store_path_root_dir.as_str())?
         {
             if self.message_store_config.timer_store_mode != TimerStoreMode::ExtendedTimeline {
-                return Err(StoreError::unsupported(
+                return Err(store_unsupported_error(
                     StoreOperation::Load,
                     "JavaCompat rollback is unsafe after formal Extended Timeline ownership; quiesce and drain the store before an explicit offline conversion"
                         .to_string(),
                 ));
             }
             if self.message_store_config.timer_extended_activation_epoch != persisted_epoch {
-                return Err(StoreError::config(
+                return Err(store_config_error(
                     StoreOperation::Load,
                     format!(
                         "configured Extended Timeline activation epoch {} does not match persisted epoch {persisted_epoch}",
@@ -876,7 +928,7 @@ impl LocalFileMessageStore {
             }
         }
         if self.message_store_config.timer_rocksdb_enable && !self.message_store_config.is_enable_rocksdb_store() {
-            return Err(StoreError::unsupported(
+            return Err(store_unsupported_error(
                 StoreOperation::Load,
                 "Timer RocksDB backend is not implemented in rocketmq-rust; keep timer_rocksdb_enable=false"
                     .to_string(),
@@ -884,7 +936,7 @@ impl LocalFileMessageStore {
         }
         if self.message_store_config.timer_store_mode == TimerStoreMode::ExtendedTimeline {
             if !cfg!(feature = "extended_timeline") {
-                return Err(StoreError::unsupported(
+                return Err(store_unsupported_error(
                     StoreOperation::Load,
                     "timer_store_mode=extended_timeline requires the rocketmq-store/extended_timeline feature"
                         .to_string(),
@@ -897,20 +949,20 @@ impl LocalFileMessageStore {
                     .contains(&self.message_store_config.timer_extended_admission_horizon_days)
                 || self.message_store_config.timer_extended_admission_horizon_days > 400
             {
-                return Err(StoreError::config(
+                return Err(store_config_error(
                     StoreOperation::Load,
                     "Extended mode requires formal admission, a non-zero activation epoch, a 3..=400 day admission horizon, and shadow=false"
                         .to_string(),
                 ));
             }
         } else if self.message_store_config.timer_extended_admission_enable {
-            return Err(StoreError::config(
+            return Err(store_config_error(
                 StoreOperation::Load,
                 "timer_extended_admission_enable requires timer_store_mode=extended_timeline".to_string(),
             ));
         }
         if self.message_store_config.timer_extended_shadow_enable && !cfg!(feature = "extended_timeline") {
-            return Err(StoreError::unsupported(
+            return Err(store_unsupported_error(
                 StoreOperation::Load,
                 "timer_extended_shadow_enable requires the rocketmq-store/extended_timeline feature".to_string(),
             ));
@@ -922,13 +974,13 @@ impl LocalFileMessageStore {
                 .timer_store_config
                 .validate()
                 .map_err(|error| {
-                    StoreError::config(StoreOperation::Load, "invalid Timer Store configuration").with_source(error)
+                    store_config_error(StoreOperation::Load, "invalid Timer Store configuration").with_source(error)
                 })?;
         }
 
         let enabled_rocksdb_options = Self::enabled_rocksdb_specific_options(self.message_store_config.as_ref());
         if !self.message_store_config.is_enable_rocksdb_store() && !enabled_rocksdb_options.is_empty() {
-            return Err(StoreError::config(
+            return Err(store_config_error(
                 StoreOperation::Load,
                 format!(
                     "RocksDB-specific configuration requires store_type=RocksDB: {}",
@@ -940,7 +992,7 @@ impl LocalFileMessageStore {
             && self.message_store_config.linux_memory_lock_budget_bytes == 0
             && !self.message_store_config.linux_memory_lock_warn_only
         {
-            return Err(StoreError::config(
+            return Err(store_config_error(
                 StoreOperation::Load,
                 "linux_memory_lock_mode=active_file requires explicit linux_memory_lock_budget_bytes when \
                  linux_memory_lock_warn_only=false; set linux_memory_lock_budget_bytes or \
@@ -972,7 +1024,7 @@ impl LocalFileMessageStore {
         if self.root_dependencies_wired {
             return Ok(());
         }
-        Err(StoreError::invalid_state(
+        Err(store_internal_error(
             StoreOperation::Start,
             format!(
                 "message store root dependencies are not wired; call wire_owned_root_dependencies before {operation}"
@@ -983,11 +1035,11 @@ impl LocalFileMessageStore {
     pub(super) fn ensure_operational_root_lease(&self, operation: StoreOperation) -> Result<(), StoreError> {
         match self.store_root_lease_state {
             StoreRootLeaseState::Operational => self.validate_current_root_mode(operation),
-            StoreRootLeaseState::DestroyRetryPending => Err(StoreError::invalid_state(
+            StoreRootLeaseState::DestroyRetryPending => Err(store_internal_error(
                 operation,
                 "message store destruction is pending; load, initialize, and start are fenced",
             )),
-            StoreRootLeaseState::Destroyed => Err(StoreError::invalid_state(
+            StoreRootLeaseState::Destroyed => Err(store_internal_error(
                 operation,
                 "message store was destroyed and cannot be reopened by the same owner",
             )),
@@ -1037,7 +1089,7 @@ impl LocalFileMessageStore {
             self.extended_timeline_role
                 .transition_with_term(false, external_term)
                 .map_err(|error| {
-                    StoreError::storage(StoreOperation::Admin, "failed to persist Extended demotion fence")
+                    store_write_error(StoreOperation::Admin, "failed to persist Extended demotion fence")
                         .with_source(error)
                 })?;
             return Ok(());
@@ -1048,7 +1100,7 @@ impl LocalFileMessageStore {
         self.extended_timeline_role
             .transition_with_term(true, external_term)
             .map_err(|error| {
-                StoreError::storage(StoreOperation::Admin, "failed to persist Extended promotion epoch")
+                store_write_error(StoreOperation::Admin, "failed to persist Extended promotion epoch")
                     .with_source(error)
             })?;
         Ok(())
@@ -1059,22 +1111,23 @@ impl LocalFileMessageStore {
         let gate = self
             .extended_timeline_promotion_gate
             .as_ref()
-            .ok_or_else(|| StoreError::invalid_state(StoreOperation::Admin, "Extended promotion gate is not wired"))?;
+            .ok_or_else(|| store_internal_error(StoreOperation::Admin, "Extended promotion gate is not wired"))?;
         let materializer = self
             .extended_timeline_materializer
             .as_ref()
-            .ok_or_else(|| StoreError::invalid_state(StoreOperation::Admin, "Extended materializer is not wired"))?;
-        let completion = self.extended_timeline_completion_reconciler.as_ref().ok_or_else(|| {
-            StoreError::invalid_state(StoreOperation::Admin, "Extended completion replay is not wired")
-        })?;
+            .ok_or_else(|| store_internal_error(StoreOperation::Admin, "Extended materializer is not wired"))?;
+        let completion = self
+            .extended_timeline_completion_reconciler
+            .as_ref()
+            .ok_or_else(|| store_internal_error(StoreOperation::Admin, "Extended completion replay is not wired"))?;
         let (source_cq_cursor, source_physical_cursor, format_fingerprint) =
             materializer.snapshot_source_cursors().map_err(|error| {
-                StoreError::storage(StoreOperation::Read, "failed to read Extended Timeline source cursors")
+                store_read_error(StoreOperation::Read, "failed to read Extended Timeline source cursors")
                     .with_source(error)
             })?;
         let metrics = materializer.metrics();
         let completion_cursor = completion.completion_physical_cursor().map_err(|error| {
-            StoreError::storage(
+            store_read_error(
                 StoreOperation::Read,
                 "failed to read Extended Timeline completion cursor",
             )
@@ -1104,9 +1157,10 @@ impl LocalFileMessageStore {
             capability_version: 1,
         })
         .map_err(|error| {
-            StoreError::invalid_state(
+            store_internal_source_error(
                 StoreOperation::Admin,
-                format!("Extended promotion rejected at source CQ cursor {source_cq_cursor}: {error}"),
+                format!("Extended promotion rejected at source CQ cursor {source_cq_cursor}"),
+                error,
             )
         })
     }
@@ -1115,17 +1169,17 @@ impl LocalFileMessageStore {
     #[cfg(feature = "extended_timeline")]
     pub fn create_extended_timer_snapshot(&self) -> Result<rocketmq_store_api::TimerSnapshotManifest, StoreError> {
         let snapshot = self.extended_timeline_snapshot.as_ref().ok_or_else(|| {
-            StoreError::unsupported(StoreOperation::Admin, "Extended Timeline snapshot is not enabled")
+            store_unsupported_error(StoreOperation::Admin, "Extended Timeline snapshot is not enabled")
         })?;
         let manifest = snapshot.create().map_err(|error| {
-            StoreError::storage(StoreOperation::Admin, "failed to create Extended Timeline snapshot").with_source(error)
+            store_write_error(StoreOperation::Admin, "failed to create Extended Timeline snapshot").with_source(error)
         })?;
         self.extended_timeline_promotion_gate
             .as_ref()
-            .ok_or_else(|| StoreError::invalid_state(StoreOperation::Admin, "Extended promotion gate is not wired"))?
+            .ok_or_else(|| store_internal_error(StoreOperation::Admin, "Extended promotion gate is not wired"))?
             .mark_snapshot_installed(manifest.clone())
             .map_err(|error| {
-                StoreError::invalid_state(StoreOperation::Admin, "failed to publish Extended Timeline snapshot")
+                store_internal_error(StoreOperation::Admin, "failed to publish Extended Timeline snapshot")
                     .with_source(error)
             })?;
         Ok(manifest)
@@ -1139,10 +1193,10 @@ impl LocalFileMessageStore {
     ) -> Result<(), StoreError> {
         self.extended_timeline_snapshot
             .as_ref()
-            .ok_or_else(|| StoreError::unsupported(StoreOperation::Admin, "Extended Timeline snapshot is not enabled"))?
+            .ok_or_else(|| store_unsupported_error(StoreOperation::Admin, "Extended Timeline snapshot is not enabled"))?
             .release(manifest)
             .map_err(|error| {
-                StoreError::storage(StoreOperation::Admin, "failed to release Extended Timeline snapshot")
+                store_write_error(StoreOperation::Admin, "failed to release Extended Timeline snapshot")
                     .with_source(error)
             })
     }
@@ -1199,4 +1253,36 @@ pub fn parse_delay_level(level_string: &str) -> (BTreeMap<i32, i64>, i32) {
     }
 
     (delay_level_table, max_delay_level)
+}
+
+#[cfg(test)]
+mod source_promotion_tests {
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("typed timeline source")]
+    struct TimelineSource;
+
+    fn assert_typed_source(error: &StoreError) {
+        assert!(std::error::Error::source(error)
+            .and_then(|source| source.downcast_ref::<TimelineSource>())
+            .is_some());
+        assert!(!error.to_string().contains("typed timeline source"));
+    }
+
+    #[test]
+    fn timeline_promotions_keep_typed_sources_out_of_private_detail() {
+        let read = store_read_source_error(StoreOperation::Load, "open timeline", TimelineSource);
+        assert_eq!(read.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
+        assert_typed_source(&read);
+
+        let config = store_config_source_error(StoreOperation::Load, "validate snapshot", TimelineSource);
+        assert_eq!(config.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+        assert_eq!(config.component(), StoreComponent::Configuration);
+        assert_typed_source(&config);
+
+        let internal = store_internal_source_error(StoreOperation::Admin, "promote timeline", TimelineSource);
+        assert_eq!(internal.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
+        assert_typed_source(&internal);
+    }
 }

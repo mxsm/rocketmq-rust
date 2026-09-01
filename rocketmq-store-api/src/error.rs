@@ -18,10 +18,16 @@ use std::error::Error as StdError;
 use std::fmt;
 
 use rocketmq_error::fields;
-use rocketmq_error::DomainError;
+use rocketmq_error::CanonicalCondition;
+use rocketmq_error::DiagnosticView;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::ErrorKind;
+use rocketmq_error::ErrorDescriptor;
+use rocketmq_error::ErrorSeverity;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::RecoveryHint;
+use rocketmq_error::Sensitive;
+use rocketmq_error::ViewContextViolation;
 
 type BoxError = Box<dyn StdError + Send + Sync>;
 
@@ -51,6 +57,20 @@ pub enum StoreOperation {
 }
 
 impl StoreOperation {
+    /// Every storage operation accepted by [`StoreError`].
+    pub const ALL: &'static [Self] = &[
+        Self::Load,
+        Self::Start,
+        Self::Shutdown,
+        Self::Append,
+        Self::Flush,
+        Self::Read,
+        Self::QueryOffset,
+        Self::Replicate,
+        Self::AppendDerived,
+        Self::Admin,
+    ];
+
     /// Returns the stable machine-readable operation name.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -65,84 +85,6 @@ impl StoreOperation {
             Self::AppendDerived => "append_derived",
             Self::Admin => "admin",
         }
-    }
-}
-
-/// Stable, low-cardinality storage failure classification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum StoreErrorKind {
-    /// Represents the not started case.
-    NotStarted,
-    /// Represents the unavailable case.
-    Unavailable,
-    /// Represents the invalid request case.
-    InvalidRequest,
-    /// Represents the not found case.
-    NotFound,
-    /// Represents the capacity case.
-    Capacity,
-    /// Represents the storage case.
-    Storage,
-    /// Represents the io case.
-    Io,
-    /// Represents the corruption case.
-    Corruption,
-    /// Represents the timeout case.
-    Timeout,
-    /// Represents the unsupported case.
-    Unsupported,
-    /// Represents the internal case.
-    Internal,
-}
-
-impl StoreErrorKind {
-    /// Every stable storage error kind.
-    pub const ALL: &'static [Self] = &[
-        Self::NotStarted,
-        Self::Unavailable,
-        Self::InvalidRequest,
-        Self::NotFound,
-        Self::Capacity,
-        Self::Storage,
-        Self::Io,
-        Self::Corruption,
-        Self::Timeout,
-        Self::Unsupported,
-        Self::Internal,
-    ];
-
-    /// Returns the stable machine-readable classification name.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::NotStarted => "not_started",
-            Self::Unavailable => "unavailable",
-            Self::InvalidRequest => "invalid_request",
-            Self::NotFound => "not_found",
-            Self::Capacity => "capacity",
-            Self::Storage => "storage",
-            Self::Io => "io",
-            Self::Corruption => "corruption",
-            Self::Timeout => "timeout",
-            Self::Unsupported => "unsupported",
-            Self::Internal => "internal",
-        }
-    }
-
-    /// Returns the stable storage-domain error code.
-    pub const fn code(self) -> ErrorCode {
-        ErrorCode::new(match self {
-            Self::NotStarted => "STORE_NOT_STARTED",
-            Self::Unavailable => "STORE_UNAVAILABLE",
-            Self::InvalidRequest => "STORE_INVALID_REQUEST",
-            Self::NotFound => "STORE_NOT_FOUND",
-            Self::Capacity => "STORE_CAPACITY_EXHAUSTED",
-            Self::Storage => "STORE_STORAGE_FAILED",
-            Self::Io => "STORE_IO_FAILED",
-            Self::Corruption => "STORE_CORRUPTED",
-            Self::Timeout => "STORE_TIMEOUT",
-            Self::Unsupported => "STORE_UNSUPPORTED",
-            Self::Internal => "STORE_INTERNAL",
-        })
     }
 }
 
@@ -169,6 +111,18 @@ pub enum StoreComponent {
 }
 
 impl StoreComponent {
+    /// Every storage component accepted by [`StoreError`].
+    pub const ALL: &'static [Self] = &[
+        Self::Store,
+        Self::Configuration,
+        Self::CommitLog,
+        Self::MappedFile,
+        Self::RocksDb,
+        Self::TieredStore,
+        Self::HighAvailability,
+        Self::DLedger,
+    ];
+
     /// Returns the stable machine-readable component name.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -186,57 +140,106 @@ impl StoreComponent {
 
 /// Canonical storage failure shared by the capability and implementation layers.
 ///
-/// Classification fields use closed vocabularies. Diagnostic detail is always
-/// treated as sensitive at external boundaries, while typed causes remain
-/// available through [`StdError::source`].
-#[derive(Debug)]
+/// Stable identity and policy come exclusively from the catalog descriptor.
+/// Operation and component are typed diagnostic context. Private detail and a
+/// typed source are retained for local diagnosis, but their values are never
+/// formatted by this facade or exposed through its public view.
 pub struct StoreError {
-    kind: StoreErrorKind,
+    descriptor: &'static ErrorDescriptor,
     operation: StoreOperation,
     component: StoreComponent,
-    detail: Option<String>,
+    context: ErrorContext,
+    private_detail: Option<Sensitive<String>>,
     source: Option<BoxError>,
 }
 
 impl StoreError {
-    /// Creates an error from closed operation and kind vocabularies.
-    pub const fn new(kind: StoreErrorKind, operation: StoreOperation) -> Self {
-        Self {
-            kind,
-            operation,
-            component: StoreComponent::Store,
-            detail: None,
-            source: None,
-        }
+    /// Creates a storage error with catalog-owned identity.
+    ///
+    /// Callers select one of the twelve `STORAGE_*` descriptors exported by
+    /// `rocketmq-error`; runtime detail must never select or override identity.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `descriptor` is not one of the twelve canonical storage
+    /// descriptors. This is a programmer contract: runtime failures select a
+    /// reviewed storage identity before constructing the facade.
+    pub fn new(descriptor: &'static ErrorDescriptor, operation: StoreOperation) -> Self {
+        Self::try_new(descriptor, operation)
+            .expect("StoreError requires one of the twelve canonical storage descriptors")
     }
 
-    /// Adds the closed component classification.
-    pub const fn in_component(mut self, component: StoreComponent) -> Self {
+    /// Attempts to create a storage error with a validated catalog identity.
+    ///
+    /// Returns `None` when `descriptor` belongs to another error domain. The
+    /// facade never accepts caller-provided context, so successful construction
+    /// also guarantees that only the four storage context fields can be emitted.
+    pub fn try_new(descriptor: &'static ErrorDescriptor, operation: StoreOperation) -> Option<Self> {
+        if !is_storage_descriptor(descriptor) {
+            return None;
+        }
+        let component = StoreComponent::Store;
+        Some(Self {
+            descriptor,
+            operation,
+            component,
+            context: store_context(operation, component, false, false),
+            private_detail: None,
+            source: None,
+        })
+    }
+
+    /// Adds the closed component classification as diagnostic context.
+    pub fn in_component(mut self, component: StoreComponent) -> Self {
         self.component = component;
+        self.rebuild_context();
         self
     }
 
-    /// Adds diagnostic-only detail. Boundary projections redact this value.
+    /// Retains sensitive diagnostic detail without exposing its value.
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
+        self.private_detail = Some(Sensitive::new(detail.into()));
+        self.rebuild_context();
         self
     }
 
     /// Preserves a typed cause in the standard source chain.
     pub fn with_source(mut self, source: impl StdError + Send + Sync + 'static) -> Self {
         self.source = Some(Box::new(source));
+        self.rebuild_context();
         self
     }
 
     /// Preserves an already boxed typed cause in the standard source chain.
     pub fn with_boxed_source(mut self, source: BoxError) -> Self {
         self.source = Some(source);
+        self.rebuild_context();
         self
     }
 
-    /// Returns the stable failure classification.
-    pub const fn kind(&self) -> StoreErrorKind {
-        self.kind
+    /// Returns the immutable catalog descriptor that owns this error's identity.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        self.descriptor
+    }
+
+    /// Returns the stable dotted catalog code.
+    pub const fn code(&self) -> ErrorCode {
+        self.descriptor.code()
+    }
+
+    /// Returns the protocol-independent condition.
+    pub const fn condition(&self) -> CanonicalCondition {
+        self.descriptor.condition()
+    }
+
+    /// Returns the catalog-owned severity.
+    pub const fn severity(&self) -> ErrorSeverity {
+        self.descriptor.severity()
+    }
+
+    /// Returns the catalog-owned recovery hint.
+    pub const fn recovery_hint(&self) -> RecoveryHint {
+        self.descriptor.recovery_hint()
     }
 
     /// Returns the operation that failed.
@@ -249,98 +252,89 @@ impl StoreError {
         self.component
     }
 
-    /// Returns diagnostic detail without exposing it to external adapters.
-    pub fn detail(&self) -> Option<&str> {
-        self.detail.as_deref()
+    /// Creates the descriptor-validated public projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema violation if the catalog and the internally generated
+    /// storage context become inconsistent.
+    pub fn public_view(&self) -> Result<PublicErrorView<'_>, ViewContextViolation> {
+        PublicErrorView::try_new(self.descriptor, &self.context)
     }
 
-    /// Creates a configuration validation failure.
-    pub fn config(operation: StoreOperation, detail: impl Into<String>) -> Self {
-        Self::new(StoreErrorKind::InvalidRequest, operation)
-            .in_component(StoreComponent::Configuration)
-            .with_detail(detail)
+    /// Creates the descriptor-validated controlled diagnostic projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema violation if the catalog and the internally generated
+    /// storage context become inconsistent.
+    pub fn diagnostic_view(&self) -> Result<DiagnosticView<'_>, ViewContextViolation> {
+        DiagnosticView::try_new(self.descriptor, &self.context)
     }
 
-    /// Creates an unsupported-configuration failure.
-    pub fn unsupported(operation: StoreOperation, detail: impl Into<String>) -> Self {
-        Self::new(StoreErrorKind::Unsupported, operation)
-            .in_component(StoreComponent::Configuration)
-            .with_detail(detail)
+    fn rebuild_context(&mut self) {
+        self.context = store_context(
+            self.operation,
+            self.component,
+            self.private_detail.is_some(),
+            self.source.is_some(),
+        );
     }
+}
 
-    /// Creates an invalid state-machine transition failure.
-    pub fn invalid_state(operation: StoreOperation, detail: impl Into<String>) -> Self {
-        Self::new(StoreErrorKind::Internal, operation).with_detail(detail)
-    }
+fn is_storage_descriptor(descriptor: &ErrorDescriptor) -> bool {
+    matches!(
+        descriptor.code().as_str(),
+        "storage.lifecycle.not_started"
+            | "storage.backend.unavailable"
+            | "storage.request.invalid"
+            | "storage.mapped_file.not_found"
+            | "storage.capacity.exhausted"
+            | "storage.read.failed"
+            | "storage.write.failed"
+            | "storage.io.failed"
+            | "storage.state.corrupted"
+            | "storage.operation.timed_out"
+            | "storage.operation.unsupported"
+            | "storage.internal.failure"
+    )
+}
 
-    /// Creates a storage failure when no lower-level typed source exists.
-    pub fn storage(operation: StoreOperation, detail: impl Into<String>) -> Self {
-        Self::new(StoreErrorKind::Storage, operation).with_detail(detail)
+fn store_context(
+    operation: StoreOperation,
+    component: StoreComponent,
+    detail_present: bool,
+    source_present: bool,
+) -> ErrorContext {
+    let mut context = ErrorContext::new()
+        .with_text(fields::STORE_OPERATION, operation.as_str())
+        .with_text(fields::STORE_COMPONENT, component.as_str());
+    if detail_present {
+        context = context.with_secret_presence(fields::STORE_DETAIL_PRESENT);
     }
-
-    /// Creates a mapped-file failure while preserving its typed source.
-    pub fn mapped_file(operation: StoreOperation, source: impl StdError + Send + Sync + 'static) -> Self {
-        Self::new(StoreErrorKind::Storage, operation)
-            .in_component(StoreComponent::MappedFile)
-            .with_source(source)
+    if source_present {
+        context = context.with_secret_presence(fields::SOURCE_PRESENT);
     }
-
-    /// Creates a RocksDB failure while preserving its typed source.
-    pub fn rocksdb(operation: StoreOperation, source: impl StdError + Send + Sync + 'static) -> Self {
-        Self::new(StoreErrorKind::Storage, operation)
-            .in_component(StoreComponent::RocksDb)
-            .with_source(source)
-    }
-
-    /// Creates a tiered-store failure while preserving its typed source.
-    pub fn tiered_store(operation: StoreOperation, source: impl StdError + Send + Sync + 'static) -> Self {
-        Self::new(StoreErrorKind::Unavailable, operation)
-            .in_component(StoreComponent::TieredStore)
-            .with_source(source)
-    }
-
-    /// Creates a high-availability failure while preserving its typed source.
-    pub fn high_availability(operation: StoreOperation, source: impl StdError + Send + Sync + 'static) -> Self {
-        Self::new(StoreErrorKind::Unavailable, operation)
-            .in_component(StoreComponent::HighAvailability)
-            .with_source(source)
-    }
-
-    /// Creates a DLedger configuration or lifecycle failure.
-    pub fn dledger(operation: StoreOperation, detail: impl Into<String>) -> Self {
-        Self::new(StoreErrorKind::Unavailable, operation)
-            .in_component(StoreComponent::DLedger)
-            .with_detail(detail)
-    }
-
-    /// Creates a mapped-file lookup failure.
-    pub const fn mapped_file_not_found(operation: StoreOperation) -> Self {
-        Self::new(StoreErrorKind::NotFound, operation).in_component(StoreComponent::MappedFile)
-    }
+    context
 }
 
 impl fmt::Display for StoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.component == StoreComponent::Store {
-            write!(
-                formatter,
-                "store operation {} failed: {}",
-                self.operation.as_str(),
-                self.kind.as_str()
-            )?;
-        } else {
-            write!(
-                formatter,
-                "store {} operation {} failed: {}",
-                self.component.as_str(),
-                self.operation.as_str(),
-                self.kind.as_str()
-            )?;
-        }
-        if let Some(detail) = &self.detail {
-            write!(formatter, ": {detail}")?;
-        }
-        Ok(())
+        write!(formatter, "{}: {}", self.code(), self.descriptor.public_message())
+    }
+}
+
+impl fmt::Debug for StoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StoreError")
+            .field("code", &self.code())
+            .field("message", &self.descriptor.public_message())
+            .field("operation", &self.operation)
+            .field("component", &self.component)
+            .field("detail_present", &self.private_detail.is_some())
+            .field("source_present", &self.source.is_some())
+            .finish()
     }
 }
 
@@ -350,74 +344,108 @@ impl StdError for StoreError {
     }
 }
 
-impl DomainError for StoreError {
-    fn kind(&self) -> ErrorKind {
-        match self.kind {
-            StoreErrorKind::NotStarted => ErrorKind::NotInitialized,
-            StoreErrorKind::Unavailable => ErrorKind::Service,
-            StoreErrorKind::InvalidRequest | StoreErrorKind::Unsupported => ErrorKind::IllegalArgument,
-            StoreErrorKind::NotFound => ErrorKind::MessageLookupFailed,
-            StoreErrorKind::Capacity => ErrorKind::StorageOutOfSpace,
-            StoreErrorKind::Storage => match self.operation {
-                StoreOperation::Read | StoreOperation::QueryOffset => ErrorKind::StorageReadFailed,
-                _ => ErrorKind::StorageWriteFailed,
-            },
-            StoreErrorKind::Io => ErrorKind::Io,
-            StoreErrorKind::Corruption => ErrorKind::StorageCorrupted,
-            StoreErrorKind::Timeout => ErrorKind::Timeout,
-            StoreErrorKind::Internal => ErrorKind::Internal,
-        }
-    }
-
-    fn code(&self) -> ErrorCode {
-        self.kind.code()
-    }
-
-    fn context(&self) -> ErrorContext {
-        let mut context = ErrorContext::new()
-            .with_text(fields::STORE_OPERATION, self.operation.as_str())
-            .with_text(fields::STORE_COMPONENT, self.component.as_str());
-        if self.detail.is_some() {
-            context = context.with_secret_presence(fields::STORE_DETAIL_PRESENT);
-        }
-        context
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io;
 
-    use rocketmq_error::DomainError;
-    use rocketmq_error::RedactionPolicy;
+    use rocketmq_error::ContextVisibility;
+    use rocketmq_error::ViewValueRef;
+    use rocketmq_error::PROTOCOL_HEADER_INVALID;
+    use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
+    use rocketmq_error::STORAGE_WRITE_FAILED;
 
     use super::*;
 
-    #[test]
-    fn storage_error_exposes_stable_metadata() {
-        let error = StoreError::new(StoreErrorKind::Unavailable, StoreOperation::Append)
-            .in_component(StoreComponent::HighAvailability);
+    #[derive(Debug)]
+    struct StoreCause {
+        source: io::Error,
+    }
 
-        assert_eq!(StoreErrorKind::Unavailable, error.kind());
-        assert_eq!(StoreOperation::Append, error.operation());
-        assert_eq!(StoreComponent::HighAvailability, error.component());
-        assert_eq!("STORE_UNAVAILABLE", DomainError::code(&error).as_str());
-        assert_eq!(RedactionPolicy::RedactSensitive, error.redaction());
+    impl fmt::Display for StoreCause {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("store cause")
+        }
+    }
+
+    impl StdError for StoreCause {
+        fn source(&self) -> Option<&(dyn StdError + 'static)> {
+            Some(&self.source)
+        }
     }
 
     #[test]
-    fn storage_error_preserves_typed_source_and_redacts_detail() {
-        let error = StoreError::new(StoreErrorKind::Storage, StoreOperation::Flush)
+    fn storage_vocabularies_remain_exact() {
+        assert_eq!(StoreOperation::ALL.len(), 10);
+        assert_eq!(StoreComponent::ALL.len(), 8);
+    }
+
+    #[test]
+    fn storage_error_exposes_catalog_metadata() {
+        let error = StoreError::new(&STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Append)
+            .in_component(StoreComponent::HighAvailability);
+
+        assert_eq!(&STORAGE_BACKEND_UNAVAILABLE, error.descriptor());
+        assert_eq!("storage.backend.unavailable", error.code().as_str());
+        assert_eq!(StoreOperation::Append, error.operation());
+        assert_eq!(StoreComponent::HighAvailability, error.component());
+    }
+
+    #[test]
+    fn storage_error_rejects_non_storage_catalog_identity() {
+        assert!(StoreError::try_new(&PROTOCOL_HEADER_INVALID, StoreOperation::Read).is_none());
+        assert!(
+            std::panic::catch_unwind(|| { StoreError::new(&PROTOCOL_HEADER_INVALID, StoreOperation::Read) }).is_err()
+        );
+    }
+
+    #[test]
+    fn storage_error_preserves_typed_source_and_safe_views() {
+        let error = StoreError::new(&STORAGE_WRITE_FAILED, StoreOperation::Flush)
             .in_component(StoreComponent::MappedFile)
             .with_detail("C:\\secret\\commitlog")
-            .with_source(io::Error::other("disk failure"));
+            .with_source(io::Error::other("disk-secret"));
 
-        assert_eq!(Some("disk failure"), error.source().map(ToString::to_string).as_deref());
         assert!(error
-            .boundary_view()
-            .context()
-            .to_string()
-            .contains("store_detail=<redacted>"));
-        assert!(error.boundary_view().context().public_fields().next().is_none());
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .is_some());
+        assert_eq!("storage.write.failed: Storage write failed", error.to_string());
+        assert!(!error.to_string().contains("secret"));
+        assert!(!format!("{error:?}").contains("disk-secret"));
+        assert!(!format!("{error:?}").contains("commitlog"));
+
+        let public = error.public_view().expect("valid public view");
+        assert!(public.fields().next().is_none());
+
+        let fields = error
+            .diagnostic_view()
+            .expect("valid diagnostic view")
+            .fields()
+            .map(|field| (field.name(), field.visibility(), field.value()))
+            .collect::<Vec<_>>();
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields[0].2, ViewValueRef::Text("flush"));
+        assert_eq!(fields[1].2, ViewValueRef::Text("mapped_file"));
+        assert_eq!(fields[2].1, ContextVisibility::SecretPresenceOnly);
+        assert_eq!(fields[2].2, ViewValueRef::Redacted);
+        assert_eq!(fields[3].2, ViewValueRef::Redacted);
+    }
+
+    #[test]
+    fn storage_error_preserves_causal_order_and_downcasts() {
+        let error = StoreError::new(&STORAGE_WRITE_FAILED, StoreOperation::Flush).with_source(StoreCause {
+            source: io::Error::other("typed leaf"),
+        });
+
+        let cause = error
+            .source()
+            .and_then(|source| source.downcast_ref::<StoreCause>())
+            .expect("first cause remains typed");
+        let leaf = cause
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("leaf cause follows the wrapper");
+        assert_eq!(leaf.to_string(), "typed leaf");
+        assert!(leaf.source().is_none());
     }
 }

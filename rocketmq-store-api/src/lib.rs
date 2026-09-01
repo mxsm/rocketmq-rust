@@ -52,7 +52,6 @@ pub use checkpoint_artifact::RELEASE_CHECKPOINT_MANIFEST_FILE;
 pub use contract::StoreContractViolation;
 pub use error::StoreComponent;
 pub use error::StoreError;
-pub use error::StoreErrorKind;
 pub use error::StoreOperation;
 pub use ha_contract::decide_replication;
 pub use ha_contract::AckPolicy;
@@ -633,8 +632,8 @@ pub struct FlushBacklog {
 pub struct StoreHealthSnapshot {
     /// Whether writable.
     pub writable: bool,
-    /// The last error value.
-    pub last_error: Option<StoreErrorKind>,
+    /// Catalog identity of the latest health failure.
+    pub last_error: Option<&'static rocketmq_error::ErrorDescriptor>,
     /// Whether page cache busy.
     pub page_cache_busy: bool,
     /// Whether transient pool deficient.
@@ -679,8 +678,8 @@ impl StoreHealthSnapshot {
         self.writable
     }
 
-    /// Returns the neutral classification of the latest health failure.
-    pub const fn last_error(&self) -> Option<StoreErrorKind> {
+    /// Returns the catalog identity of the latest health failure.
+    pub const fn last_error(&self) -> Option<&'static rocketmq_error::ErrorDescriptor> {
         self.last_error
     }
 

@@ -35,7 +35,6 @@ use rocketmq_store::CommitLogReadMode;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::StoreError;
-use rocketmq_store::StoreErrorKind;
 use rocketmq_store::StoreOperation;
 use rocketmq_store::TimerMessageStore;
 use rocketmq_transport::api::ServerConfig;
@@ -290,7 +289,10 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
     ) -> Result<(), CommitLogReadModeUpdateError> {
         self.message_store_provider
             .upgrade()
-            .ok_or(StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Admin))?
+            .ok_or(StoreError::new(
+                &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,
+                StoreOperation::Admin,
+            ))?
             .set_commitlog_read_mode(read_ahead_mode)?;
         self.config
             .apply_data_read_ahead(read_ahead_mode == CommitLogReadMode::Normal)?;

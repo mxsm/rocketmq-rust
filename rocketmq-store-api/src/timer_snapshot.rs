@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_error::STORAGE_IO_FAILED;
+use rocketmq_error::STORAGE_REQUEST_INVALID;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
@@ -23,7 +25,6 @@ use thiserror::Error;
 
 use crate::StoreContractViolation;
 use crate::StoreError;
-use crate::StoreErrorKind;
 use crate::StoreOperation;
 
 /// Current Extended Timeline snapshot manifest schema.
@@ -272,11 +273,11 @@ struct TimerSnapshotIoError {
 }
 
 fn snapshot_contract(source: StoreContractViolation) -> StoreError {
-    StoreError::new(StoreErrorKind::InvalidRequest, StoreOperation::Read).with_source(source)
+    StoreError::new(&STORAGE_REQUEST_INVALID, StoreOperation::Read).with_source(source)
 }
 
 fn snapshot_io(operation: &'static str, path: &Path, source: std::io::Error) -> StoreError {
-    StoreError::new(StoreErrorKind::Io, StoreOperation::Read).with_source(TimerSnapshotIoError {
+    StoreError::new(&STORAGE_IO_FAILED, StoreOperation::Read).with_source(TimerSnapshotIoError {
         operation,
         path: path.to_path_buf(),
         source,

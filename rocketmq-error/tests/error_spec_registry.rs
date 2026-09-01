@@ -9,6 +9,7 @@ use rocketmq_error::ALL_ERROR_SPECS;
 
 #[test]
 fn every_error_kind_has_one_spec() {
+    assert_eq!(ALL_ERROR_SPECS.len(), 73);
     assert_eq!(ALL_ERROR_SPECS.len(), ErrorKind::ALL.len());
 
     let mut kinds = HashSet::new();

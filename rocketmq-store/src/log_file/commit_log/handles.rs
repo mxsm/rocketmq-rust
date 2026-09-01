@@ -36,6 +36,7 @@ use crate::consume_queue::mapped_file_queue::MappedFileQueueCleanupHandle;
 use crate::consume_queue::mapped_file_queue::MappedFileQueueReadHandle;
 use crate::log_file::mapped_file::MappedFile;
 use crate::message_store::runtime_state::StoreRuntimeState;
+use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
 use crate::transfer::error::TransferError;
@@ -328,11 +329,17 @@ impl CommitLogReplicaHandle {
         let mapped_file = self.append.get_last_mapped_file(start_offset as u64, true);
         if mapped_file.is_none() {
             drop(lock);
-            return Err(StoreError::mapped_file_not_found(StoreOperation::Append));
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND, StoreOperation::Append)
+                    .in_component(StoreComponent::MappedFile),
+            );
         }
         let Some(mapped_file) = self.append.get_last_mapped_file(start_offset as u64, true) else {
             drop(lock);
-            return Err(StoreError::mapped_file_not_found(StoreOperation::Append));
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND, StoreOperation::Append)
+                    .in_component(StoreComponent::MappedFile),
+            );
         };
         let appended = mapped_file.append_message_offset_length(data, data_start as usize, data_length as usize);
         drop(lock);

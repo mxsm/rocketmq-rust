@@ -247,15 +247,15 @@ pub(super) fn record_message_store_shutdown_outcome(
             progress.complete("message_store");
         }
         MessageStoreShutdownOutcome::Failed(error) => {
-            let error_kind = error.kind().as_str();
-            warn!(error_kind, error = %error, "Failed to shutdown message store durably");
+            let error_code = error.code().as_str();
+            warn!(error_code, error = %error, "Failed to shutdown message store durably");
             shutdown_report.message_store = BrokerShutdownComponentReport {
                 name: "message_store",
                 present: true,
                 healthy: false,
                 timed_out: false,
                 elapsed,
-                error_kind: Some(error_kind),
+                error_kind: Some(error_code),
                 detail: Some(error.to_string()),
             };
         }

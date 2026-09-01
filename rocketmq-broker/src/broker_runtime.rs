@@ -71,7 +71,6 @@ use rocketmq_store::CommitLogDispatcher;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::MessageStoreShutdownReport;
 use rocketmq_store::StoreError;
-use rocketmq_store::StoreErrorKind;
 use rocketmq_store::StoreFactory;
 use rocketmq_store::StoreFactoryConfig;
 use rocketmq_store::StoreOperation;

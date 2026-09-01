@@ -695,22 +695,60 @@ def is_source_stringification_line(line: str) -> bool:
     return False
 
 
+def check_store_error_detail_stringification(paths: list[Path]) -> list[Finding]:
+    """Reject typed StoreError sources interpolated into private detail."""
+    source_interpolation = re.compile(r"\{(error|err|e)(?::[^}]*)?\}")
+    facade_detail_terms = (
+        ".with_detail(",
+        "store_config_error(",
+        "store_unsupported_error(",
+        "store_internal_error(",
+        "store_read_error(",
+        "store_write_error(",
+    )
+    findings: list[Finding] = []
+    for path in paths:
+        lines = read_text(path).splitlines()
+        for index, line in enumerate(lines):
+            if "format!(" not in line:
+                continue
+            format_window = "\n".join(lines[index : min(len(lines), index + 8)])
+            if source_interpolation.search(format_window) is None:
+                continue
+            line_number = index + 1
+            if is_test_context(path, line_number):
+                continue
+            promotion_window = "\n".join(lines[max(0, index - 5) : min(len(lines), index + 8)])
+            if any(term in promotion_window for term in facade_detail_terms):
+                findings.append(
+                    Finding(
+                        path,
+                        line_number,
+                        "StoreError promotion must retain the typed source with with_source instead of formatting it into private detail",
+                    )
+                )
+    return findings
+
+
 def check_source_stringification_allowlist() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-store-api" / "src" / "error.rs": [
+            "descriptor: &'static ErrorDescriptor",
+            "context: ErrorContext",
+            "private_detail: Option<Sensitive<String>>",
             "source: Option<BoxError>",
-            "pub fn rocksdb(operation: StoreOperation",
-            ".in_component(StoreComponent::RocksDb)",
-            ".with_source(source)",
+            "pub fn with_source",
+            "pub fn public_view",
+            "pub fn diagnostic_view",
             "impl StdError for StoreError",
-            "impl DomainError for StoreError",
         ],
         ROOT / "rocketmq-store-local" / "src" / "mapped_file" / "mapped_file_error.rs": [
             "MmapFailed(#[source] io::Error)",
             "FlushFailed(#[source] io::Error)",
         ],
         ROOT / "rocketmq-store" / "src" / "message_store" / "rocksdb_message_store.rs": [
-            "RocksDbMessageStoreError::Backend { source } => StoreError::rocksdb(StoreOperation::Load, source)",
+            "RocksDbMessageStoreError::Backend { source } => {",
+            "STORAGE_BACKEND_UNAVAILABLE",
             ".with_source(source)",
         ],
     }
@@ -731,6 +769,17 @@ def check_source_stringification_allowlist() -> list[Finding]:
         *rust_files_under("rocketmq-auth", "src"),
         *rust_files_under("rocketmq-broker", "src"),
     ]
+    store_facade_paths = [
+        *rust_files_under("rocketmq-store-api", "src"),
+        *rust_files_under("rocketmq-store", "src"),
+        *rust_files_under("rocketmq-store-local", "src"),
+        *rust_files_under("rocketmq-store-rocksdb", "src"),
+        *rust_files_under("rocketmq-tieredstore", "src"),
+        *rust_files_under("rocketmq-broker", "src"),
+        *rust_files_under("rocketmq-controller", "src"),
+        *rust_files_under("rocketmq-tools", "rocketmq-store-inspect", "src"),
+    ]
+    findings.extend(check_store_error_detail_stringification(store_facade_paths))
     for path in domain_paths:
         for line_number, line in enumerate(read_text(path).splitlines(), start=1):
             stripped = line.strip()

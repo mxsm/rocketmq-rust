@@ -18,6 +18,10 @@ mod flush_consume_queue;
 
 pub(super) use flush_consume_queue::FlushConsumeQueueService;
 
+fn lifecycle_invalid(operation: StoreOperation, detail: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, operation).with_detail(detail)
+}
+
 impl LocalFileMessageStore {
     pub(super) fn add_schedule_task(&mut self) {
         if self.scheduled_task_group.is_some() {
@@ -523,7 +527,7 @@ impl LocalFileMessageStore {
         if self.store_root_mode == StoreRootMode::Managed
             && (self.managed_lifecycle_runtime.is_none() || self.mapped_file_retirement_service.is_none())
         {
-            return Err(StoreError::invalid_state(
+            return Err(lifecycle_invalid(
                 StoreOperation::Start,
                 "managed mapped-file lifecycle has not completed queue/runtime/reaper activation",
             ));
@@ -531,19 +535,19 @@ impl LocalFileMessageStore {
         match self.lifecycle_state() {
             LocalStoreState::Initialized => {}
             LocalStoreState::Created => {
-                return Err(StoreError::invalid_state(
+                return Err(lifecycle_invalid(
                     StoreOperation::Start,
                     "message store must be initialized before start".to_string(),
                 ));
             }
             LocalStoreState::Started => {
-                return Err(StoreError::invalid_state(
+                return Err(lifecycle_invalid(
                     StoreOperation::Start,
                     "message store is already started",
                 ));
             }
             LocalStoreState::Shutdown => {
-                return Err(StoreError::invalid_state(
+                return Err(lifecycle_invalid(
                     StoreOperation::Start,
                     "message store is shutdown; call init before start".to_string(),
                 ));
@@ -551,7 +555,7 @@ impl LocalFileMessageStore {
             LocalStoreState::RecoveringConsumeQueue
             | LocalStoreState::RecoveringCommitLog
             | LocalStoreState::RecoveringTopicQueueTable => {
-                return Err(StoreError::invalid_state(
+                return Err(lifecycle_invalid(
                     StoreOperation::Start,
                     "message store is recovering; start is not allowed".to_string(),
                 ));
@@ -607,7 +611,9 @@ impl LocalFileMessageStore {
             if let Some(ha_service) = self.ha_service.as_mut() {
                 ha_service.start().await.map_err(|e| {
                     error!("HA service start failed: {:?}", e);
-                    StoreError::high_availability(StoreOperation::Start, e)
+                    StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Start)
+                        .in_component(StoreComponent::HighAvailability)
+                        .with_source(e)
                 })?;
             }
             if let Some(service) = self.mapped_file_retirement_service.as_mut() {
@@ -656,7 +662,7 @@ impl LocalFileMessageStore {
             LocalStoreState::Created | LocalStoreState::Shutdown => {}
             LocalStoreState::Initialized => return Ok(()),
             LocalStoreState::Started => {
-                return Err(StoreError::invalid_state(
+                return Err(lifecycle_invalid(
                     StoreOperation::Load,
                     "message store cannot be initialized while started".to_string(),
                 ));
@@ -664,7 +670,7 @@ impl LocalFileMessageStore {
             LocalStoreState::RecoveringConsumeQueue
             | LocalStoreState::RecoveringCommitLog
             | LocalStoreState::RecoveringTopicQueueTable => {
-                return Err(StoreError::invalid_state(
+                return Err(lifecycle_invalid(
                     StoreOperation::Load,
                     "message store cannot be initialized while recovering".to_string(),
                 ));
@@ -676,7 +682,7 @@ impl LocalFileMessageStore {
         {
             self.ensure_root_dependencies_wired("init")?;
             let pending_ha_service = self.pending_ha_service.take().ok_or_else(|| {
-                StoreError::invalid_state(
+                lifecycle_invalid(
                     StoreOperation::Load,
                     "HA service was not constructed while wiring root dependencies",
                 )
@@ -717,9 +723,11 @@ impl LocalFileMessageStore {
             match self.transient_store_pool.init() {
                 Ok(_) => {}
                 Err(source) => {
-                    return Err(StoreError::new(StoreErrorKind::Storage, StoreOperation::Load)
-                        .in_component(StoreComponent::MappedFile)
-                        .with_source(source));
+                    return Err(
+                        StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Load)
+                            .in_component(StoreComponent::MappedFile)
+                            .with_source(source),
+                    );
                 }
             }
         }
@@ -877,7 +885,7 @@ impl LocalFileMessageStore {
                 report.transient_pool_outstanding_leases = pool_report.outstanding_leases();
             }
             Err(source) => {
-                let error = StoreError::new(StoreErrorKind::Storage, StoreOperation::Shutdown)
+                let error = StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Shutdown)
                     .in_component(StoreComponent::MappedFile)
                     .with_source(source);
                 if shutdown_error.is_none() {
@@ -916,7 +924,7 @@ impl LocalFileMessageStore {
             return Ok(true);
         }
         if self.lifecycle_state() != LocalStoreState::Shutdown {
-            return Err(StoreError::invalid_state(
+            return Err(lifecycle_invalid(
                 StoreOperation::Admin,
                 "managed Store destroy requires ordinary shutdown to complete first",
             ));
@@ -931,14 +939,14 @@ impl LocalFileMessageStore {
         }
         let Some(runtime) = self.managed_lifecycle_runtime.clone() else {
             self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
-            return Err(StoreError::invalid_state(
+            return Err(lifecycle_invalid(
                 StoreOperation::Admin,
                 "managed lifecycle runtime is unavailable after shutdown",
             ));
         };
         let Some(service) = self.mapped_file_retirement_service.as_mut() else {
             self.store_root_lease_state = StoreRootLeaseState::DestroyRetryPending;
-            return Err(StoreError::invalid_state(
+            return Err(lifecycle_invalid(
                 StoreOperation::Admin,
                 "managed mapped-file retirement service is unavailable after shutdown",
             ));

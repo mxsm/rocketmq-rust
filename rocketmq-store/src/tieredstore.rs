@@ -54,6 +54,7 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::filter::ArcMessageFilter;
 use crate::log_file::commit_log::CommitLog;
 use crate::log_file::commit_log::CommitLogReadHandle;
+use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
 use crate::store_error::StoreOperation;
 
@@ -74,8 +75,11 @@ impl TieredStoreDecorator {
         metrics: TieredStoreMetricsRecorder,
         parent_task_group: TaskGroup,
     ) -> Result<Self, StoreError> {
-        let store = TieredStore::new_with_metrics(config, metrics, parent_task_group)
-            .map_err(|error| StoreError::tiered_store(StoreOperation::Load, error))?;
+        let store = TieredStore::new_with_metrics(config, metrics, parent_task_group).map_err(|error| {
+            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)
+                .in_component(StoreComponent::TieredStore)
+                .with_source(error)
+        })?;
         Ok(Self { store: Arc::new(store) })
     }
 
@@ -99,24 +103,27 @@ impl TieredStoreDecorator {
     }
 
     pub async fn load(&self) -> Result<(), StoreError> {
-        self.store
-            .load()
-            .await
-            .map_err(|error| StoreError::tiered_store(StoreOperation::Load, error))
+        self.store.load().await.map_err(|error| {
+            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)
+                .in_component(StoreComponent::TieredStore)
+                .with_source(error)
+        })
     }
 
     pub async fn start(&self) -> Result<(), StoreError> {
-        self.store
-            .start()
-            .await
-            .map_err(|error| StoreError::tiered_store(StoreOperation::Start, error))
+        self.store.start().await.map_err(|error| {
+            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Start)
+                .in_component(StoreComponent::TieredStore)
+                .with_source(error)
+        })
     }
 
     pub async fn shutdown(&self) -> Result<(), StoreError> {
-        self.store
-            .shutdown()
-            .await
-            .map_err(|error| StoreError::tiered_store(StoreOperation::Shutdown, error))
+        self.store.shutdown().await.map_err(|error| {
+            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Shutdown)
+                .in_component(StoreComponent::TieredStore)
+                .with_source(error)
+        })
     }
 
     pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
@@ -201,7 +208,12 @@ impl TieredStoreDecorator {
                 );
                 match TieredReadPolicy::classify_error(error.kind(), local_available) {
                     TieredReadErrorDisposition::FallbackToLocal | TieredReadErrorDisposition::Miss => Ok(None),
-                    TieredReadErrorDisposition::Fatal => Err(StoreError::tiered_store(StoreOperation::Read, error)),
+                    TieredReadErrorDisposition::Fatal => Err(StoreError::new(
+                        &rocketmq_error::STORAGE_READ_FAILED,
+                        StoreOperation::Read,
+                    )
+                    .in_component(StoreComponent::TieredStore)
+                    .with_source(error)),
                 }
             }
         }
@@ -236,7 +248,12 @@ impl TieredStoreDecorator {
                 warn!(topic = %topic, key = %key, error = %error, "tieredstore query_message fallback failed");
                 match TieredReadPolicy::classify_error(error.kind(), local_available) {
                     TieredReadErrorDisposition::FallbackToLocal | TieredReadErrorDisposition::Miss => Ok(None),
-                    TieredReadErrorDisposition::Fatal => Err(StoreError::tiered_store(StoreOperation::Read, error)),
+                    TieredReadErrorDisposition::Fatal => Err(StoreError::new(
+                        &rocketmq_error::STORAGE_READ_FAILED,
+                        StoreOperation::Read,
+                    )
+                    .in_component(StoreComponent::TieredStore)
+                    .with_source(error)),
                 }
             }
         }
@@ -254,7 +271,11 @@ impl TieredStoreDecorator {
             .get_offset_by_time_with_boundary(topic.to_string(), queue_id, timestamp, boundary_type)
             .await
             .map(|offset| (offset >= 0).then_some(offset))
-            .map_err(|error| StoreError::tiered_store(StoreOperation::QueryOffset, error))
+            .map_err(|error| {
+                StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::QueryOffset)
+                    .in_component(StoreComponent::TieredStore)
+                    .with_source(error)
+            })
     }
 
     pub async fn message_timestamp(
@@ -267,7 +288,11 @@ impl TieredStoreDecorator {
             .fetcher()
             .get_message_timestamp(topic.to_string(), queue_id, consume_queue_offset)
             .await
-            .map_err(|error| StoreError::tiered_store(StoreOperation::QueryOffset, error))
+            .map_err(|error| {
+                StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::QueryOffset)
+                    .in_component(StoreComponent::TieredStore)
+                    .with_source(error)
+            })
     }
 
     #[cfg(test)]

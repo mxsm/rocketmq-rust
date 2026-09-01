@@ -71,7 +71,10 @@ impl BrokerRuntime {
         self.detach_message_store_provider();
         let result = match self.composition.state.message_store_mut() {
             Some(message_store) => BrokerStorePort::start(message_store).await,
-            None => Err(StoreError::new(StoreErrorKind::NotStarted, StoreOperation::Start)),
+            None => Err(StoreError::new(
+                &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,
+                StoreOperation::Start,
+            )),
         };
         self.bind_message_store_provider();
         result

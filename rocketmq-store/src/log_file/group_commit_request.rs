@@ -24,10 +24,8 @@ use crate::store_error::StoreOperation;
 use rocketmq_store_api::WriteAuthority;
 
 fn group_commit_invalid_state(reason: impl Into<String>) -> StoreError {
-    StoreError::invalid_state(
-        StoreOperation::Flush,
-        format!("group commit response {}", reason.into()),
-    )
+    StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Flush)
+        .with_detail(format!("group commit response {}", reason.into()))
 }
 
 pub struct GroupCommitResponse {
@@ -193,7 +191,6 @@ mod tests {
     use tokio::time::Duration;
 
     use super::*;
-    use crate::store_error::StoreErrorKind;
 
     #[tokio::test]
     async fn test_group_commit_request_creation() {
@@ -241,9 +238,7 @@ mod tests {
         assert!(matches!(first, Ok(PutMessageStatus::FlushDiskTimeout)));
         assert!(matches!(
             second,
-            Err(error)
-                if error.kind() == StoreErrorKind::Internal
-                    && error.detail().is_some_and(|detail| detail.contains("receiver was already consumed"))
+            Err(error) if error.descriptor() == &rocketmq_error::STORAGE_INTERNAL_FAILURE
         ));
     }
 

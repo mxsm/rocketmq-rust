@@ -41,7 +41,7 @@ use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::RocksDBMessageStore;
 use rocketmq_store::StoreComponent;
-use rocketmq_store::StoreErrorKind;
+use rocketmq_store::StoreOperation;
 use rocketmq_store::StorePorts;
 use rocketmq_store::StoreRuntimeConfig;
 use rocketmq_store::StoreType;
@@ -533,17 +533,19 @@ fn rocksdb_time_lookup_and_failure_mapping_stay_on_the_legacy_contract() {
     let error = store
         .try_get_max_offset_in_queue(&topic, 0)
         .expect_err("closed RocksDB must expose a typed error");
-    assert_eq!(error.kind(), StoreErrorKind::Storage);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
+    assert_eq!(error.operation(), StoreOperation::QueryOffset);
     assert_eq!(error.component(), StoreComponent::RocksDb);
     assert_eq!(store.get_max_offset_in_queue(&topic, 0), 0);
     assert_eq!(store.get_commit_log_offset_in_queue(&topic, 0, 0), -1);
     let flush_error = store.try_flush().expect_err("closed RocksDB flush must fail");
-    assert_eq!(flush_error.kind(), StoreErrorKind::Storage);
+    assert_eq!(flush_error.descriptor(), &rocketmq_error::STORAGE_WRITE_FAILED);
+    assert_eq!(flush_error.operation(), StoreOperation::Flush);
     assert_eq!(flush_error.component(), StoreComponent::RocksDb);
     let health_error = store
         .health_snapshot()
         .last_flush_error
         .expect("flush failure must be reflected in health");
-    assert_eq!(health_error.kind, StoreErrorKind::Storage);
+    assert_eq!(health_error.descriptor, &rocketmq_error::STORAGE_WRITE_FAILED);
     assert_eq!(health_error.component, StoreComponent::RocksDb);
 }

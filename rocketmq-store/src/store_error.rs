@@ -16,7 +16,6 @@ use std::error::Error as StdError;
 
 pub use rocketmq_store_api::StoreComponent;
 pub use rocketmq_store_api::StoreError;
-pub use rocketmq_store_api::StoreErrorKind;
 pub use rocketmq_store_api::StoreOperation;
 use thiserror::Error;
 

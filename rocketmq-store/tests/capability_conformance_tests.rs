@@ -27,7 +27,6 @@ use rocketmq_store::MessageStoreReadCapability;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StoreComponent;
-use rocketmq_store::StoreErrorKind;
 use rocketmq_store::StoreHealthError;
 use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::StorePorts;
@@ -205,13 +204,27 @@ fn every_backend_append_status_maps_exhaustively_without_collapsing() {
 }
 
 #[test]
-fn canonical_store_error_kinds_have_unique_codes() {
-    let codes = StoreErrorKind::ALL
+fn canonical_store_descriptors_have_unique_codes() {
+    let descriptors = [
+        &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,
+        &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        &rocketmq_error::STORAGE_REQUEST_INVALID,
+        &rocketmq_error::STORAGE_MAPPED_FILE_NOT_FOUND,
+        &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+        &rocketmq_error::STORAGE_READ_FAILED,
+        &rocketmq_error::STORAGE_WRITE_FAILED,
+        &rocketmq_error::STORAGE_IO_FAILED,
+        &rocketmq_error::STORAGE_STATE_CORRUPTED,
+        &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
+        &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+        &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+    ];
+    let codes = descriptors
         .iter()
-        .map(|kind| kind.code().as_str())
+        .map(|descriptor| descriptor.code().as_str())
         .collect::<std::collections::HashSet<_>>();
 
-    assert_eq!(StoreErrorKind::ALL.len(), codes.len());
+    assert_eq!(descriptors.len(), codes.len());
 }
 
 #[test]
@@ -237,25 +250,44 @@ fn every_backend_get_status_maps_exhaustively() {
 }
 
 #[test]
-fn store_health_error_preserves_canonical_kind_or_component_token() {
+fn store_health_error_preserves_canonical_code_and_component() {
     let cases = [
-        (StoreErrorKind::Storage, StoreComponent::MappedFile, "mapped_file"),
-        (StoreErrorKind::Storage, StoreComponent::RocksDb, "rocksdb"),
-        (StoreErrorKind::Unavailable, StoreComponent::TieredStore, "tiered_store"),
         (
-            StoreErrorKind::Unavailable,
-            StoreComponent::HighAvailability,
-            "high_availability",
+            &rocketmq_error::STORAGE_WRITE_FAILED,
+            StoreComponent::MappedFile,
+            "storage.write.failed",
         ),
-        (StoreErrorKind::Unavailable, StoreComponent::DLedger, "dledger"),
-        (StoreErrorKind::NotStarted, StoreComponent::Store, "not_started"),
+        (
+            &rocketmq_error::STORAGE_READ_FAILED,
+            StoreComponent::RocksDb,
+            "storage.read.failed",
+        ),
+        (
+            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            StoreComponent::TieredStore,
+            "storage.backend.unavailable",
+        ),
+        (
+            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            StoreComponent::HighAvailability,
+            "storage.backend.unavailable",
+        ),
+        (
+            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            StoreComponent::DLedger,
+            "storage.backend.unavailable",
+        ),
+        (
+            &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,
+            StoreComponent::Store,
+            "storage.lifecycle.not_started",
+        ),
     ];
 
-    for (kind, component, expected) in cases {
-        assert_eq!(
-            expected,
-            StoreHealthError::in_component(kind, component).backend_token()
-        );
+    for (descriptor, component, expected_code) in cases {
+        let error = StoreHealthError::in_component(descriptor, component);
+        assert_eq!(expected_code, error.code());
+        assert_eq!(component, error.component());
     }
 }
 
@@ -264,7 +296,7 @@ fn store_health_exposes_a_backend_neutral_canonical_projection() {
     let snapshot = StoreHealthSnapshot {
         writable: false,
         last_error: Some(StoreHealthError::in_component(
-            StoreErrorKind::Unavailable,
+            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
             StoreComponent::HighAvailability,
         )),
         appended_watermark: 80,
@@ -275,7 +307,10 @@ fn store_health_exposes_a_backend_neutral_canonical_projection() {
     let canonical = snapshot.canonical();
 
     assert!(!canonical.writable());
-    assert_eq!(Some(StoreErrorKind::Unavailable), canonical.last_error());
+    assert_eq!(
+        Some(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE),
+        canonical.last_error()
+    );
     assert_eq!(80, canonical.appended_watermark());
     assert_eq!(48, canonical.durable_watermark());
 }

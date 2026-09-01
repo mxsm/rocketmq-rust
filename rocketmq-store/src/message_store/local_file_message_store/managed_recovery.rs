@@ -40,7 +40,6 @@ use super::MappedFileRetirementService;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
-use crate::store_error::StoreErrorKind;
 use crate::store_error::StoreOperation;
 
 /// Result of the complete read-only Wave-A proof chain.
@@ -79,35 +78,49 @@ pub(super) struct ActivatedManagedQueues {
 
 pub(super) fn validate_wave_b_configuration(config: &MessageStoreConfig) -> Result<(), StoreError> {
     if !cfg!(any(target_os = "linux", windows)) {
-        return Err(StoreError::new(StoreErrorKind::Unsupported, StoreOperation::Load)
-            .in_component(StoreComponent::MappedFile)
-            .with_detail("managed mapped-file lifecycle Wave-B writes require a qualified Linux or Windows backend"));
+        return Err(
+            StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, StoreOperation::Load)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail(
+                    "managed mapped-file lifecycle Wave-B writes require a qualified Linux or Windows backend",
+                ),
+        );
     }
     let expected_commit_log = PathBuf::from(config.store_path_root_dir.as_str()).join("commitlog");
     if Path::new(&config.get_store_path_commit_log()) != expected_commit_log {
-        return Err(StoreError::new(StoreErrorKind::Unsupported, StoreOperation::Load)
-            .in_component(StoreComponent::MappedFile)
-            .with_detail("managed mapped-file lifecycle requires CommitLog under <storeRoot>/commitlog"));
+        return Err(
+            StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, StoreOperation::Load)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail("managed mapped-file lifecycle requires CommitLog under <storeRoot>/commitlog"),
+        );
     }
     if config.is_enable_rocksdb_store() {
-        return Err(StoreError::new(StoreErrorKind::Unsupported, StoreOperation::Load)
-            .in_component(StoreComponent::MappedFile)
-            .with_detail("managed mapped-file lifecycle does not yet cover RocksDB consume-queue storage"));
+        return Err(
+            StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, StoreOperation::Load)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail("managed mapped-file lifecycle does not yet cover RocksDB consume-queue storage"),
+        );
     }
     if config.enable_compaction {
-        return Err(StoreError::new(StoreErrorKind::Unsupported, StoreOperation::Load)
-            .in_component(StoreComponent::MappedFile)
-            .with_detail("managed mapped-file lifecycle does not yet cover compaction queues"));
+        return Err(
+            StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, StoreOperation::Load)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail("managed mapped-file lifecycle does not yet cover compaction queues"),
+        );
     }
     if config.is_timer_wheel_enable() {
-        return Err(StoreError::new(StoreErrorKind::Unsupported, StoreOperation::Load)
-            .in_component(StoreComponent::MappedFile)
-            .with_detail("managed mapped-file lifecycle does not yet cover timer-wheel mapped files"));
+        return Err(
+            StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, StoreOperation::Load)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail("managed mapped-file lifecycle does not yet cover timer-wheel mapped files"),
+        );
     }
     if config.message_index_enable {
-        return Err(StoreError::new(StoreErrorKind::Unsupported, StoreOperation::Load)
-            .in_component(StoreComponent::MappedFile)
-            .with_detail("managed mapped-file lifecycle does not yet cover index-file retirement"));
+        return Err(
+            StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, StoreOperation::Load)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail("managed mapped-file lifecycle does not yet cover index-file retirement"),
+        );
     }
     Ok(())
 }
@@ -128,7 +141,7 @@ pub(super) fn plan_managed_queue_routes(
         config.enable_consume_queue_ext,
     )
     .map_err(|detail| {
-        StoreError::new(StoreErrorKind::Corruption, StoreOperation::Load)
+        StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Load)
             .in_component(StoreComponent::MappedFile)
             .with_detail(detail)
     })
@@ -142,7 +155,7 @@ pub(super) fn stage_and_activate_managed_queues(
 ) -> Result<ActivatedManagedQueues, StoreError> {
     let mut queues = Vec::new();
     queues.try_reserve_exact(routes.len()).map_err(|_| {
-        StoreError::new(StoreErrorKind::Unavailable, StoreOperation::Load)
+        StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)
             .in_component(StoreComponent::MappedFile)
             .with_detail("failed to reserve managed queue staging inventory")
     })?;
@@ -436,7 +449,7 @@ impl LocalFileMessageStore {
 }
 
 fn managed_queue_install_error(detail: impl Into<String>) -> StoreError {
-    StoreError::new(StoreErrorKind::Corruption, StoreOperation::Load)
+    StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Load)
         .in_component(StoreComponent::MappedFile)
         .with_detail(detail)
 }
@@ -456,9 +469,11 @@ pub(super) fn inspect_and_reconcile_managed_root(
 ) -> Result<ManagedReadOnlyDisposition, StoreError> {
     let inspection = store_root_lease.inspect_managed_lifecycle(StoreOperation::Load)?;
     let LockedManagedLifecycleInspection::Managed(session) = inspection else {
-        return Err(StoreError::new(StoreErrorKind::Corruption, StoreOperation::Load)
-            .in_component(StoreComponent::MappedFile)
-            .with_detail("managed lifecycle evidence disappeared between classification and reconciliation"));
+        return Err(
+            StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Load)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail("managed lifecycle evidence disappeared between classification and reconciliation"),
+        );
     };
 
     match session
@@ -487,7 +502,7 @@ pub(super) fn wave_b_activation_fence(disposition: ManagedReadOnlyDisposition) -
             recovery.required_action_count(),
         ),
     };
-    StoreError::new(StoreErrorKind::Unsupported, StoreOperation::Load)
+    StoreError::new(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, StoreOperation::Load)
         .in_component(StoreComponent::MappedFile)
         .with_detail(detail)
 }
@@ -498,44 +513,45 @@ pub(super) fn require_wave_b_ready(
 ) -> Result<PreparedManagedLifecycleActivation, StoreError> {
     match disposition {
         ManagedReadOnlyDisposition::Ready(prepared) => Ok(prepared),
-        ManagedReadOnlyDisposition::RecoveryRequired(recovery) => {
-            Err(StoreError::new(StoreErrorKind::Unavailable, StoreOperation::Load)
-                .in_component(StoreComponent::MappedFile)
-                .with_detail(format!(
-                    "managed lifecycle requires {} durable recovery actions before Wave-B activation",
-                    recovery.required_action_count(),
-                )))
-        }
+        ManagedReadOnlyDisposition::RecoveryRequired(recovery) => Err(StoreError::new(
+            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            StoreOperation::Load,
+        )
+        .in_component(StoreComponent::MappedFile)
+        .with_detail(format!(
+            "managed lifecycle requires {} durable recovery actions before Wave-B activation",
+            recovery.required_action_count(),
+        ))),
     }
 }
 
 fn managed_activation_error(error: ManagedLifecycleActivationError) -> StoreError {
-    let kind = match error.kind() {
+    let descriptor = match error.kind() {
         ManagedLifecycleActivationErrorKind::QueueLoad | ManagedLifecycleActivationErrorKind::SegmentClaim => {
-            StoreErrorKind::Unavailable
+            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
         }
         ManagedLifecycleActivationErrorKind::Registry
         | ManagedLifecycleActivationErrorKind::DuplicateQueue
         | ManagedLifecycleActivationErrorKind::StagingFailed
-        | ManagedLifecycleActivationErrorKind::UnclaimedSegments => StoreErrorKind::Corruption,
+        | ManagedLifecycleActivationErrorKind::UnclaimedSegments => &rocketmq_error::STORAGE_STATE_CORRUPTED,
         ManagedLifecycleActivationErrorKind::Writer | ManagedLifecycleActivationErrorKind::Namespace => {
-            StoreErrorKind::Storage
+            &rocketmq_error::STORAGE_WRITE_FAILED
         }
     };
-    StoreError::new(kind, StoreOperation::Load)
+    StoreError::new(descriptor, StoreOperation::Load)
         .in_component(StoreComponent::MappedFile)
         .with_detail("managed lifecycle activation staging failed before Store construction")
         .with_source(error)
 }
 
 fn managed_reconciliation_error(error: ManagedReconciliationError) -> StoreError {
-    let kind = match error.kind() {
-        ManagedReconciliationErrorKind::Inventory => StoreErrorKind::Unavailable,
+    let descriptor = match error.kind() {
+        ManagedReconciliationErrorKind::Inventory => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
         ManagedReconciliationErrorKind::ReplayRecoveryRequired
         | ManagedReconciliationErrorKind::MissingStoreUuid
-        | ManagedReconciliationErrorKind::State => StoreErrorKind::Corruption,
+        | ManagedReconciliationErrorKind::State => &rocketmq_error::STORAGE_STATE_CORRUPTED,
     };
-    StoreError::new(kind, StoreOperation::Load)
+    StoreError::new(descriptor, StoreOperation::Load)
         .in_component(StoreComponent::MappedFile)
         .with_detail("managed replay and namespace reconciliation failed before Store construction")
         .with_source(error)
