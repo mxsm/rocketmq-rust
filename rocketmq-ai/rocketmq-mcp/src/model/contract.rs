@@ -39,6 +39,10 @@ pub enum QuerySource {
     ConsumerGroupConfig,
     SubscriptionGroups,
     TopicRoute,
+    BrokerHaRuntime,
+    ControllerSyncState,
+    ControllerMetadata,
+    NameserverConfig,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -115,6 +119,10 @@ impl SourceFailure {
             AdminSource::TopicStats => QuerySource::TopicStats,
             AdminSource::ConsumerGroupConfig => QuerySource::ConsumerGroupConfig,
             AdminSource::SubscriptionGroups => QuerySource::SubscriptionGroups,
+            AdminSource::BrokerHaRuntime => QuerySource::BrokerHaRuntime,
+            AdminSource::ControllerSyncState => QuerySource::ControllerSyncState,
+            AdminSource::ControllerMetadata => QuerySource::ControllerMetadata,
+            AdminSource::NameserverConfig => QuerySource::NameserverConfig,
         };
         let code = match failure.code() {
             AdminCode::SourceUnavailable => SourceFailureCode::SourceUnavailable,
@@ -472,6 +480,10 @@ mod tests {
         for (admin_source, expected) in [
             (AdminQuerySource::TopicConfig, QuerySource::TopicConfig),
             (AdminQuerySource::ConsumerGroupConfig, QuerySource::ConsumerGroupConfig),
+            (AdminQuerySource::BrokerHaRuntime, QuerySource::BrokerHaRuntime),
+            (AdminQuerySource::ControllerSyncState, QuerySource::ControllerSyncState),
+            (AdminQuerySource::ControllerMetadata, QuerySource::ControllerMetadata),
+            (AdminQuerySource::NameserverConfig, QuerySource::NameserverConfig),
         ] {
             let failure =
                 AdminSourceFailure::new(admin_source, AdminQueryFailureCode::SourceUnavailable, true, "broker-a");

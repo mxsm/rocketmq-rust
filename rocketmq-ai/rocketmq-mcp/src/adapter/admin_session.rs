@@ -72,14 +72,29 @@ use crate::tools::topic_tools::TopicRouteQueue;
 use crate::tools::topic_tools::TopicStatsQueueRow;
 
 mod consumer_observation;
+mod infrastructure_observation;
 mod topic_observation;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedCluster {
     pub name: String,
     pub rocketmq_cluster_name: String,
     pub namesrv_addr: String,
     pub credentials: Option<AdminCredentials>,
+    pub controller_targets: Vec<rocketmq_admin_core::read_client_adapter::ControllerObservationTarget>,
+}
+
+impl std::fmt::Debug for ResolvedCluster {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolvedCluster")
+            .field("name", &self.name)
+            .field("rocketmq_cluster_name", &self.rocketmq_cluster_name)
+            .field("namesrv_addr", &"[REDACTED]")
+            .field("credentials", &self.credentials.as_ref().map(|_| "[REDACTED]"))
+            .field("controller_targets", &self.controller_targets)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -357,6 +372,52 @@ pub(crate) trait AdminSession: Send {
         }
     }
 
+    fn ha_status(
+        &mut self,
+        _broker_names: &[String],
+        _include_sync_state: bool,
+        _controller_names: &[String],
+    ) -> impl Future<
+        Output = Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolExecutionError>,
+    > + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "HA observations are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn controller_metadata(
+        &mut self,
+        _controller_names: &[String],
+    ) -> impl Future<
+        Output = Result<
+            QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>,
+            ToolExecutionError,
+        >,
+    > + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Controller metadata is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn nameserver_config_summary(
+        &mut self,
+    ) -> impl Future<
+        Output = Result<
+            QueryPayload<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>,
+            ToolExecutionError,
+        >,
+    > + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "NameServer configuration is unavailable".to_string(),
+            ))
+        }
+    }
+
     fn shutdown(self) -> impl Future<Output = Result<(), ToolExecutionError>> + Send;
 }
 
@@ -412,7 +473,9 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
                 test_session: Some(factory.start()),
             });
         }
-        let mut builder = ReadAdminBuilder::new(self.client_runtime.clone()).namesrv_addr(cluster.namesrv_addr.clone());
+        let mut builder = ReadAdminBuilder::new(self.client_runtime.clone())
+            .namesrv_addr(cluster.namesrv_addr.clone())
+            .controller_targets(cluster.controller_targets.clone());
         if let Some(credentials) = cluster.credentials.clone() {
             builder = builder.credentials(credentials);
         }
@@ -1044,6 +1107,30 @@ impl AdminSession for AdminCoreSession {
                     .collect(),
             }),
         )
+    }
+
+    async fn ha_status(
+        &mut self,
+        broker_names: &[String],
+        include_sync_state: bool,
+        controller_names: &[String],
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolExecutionError> {
+        self.query_ha_status_observation(broker_names, include_sync_state, controller_names)
+            .await
+    }
+
+    async fn controller_metadata(
+        &mut self,
+        controller_names: &[String],
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolExecutionError> {
+        self.query_controller_metadata_observation(controller_names).await
+    }
+
+    async fn nameserver_config_summary(
+        &mut self,
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolExecutionError>
+    {
+        self.query_nameserver_config_summary_observation().await
     }
 
     async fn shutdown(mut self) -> Result<(), ToolExecutionError> {

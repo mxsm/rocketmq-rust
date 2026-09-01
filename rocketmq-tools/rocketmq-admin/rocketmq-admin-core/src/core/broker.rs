@@ -1043,6 +1043,25 @@ pub fn is_valid_remoting_endpoint(endpoint: &str) -> bool {
     !host.is_empty() && port.parse::<u16>().is_ok_and(|port| port != 0)
 }
 
+/// Returns the canonical ownership key for one valid remoting endpoint.
+///
+/// IP literals use [`std::net::SocketAddr`] canonical formatting. DNS hosts
+/// are lowercased and ports are normalized to their decimal representation.
+/// No caller should expose the returned value outside trusted target
+/// resolution code.
+#[must_use]
+pub fn canonical_remoting_endpoint(endpoint: &str) -> Option<String> {
+    if !is_valid_remoting_endpoint(endpoint) {
+        return None;
+    }
+    if let Ok(socket) = endpoint.parse::<std::net::SocketAddr>() {
+        return Some(socket.to_string());
+    }
+    let (host, port) = endpoint.rsplit_once(':')?;
+    let port = port.parse::<u16>().ok()?;
+    Some(format!("{}:{port}", host.to_ascii_lowercase()))
+}
+
 fn valid_remoting_host(host: &str) -> bool {
     if host.parse::<std::net::Ipv4Addr>().is_ok() {
         return true;
@@ -1498,6 +1517,14 @@ mod tests {
         ] {
             assert!(!is_valid_remoting_endpoint(invalid), "endpoint={invalid}");
         }
+        assert_eq!(
+            canonical_remoting_endpoint("Broker-A.INTERNAL:10911").as_deref(),
+            Some("broker-a.internal:10911")
+        );
+        assert_eq!(
+            canonical_remoting_endpoint("[2001:0db8:0:0:0:0:0:1]:10911").as_deref(),
+            Some("[2001:db8::1]:10911")
+        );
     }
 
     #[test]

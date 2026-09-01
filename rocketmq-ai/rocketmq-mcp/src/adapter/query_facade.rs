@@ -92,6 +92,7 @@ use crate::tools::topic_tools::QueryTopicRouteArgs;
 use crate::tools::topic_tools::QueryTopicRouteOutput;
 
 mod consumer_observation;
+mod infrastructure_observation;
 mod topic_observation;
 
 #[derive(Debug, Clone)]
@@ -355,6 +356,51 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
         async {
             Err(ToolExecutionError::Backend(
                 "Consumer Group configuration state is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn ha_status(
+        &self,
+        _args: crate::tools::infrastructure_tools::GetHaStatusArgs,
+    ) -> impl Future<
+        Output = Result<QueryResult<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolExecutionError>,
+    > + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "HA observations are unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn controller_metadata(
+        &self,
+        _args: crate::tools::infrastructure_tools::GetControllerMetadataArgs,
+    ) -> impl Future<
+        Output = Result<
+            QueryResult<crate::tools::infrastructure_tools::GetControllerMetadataOutput>,
+            ToolExecutionError,
+        >,
+    > + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "Controller metadata is unavailable".to_string(),
+            ))
+        }
+    }
+
+    fn nameserver_config_summary(
+        &self,
+        _args: crate::tools::infrastructure_tools::GetNameserverConfigSummaryArgs,
+    ) -> impl Future<
+        Output = Result<
+            QueryResult<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>,
+            ToolExecutionError,
+        >,
+    > + Send {
+        async {
+            Err(ToolExecutionError::Backend(
+                "NameServer configuration is unavailable".to_string(),
             ))
         }
     }
@@ -1423,6 +1469,16 @@ where
             credentials: config
                 .resolve_admin_credentials()
                 .map_err(|error| ToolExecutionError::Backend(error.to_string()))?,
+            controller_targets: config
+                .controllers
+                .iter()
+                .map(|controller| {
+                    rocketmq_admin_core::read_client_adapter::ControllerObservationTarget::new(
+                        controller.name.clone(),
+                        controller.endpoint.clone(),
+                    )
+                })
+                .collect(),
         })
     }
 
@@ -1615,6 +1671,28 @@ where
         args: ConsumerGroupConfigStateArgs,
     ) -> Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolExecutionError> {
         QueryFacade::consumer_group_config_state(self, args).await
+    }
+
+    async fn ha_status(
+        &self,
+        args: crate::tools::infrastructure_tools::GetHaStatusArgs,
+    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolExecutionError> {
+        QueryFacade::ha_status(self, args).await
+    }
+
+    async fn controller_metadata(
+        &self,
+        args: crate::tools::infrastructure_tools::GetControllerMetadataArgs,
+    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolExecutionError> {
+        QueryFacade::controller_metadata(self, args).await
+    }
+
+    async fn nameserver_config_summary(
+        &self,
+        args: crate::tools::infrastructure_tools::GetNameserverConfigSummaryArgs,
+    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolExecutionError>
+    {
+        QueryFacade::nameserver_config_summary(self, args).await
     }
 
     async fn diagnose_consumer_lag(

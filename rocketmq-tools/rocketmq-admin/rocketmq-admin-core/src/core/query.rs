@@ -45,6 +45,10 @@ pub enum AdminQuerySource {
     TopicStats,
     ConsumerGroupConfig,
     SubscriptionGroups,
+    BrokerHaRuntime,
+    ControllerSyncState,
+    ControllerMetadata,
+    NameserverConfig,
 }
 
 /// Stable, backend-independent failure classification.

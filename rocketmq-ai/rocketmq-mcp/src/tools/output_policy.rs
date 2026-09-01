@@ -68,19 +68,28 @@ pub(crate) fn apply_with_policy(mut value: Value, policy: OutputPolicy) -> Resul
 }
 
 fn bound_rows(value: &mut Value, max_rows: usize) -> bool {
+    let mut remaining = max_rows;
+    bound_rows_with_remaining(value, &mut remaining)
+}
+
+fn bound_rows_with_remaining(value: &mut Value, remaining: &mut usize) -> bool {
     match value {
         Value::Object(object) => {
             let mut changed = false;
-            for value in object.values_mut() {
-                changed |= bound_rows(value, max_rows);
+            for (key, value) in object.iter_mut() {
+                if !matches!(key.as_str(), "warnings" | "source_failures") {
+                    changed |= bound_rows_with_remaining(value, remaining);
+                }
             }
             changed
         }
         Value::Array(values) => {
-            let mut changed = values.len() > max_rows;
-            values.truncate(max_rows);
+            let retained = values.len().min(*remaining);
+            let mut changed = retained != values.len();
+            values.truncate(retained);
+            *remaining -= retained;
             for value in values {
-                changed |= bound_rows(value, max_rows);
+                changed |= bound_rows_with_remaining(value, remaining);
             }
             changed
         }
@@ -167,6 +176,10 @@ fn normalize_source_failure(value: &Value) -> Option<Value> {
             | "topic_config"
             | "consumer_group_config"
             | "topic_stats"
+            | "broker_ha_runtime"
+            | "controller_sync_state"
+            | "controller_metadata"
+            | "nameserver_config"
     ) || !matches!(
         code,
         "source_unavailable" | "timeout" | "permission_denied" | "not_found" | "rate_limited" | "invalid_response"
@@ -314,6 +327,49 @@ mod tests {
     }
 
     #[test]
+    fn nested_row_policy_uses_one_query_wide_exact_budget() {
+        let exact = apply_with_policy(
+            json!({
+                "partial": false,
+                "warnings": [],
+                "data": {"brokers": [{"connections": [1, 2]}]}
+            }),
+            OutputPolicy {
+                max_bytes: 1024,
+                max_rows: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(exact["partial"], false);
+        assert_eq!(exact["data"]["brokers"][0]["connections"].as_array().unwrap().len(), 2);
+
+        let overflow = apply_with_policy(
+            json!({
+                "partial": false,
+                "warnings": [],
+                "data": {"brokers": [{"connections": [1, 2, 3]}]}
+            }),
+            OutputPolicy {
+                max_bytes: 1024,
+                max_rows: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(overflow["partial"], true);
+        assert_eq!(
+            overflow["data"]["brokers"][0]["connections"]
+                .as_array()
+                .unwrap()
+                .as_slice(),
+            [json!(1), json!(2)]
+        );
+        assert!(overflow["warnings"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("output_rows_truncated")));
+    }
+
+    #[test]
     fn source_failure_policy_sanitizes_deduplicates_orders_and_caps_metadata() {
         let mut failures = (0..20)
             .rev()
@@ -405,6 +461,70 @@ mod tests {
         assert!(!serialized.contains("address"));
         assert!(!serialized.contains("attributes"));
         assert!(!serialized.contains("must not escape"));
+    }
+
+    #[test]
+    fn infrastructure_sources_preserve_only_closed_metadata_and_mixed_cap_order() {
+        let sources = [
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config",
+        ];
+        for source in sources {
+            let output = apply(json!({
+                "source_failures": [{
+                    "source": source,
+                    "code": "invalid_response",
+                    "retryable": false,
+                    "logical_target": "logical-a",
+                    "raw_error": "private endpoint and backend body"
+                }]
+            }))
+            .unwrap();
+            assert_eq!(
+                output["source_failures"][0],
+                json!({
+                    "source": source,
+                    "code": "invalid_response",
+                    "retryable": false,
+                    "logical_target": "logical-a"
+                })
+            );
+        }
+
+        let failures = (0..17)
+            .rev()
+            .map(|index| {
+                json!({
+                    "source": sources[index % sources.len()],
+                    "code": if index % 2 == 0 { "timeout" } else { "source_unavailable" },
+                    "retryable": index % 2 == 0,
+                    "logical_target": format!("logical-{index:02}"),
+                    "address": "10.0.0.1:9878",
+                    "backend_text": "must not survive"
+                })
+            })
+            .collect::<Vec<_>>();
+        let output = apply(json!({
+            "partial": true,
+            "warnings": ["source_failures_present"],
+            "source_failures": failures
+        }))
+        .unwrap();
+        let failures = output["source_failures"].as_array().unwrap();
+        assert_eq!(failures.len(), MAX_SOURCE_FAILURES);
+        assert!(failures
+            .windows(2)
+            .all(|pair| source_failure_key(&pair[0]) <= source_failure_key(&pair[1])));
+        for source in sources {
+            assert!(failures.iter().any(|failure| failure["source"] == source));
+        }
+        assert!(failures.iter().all(|failure| failure.as_object().unwrap().len() == 4));
+        let serialized = output.to_string();
+        assert!(!serialized.contains("10.0.0.1"));
+        assert!(!serialized.contains("backend_text"));
+        assert!(!serialized.contains("must not survive"));
     }
 
     #[test]

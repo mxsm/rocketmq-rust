@@ -135,7 +135,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -348,7 +352,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -610,7 +618,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -835,7 +847,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -1214,7 +1230,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -1455,7 +1475,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -1728,7 +1752,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -2346,7 +2374,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -2788,7 +2820,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -3032,7 +3068,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -3292,7 +3332,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -3789,7 +3833,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -4103,7 +4151,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -4360,7 +4412,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -4580,7 +4636,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -4735,7 +4795,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -5039,7 +5103,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -5268,7 +5336,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -5487,7 +5559,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -5883,7 +5959,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -6199,7 +6279,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -6297,6 +6381,878 @@ expression: contracts
       "type": "object"
     },
     "title": "RocketMQ consumer progress"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ HA status"
+    },
+    "description": "Get bounded HA observations for logical master Brokers with optional configured Controller sync state.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "broker_names": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "controller_names": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "include_sync_state": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cluster"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_ha_status",
+    "outputSchema": {
+      "$defs": {
+        "BrokerHaObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "broker_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "broker_name": {
+              "type": "string"
+            },
+            "connections": {
+              "items": {
+                "$ref": "#/$defs/HaConnectionObservation"
+              },
+              "type": "array"
+            },
+            "group_transfer_ack_notify_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "in_sync_slave_count": {
+              "format": "uint32",
+              "maximum": 64,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "master_commit_log_max_offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pending_group_transfer_oldest_wait_millis": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pending_group_transfer_request_count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "broker_name",
+            "broker_id",
+            "master_commit_log_max_offset",
+            "in_sync_slave_count",
+            "pending_group_transfer_request_count",
+            "pending_group_transfer_oldest_wait_millis",
+            "group_transfer_ack_notify_count",
+            "connections"
+          ],
+          "type": "object"
+        },
+        "BrokerSyncStateObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            },
+            "in_sync_replicas": {
+              "items": {
+                "$ref": "#/$defs/LogicalBrokerInstance"
+              },
+              "type": "array"
+            },
+            "master_broker_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "master_epoch": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "not_in_sync_replicas": {
+              "items": {
+                "$ref": "#/$defs/LogicalBrokerInstance"
+              },
+              "type": "array"
+            },
+            "sync_state_set_epoch": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "broker_name",
+            "master_broker_id",
+            "master_epoch",
+            "sync_state_set_epoch",
+            "in_sync_replicas",
+            "not_in_sync_replicas"
+          ],
+          "type": "object"
+        },
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "ControllerSyncStateObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "brokers": {
+              "items": {
+                "$ref": "#/$defs/BrokerSyncStateObservation"
+              },
+              "type": "array"
+            },
+            "controller_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "controller_name",
+            "brokers"
+          ],
+          "type": "object"
+        },
+        "GetHaStatusOutput": {
+          "additionalProperties": false,
+          "properties": {
+            "brokers": {
+              "items": {
+                "$ref": "#/$defs/BrokerHaObservation"
+              },
+              "type": "array"
+            },
+            "cluster": {
+              "type": "string"
+            },
+            "controller_sync_states": {
+              "items": {
+                "$ref": "#/$defs/ControllerSyncStateObservation"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "cluster",
+            "brokers",
+            "controller_sync_states"
+          ],
+          "type": "object"
+        },
+        "HaConnectionObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "diff": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "in_sync": {
+              "type": "boolean"
+            },
+            "replica": {
+              "$ref": "#/$defs/LogicalBrokerInstance"
+            },
+            "slave_ack_offset": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "transfer_from_where": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "transferred_bytes_per_second": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "replica",
+            "slave_ack_offset",
+            "diff",
+            "in_sync",
+            "transferred_bytes_per_second",
+            "transfer_from_where"
+          ],
+          "type": "object"
+        },
+        "LogicalBrokerInstance": {
+          "additionalProperties": false,
+          "properties": {
+            "broker_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "broker_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "broker_name",
+            "broker_id"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetHaStatusOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ HA status"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ Controller metadata"
+    },
+    "description": "Get bounded metadata for configured logical Controller aliases.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "controller_names": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cluster"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_controller_metadata",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "ControllerMetadataObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "applied_log_index": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "committed_log_index": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "controller_name": {
+              "type": "string"
+            },
+            "group": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "is_leader": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "last_log_index": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "leader_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "peer_count": {
+              "format": "uint",
+              "maximum": 32,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "controller_name"
+          ],
+          "type": "object"
+        },
+        "GetControllerMetadataOutput": {
+          "additionalProperties": false,
+          "properties": {
+            "cluster": {
+              "type": "string"
+            },
+            "controllers": {
+              "items": {
+                "$ref": "#/$defs/ControllerMetadataObservation"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "cluster",
+            "controllers"
+          ],
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetControllerMetadataOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ Controller metadata"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "RocketMQ NameServer configuration summary"
+    },
+    "description": "Get fixed allowlisted configuration values and differences for configured NameServers.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cluster"
+      ],
+      "type": "object"
+    },
+    "name": "rocketmq_get_nameserver_config_summary",
+    "outputSchema": {
+      "$defs": {
+        "CacheStatus": {
+          "enum": [
+            "bypass",
+            "hit",
+            "miss"
+          ],
+          "type": "string"
+        },
+        "GetNameserverConfigSummaryOutput": {
+          "additionalProperties": false,
+          "properties": {
+            "cluster": {
+              "type": "string"
+            },
+            "inconsistent_fields": {
+              "items": {
+                "$ref": "#/$defs/NameserverConfigDifferenceField"
+              },
+              "type": "array"
+            },
+            "nameservers": {
+              "items": {
+                "$ref": "#/$defs/NameserverConfigObservation"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "cluster",
+            "nameservers",
+            "inconsistent_fields"
+          ],
+          "type": "object"
+        },
+        "NameserverConfigDifferenceField": {
+          "enum": [
+            "cluster_test",
+            "order_message_enable",
+            "return_order_topic_config_to_broker",
+            "client_request_thread_pool_nums",
+            "client_request_thread_pool_queue_capacity",
+            "scan_not_active_broker_interval_ms",
+            "unregister_broker_queue_capacity",
+            "support_acting_master"
+          ],
+          "type": "string"
+        },
+        "NameserverConfigObservation": {
+          "additionalProperties": false,
+          "properties": {
+            "nameserver_name": {
+              "type": "string"
+            },
+            "values": {
+              "$ref": "#/$defs/NameserverConfigValues"
+            }
+          },
+          "required": [
+            "nameserver_name",
+            "values"
+          ],
+          "type": "object"
+        },
+        "NameserverConfigValues": {
+          "additionalProperties": false,
+          "properties": {
+            "client_request_thread_pool_nums": {
+              "format": "int32",
+              "maximum": 4096,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "client_request_thread_pool_queue_capacity": {
+              "format": "int32",
+              "maximum": 10000000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "cluster_test": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "order_message_enable": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "return_order_topic_config_to_broker": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "scan_not_active_broker_interval_ms": {
+              "format": "uint64",
+              "maximum": 3600000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "support_acting_master": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "unregister_broker_queue_capacity": {
+              "format": "int32",
+              "maximum": 10000000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "QuerySource": {
+          "enum": [
+            "broker_runtime",
+            "broker_config",
+            "broker_log_filter",
+            "consumer_statistics",
+            "consumer_connection",
+            "producer_connection",
+            "topic_config",
+            "topic_stats",
+            "consumer_group_config",
+            "subscription_groups",
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
+          ],
+          "type": "string"
+        },
+        "SourceFailure": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/SourceFailureCode"
+            },
+            "logical_target": {
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/QuerySource"
+            }
+          },
+          "required": [
+            "source",
+            "code",
+            "retryable",
+            "logical_target"
+          ],
+          "type": "object"
+        },
+        "SourceFailureCode": {
+          "enum": [
+            "source_unavailable",
+            "timeout",
+            "permission_denied",
+            "not_found",
+            "rate_limited",
+            "invalid_response"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "cache_status": {
+          "$ref": "#/$defs/CacheStatus"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/GetNameserverConfigSummaryOutput"
+        },
+        "freshness_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "request_id",
+        "cluster",
+        "observed_at",
+        "freshness_ms",
+        "cache_status",
+        "partial",
+        "warnings",
+        "data"
+      ],
+      "type": "object"
+    },
+    "title": "RocketMQ NameServer configuration summary"
   },
   {
     "annotations": {
@@ -6480,7 +7436,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -6744,7 +7704,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -7004,7 +7968,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -7268,7 +8236,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },
@@ -7544,7 +8516,11 @@ expression: contracts
             "topic_stats",
             "consumer_group_config",
             "subscription_groups",
-            "topic_route"
+            "topic_route",
+            "broker_ha_runtime",
+            "controller_sync_state",
+            "controller_metadata",
+            "nameserver_config"
           ],
           "type": "string"
         },

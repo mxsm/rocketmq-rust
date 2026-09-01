@@ -27,6 +27,7 @@ use crate::tools::config_tools;
 use crate::tools::connection_tools;
 use crate::tools::consumer_tools;
 use crate::tools::diagnosis_tools;
+use crate::tools::infrastructure_tools;
 use crate::tools::message_tools;
 use crate::tools::proxy_tools;
 use crate::tools::topic_tools;
@@ -54,6 +55,9 @@ pub enum ToolId {
     GetTopicConfig,
     GetConsumerGroupDetails,
     GetConsumerProgress,
+    GetHaStatus,
+    GetControllerMetadata,
+    GetNameserverConfigSummary,
     #[cfg(feature = "change-planning")]
     PlanCreateTopic,
     #[cfg(feature = "change-planning")]
@@ -89,6 +93,9 @@ impl ToolId {
         Self::GetTopicConfig,
         Self::GetConsumerGroupDetails,
         Self::GetConsumerProgress,
+        Self::GetHaStatus,
+        Self::GetControllerMetadata,
+        Self::GetNameserverConfigSummary,
         #[cfg(feature = "change-planning")]
         Self::PlanCreateTopic,
         #[cfg(feature = "change-planning")]
@@ -257,6 +264,27 @@ impl ToolId {
                 "Get a bounded snapshot page of deterministic per-queue progress and complete aggregate totals.",
                 RiskLevel::ReadOnly,
             ),
+            Self::GetHaStatus => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_ha_status",
+                "RocketMQ HA status",
+                "Get bounded HA observations for logical master Brokers with optional configured Controller sync state.",
+                RiskLevel::Diagnose,
+            ),
+            Self::GetControllerMetadata => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_controller_metadata",
+                "RocketMQ Controller metadata",
+                "Get bounded metadata for configured logical Controller aliases.",
+                RiskLevel::Diagnose,
+            ),
+            Self::GetNameserverConfigSummary => ToolDescriptor::read_only(
+                self,
+                "rocketmq_get_nameserver_config_summary",
+                "RocketMQ NameServer configuration summary",
+                "Get fixed allowlisted configuration values and differences for configured NameServers.",
+                RiskLevel::ReadOnly,
+            ),
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => ToolDescriptor::read_only(
                 self,
@@ -368,6 +396,18 @@ impl ToolId {
             Self::GetConsumerProgress => descriptor.build::<
                 consumer_tools::GetConsumerProgressArgs,
                 consumer_tools::GetConsumerProgressOutput,
+            >(),
+            Self::GetHaStatus => descriptor.build::<
+                infrastructure_tools::GetHaStatusArgs,
+                infrastructure_tools::GetHaStatusOutput,
+            >(),
+            Self::GetControllerMetadata => descriptor.build::<
+                infrastructure_tools::GetControllerMetadataArgs,
+                infrastructure_tools::GetControllerMetadataOutput,
+            >(),
+            Self::GetNameserverConfigSummary => descriptor.build::<
+                infrastructure_tools::GetNameserverConfigSummaryArgs,
+                infrastructure_tools::GetNameserverConfigSummaryOutput,
             >(),
             #[cfg(feature = "change-planning")]
             Self::PlanCreateTopic => descriptor.build::<change_tools::CreateTopicArgs, change_tools::ChangePlan>(),
@@ -518,9 +558,9 @@ mod tests {
             ]
         );
         #[cfg(not(feature = "change-planning"))]
-        assert_eq!(names.len(), 21);
+        assert_eq!(names.len(), 24);
         #[cfg(feature = "change-planning")]
-        assert_eq!(names.len(), 26);
+        assert_eq!(names.len(), 29);
     }
 
     #[test]
@@ -571,6 +611,31 @@ mod tests {
                 "{} must reject unknown arguments",
                 descriptor.name
             );
+        }
+    }
+
+    #[test]
+    fn infrastructure_contracts_have_exact_risk_and_no_target_addresses() {
+        for (tool_id, risk) in [
+            (ToolId::GetHaStatus, RiskLevel::Diagnose),
+            (ToolId::GetControllerMetadata, RiskLevel::Diagnose),
+            (ToolId::GetNameserverConfigSummary, RiskLevel::ReadOnly),
+        ] {
+            let descriptor = tool_id.descriptor();
+            assert_eq!(descriptor.risk_level, risk);
+            assert!(descriptor.annotations.read_only);
+            assert!(!descriptor.annotations.destructive);
+            let definition = tool_id.definition();
+            assert_eq!(
+                definition.input_schema.get("additionalProperties"),
+                Some(&serde_json::Value::Bool(false))
+            );
+            let properties = definition.input_schema["properties"].as_object().unwrap();
+            for forbidden in ["address", "addr", "endpoint"] {
+                assert!(properties
+                    .keys()
+                    .all(|key| !key.to_ascii_lowercase().contains(forbidden)));
+            }
         }
     }
 

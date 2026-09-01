@@ -37,7 +37,13 @@ pub use crate::admin::ConsumerProgressRead;
 pub use crate::admin::DefaultMQAdminExt;
 pub use crate::admin::DefaultMQAdminExtImpl;
 #[cfg(feature = "admin-read")]
+pub use crate::admin::InfrastructureObservationReadError;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::InfrastructureObservationReadErrorCode;
+#[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminConsumerObservationReadExt;
+#[cfg(feature = "admin-read")]
+pub use crate::admin::MQAdminInfrastructureObservationReadExt;
 #[cfg(feature = "admin-read")]
 pub use crate::admin::MQAdminMessageReadExt;
 #[cfg(feature = "admin-mutation")]

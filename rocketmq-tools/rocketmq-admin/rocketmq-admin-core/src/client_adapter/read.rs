@@ -85,6 +85,13 @@ use crate::core::consumer_observation::QueryConsumerGroupDetailsRequest;
 use crate::core::consumer_observation::QueryConsumerGroupDetailsResult;
 use crate::core::consumer_observation::QueryConsumerProgressRequest;
 use crate::core::consumer_observation::QueryConsumerProgressResult;
+use crate::core::infrastructure_observation::InfrastructureObservationQueryAdmin;
+use crate::core::infrastructure_observation::QueryControllerMetadataRequest;
+use crate::core::infrastructure_observation::QueryControllerMetadataResult;
+use crate::core::infrastructure_observation::QueryHaStatusRequest;
+use crate::core::infrastructure_observation::QueryHaStatusResult;
+use crate::core::infrastructure_observation::QueryNameserverConfigSummaryRequest;
+use crate::core::infrastructure_observation::QueryNameserverConfigSummaryResult;
 use crate::core::message::MessageMetadataQueryAdmin;
 use crate::core::message::MessageMetadataRequest;
 use crate::core::proxy::ProxyDrainPending;
@@ -122,11 +129,46 @@ pub use rocketmq_client_rust::ClientRuntime;
 pub use rocketmq_client_rust::ClientRuntimeConfig;
 pub use rocketmq_client_rust::TelemetryHandle;
 
+/// Configured logical Controller target used only inside the read adapter.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ControllerObservationTarget {
+    name: String,
+    endpoint: String,
+}
+
+impl ControllerObservationTarget {
+    pub fn new(name: impl Into<String>, endpoint: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            endpoint: endpoint.into(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+}
+
+impl std::fmt::Debug for ControllerObservationTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ControllerObservationTarget")
+            .field("name", &self.name)
+            .field("endpoint", &"[REDACTED]")
+            .finish()
+    }
+}
+
 #[derive(Clone)]
 pub struct ReadAdminBuilder {
     client_runtime: Arc<ClientRuntime>,
     config: crate::core::admin::AdminBuilder,
     credentials: Option<AdminCredentials>,
+    controller_targets: Vec<ControllerObservationTarget>,
 }
 
 impl ReadAdminBuilder {
@@ -135,6 +177,7 @@ impl ReadAdminBuilder {
             client_runtime,
             config: crate::core::admin::AdminBuilder::new(),
             credentials: None,
+            controller_targets: Vec::new(),
         }
     }
 
@@ -188,10 +231,17 @@ impl ReadAdminBuilder {
         self
     }
 
+    pub fn controller_targets(mut self, targets: Vec<ControllerObservationTarget>) -> Self {
+        self.controller_targets = targets;
+        self
+    }
+
     pub async fn build_and_start(self) -> AdminResult<ReadAdminSession> {
         let client_runtime = self.client_runtime;
         let config = self.config;
         let credentials = self.credentials;
+        let controller_targets =
+            crate::infrastructure_observation::validate_controller_targets(self.controller_targets)?;
         let clock = config.configured_clock();
         let now_millis = clock.now_millis();
         let admin_group = config
@@ -208,6 +258,9 @@ impl ReadAdminBuilder {
             ),
             None => DefaultMQAdminExt::with_admin_ext_group_and_timeout(client_runtime.clone(), admin_group, timeout),
         };
+        let nameserver_endpoints = crate::infrastructure_observation::parse_nameserver_endpoints(
+            config.configured_namesrv_addr().unwrap_or_default(),
+        )?;
         if let Some(namesrv_addr) = config.configured_namesrv_addr() {
             admin.set_namesrv_addr(namesrv_addr);
         }
@@ -230,6 +283,8 @@ impl ReadAdminBuilder {
             client_runtime,
             clock,
             closed: false,
+            controller_targets,
+            nameserver_endpoints,
         })
     }
 
@@ -245,6 +300,7 @@ impl std::fmt::Debug for ReadAdminBuilder {
             .field("client_runtime", &"explicit")
             .field("config", &self.config)
             .field("credentials", &self.credentials.as_ref().map(|_| "<redacted>"))
+            .field("controller_targets", &self.controller_targets)
             .finish()
     }
 }
@@ -265,6 +321,46 @@ pub struct ReadAdminSession {
     client_runtime: Arc<ClientRuntime>,
     clock: Arc<dyn Clock>,
     closed: bool,
+    controller_targets: Vec<ControllerObservationTarget>,
+    nameserver_endpoints: Vec<CheetahString>,
+}
+
+impl InfrastructureObservationQueryAdmin for ReadAdminSession {
+    fn query_ha_status<'a>(
+        &'a mut self,
+        request: &'a QueryHaStatusRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryHaStatusResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::infrastructure_observation::query_ha_status(&self.inner, &self.controller_targets, request).await
+        })
+    }
+
+    fn query_controller_metadata<'a>(
+        &'a mut self,
+        request: &'a QueryControllerMetadataRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryControllerMetadataResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::infrastructure_observation::query_controller_metadata(&self.inner, &self.controller_targets, request)
+                .await
+        })
+    }
+
+    fn query_nameserver_config_summary<'a>(
+        &'a mut self,
+        request: &'a QueryNameserverConfigSummaryRequest,
+    ) -> AdminFuture<'a, AdminQueryResult<QueryNameserverConfigSummaryResult>> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            crate::infrastructure_observation::query_nameserver_config_summary(
+                &self.inner,
+                &self.nameserver_endpoints,
+                request,
+            )
+            .await
+        })
+    }
 }
 
 impl ReadAdminSession {

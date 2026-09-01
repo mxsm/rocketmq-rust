@@ -538,6 +538,7 @@ mod tests {
                 tenant: None,
                 credentials: None,
                 proxies: Vec::new(),
+                controllers: Vec::new(),
             }],
         )
         .unwrap()

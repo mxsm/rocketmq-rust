@@ -18,6 +18,8 @@ pub mod default_mq_admin_ext;
 pub mod default_mq_admin_ext_impl;
 #[cfg(feature = "admin-read")]
 mod mq_admin_consumer_observation_read_ext;
+#[cfg(feature = "admin-read")]
+mod mq_admin_infrastructure_observation_read_ext;
 #[cfg(feature = "admin-mutation")]
 mod mq_admin_mutation_ext;
 #[cfg(feature = "admin-read")]
@@ -47,6 +49,12 @@ pub use mq_admin_consumer_observation_read_ext::ConsumerGroupConfigRead;
 pub use mq_admin_consumer_observation_read_ext::ConsumerProgressRead;
 #[cfg(feature = "admin-read")]
 pub use mq_admin_consumer_observation_read_ext::MQAdminConsumerObservationReadExt;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_infrastructure_observation_read_ext::InfrastructureObservationReadError;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_infrastructure_observation_read_ext::InfrastructureObservationReadErrorCode;
+#[cfg(feature = "admin-read")]
+pub use mq_admin_infrastructure_observation_read_ext::MQAdminInfrastructureObservationReadExt;
 #[cfg(feature = "admin-mutation")]
 pub use mq_admin_mutation_ext::BrokerConfigPatchOutcome;
 #[cfg(feature = "admin-mutation")]

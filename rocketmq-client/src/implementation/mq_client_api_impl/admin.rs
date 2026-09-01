@@ -2327,7 +2327,9 @@ impl MQClientAPIImpl {
                             let body_str = String::from_utf8_lossy(body.as_ref()).to_string();
                             // if body_str contains =, return from Java version
                             let properties = if body_str.contains('=') {
-                                mix_all::string_to_properties(&body_str).unwrap_or_default()
+                                mix_all::string_to_properties(&body_str).ok_or_else(|| {
+                                    mq_client_err!("Failed to parse namesrv config properties".to_string())
+                                })?
                             } else {
                                 SerdeJsonUtils::from_json_str::<HashMap<CheetahString, CheetahString>>(&body_str)
                                     .map_err(|e| mq_client_err!(format!("Failed to parse namesrv config JSON: {e}")))?
@@ -2408,13 +2410,27 @@ impl MQClientAPIImpl {
         let controller_meta_data = self.get_controller_metadata(controller_address, timeout_millis).await?;
         let leader_address = controller_leader_address(controller_meta_data)?;
 
+        self.get_in_sync_state_data_at(leader_address, brokers, timeout_millis)
+            .await
+    }
+
+    /// Queries sync-state data at exactly the supplied Controller endpoint.
+    ///
+    /// Unlike [`Self::get_in_sync_state_data`], this method performs no metadata
+    /// lookup and never follows a Controller-advertised leader address.
+    pub async fn get_in_sync_state_data_at(
+        &self,
+        controller_address: CheetahString,
+        brokers: Vec<CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<BrokerReplicasInfo> {
         let request = self.create_remoting_command(RequestCode::ControllerGetSyncStateData);
         let body = serde_json::to_vec(&brokers)
             .map_err(|e| mq_client_err!(format!("Failed to serialize broker names: {}", e)))?;
         let request = request.set_body(body);
         let response = self
             .remoting_client
-            .invoke_request(Some(&leader_address), request, timeout_millis)
+            .invoke_request(Some(&controller_address), request, timeout_millis)
             .await?;
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {

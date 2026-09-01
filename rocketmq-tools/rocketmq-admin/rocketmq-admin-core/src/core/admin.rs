@@ -60,7 +60,7 @@ impl std::fmt::Debug for AdminBuilder {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("AdminBuilder")
-            .field("namesrv_addr", &self.namesrv_addr)
+            .field("namesrv_addr", &self.namesrv_addr.as_ref().map(|_| "[REDACTED]"))
             .field("admin_group", &self.admin_group)
             .field("instance_name", &self.instance_name)
             .field("timeout_millis", &self.timeout_millis)
