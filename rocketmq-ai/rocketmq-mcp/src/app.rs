@@ -101,6 +101,7 @@ pub struct McpApp {
     guard: Guard,
     metrics: rocketmq_observability::metrics::mcp::McpMetricsRecorder,
     query: Arc<QueryFacade<AdminCoreSessionFactory>>,
+    resources: crate::resources::registry::ResourceRegistry,
     client_runtime: Arc<ClientRuntime>,
     service_context: rocketmq_runtime::ChildServiceContext,
     telemetry: Arc<std::sync::Mutex<Option<rocketmq_observability::TelemetryRuntimeGuard>>>,
@@ -113,6 +114,7 @@ impl std::fmt::Debug for McpApp {
             .field("config", &self.config)
             .field("guard", &self.guard)
             .field("query", &self.query)
+            .field("resources", &self.resources)
             .field("service_context", &self.service_context)
             .field(
                 "telemetry_installed",
@@ -142,11 +144,14 @@ impl McpApp {
         )
         .map_err(|error| crate::error::McpError::infrastructure("initialize MCP client runtime", error))?;
         let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()));
+        let resources = crate::resources::registry::ResourceRegistry::new()
+            .map_err(|error| crate::error::McpError::infrastructure("initialize resource registry", error))?;
         Ok(Self {
             config,
             guard,
             metrics,
             query,
+            resources,
             client_runtime,
             service_context,
             telemetry: Arc::new(std::sync::Mutex::new(None)),
@@ -265,6 +270,10 @@ impl McpApp {
 
     pub(crate) fn query(&self) -> &Arc<QueryFacade<AdminCoreSessionFactory>> {
         &self.query
+    }
+
+    pub(crate) fn resources(&self) -> &crate::resources::registry::ResourceRegistry {
+        &self.resources
     }
 
     /// Starts the process lifecycle boundary under the application's owned runtime context.

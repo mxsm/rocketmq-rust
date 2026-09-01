@@ -16,3 +16,4 @@
 
 pub mod contract;
 pub mod diagnosis;
+pub(crate) mod identifier;
