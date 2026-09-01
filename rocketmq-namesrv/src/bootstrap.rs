@@ -876,9 +876,9 @@ impl NameServerRuntime {
             .is_none_or(|report| !report.timed_out && report.pending_operations == 0 && report.pending_bytes == 0);
         shutdown_report.metadata_io_healthy = Some(metadata_persisted && metadata_drained);
 
-        info!("NameServer shutdown: stopping the embedded controller...");
         #[cfg(feature = "embedded-controller")]
         if let Some(controller_manager) = self.inner.controller_manager() {
+            info!("NameServer shutdown: stopping the embedded controller...");
             shutdown_report.embedded_controller_healthy =
                 Some(match controller_manager.shutdown_until(deadline).await {
                     Ok(()) => true,
