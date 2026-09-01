@@ -73,6 +73,7 @@ pub mod response;
 pub mod set_message_request_mode_request_body;
 pub mod subscription_group_list;
 pub mod subscription_group_wrapper;
+pub mod supervised_mutation;
 pub mod sync_state_set_body;
 pub mod timer_metrics_serialize_wrapper;
 pub mod topic;

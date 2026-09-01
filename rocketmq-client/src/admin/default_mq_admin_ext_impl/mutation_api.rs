@@ -47,6 +47,7 @@ use rocketmq_protocol::protocol::header::delete_topic_request_header::DeleteTopi
 use rocketmq_protocol::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_protocol::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
 use rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
+use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader;
@@ -56,7 +57,19 @@ use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use crate::admin::mq_admin_mutation_ext::BrokerConfigPatchOutcome;
+use crate::admin::mq_admin_mutation_ext::BrokerMutationConfigState;
+use crate::admin::mq_admin_mutation_ext::ConditionalConsumerOffsetOutcome;
 use crate::admin::mq_admin_mutation_ext::MQAdminMutationExt;
+use crate::admin::mq_admin_mutation_ext::MutationConsumerOffsetPreview;
+use crate::admin::mq_admin_mutation_ext::MutationExpectedMessageRequestMode;
+use crate::admin::mq_admin_mutation_ext::MutationExpectedState;
+use crate::admin::mq_admin_mutation_ext::MutationMessageRequestMode;
+use crate::admin::mq_admin_mutation_ext::MutationMessageRequestModeOutcome;
+use crate::admin::mq_admin_mutation_ext::MutationStateCasOutcome;
+use crate::admin::mq_admin_mutation_ext::MutationSubscriptionGroupConfig;
+use crate::admin::mq_admin_mutation_ext::MutationSubscriptionGroupConfigState;
+use crate::admin::mq_admin_mutation_ext::MutationTopicConfig;
+use crate::admin::mq_admin_mutation_ext::MutationTopicConfigState;
 use crate::admin::mq_admin_mutation_ext::SubscriptionGroupConfigPatch;
 use crate::admin::mq_admin_mutation_ext::SubscriptionGroupConfigPatchOutcome;
 use crate::admin::mq_admin_mutation_ext::TopicConfigPatch;
@@ -67,6 +80,8 @@ use crate::admin::mq_admin_mutation_ext::TopicOffsetMutationTargetOutcome;
 
 use super::DefaultMQAdminExtImpl;
 use super::NAMESPACE_ORDER_TOPIC_CONFIG;
+
+const MAX_SUPERVISED_OFFSET_TARGETS: usize = 1_000;
 
 fn timestamp_to_java_long(operation: &'static str, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
     i64::try_from(timestamp)
@@ -188,11 +203,11 @@ impl DefaultMQAdminExtImpl {
     ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
         let consume_stats = self
             .mq_client_api()?
-            .get_consume_stats(
+            .get_consume_stats_for_mutation(
                 &broker_addr,
                 GetConsumeStatsRequestHeader {
                     consumer_group: consumer_group.clone(),
-                    topic: CheetahString::empty(),
+                    topic: topic.clone(),
                     topic_list: None,
                     topic_request_header: None,
                 },
@@ -325,11 +340,11 @@ impl DefaultMQAdminExtImpl {
             Err(error) => return vec![offset_failure(&broker_name, None, &error)],
         };
         let consume_stats = match api
-            .get_consume_stats(
+            .get_consume_stats_for_mutation(
                 &broker_addr,
                 GetConsumeStatsRequestHeader {
                     consumer_group: consumer_group.clone(),
-                    topic: CheetahString::empty(),
+                    topic: topic.clone(),
                     topic_list: None,
                     topic_request_header: None,
                 },
@@ -583,6 +598,34 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
             .await
     }
 
+    async fn mutation_topic_config_state(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<MutationTopicConfigState> {
+        self.mq_client_api()?
+            .get_topic_config_state_for_mutation(&broker_addr, topic, self.remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn replace_topic_config_if_state(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        expected_state: MutationExpectedState,
+        replacement: MutationTopicConfig,
+    ) -> rocketmq_error::RocketMQResult<MutationStateCasOutcome> {
+        self.mq_client_api()?
+            .replace_topic_config_if_state(
+                &broker_addr,
+                topic,
+                expected_state,
+                replacement,
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
     async fn patch_subscription_group_config_if_version(
         &self,
         broker_addr: CheetahString,
@@ -596,6 +639,232 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
                 group,
                 expected_version,
                 patch,
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
+    async fn mutation_subscription_group_config_state(
+        &self,
+        broker_addr: CheetahString,
+        group: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<MutationSubscriptionGroupConfigState> {
+        self.mq_client_api()?
+            .get_subscription_group_config_state_for_mutation(&broker_addr, group, self.remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn replace_subscription_group_config_if_state(
+        &self,
+        broker_addr: CheetahString,
+        group: CheetahString,
+        expected_state: MutationExpectedState,
+        replacement: MutationSubscriptionGroupConfig,
+    ) -> rocketmq_error::RocketMQResult<MutationStateCasOutcome> {
+        self.mq_client_api()?
+            .replace_subscription_group_config_if_state(
+                &broker_addr,
+                group,
+                expected_state,
+                replacement,
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
+    async fn broker_mutation_config_state(
+        &self,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<BrokerMutationConfigState> {
+        self.mq_client_api()?
+            .get_broker_mutation_config_state(&broker_addr, self.remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn reset_consumer_offset_if_current(
+        &self,
+        broker_addr: CheetahString,
+        consumer_group: CheetahString,
+        topic: CheetahString,
+        queue_id: i32,
+        expected_offset: i64,
+        new_offset: i64,
+    ) -> rocketmq_error::RocketMQResult<ConditionalConsumerOffsetOutcome> {
+        self.mq_client_api()?
+            .reset_consumer_offset_if_current(
+                &broker_addr,
+                consumer_group,
+                topic,
+                queue_id,
+                expected_offset,
+                new_offset,
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
+    async fn preview_consumer_offset_reset_on_broker(
+        &self,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
+        read_queue_nums: u32,
+        consumer_group: CheetahString,
+        topic: CheetahString,
+        timestamp: i64,
+    ) -> rocketmq_error::RocketMQResult<Vec<MutationConsumerOffsetPreview>> {
+        if read_queue_nums as usize > MAX_SUPERVISED_OFFSET_TARGETS {
+            return Err(RocketMQError::illegal_argument(
+                "supervised offset preview exceeds 1000 queue targets",
+            ));
+        }
+        let timeout = self.remoting_timeout_millis()?;
+        let api = self.mq_client_api()?;
+        let consume_stats = api
+            .get_consume_stats_for_supervised_mutation(
+                &broker_addr,
+                &broker_name,
+                read_queue_nums,
+                GetConsumeStatsRequestHeader {
+                    consumer_group: consumer_group.clone(),
+                    topic: topic.clone(),
+                    topic_list: None,
+                    topic_request_header: None,
+                },
+                timeout,
+            )
+            .await?;
+        if consume_stats.offset_table.values().any(|wrapper| {
+            wrapper.get_consumer_offset() < -1 || wrapper.get_broker_offset() < 0 || wrapper.get_pull_offset() < -1
+        }) || consume_stats.offset_table.keys().any(|queue| {
+            queue.topic() != &topic
+                || queue.broker_name() != &broker_name
+                || queue.queue_id() < 0
+                || queue.queue_id() >= read_queue_nums as i32
+        }) {
+            return Err(RocketMQError::response_process_failed(
+                "preview_consumer_offset_reset_on_broker",
+                "Broker returned consume-stats rows outside the exact Topic/Broker queue set",
+            ));
+        }
+        let mut consumed = consume_stats
+            .offset_table
+            .into_iter()
+            .map(|(queue, wrapper)| (queue, wrapper.get_consumer_offset()))
+            .collect::<Vec<_>>();
+        consumed.sort_by_key(|(queue, _)| queue.queue_id());
+        if !consumed.is_empty()
+            && (consumed.len() != read_queue_nums as usize
+                || consumed
+                    .iter()
+                    .enumerate()
+                    .any(|(queue_id, (queue, _))| queue.queue_id() != queue_id as i32))
+        {
+            return Err(RocketMQError::response_process_failed(
+                "preview_consumer_offset_reset_on_broker",
+                "Broker returned an incomplete consume-stats queue set",
+            ));
+        }
+        let queues = if consumed.is_empty() {
+            let stats = api
+                .get_topic_stats_info(
+                    &broker_addr,
+                    GetTopicStatsInfoRequestHeader {
+                        topic: topic.clone(),
+                        topic_request_header: None,
+                    },
+                    timeout,
+                )
+                .await?;
+            (0..read_queue_nums)
+                .map(|queue_id| {
+                    let queue = MessageQueue::from_parts(topic.clone(), broker_name.clone(), queue_id as i32);
+                    let current = stats
+                        .get_offset_table()
+                        .get(&queue)
+                        .map(TopicOffset::get_min_offset)
+                        .unwrap_or(0);
+                    (queue, current)
+                })
+                .collect()
+        } else {
+            consumed
+        };
+        let mut preview = Vec::with_capacity(queues.len());
+        for (queue, current_offset) in queues {
+            let planned_offset = if timestamp == -1 {
+                api.get_max_offset(broker_addr.as_str(), &queue, timeout).await?
+            } else {
+                api.search_offset_by_timestamp(
+                    broker_addr.as_str(),
+                    &queue,
+                    timestamp,
+                    rocketmq_model::common::boundary_type::BoundaryType::Lower,
+                    timeout,
+                )
+                .await?
+            };
+            if current_offset < -1 || planned_offset < 0 {
+                return Err(RocketMQError::response_process_failed(
+                    "preview_consumer_offset_reset_on_broker",
+                    "Broker returned an invalid consumer offset",
+                ));
+            }
+            preview.push(MutationConsumerOffsetPreview {
+                broker_name: broker_name.to_string(),
+                queue_id: queue.queue_id(),
+                current_offset,
+                planned_offset,
+            });
+        }
+        preview.sort_by_key(|row| row.queue_id);
+        Ok(preview)
+    }
+
+    async fn mutation_consumer_offset(
+        &self,
+        broker_addr: CheetahString,
+        consumer_group: CheetahString,
+        topic: CheetahString,
+        queue_id: i32,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        if queue_id < 0 {
+            return Err(RocketMQError::illegal_argument("queueId must be non-negative"));
+        }
+        self.mq_client_api()?
+            .query_consumer_offset(
+                broker_addr.as_str(),
+                QueryConsumerOffsetRequestHeader::new(consumer_group, topic, queue_id),
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
+    async fn mutation_message_request_mode(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<MutationMessageRequestMode>> {
+        self.mq_client_api()?
+            .get_message_request_mode_for_mutation(&broker_addr, topic, consumer_group, self.remoting_timeout_millis()?)
+            .await
+    }
+
+    async fn replace_message_request_mode_if_current(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        expected: MutationExpectedMessageRequestMode,
+        replacement: MutationMessageRequestMode,
+    ) -> rocketmq_error::RocketMQResult<MutationMessageRequestModeOutcome> {
+        self.mq_client_api()?
+            .replace_message_request_mode_if_current(
+                &broker_addr,
+                topic,
+                consumer_group,
+                expected,
+                replacement,
                 self.remoting_timeout_millis()?,
             )
             .await
@@ -1166,7 +1435,411 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
 
 #[cfg(test)]
 mod detailed_offset_tests {
+    use std::collections::BTreeMap;
+    use std::collections::VecDeque;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
+    use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
+    use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
+    use rocketmq_protocol::RemotingCommand;
+    use rocketmq_runtime::RuntimeContext;
+    use rocketmq_runtime::ShutdownDeadline;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::test_support::SessionProcessor;
+    use rocketmq_transport::test_support::SessionTransportServer;
+    use rocketmq_transport::test_support::SessionTransportServerConfig;
+
+    use crate::base::client_config::ClientConfig;
+    use crate::factory::mq_client_instance::MQClientInstance;
+    use crate::runtime::test_client_runtime;
+
     use super::*;
+
+    #[derive(Default)]
+    struct ScriptedRequestLedger {
+        responses: Mutex<HashMap<i32, VecDeque<RemotingCommand>>>,
+        counts: Mutex<HashMap<i32, usize>>,
+    }
+
+    impl ScriptedRequestLedger {
+        fn push(&self, code: RequestCode, response: RemotingCommand) {
+            self.responses
+                .lock()
+                .expect("scripted responses")
+                .entry(code.to_i32())
+                .or_default()
+                .push_back(response);
+        }
+
+        fn snapshot(&self) -> HashMap<i32, usize> {
+            self.counts.lock().expect("request counts").clone()
+        }
+    }
+
+    impl SessionProcessor for ScriptedRequestLedger {
+        fn process(
+            &self,
+            request: RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
+            Box::pin(async move {
+                *self
+                    .counts
+                    .lock()
+                    .expect("request counts")
+                    .entry(request.code())
+                    .or_default() += 1;
+                let response = self
+                    .responses
+                    .lock()
+                    .expect("scripted responses")
+                    .get_mut(&request.code())
+                    .and_then(VecDeque::pop_front)
+                    .ok_or_else(|| {
+                        RocketMQError::illegal_argument(format!("unexpected request code {}", request.code()))
+                    })?;
+                Ok(response.set_opaque(request.opaque()))
+            })
+        }
+    }
+
+    struct ProductionAdminHarness {
+        admin: DefaultMQAdminExtImpl,
+        broker_addr: CheetahString,
+        client_instance: Arc<MQClientInstance>,
+        client_runtime: Arc<crate::runtime::ClientRuntime>,
+        ledger: Arc<ScriptedRequestLedger>,
+        server: Arc<SessionTransportServer>,
+        server_runtime: RuntimeContext,
+    }
+
+    impl ProductionAdminHarness {
+        async fn new(scope: &'static str) -> Self {
+            let server_runtime = RuntimeContext::from_current(scope);
+            let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
+            let ledger = Arc::new(ScriptedRequestLedger::default());
+            let server = SessionTransportServer::bind(
+                server_runtime.service_context("scripted-broker"),
+                SessionTransportServerConfig::loopback(),
+                Arc::clone(&ledger) as Arc<dyn SessionProcessor>,
+                admission,
+            )
+            .await
+            .expect("bind scripted broker");
+            let broker_addr = CheetahString::from_string(server.local_addr().to_string());
+            server.start().expect("start scripted broker");
+
+            let client_runtime = test_client_runtime(scope);
+            let mut client_config = ClientConfig::default();
+            client_config.set_vip_channel_enabled(false);
+            let client_instance = MQClientInstance::new_arc(
+                client_config.clone(),
+                0,
+                CheetahString::from_string(format!("{scope}-client")),
+                None,
+                client_runtime.component("instance"),
+                client_runtime.telemetry_handle().clone(),
+                client_runtime.pool().request_future_holder(),
+            );
+            client_instance
+                .get_mq_client_api_impl()
+                .expect("client API")
+                .start()
+                .await
+                .expect("start client API transport");
+
+            let mut admin = DefaultMQAdminExtImpl::new(
+                Arc::clone(&client_runtime),
+                None,
+                Duration::from_secs(5),
+                client_config,
+                CheetahString::from_string(format!("{scope}-admin")),
+            );
+            admin.client_instance = Some(Arc::clone(&client_instance));
+
+            Self {
+                admin,
+                broker_addr,
+                client_instance,
+                client_runtime,
+                ledger,
+                server,
+                server_runtime,
+            }
+        }
+
+        async fn shutdown(self) {
+            let Self {
+                admin,
+                client_instance,
+                client_runtime,
+                server,
+                server_runtime,
+                ..
+            } = self;
+            drop(admin);
+            client_instance.shutdown().await;
+            client_runtime
+                .shutdown()
+                .await
+                .assert_no_task_leak()
+                .expect("client runtime tasks drained");
+            server
+                .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+                .await
+                .assert_no_task_leak()
+                .expect("scripted broker tasks drained");
+            server_runtime
+                .shutdown_tasks(Duration::from_secs(5))
+                .await
+                .assert_no_task_leak()
+                .expect("scripted broker runtime tasks drained");
+        }
+    }
+
+    fn request_delta(before: &HashMap<i32, usize>, after: &HashMap<i32, usize>, code: RequestCode) -> usize {
+        after.get(&code.to_i32()).copied().unwrap_or(0) - before.get(&code.to_i32()).copied().unwrap_or(0)
+    }
+
+    fn assert_request_delta(
+        before: &HashMap<i32, usize>,
+        after: &HashMap<i32, usize>,
+        expected: &[(RequestCode, usize)],
+    ) {
+        let expected = expected
+            .iter()
+            .map(|(code, count)| (code.to_i32(), *count))
+            .collect::<BTreeMap<_, _>>();
+        let actual = after
+            .iter()
+            .filter_map(|(code, count)| {
+                let delta = count - before.get(code).copied().unwrap_or(0);
+                (delta != 0).then_some((*code, delta))
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(actual, expected);
+    }
+
+    fn consume_stats_response(rows: Vec<MessageQueue>) -> RemotingCommand {
+        let mut stats = ConsumeStats::new();
+        for row in rows {
+            stats.offset_table.insert(row, OffsetWrapper::new());
+        }
+        RemotingCommand::create_success_response_command()
+            .set_body(stats.encode_java_compatible().expect("consume stats body"))
+    }
+
+    fn duplicate_consume_stats_response() -> RemotingCommand {
+        let mut stats = ConsumeStats::new();
+        stats
+            .offset_table
+            .insert(MessageQueue::from_parts("orders", "broker-a", 0), OffsetWrapper::new());
+        let one = stats.to_java_compatible_json().expect("single row JSON");
+        let body = one.strip_prefix("{\"offsetTable\":{").expect("offset table prefix");
+        let (entry, suffix) = body.split_once("},\"consumeTps\":").expect("offset table suffix");
+        RemotingCommand::create_success_response_command()
+            .set_body(format!("{{\"offsetTable\":{{{entry},{entry}}},\"consumeTps\":{suffix}"))
+    }
+
+    fn response_with_offset_header(code: ResponseCode, offset: i64) -> RemotingCommand {
+        let mut response = RemotingCommand::create_response_command_with_code_and_header(
+            code,
+            QueryConsumerOffsetResponseHeader { offset: Some(offset) },
+        );
+        response.make_custom_header_to_net();
+        response
+    }
+
+    #[tokio::test]
+    async fn production_admin_preview_stops_after_real_remoting_rejects_consume_stats() {
+        let harness = ProductionAdminHarness::new("supervised-preview-wire-test").await;
+        let cases = [
+            (
+                "wrong topic",
+                consume_stats_response(vec![MessageQueue::from_parts("wrong-topic", "broker-a", 0)]),
+                1,
+            ),
+            (
+                "wrong broker",
+                consume_stats_response(vec![MessageQueue::from_parts("orders", "wrong-broker", 0)]),
+                1,
+            ),
+            (
+                "wrong queue id",
+                consume_stats_response(vec![MessageQueue::from_parts("orders", "broker-a", 1)]),
+                1,
+            ),
+            ("duplicate queue", duplicate_consume_stats_response(), 1),
+            (
+                "queue gap",
+                consume_stats_response(vec![MessageQueue::from_parts("orders", "broker-a", 0)]),
+                2,
+            ),
+            (
+                "oversized body",
+                RemotingCommand::create_success_response_command().set_body(vec![b' '; 1024 * 1024 + 1]),
+                1,
+            ),
+        ];
+
+        for (label, response, read_queue_nums) in cases {
+            harness.ledger.push(RequestCode::GetConsumeStats, response);
+            let before = harness.ledger.snapshot();
+            let error = MQAdminMutationExt::preview_consumer_offset_reset_on_broker(
+                &harness.admin,
+                harness.broker_addr.clone(),
+                CheetahString::from_static_str("broker-a"),
+                read_queue_nums,
+                CheetahString::from_static_str("orders-consumer"),
+                CheetahString::from_static_str("orders"),
+                123,
+            )
+            .await
+            .expect_err(label);
+            let rendered = error.to_string();
+            assert!(!rendered.contains("wrong-topic"));
+            assert!(!rendered.contains("wrong-broker"));
+            let after = harness.ledger.snapshot();
+            assert_request_delta(&before, &after, &[(RequestCode::GetConsumeStats, 1)]);
+            assert_eq!(request_delta(&before, &after, RequestCode::GetTopicStatsInfo), 0);
+            assert_eq!(request_delta(&before, &after, RequestCode::SearchOffsetByTimestamp), 0);
+            assert_eq!(request_delta(&before, &after, RequestCode::GetMaxOffset), 0);
+            assert_eq!(
+                request_delta(&before, &after, RequestCode::UpdateConsumerOffsetConditional),
+                0
+            );
+            assert_eq!(request_delta(&before, &after, RequestCode::QueryConsumerOffset), 0);
+        }
+
+        harness.ledger.push(
+            RequestCode::GetConsumeStats,
+            consume_stats_response(vec![MessageQueue::from_parts("orders", "broker-a", 0)]),
+        );
+        let mut search =
+            RemotingCommand::create_success_response_command_with_header(SearchOffsetResponseHeader { offset: 5 });
+        search.make_custom_header_to_net();
+        harness.ledger.push(RequestCode::SearchOffsetByTimestamp, search);
+        let before = harness.ledger.snapshot();
+        let preview = MQAdminMutationExt::preview_consumer_offset_reset_on_broker(
+            &harness.admin,
+            harness.broker_addr.clone(),
+            CheetahString::from_static_str("broker-a"),
+            1,
+            CheetahString::from_static_str("orders-consumer"),
+            CheetahString::from_static_str("orders"),
+            123,
+        )
+        .await
+        .expect("valid search-offset preview");
+        assert_eq!(preview.len(), 1);
+        assert_eq!(preview[0].planned_offset, 5);
+        let after = harness.ledger.snapshot();
+        assert_request_delta(
+            &before,
+            &after,
+            &[
+                (RequestCode::GetConsumeStats, 1),
+                (RequestCode::SearchOffsetByTimestamp, 1),
+            ],
+        );
+
+        harness.ledger.push(
+            RequestCode::GetConsumeStats,
+            consume_stats_response(vec![MessageQueue::from_parts("orders", "broker-a", 0)]),
+        );
+        let mut maximum =
+            RemotingCommand::create_success_response_command_with_header(GetMaxOffsetResponseHeader { offset: 9 });
+        maximum.make_custom_header_to_net();
+        harness.ledger.push(RequestCode::GetMaxOffset, maximum);
+        let before = harness.ledger.snapshot();
+        let preview = MQAdminMutationExt::preview_consumer_offset_reset_on_broker(
+            &harness.admin,
+            harness.broker_addr.clone(),
+            CheetahString::from_static_str("broker-a"),
+            1,
+            CheetahString::from_static_str("orders-consumer"),
+            CheetahString::from_static_str("orders"),
+            -1,
+        )
+        .await
+        .expect("valid max-offset preview");
+        assert_eq!(preview[0].planned_offset, 9);
+        let after = harness.ledger.snapshot();
+        assert_request_delta(
+            &before,
+            &after,
+            &[(RequestCode::GetConsumeStats, 1), (RequestCode::GetMaxOffset, 1)],
+        );
+
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn production_admin_conditional_offset_rejects_invalid_real_remoting_responses_before_verify() {
+        let harness = ProductionAdminHarness::new("conditional-offset-wire-test").await;
+        let invalid = [
+            response_with_offset_header(ResponseCode::SystemError, 3).set_remark("accessKey=secret at 10.0.0.9:10911"),
+            RemotingCommand::create_success_response_command(),
+            response_with_offset_header(ResponseCode::Success, 4),
+            response_with_offset_header(ResponseCode::InvalidParameter, 7),
+            response_with_offset_header(ResponseCode::Success, -2),
+        ];
+
+        for response in invalid {
+            harness
+                .ledger
+                .push(RequestCode::UpdateConsumerOffsetConditional, response);
+            let before = harness.ledger.snapshot();
+            let error = MQAdminMutationExt::reset_consumer_offset_if_current(
+                &harness.admin,
+                harness.broker_addr.clone(),
+                CheetahString::from_static_str("orders-consumer"),
+                CheetahString::from_static_str("orders"),
+                0,
+                7,
+                3,
+            )
+            .await
+            .expect_err("invalid conditional response");
+            let rendered = error.to_string();
+            assert!(!rendered.contains("secret"));
+            assert!(!rendered.contains("10.0.0.9"));
+            let after = harness.ledger.snapshot();
+            assert_request_delta(&before, &after, &[(RequestCode::UpdateConsumerOffsetConditional, 1)]);
+            assert_eq!(request_delta(&before, &after, RequestCode::QueryConsumerOffset), 0);
+        }
+
+        harness.ledger.push(
+            RequestCode::UpdateConsumerOffsetConditional,
+            response_with_offset_header(ResponseCode::Success, 3),
+        );
+        let before = harness.ledger.snapshot();
+        let outcome = MQAdminMutationExt::reset_consumer_offset_if_current(
+            &harness.admin,
+            harness.broker_addr.clone(),
+            CheetahString::from_static_str("orders-consumer"),
+            CheetahString::from_static_str("orders"),
+            0,
+            7,
+            3,
+        )
+        .await
+        .expect("valid conditional response");
+        assert!(outcome.applied);
+        assert_eq!(outcome.actual_offset, 3);
+        let after = harness.ledger.snapshot();
+        assert_request_delta(&before, &after, &[(RequestCode::UpdateConsumerOffsetConditional, 1)]);
+
+        harness.shutdown().await;
+    }
 
     #[test]
     fn detailed_offset_outcomes_retain_applied_and_failed_queue_targets_in_order() {

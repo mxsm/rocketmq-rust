@@ -18,6 +18,10 @@ const CLIENT_FACADE: &str = include_str!("../src/implementation/mq_client_api_im
 const CLIENT_ADMIN: &str = include_str!("../src/implementation/mq_client_api_impl/admin.rs");
 const CLIENT_VERSIONED_CONFIG: &str =
     include_str!("../src/implementation/mq_client_api_impl/admin/versioned_config.rs");
+const CLIENT_SUPERVISED_MUTATION: &str =
+    include_str!("../src/implementation/mq_client_api_impl/admin/supervised_mutation.rs");
+const CLIENT_SUPERVISED_MUTATION_DECODE: &str =
+    include_str!("../src/implementation/mq_client_api_impl/admin/supervised_mutation_decode.rs");
 const CLIENT_CONSUMER: &str = include_str!("../src/implementation/mq_client_api_impl/consumer.rs");
 const CLIENT_PRODUCER: &str = include_str!("../src/implementation/mq_client_api_impl/producer.rs");
 const CLIENT_REQUEST_BUILDER: &str = include_str!("../src/implementation/mq_client_api_impl/request_builder.rs");
@@ -70,6 +74,19 @@ fn client_facades_declare_explicit_capability_modules() {
     assert!(ADMIN_FACADE.lines().count() <= 300);
     assert!(PRODUCER_FACADE.lines().count() <= 450);
     assert!(CLIENT_ADMIN.contains("mod versioned_config;"));
+    let admin_lines = CLIENT_ADMIN.lines().collect::<Vec<_>>();
+    for module in ["supervised_mutation", "supervised_mutation_decode"] {
+        let declaration = format!("mod {module};");
+        let declaration_index = admin_lines
+            .iter()
+            .position(|line| line.trim() == declaration)
+            .unwrap_or_else(|| panic!("missing {declaration}"));
+        assert_eq!(
+            admin_lines[declaration_index - 1].trim(),
+            r#"#[cfg(feature = "admin-mutation")]"#,
+            "{declaration} must be directly gated by admin-mutation"
+        );
+    }
     assert!(!CLIENT_FACADE.contains("pub async fn send_message"));
     assert!(!PRODUCER_FACADE.contains("pub async fn send_with_timeout"));
 }
@@ -166,6 +183,12 @@ fn capability_files_stay_within_the_reviewed_split_limits() {
     for (name, source, limit) in [
         ("client/admin.rs", CLIENT_ADMIN, 3_650),
         ("client/admin/versioned_config.rs", CLIENT_VERSIONED_CONFIG, 700),
+        ("client/admin/supervised_mutation.rs", CLIENT_SUPERVISED_MUTATION, 450),
+        (
+            "client/admin/supervised_mutation_decode.rs",
+            CLIENT_SUPERVISED_MUTATION_DECODE,
+            450,
+        ),
         ("client/consumer.rs", CLIENT_CONSUMER, 1_650),
         ("client/producer.rs", CLIENT_PRODUCER, 950),
         ("client/request_builder.rs", CLIENT_REQUEST_BUILDER, 150),
@@ -196,6 +219,8 @@ fn capability_split_does_not_introduce_detached_runtime_work() {
     let production_sources = [
         CLIENT_ADMIN,
         CLIENT_VERSIONED_CONFIG,
+        CLIENT_SUPERVISED_MUTATION,
+        CLIENT_SUPERVISED_MUTATION_DECODE,
         CLIENT_CONSUMER,
         CLIENT_PRODUCER,
         CLIENT_REQUEST_BUILDER,

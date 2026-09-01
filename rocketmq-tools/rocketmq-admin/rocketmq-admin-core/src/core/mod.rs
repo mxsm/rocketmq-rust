@@ -41,6 +41,7 @@ pub mod queue;
 pub mod release_checkpoint;
 pub mod security;
 pub mod static_topic;
+pub mod supervised_mutation;
 pub mod topic;
 pub mod topic_observation;
 

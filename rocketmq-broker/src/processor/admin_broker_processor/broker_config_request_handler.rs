@@ -27,6 +27,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
+use rocketmq_protocol::protocol::body::supervised_mutation::BrokerMutationConfigState;
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
 #[cfg(feature = "rocksdb_store")]
 use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigType;
@@ -35,6 +36,7 @@ use rocketmq_protocol::protocol::header::update_broker_config_request_header::Up
 use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::DataVersion;
+use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::CommitLogReadMode;
@@ -365,6 +367,30 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             config_generation: snapshot.id().value(),
         });
         Ok(Some(response))
+    }
+
+    pub async fn get_broker_mutation_config(
+        &self,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let snapshot = self.broker_runtime_inner.runtime_config_snapshot();
+        let broker = snapshot.broker();
+        let store = snapshot.store();
+        let state = BrokerMutationConfigState {
+            generation: snapshot.id().value(),
+            auto_create_topic_enable: broker.auto_create_topic_enable,
+            auto_create_subscription_group: broker.auto_create_subscription_group,
+            broker_permission: broker.broker_permission,
+            default_topic_queue_nums: broker.topic_queue_config.default_topic_queue_nums,
+            message_index_enable: store.message_index_enable,
+            trace_topic_enable: broker.trace_topic_enable,
+        };
+        Ok(Some(
+            RemotingCommand::create_success_response_command()
+                .set_opaque(request.opaque())
+                .set_body(state.encode()?),
+        ))
     }
 
     pub async fn get_broker_runtime_info(

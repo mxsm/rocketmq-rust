@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::config::config_manager::ConfigManager;
@@ -29,6 +30,19 @@ use crate::broker_path_config_helper;
 pub(crate) struct MessageRequestModeManager {
     message_store_config: Arc<MessageStoreConfig>,
     message_request_mode_map: Arc<parking_lot::Mutex<MessageRequestModeMap>>,
+    supervised_dirty: Arc<parking_lot::Mutex<HashSet<(CheetahString, CheetahString)>>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct MessageRequestModeUpdate {
+    pub(crate) value: SetMessageRequestModeRequestBody,
+    pub(crate) changed: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum MessageRequestModeCasError {
+    Conflict(Option<SetMessageRequestModeRequestBody>),
+    PersistenceDirty(Option<SetMessageRequestModeRequestBody>),
 }
 
 impl MessageRequestModeManager {
@@ -36,6 +50,7 @@ impl MessageRequestModeManager {
         Self {
             message_store_config,
             message_request_mode_map: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            supervised_dirty: Arc::new(parking_lot::Mutex::new(HashSet::new())),
         }
     }
 
@@ -64,6 +79,61 @@ impl MessageRequestModeManager {
             }
         }
         None
+    }
+
+    /// Conditionally replaces one exact Topic/group entry under the manager lock.
+    pub fn set_message_request_mode_if_current(
+        &self,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        expected: Option<&SetMessageRequestModeRequestBody>,
+        replacement: SetMessageRequestModeRequestBody,
+    ) -> Result<MessageRequestModeUpdate, MessageRequestModeCasError> {
+        let mut dirty = self.supervised_dirty.lock();
+        let mut map = self.message_request_mode_map.lock();
+        let current = map.get(&topic).and_then(|groups| groups.get(&consumer_group)).cloned();
+        if dirty.contains(&(topic.clone(), consumer_group.clone())) {
+            return Err(MessageRequestModeCasError::PersistenceDirty(current));
+        }
+        let expected_matches = match (expected, current.as_ref()) {
+            (None, None) => true,
+            (Some(expected), Some(current)) => {
+                expected.mode == current.mode && expected.pop_share_queue_num == current.pop_share_queue_num
+            }
+            _ => false,
+        };
+        if !expected_matches {
+            return Err(MessageRequestModeCasError::Conflict(current));
+        }
+        if current.as_ref().is_some_and(|current| {
+            current.mode == replacement.mode && current.pop_share_queue_num == replacement.pop_share_queue_num
+        }) {
+            return Ok(MessageRequestModeUpdate {
+                value: replacement,
+                changed: false,
+            });
+        }
+        map.entry(topic.clone())
+            .or_default()
+            .insert(consumer_group.clone(), replacement.clone());
+        dirty.insert((topic, consumer_group));
+        Ok(MessageRequestModeUpdate {
+            value: replacement,
+            changed: true,
+        })
+    }
+
+    pub(crate) fn complete_supervised_persistence(
+        &self,
+        topic: &CheetahString,
+        consumer_group: &CheetahString,
+        persisted: bool,
+    ) {
+        if persisted {
+            self.supervised_dirty
+                .lock()
+                .remove(&(topic.clone(), consumer_group.clone()));
+        }
     }
 
     pub fn message_request_mode_map(&self) -> Arc<parking_lot::Mutex<MessageRequestModeMap>> {
@@ -131,6 +201,96 @@ mod tests {
         let result = manager.get_message_request_mode(&topic, &consumer_group);
 
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn conditional_request_mode_set_is_exact_and_conflicts_without_overwrite() {
+        let manager = MessageRequestModeManager::new(Arc::new(MessageStoreConfig::default()));
+        let topic = CheetahString::from("test_topic");
+        let consumer_group = CheetahString::from("test_group");
+        let pull = SetMessageRequestModeRequestBody {
+            mode: MessageRequestMode::Pull,
+            pop_share_queue_num: 0,
+            ..SetMessageRequestModeRequestBody::default()
+        };
+        let pop = SetMessageRequestModeRequestBody {
+            mode: MessageRequestMode::Pop,
+            pop_share_queue_num: 4,
+            ..pull.clone()
+        };
+
+        let created = manager
+            .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), None, pull.clone())
+            .expect("absent mode should be created");
+        assert!(created.changed);
+        assert_eq!(created.value.mode, MessageRequestMode::Pull);
+        assert_eq!(created.value.pop_share_queue_num, 0);
+
+        let conflict = manager
+            .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), None, pop.clone())
+            .expect_err("second absent create should conflict");
+        let MessageRequestModeCasError::PersistenceDirty(Some(conflict)) = conflict else {
+            panic!("changed supervised state remains dirty until persistence completes");
+        };
+        assert_eq!(conflict.mode, MessageRequestMode::Pull);
+        assert_eq!(conflict.pop_share_queue_num, 0);
+
+        manager.complete_supervised_persistence(&topic, &consumer_group, true);
+
+        let updated = manager
+            .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), Some(&pull), pop.clone())
+            .expect("matching exact mode should update");
+        assert!(updated.changed);
+        assert_eq!(updated.value.mode, MessageRequestMode::Pop);
+        assert_eq!(updated.value.pop_share_queue_num, 4);
+        for replacement in [pop.clone(), pull.clone()] {
+            assert!(matches!(
+                manager.set_message_request_mode_if_current(
+                    topic.clone(),
+                    consumer_group.clone(),
+                    Some(&pop),
+                    replacement,
+                ),
+                Err(MessageRequestModeCasError::PersistenceDirty(Some(_)))
+            ));
+        }
+        manager.complete_supervised_persistence(&topic, &consumer_group, true);
+        let unchanged = manager
+            .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), Some(&pop), pop.clone())
+            .expect("identical replacement should be an accepted no-op");
+        assert!(!unchanged.changed);
+        let current = manager
+            .get_message_request_mode(&topic, &consumer_group)
+            .expect("updated mode should remain present");
+        assert_eq!(current.mode, MessageRequestMode::Pop);
+        assert_eq!(current.pop_share_queue_num, 4);
+    }
+
+    #[test]
+    fn dirty_request_mode_is_not_visible_after_restart_from_last_durable_snapshot() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_dir.path().to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let manager = MessageRequestModeManager::new(Arc::clone(&config));
+        manager.persist().expect("persist empty baseline");
+        let topic = CheetahString::from("test_topic");
+        let consumer_group = CheetahString::from("test_group");
+        let pull = SetMessageRequestModeRequestBody {
+            mode: MessageRequestMode::Pull,
+            pop_share_queue_num: 0,
+            ..SetMessageRequestModeRequestBody::default()
+        };
+        let applied = manager
+            .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), None, pull)
+            .expect("in-memory replacement");
+        assert!(applied.changed);
+        manager.complete_supervised_persistence(&topic, &consumer_group, false);
+
+        let restarted = MessageRequestModeManager::new(config);
+        assert!(restarted.load());
+        assert!(restarted.get_message_request_mode(&topic, &consumer_group).is_none());
     }
 
     #[test]

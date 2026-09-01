@@ -170,6 +170,7 @@ pub mod offset {
     pub use super::super::header::reset_offset_request_header::ResetOffsetRequestHeader;
     pub use super::super::header::search_offset_request_header::SearchOffsetRequestHeader;
     pub use super::super::header::search_offset_response_header::SearchOffsetResponseHeader;
+    pub use super::super::header::update_consumer_offset_conditional_header::UpdateConsumerOffsetConditionalHeader;
     pub use super::super::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
     pub use super::super::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
 }
@@ -264,6 +265,7 @@ pub use super::header::remove_broker_request_header::RemoveBrokerRequestHeader;
 
 // Offset operations
 pub use super::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+pub use super::header::update_consumer_offset_conditional_header::UpdateConsumerOffsetConditionalHeader;
 pub use super::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 
 // Utility

@@ -15,12 +15,18 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_auth::AuthConfig;
 use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::supervised_mutation::{
+    ExpectedMessageRequestMode, ExpectedState, GetMessageRequestModeRequestBody, SetMessageRequestModeCasRequestBody,
+    SupervisedMessageRequestMode, SupervisedSubscriptionGroupConfig, SupervisedSubscriptionGroupConfigCasRequestBody,
+    SupervisedTopicConfig, SupervisedTopicConfigCasRequestBody,
+};
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeOwner;
@@ -381,6 +387,145 @@ async fn broker_auth_uses_original_code_after_a_before_hook_mutates_the_command(
         .shutdown()
         .await
         .expect("test auth runtime should shut down");
+}
+
+fn supervised_auth_command(code: RequestCode) -> RemotingCommand {
+    let mut command = RemotingCommand::create_remoting_command(code);
+    command.add_ext_field("AccessKey", "operator");
+    match code {
+        RequestCode::UpdateTopicConfigStateCas => {
+            command.add_ext_field("topic", "TopicA");
+            command.set_body(
+                serde_json::to_vec(&SupervisedTopicConfigCasRequestBody {
+                    expected_state: ExpectedState::Absent,
+                    replacement: SupervisedTopicConfig {
+                        read_queue_nums: 4,
+                        write_queue_nums: 4,
+                        perm: 6,
+                        order: false,
+                        message_type: "NORMAL".to_owned(),
+                    },
+                })
+                .expect("Topic body"),
+            )
+        }
+        RequestCode::UpdateSubscriptionGroupConfigStateCas => {
+            command.add_ext_field("group", "GroupA");
+            command.set_body(
+                serde_json::to_vec(&SupervisedSubscriptionGroupConfigCasRequestBody {
+                    expected_state: ExpectedState::Absent,
+                    replacement: SupervisedSubscriptionGroupConfig {
+                        consume_enable: true,
+                        consume_from_min_enable: true,
+                        consume_broadcast_enable: true,
+                        consume_message_orderly: false,
+                        retry_queue_nums: 1,
+                        retry_max_times: 16,
+                        broker_id: 0,
+                        which_broker_when_consume_slowly: 1,
+                        notify_consumer_ids_changed_enable: true,
+                        group_sys_flag: 0,
+                        consume_timeout_minute: 15,
+                    },
+                })
+                .expect("group body"),
+            )
+        }
+        RequestCode::UpdateConsumerOffsetConditional => {
+            command.add_ext_field("consumerGroup", "GroupA");
+            command.add_ext_field("topic", "TopicA");
+            command.add_ext_field("queueId", "0");
+            command.add_ext_field("expectedOffset", "9");
+            command.add_ext_field("newOffset", "4");
+            command
+        }
+        RequestCode::GetBrokerMutationConfig => command,
+        RequestCode::GetMessageRequestMode => command.set_body(
+            serde_json::to_vec(&GetMessageRequestModeRequestBody {
+                topic: "TopicA".to_owned(),
+                consumer_group: "GroupA".to_owned(),
+            })
+            .expect("request-mode query body"),
+        ),
+        RequestCode::SetMessageRequestModeCas => command.set_body(
+            serde_json::to_vec(&SetMessageRequestModeCasRequestBody {
+                topic: "TopicA".to_owned(),
+                consumer_group: "GroupA".to_owned(),
+                expected_state: ExpectedMessageRequestMode::Absent,
+                replacement: SupervisedMessageRequestMode {
+                    mode: "POP".to_owned(),
+                    pop_share_queue_num: 4,
+                },
+            })
+            .expect("request-mode mutation body"),
+        ),
+        other => panic!("unsupported supervised auth test code: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn real_authorization_provider_denies_all_six_supervised_codes_before_leaf_dispatch() {
+    let runtime_context = RuntimeContext::from_current("broker-supervised-provider-denial-test");
+    let auth_runtime = Arc::new(
+        AuthRuntimeBuilder::new(
+            AuthConfig {
+                cluster_name: CheetahString::from_static_str("DefaultCluster"),
+                authorization_enabled: true,
+                ..AuthConfig::default()
+            },
+            runtime_context.service_context("broker.supervised-provider-denial"),
+        )
+        .build()
+        .await
+        .expect("test auth runtime should initialize"),
+    );
+    let probe = ProbeProcessor::new(false);
+    let calls = Arc::clone(&probe.calls);
+    let mut router = BrokerRequestProcessor::new();
+    for code in [
+        RequestCode::UpdateTopicConfigStateCas,
+        RequestCode::UpdateSubscriptionGroupConfigStateCas,
+        RequestCode::UpdateConsumerOffsetConditional,
+        RequestCode::GetBrokerMutationConfig,
+        RequestCode::GetMessageRequestMode,
+        RequestCode::SetMessageRequestModeCas,
+    ] {
+        router.register_processor(code.to_i32(), probe.clone());
+    }
+    router.set_auth_runtime(Arc::clone(&auth_runtime));
+    let fixture = RouterFixture::new(router, Vec::new());
+
+    for code in [
+        RequestCode::UpdateTopicConfigStateCas,
+        RequestCode::UpdateSubscriptionGroupConfigStateCas,
+        RequestCode::UpdateConsumerOffsetConditional,
+        RequestCode::GetBrokerMutationConfig,
+        RequestCode::GetMessageRequestMode,
+        RequestCode::SetMessageRequestModeCas,
+    ] {
+        let outcome = fixture
+            .harness
+            .dispatch(None, supervised_auth_command(code))
+            .await
+            .expect("authorization denial should be an owned reply");
+        let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
+            panic!("authorization denial must reply");
+        };
+        assert_eq!(
+            plan.response_code(),
+            no_permission_with_remark("expected denial").code()
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(auth_runtime.metrics_snapshot().authorization_failures >= 6);
+
+    fixture.finish().await;
+    auth_runtime.shutdown().await.expect("auth runtime should shut down");
+    runtime_context
+        .shutdown_tasks(Duration::from_secs(5))
+        .await
+        .assert_no_task_leak()
+        .expect("auth runtime context should drain");
 }
 
 fn fast_failure(max_count: usize) -> BrokerFastFailure {

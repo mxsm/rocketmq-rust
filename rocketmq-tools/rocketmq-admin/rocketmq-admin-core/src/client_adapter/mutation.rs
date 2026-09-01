@@ -13,6 +13,9 @@
 
 //! Mutation-only public adapter over the explicit client mutation capability.
 
+#[path = "mutation/supervised.rs"]
+mod supervised;
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ops::Deref;
@@ -21,7 +24,15 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::BrokerConfigPatchOutcome as ClientBrokerConfigPatchOutcome;
+use rocketmq_client_rust::BrokerMutationConfigState as ClientBrokerMutationConfigState;
 use rocketmq_client_rust::MQAdminMutationExt;
+use rocketmq_client_rust::MutationExpectedMessageRequestMode as ClientExpectedMessageRequestMode;
+use rocketmq_client_rust::MutationExpectedState as ClientExpectedState;
+use rocketmq_client_rust::MutationMessageRequestMode as ClientMessageRequestMode;
+use rocketmq_client_rust::MutationPersistenceState as ClientMutationPersistenceState;
+use rocketmq_client_rust::MutationSubscriptionGroupConfig as ClientSubscriptionGroupConfig;
+use rocketmq_client_rust::MutationTopicConfig as ClientTopicConfig;
+use rocketmq_client_rust::MutationTopicMessageType as ClientTopicMessageType;
 use rocketmq_client_rust::SubscriptionGroupConfigPatch as ClientSubscriptionGroupConfigPatch;
 use rocketmq_client_rust::SubscriptionGroupConfigPatchOutcome as ClientSubscriptionGroupConfigPatchOutcome;
 use rocketmq_client_rust::TopicConfigPatch as ClientTopicConfigPatch;
@@ -73,6 +84,7 @@ use crate::core::proxy::ProxyDrainPending;
 use crate::core::proxy::ProxyDrainState;
 use crate::core::proxy::ProxyMutationAdmin;
 use crate::core::security::AdminCredentials;
+use crate::core::supervised_mutation::*;
 use crate::core::topic::DeleteTopicAdminRequest;
 use crate::core::topic::DeleteTopicsInBrokerRequest;
 use crate::core::topic::PatchTopicConfigOutcome;
@@ -173,10 +185,10 @@ impl MutationAdminBuilder {
     }
 
     pub async fn build_and_start(self) -> AdminResult<MutationAdminSession> {
-        self.inner
-            .build_and_start()
-            .await
-            .map(|inner| MutationAdminSession { inner })
+        self.inner.build_and_start().await.map(|inner| MutationAdminSession {
+            inner,
+            plan_seal: Arc::new(MutationPlanSeal),
+        })
     }
 
     pub async fn build_with_guard(self) -> AdminResult<MutationAdminGuard> {
@@ -197,6 +209,7 @@ impl std::fmt::Debug for MutationAdminBuilder {
 #[must_use = "a started mutation admin session must be explicitly shut down"]
 pub struct MutationAdminSession {
     inner: crate::client_adapter::lifecycle::AdminSession,
+    plan_seal: Arc<MutationPlanSeal>,
 }
 
 impl MutationAdminSession {
@@ -210,6 +223,21 @@ impl MutationAdminSession {
 
     pub fn client_runtime(&self) -> Arc<ClientRuntime> {
         self.inner.client_runtime()
+    }
+
+    fn ensure_plan_owned(&self, seal: &Arc<MutationPlanSeal>) -> AdminResult<()> {
+        ensure_same_plan_seal(&self.plan_seal, seal)
+    }
+}
+
+fn ensure_same_plan_seal(session_seal: &Arc<MutationPlanSeal>, plan_seal: &Arc<MutationPlanSeal>) -> AdminResult<()> {
+    if Arc::ptr_eq(session_seal, plan_seal) {
+        Ok(())
+    } else {
+        Err(AdminError::invalid_argument(
+            "plan",
+            "was created by a different mutation admin session",
+        ))
     }
 }
 
@@ -1642,8 +1670,8 @@ impl ProxyMutationAdmin for MutationAdminSession {
     }
 }
 
-async fn require_topic_route(
-    admin: &rocketmq_client_rust::DefaultMQAdminExt,
+async fn require_topic_route<A: MQAdminMutationExt + ?Sized>(
+    admin: &A,
     topic: &str,
 ) -> Result<TopicRouteData, AdminError> {
     admin
@@ -1689,14 +1717,38 @@ fn master_targets_by_cluster_name(
             format!("cluster `{cluster_name}` was not found in the current NameServer view"),
         )
     })?;
-    let mut targets = Vec::new();
+    if broker_names.is_empty() {
+        return Err(AdminError::backend(
+            "mutation_cluster_info",
+            "selected cluster has no broker members",
+        ));
+    }
+    let mut targets = Vec::with_capacity(broker_names.len());
+    let mut endpoints = HashSet::with_capacity(broker_names.len());
     for broker_name in broker_names {
-        if let Some(master_addr) = broker_table
-            .get(broker_name)
-            .and_then(|broker| broker.broker_addrs().get(&MASTER_ID))
-        {
-            targets.push((broker_name.to_string(), master_addr.clone()));
+        let broker = broker_table.get(broker_name).ok_or_else(|| {
+            AdminError::backend(
+                "mutation_cluster_info",
+                "selected cluster membership references a missing broker",
+            )
+        })?;
+        if broker.broker_name() != broker_name || broker.cluster() != cluster_name {
+            return Err(AdminError::backend(
+                "mutation_cluster_info",
+                "selected cluster broker identity is inconsistent",
+            ));
         }
+        let master_addr = broker
+            .broker_addrs()
+            .get(&MASTER_ID)
+            .ok_or_else(|| AdminError::backend("mutation_cluster_info", "selected cluster broker has no master"))?;
+        if !endpoints.insert(master_addr.clone()) {
+            return Err(AdminError::backend(
+                "mutation_cluster_info",
+                "selected cluster has duplicate master endpoints",
+            ));
+        }
+        targets.push((broker_name.to_string(), master_addr.clone()));
     }
     targets.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(targets)
@@ -2086,5 +2138,15 @@ mod tests {
             Some(TopicOffsetMutationFailureCode::Unavailable)
         );
         assert!(outcome.targets[1].retryable);
+    }
+
+    #[test]
+    fn supervised_plan_seal_accepts_clones_and_rejects_other_sessions() {
+        let session = Arc::new(MutationPlanSeal);
+        let cloned_plan = Arc::clone(&session);
+        let other_session = Arc::new(MutationPlanSeal);
+
+        assert!(ensure_same_plan_seal(&session, &cloned_plan).is_ok());
+        assert!(ensure_same_plan_seal(&session, &other_session).is_err());
     }
 }

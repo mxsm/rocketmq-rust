@@ -18,6 +18,10 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody;
 use rocketmq_protocol::protocol::body::subscription_group_list::SubscriptionGroupList;
+use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
+use rocketmq_protocol::protocol::body::supervised_mutation::MutationPersistenceState;
+use rocketmq_protocol::protocol::body::supervised_mutation::StateCasResultBody;
+use rocketmq_protocol::protocol::body::supervised_mutation::SupervisedSubscriptionGroupConfigCasRequestBody;
 use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
 use rocketmq_protocol::protocol::header::update_group_forbidden_request_header::UpdateGroupForbiddenRequestHeader;
@@ -256,6 +260,16 @@ impl SubscriptionGroupHandler {
                         .set_remark("Subscription Group configuration version is exhausted"),
                 ));
             }
+            Err(
+                SubscriptionGroupConfigCasError::StateConflict { .. }
+                | SubscriptionGroupConfigCasError::PersistenceDirty { .. },
+            ) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Subscription Group configuration state is unavailable"),
+                ));
+            }
         };
         let subscription_group_version = match u64::try_from(update.data_version.counter()) {
             Ok(version) => version,
@@ -278,6 +292,168 @@ impl SubscriptionGroupHandler {
             .set_remark(format!(
                 "Subscription Group configuration patch committed, version={subscription_group_version}"
             )),
+        ))
+    }
+
+    pub async fn update_subscription_group_config_state_cas<MS: BrokerAdminStore>(
+        &self,
+        runtime: &BrokerAdminRuntime<MS>,
+        _metadata: &AdminRequestMetadata,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
+        let header = match request.decode_command_custom_header::<GetSubscriptionGroupConfigRequestHeader>() {
+            Ok(header) => header,
+            Err(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Subscription Group state replacement requires a valid group"),
+                ));
+            }
+        };
+        let Some(encoded) = request.body() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("Subscription Group state replacement body is required"),
+            ));
+        };
+        let body = match serde_json::from_slice::<SupervisedSubscriptionGroupConfigCasRequestBody>(encoded.as_ref()) {
+            Ok(body) => body,
+            Err(_) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Subscription Group state replacement body is invalid"),
+                ));
+            }
+        };
+        if validate_subscription_group_name(header.group.as_str()).is_err()
+            || is_sys_consumer_group(header.group.as_str())
+            || body.replacement.retry_queue_nums < 0
+            || body.replacement.retry_max_times < -1
+            || body.replacement.consume_timeout_minute <= 0
+        {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::InvalidParameter)
+                    .set_remark("Subscription Group state replacement is not eligible"),
+            ));
+        }
+        let replacement = &body.replacement;
+        let mut config = SubscriptionGroupConfig::new(header.group.clone());
+        config.set_consume_enable(replacement.consume_enable);
+        config.set_consume_from_min_enable(replacement.consume_from_min_enable);
+        config.set_consume_broadcast_enable(replacement.consume_broadcast_enable);
+        config.set_consume_message_orderly(replacement.consume_message_orderly);
+        config.set_retry_queue_nums(replacement.retry_queue_nums);
+        config.set_retry_max_times(replacement.retry_max_times);
+        config.set_broker_id(replacement.broker_id);
+        config.set_which_broker_when_consume_slowly(replacement.which_broker_when_consume_slowly);
+        config.set_notify_consumer_ids_changed_enable(replacement.notify_consumer_ids_changed_enable);
+        config.set_group_sys_flag(replacement.group_sys_flag);
+        config.set_consume_timeout_minute(replacement.consume_timeout_minute);
+        let update = match runtime
+            .subscription_group_manager()
+            .replace_subscription_group_config_if_state(&header.group, body.expected_state, config)
+        {
+            Ok(update) => update,
+            Err(SubscriptionGroupConfigCasError::StateConflict { actual_version }) => {
+                let state = actual_version.map_or(ExpectedState::Absent, |version| ExpectedState::Present { version });
+                return Ok(Some(
+                    response.set_code(ResponseCode::InvalidParameter).set_body(
+                        StateCasResultBody {
+                            applied: false,
+                            changed: false,
+                            state,
+                            persistence: MutationPersistenceState::NotRequired,
+                        }
+                        .encode()?,
+                    ),
+                ));
+            }
+            Err(SubscriptionGroupConfigCasError::PersistenceDirty { actual_version }) => {
+                return Ok(Some(
+                    response.set_code(ResponseCode::SystemError).set_body(
+                        StateCasResultBody {
+                            applied: false,
+                            changed: false,
+                            state: ExpectedState::Present {
+                                version: actual_version,
+                            },
+                            persistence: MutationPersistenceState::Failed,
+                        }
+                        .encode()?,
+                    ),
+                ));
+            }
+            Err(SubscriptionGroupConfigCasError::NoChange) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Subscription Group state replacement has no effect"),
+                ));
+            }
+            Err(
+                SubscriptionGroupConfigCasError::InvalidGroupName
+                | SubscriptionGroupConfigCasError::GroupNotFound
+                | SubscriptionGroupConfigCasError::VersionConflict { .. }
+                | SubscriptionGroupConfigCasError::VersionUnavailable
+                | SubscriptionGroupConfigCasError::VersionExhausted
+                | SubscriptionGroupConfigCasError::ValueOutOfRange,
+            ) => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Subscription Group state replacement is unavailable"),
+                ));
+            }
+        };
+        let version = u64::try_from(update.data_version.counter()).map_err(|_| {
+            rocketmq_error::RocketMQError::invariant_violated(
+                "Subscription Group state version must remain non-negative",
+            )
+        })?;
+        if !update.changed {
+            return Ok(Some(
+                RemotingCommand::create_success_response_command()
+                    .set_opaque(request.opaque())
+                    .set_body(
+                        StateCasResultBody {
+                            applied: true,
+                            changed: false,
+                            state: ExpectedState::Present { version },
+                            persistence: MutationPersistenceState::NotRequired,
+                        }
+                        .encode()?,
+                    ),
+            ));
+        }
+        let persistence = runtime.subscription_group_manager().persist_supervised_snapshot().await;
+        runtime.subscription_group_manager().complete_supervised_persistence(
+            &header.group,
+            version,
+            persistence.is_ok(),
+        );
+        let (code, persistence) = if persistence.is_ok() {
+            (ResponseCode::Success, MutationPersistenceState::Persisted)
+        } else {
+            (ResponseCode::SystemError, MutationPersistenceState::Failed)
+        };
+        Ok(Some(
+            RemotingCommand::create_success_response_command()
+                .set_code(code)
+                .set_opaque(request.opaque())
+                .set_body(
+                    StateCasResultBody {
+                        applied: true,
+                        changed: true,
+                        state: ExpectedState::Present { version },
+                        persistence,
+                    }
+                    .encode()?,
+                ),
         ))
     }
 
@@ -314,7 +490,10 @@ impl SubscriptionGroupHandler {
                     .set_remark("The specified group is invalid."),
             )),
             Err(
-                SubscriptionGroupConfigCasError::VersionUnavailable | SubscriptionGroupConfigCasError::VersionExhausted,
+                SubscriptionGroupConfigCasError::VersionUnavailable
+                | SubscriptionGroupConfigCasError::VersionExhausted
+                | SubscriptionGroupConfigCasError::StateConflict { .. }
+                | SubscriptionGroupConfigCasError::PersistenceDirty { .. },
             ) => Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
@@ -568,15 +747,22 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::body::subscription_group_list::SubscriptionGroupList;
+    use rocketmq_protocol::protocol::body::supervised_mutation::{
+        ExpectedState, MutationPersistenceState, StateCasResultBody, SupervisedSubscriptionGroupConfig,
+        SupervisedSubscriptionGroupConfigCasRequestBody,
+    };
     use rocketmq_protocol::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
     use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::subscription::group_forbidden::GroupForbidden;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_store::MessageStoreConfig;
 
     use super::*;
     use crate::broker_runtime::BrokerRuntime;
+    use crate::config::config_manager::ConfigManager;
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()
@@ -965,6 +1151,120 @@ mod tests {
                 .expect("Subscription Group query should carry the current version")
                 .subscription_group_version,
             initial_version + 1
+        );
+
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn subscription_group_state_cas_reports_applied_when_persistence_fails() {
+        let runtime = new_test_runtime("group-state-persist-fail").await;
+        let admin = runtime.admin_runtime_for_test();
+        let handler = SubscriptionGroupHandler::new();
+        let group = CheetahString::from_static_str("PersistFailureGroup");
+        let persistence_target = admin.subscription_group_manager().config_file_path();
+        std::fs::create_dir_all(persistence_target.as_str()).expect("occupy persistence target with a directory");
+
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateSubscriptionGroupConfigStateCas,
+            GetSubscriptionGroupConfigRequestHeader {
+                group: group.clone(),
+                rpc_request_header: None,
+            },
+        )
+        .set_body(
+            SupervisedSubscriptionGroupConfigCasRequestBody {
+                expected_state: ExpectedState::Absent,
+                replacement: SupervisedSubscriptionGroupConfig {
+                    consume_enable: true,
+                    consume_from_min_enable: true,
+                    consume_broadcast_enable: true,
+                    consume_message_orderly: false,
+                    retry_queue_nums: 1,
+                    retry_max_times: 16,
+                    broker_id: 0,
+                    which_broker_when_consume_slowly: 1,
+                    notify_consumer_ids_changed_enable: true,
+                    group_sys_flag: 0,
+                    consume_timeout_minute: 15,
+                },
+            }
+            .encode()
+            .expect("request body"),
+        );
+        request.make_custom_header_to_net();
+        let response = handler
+            .update_subscription_group_config_state_cas(
+                &admin,
+                &AdminRequestMetadata::network_for_test("127.0.0.1:10911".parse().expect("peer")),
+                &mut request,
+            )
+            .await
+            .expect("handler")
+            .expect("response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        let outcome = StateCasResultBody::decode(response.body().expect("body")).expect("typed outcome");
+        assert!(outcome.applied);
+        assert!(outcome.changed);
+        assert_eq!(outcome.persistence, MutationPersistenceState::Failed);
+        let ExpectedState::Present { version } = outcome.state else {
+            panic!("applied Subscription Group state must be present");
+        };
+        assert!(admin.subscription_group_manager().group_exists(group.as_str()));
+
+        for retry_max_times in [16, 17] {
+            let mut follow_up = RemotingCommand::create_request_command(
+                RequestCode::UpdateSubscriptionGroupConfigStateCas,
+                GetSubscriptionGroupConfigRequestHeader {
+                    group: group.clone(),
+                    rpc_request_header: None,
+                },
+            )
+            .set_body(
+                SupervisedSubscriptionGroupConfigCasRequestBody {
+                    expected_state: ExpectedState::Present { version },
+                    replacement: SupervisedSubscriptionGroupConfig {
+                        consume_enable: true,
+                        consume_from_min_enable: true,
+                        consume_broadcast_enable: true,
+                        consume_message_orderly: false,
+                        retry_queue_nums: 1,
+                        retry_max_times,
+                        broker_id: 0,
+                        which_broker_when_consume_slowly: 1,
+                        notify_consumer_ids_changed_enable: true,
+                        group_sys_flag: 0,
+                        consume_timeout_minute: 15,
+                    },
+                }
+                .encode()
+                .expect("follow-up body"),
+            );
+            follow_up.make_custom_header_to_net();
+            let response = handler
+                .update_subscription_group_config_state_cas(
+                    &admin,
+                    &AdminRequestMetadata::network_for_test("127.0.0.1:10911".parse().expect("peer")),
+                    &mut follow_up,
+                )
+                .await
+                .expect("handler")
+                .expect("response");
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+            let follow_up = StateCasResultBody::decode(response.body().expect("body")).expect("typed outcome");
+            assert!(!follow_up.applied);
+            assert!(!follow_up.changed);
+            assert_eq!(follow_up.persistence, MutationPersistenceState::Failed);
+            assert_eq!(follow_up.state, ExpectedState::Present { version });
+        }
+        assert_eq!(
+            admin
+                .subscription_group_manager()
+                .find_subscription_group_config(&group)
+                .expect("dirty Subscription Group remains in memory")
+                .retry_max_times(),
+            16
         );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());

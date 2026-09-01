@@ -27,6 +27,7 @@ use rocketmq_model::common::attribute::attribute_util::AttributeUtil;
 use rocketmq_model::common::attribute::subscription_group_attributes::SubscriptionGroupAttributes;
 use rocketmq_model::common::mix_all::is_sys_consumer_group;
 use rocketmq_model::common::topic::TopicValidator;
+use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_configs;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
@@ -57,6 +58,7 @@ pub const TOPIC_MAX_LENGTH: usize = 127;
 pub(crate) struct SubscriptionGroupConfigUpdate {
     pub(crate) config: Arc<SubscriptionGroupConfig>,
     pub(crate) data_version: DataVersion,
+    pub(crate) changed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -77,6 +79,8 @@ pub(crate) enum SubscriptionGroupConfigCasError {
     VersionExhausted,
     ValueOutOfRange,
     NoChange,
+    StateConflict { actual_version: Option<u64> },
+    PersistenceDirty { actual_version: u64 },
 }
 
 #[derive(Clone)]
@@ -116,6 +120,7 @@ pub(crate) struct SubscriptionGroupManager {
 
     /// Serializes configuration state and version transitions.
     metadata_transition: Arc<parking_lot::Mutex<()>>,
+    supervised_dirty_groups: Arc<DashMap<CheetahString, u64>>,
 
     config: SubscriptionGroupManagerConfig,
     state_machine_version: StateMachineVersionView,
@@ -165,6 +170,7 @@ impl SubscriptionGroupManager {
                 rocketmq_protocol::protocol::data_version_facade::new_data_version(),
             )),
             metadata_transition: Arc::new(parking_lot::Mutex::new(())),
+            supervised_dirty_groups: Arc::new(DashMap::new()),
             config,
             state_machine_version,
             broker_metrics_manager,
@@ -203,6 +209,33 @@ impl SubscriptionGroupManager {
         ) {
             error!(%error, operation, "Failed to admit subscription group metadata snapshot");
         }
+    }
+
+    /// Persists a supervised mutation durably so its wire outcome can report applied truth.
+    pub(crate) async fn persist_supervised_snapshot(&self) -> rocketmq_error::RocketMQResult<()> {
+        let Some(metadata_io) = self.metadata_io.as_ref() else {
+            return self.persist();
+        };
+        if !self.supports_metadata_io_actor() {
+            return self.persist();
+        }
+        let content = self.encode_pretty(true);
+        if content.is_empty() {
+            return Err(rocketmq_error::RocketMQError::storage_write_failed(
+                "subscription-group",
+                "encoded supervised snapshot is empty",
+            ));
+        }
+        metadata_io
+            .submit_next_durable(
+                "broker.subscription-group",
+                self.config_file_path(),
+                content.into_bytes(),
+                MetadataDeadline::after(Duration::from_secs(5)),
+            )
+            .await
+            .map_err(crate::runtime_to_rocketmq_error)
+            .map(|_| ())
     }
 
     #[cfg(feature = "rocksdb_store")]
@@ -876,11 +909,94 @@ impl SubscriptionGroupManager {
         let update = SubscriptionGroupConfigUpdate {
             config,
             data_version: data_version.clone(),
+            changed: true,
         };
         drop(data_version);
         drop(_transition);
         self.persist_after_mutation("cas-update");
         Ok(update)
+    }
+
+    /// Atomically creates or fully replaces one supervised Subscription Group state.
+    pub(crate) fn replace_subscription_group_config_if_state(
+        &self,
+        group: &CheetahString,
+        expected_state: ExpectedState,
+        mut replacement: SubscriptionGroupConfig,
+    ) -> Result<SubscriptionGroupConfigUpdate, SubscriptionGroupConfigCasError> {
+        validate_subscription_group_name(group.as_str())
+            .map_err(|_| SubscriptionGroupConfigCasError::InvalidGroupName)?;
+        replacement.set_group_name(group.clone());
+
+        let transition = self.metadata_transition.lock();
+        let current = self.find_subscription_group_config_inner(group);
+        let mut data_version = self.data_version.write();
+        let counter = data_version.counter();
+        let actual_version = u64::try_from(counter).map_err(|_| SubscriptionGroupConfigCasError::VersionUnavailable)?;
+        let matches = match expected_state {
+            ExpectedState::Absent => current.is_none(),
+            ExpectedState::Present { version } => current.is_some() && version == actual_version,
+        };
+        if !matches {
+            return Err(SubscriptionGroupConfigCasError::StateConflict {
+                actual_version: current.as_ref().map(|_| actual_version),
+            });
+        }
+        if let Some(version) = self.supervised_dirty_groups.get(group).map(|entry| *entry.value()) {
+            return Err(SubscriptionGroupConfigCasError::PersistenceDirty {
+                actual_version: version,
+            });
+        }
+        if counter == i64::MAX {
+            return Err(SubscriptionGroupConfigCasError::VersionExhausted);
+        }
+        if let Some(current) = current.as_ref() {
+            replacement.set_group_retry_policy(current.group_retry_policy().clone());
+            replacement.set_subscription_data_set(current.subscription_data_set().cloned());
+            replacement.set_attributes(current.attributes().clone());
+        }
+        if current
+            .as_deref()
+            .is_some_and(|current| supervised_group_configs_equal(current, &replacement))
+        {
+            return Ok(SubscriptionGroupConfigUpdate {
+                config: Arc::new(replacement),
+                data_version: data_version.clone(),
+                changed: false,
+            });
+        }
+        let config = Arc::new(replacement);
+        self.subscription_group_table.insert(group.clone(), Arc::clone(&config));
+        data_version.next_version_with(self.state_machine_version.get());
+        let version =
+            u64::try_from(data_version.counter()).map_err(|_| SubscriptionGroupConfigCasError::VersionUnavailable)?;
+        self.supervised_dirty_groups.insert(group.clone(), version);
+        let update = SubscriptionGroupConfigUpdate {
+            config,
+            data_version: data_version.clone(),
+            changed: true,
+        };
+        drop(data_version);
+        drop(transition);
+        Ok(update)
+    }
+
+    pub(crate) fn complete_supervised_persistence(&self, group: &CheetahString, version: u64, persisted: bool) {
+        if !persisted {
+            return;
+        }
+        if self
+            .supervised_dirty_groups
+            .get(group)
+            .is_some_and(|current| *current.value() == version)
+        {
+            self.supervised_dirty_groups.remove(group);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn supervised_dirty_version(&self, group: &CheetahString) -> Option<u64> {
+        self.supervised_dirty_groups.get(group).map(|entry| *entry.value())
     }
 
     pub fn get_forbidden(&self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) -> bool {
@@ -1493,6 +1609,21 @@ impl SubscriptionGroupManager {
     }
 }
 
+fn supervised_group_configs_equal(left: &SubscriptionGroupConfig, right: &SubscriptionGroupConfig) -> bool {
+    left.group_name() == right.group_name()
+        && left.consume_enable() == right.consume_enable()
+        && left.consume_from_min_enable() == right.consume_from_min_enable()
+        && left.consume_broadcast_enable() == right.consume_broadcast_enable()
+        && left.consume_message_orderly() == right.consume_message_orderly()
+        && left.retry_queue_nums() == right.retry_queue_nums()
+        && left.retry_max_times() == right.retry_max_times()
+        && left.broker_id() == right.broker_id()
+        && left.which_broker_when_consume_slowly() == right.which_broker_when_consume_slowly()
+        && left.notify_consumer_ids_changed_enable() == right.notify_consumer_ids_changed_enable()
+        && left.group_sys_flag() == right.group_sys_flag()
+        && left.consume_timeout_minute() == right.consume_timeout_minute()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SubscriptionGroupWrapperInner {
@@ -1809,6 +1940,143 @@ mod tests {
                 .expect_err("out-of-range patch must fail"),
             SubscriptionGroupConfigCasError::ValueOutOfRange
         );
+    }
+
+    #[test]
+    fn subscription_group_state_cas_supports_create_replace_and_conflict() {
+        use rocketmq_store::MessageStoreConfig;
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            ..MessageStoreConfig::default()
+        };
+        let manager = SubscriptionGroupManager::new(
+            SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config),
+            StateMachineVersionView::default(),
+            None,
+        );
+        let group = CheetahString::from_static_str("STATE_CAS_GROUP");
+        let mut created_config = SubscriptionGroupConfig::new(group.clone());
+        created_config.set_retry_queue_nums(2);
+        created_config.set_attributes(HashMap::from([(
+            CheetahString::from_static_str("internal.attribute"),
+            CheetahString::from_static_str("preserved"),
+        )]));
+        let created = manager
+            .replace_subscription_group_config_if_state(&group, ExpectedState::Absent, created_config)
+            .expect("absent group should be created");
+        let version = u64::try_from(created.data_version.counter()).expect("non-negative version");
+
+        assert_eq!(
+            manager
+                .replace_subscription_group_config_if_state(
+                    &group,
+                    ExpectedState::Absent,
+                    SubscriptionGroupConfig::new(group.clone()),
+                )
+                .expect_err("second absent create must conflict"),
+            SubscriptionGroupConfigCasError::StateConflict {
+                actual_version: Some(version),
+            }
+        );
+        manager.complete_supervised_persistence(&group, version, true);
+
+        let mut replacement = SubscriptionGroupConfig::new(group.clone());
+        replacement.set_consume_enable(false);
+        replacement.set_retry_queue_nums(4);
+        let updated = manager
+            .replace_subscription_group_config_if_state(&group, ExpectedState::Present { version }, replacement)
+            .expect("matching group state should replace");
+        assert!(!updated.config.consume_enable());
+        assert_eq!(updated.config.retry_queue_nums(), 4);
+        assert!(updated.changed);
+        manager.complete_supervised_persistence(&group, version + 1, true);
+        assert_eq!(
+            updated
+                .config
+                .attributes()
+                .get("internal.attribute")
+                .map(CheetahString::as_str),
+            Some("preserved")
+        );
+        let unchanged = manager
+            .replace_subscription_group_config_if_state(
+                &group,
+                ExpectedState::Present { version: version + 1 },
+                updated.config.as_ref().clone(),
+            )
+            .expect("identical group replacement should be an accepted no-op");
+        assert!(!unchanged.changed);
+        assert_eq!(unchanged.data_version.counter(), updated.data_version.counter());
+        assert_eq!(
+            manager
+                .replace_subscription_group_config_if_state(
+                    &group,
+                    ExpectedState::Present { version },
+                    SubscriptionGroupConfig::new(group.clone()),
+                )
+                .expect_err("stale group state must conflict"),
+            SubscriptionGroupConfigCasError::StateConflict {
+                actual_version: Some(version + 1),
+            }
+        );
+    }
+
+    #[test]
+    fn subscription_group_state_cas_stays_fail_closed_after_persistence_failure() {
+        use rocketmq_store::MessageStoreConfig;
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            ..MessageStoreConfig::default()
+        };
+        let manager_config = SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config);
+        let manager = SubscriptionGroupManager::new(manager_config.clone(), StateMachineVersionView::default(), None);
+        manager.persist().expect("persist clean baseline");
+        let group = CheetahString::from_static_str("DIRTY_STATE_CAS_GROUP");
+        let created = manager
+            .replace_subscription_group_config_if_state(
+                &group,
+                ExpectedState::Absent,
+                SubscriptionGroupConfig::new(group.clone()),
+            )
+            .expect("create");
+        let version = u64::try_from(created.data_version.counter()).expect("version");
+        manager.complete_supervised_persistence(&group, version, false);
+        assert_eq!(manager.supervised_dirty_version(&group), Some(version));
+        let mut different = created.config.as_ref().clone();
+        different.set_consume_enable(false);
+        for replacement in [created.config.as_ref().clone(), different] {
+            assert_eq!(
+                manager
+                    .replace_subscription_group_config_if_state(
+                        &group,
+                        ExpectedState::Present { version },
+                        replacement,
+                    )
+                    .expect_err("dirty state must reject same and different replacements"),
+                SubscriptionGroupConfigCasError::PersistenceDirty {
+                    actual_version: version,
+                }
+            );
+        }
+        assert_eq!(manager.data_version.read().counter(), created.data_version.counter());
+
+        let restarted = SubscriptionGroupManager::new(manager_config, StateMachineVersionView::default(), None);
+        assert!(restarted.load());
+        assert!(!restarted.group_exists(group.as_str()));
     }
 
     #[test]

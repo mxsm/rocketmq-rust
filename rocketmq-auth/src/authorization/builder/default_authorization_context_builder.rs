@@ -16,19 +16,28 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
+use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::body::delete_subscription_group_list_request_body::DeleteSubscriptionGroupListRequestBody;
 use rocketmq_protocol::protocol::body::delete_topic_list_request_body::DeleteTopicListRequestBody;
 use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+use rocketmq_protocol::protocol::body::supervised_mutation::{
+    ExpectedMessageRequestMode, ExpectedState, GetMessageRequestModeRequestBody, SetMessageRequestModeCasRequestBody,
+    SupervisedSubscriptionGroupConfigCasRequestBody, SupervisedTopicConfigCasRequestBody,
+};
 use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_protocol::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
+use rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
+use rocketmq_protocol::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
+use rocketmq_protocol::protocol::header::update_consumer_offset_conditional_header::UpdateConsumerOffsetConditionalHeader;
 use rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::ResourcePattern;
 use rocketmq_security_api::ResourceType;
@@ -100,6 +109,42 @@ impl DefaultAuthorizationContextBuilder {
             .validate()
             .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
         Ok(auth_context.source_ip().unwrap_or("embedded").to_owned())
+    }
+
+    fn require_topic(topic: &str) -> AuthorizationResult<&str> {
+        if TopicValidator::validate_topic(topic).valid() {
+            Ok(topic)
+        } else {
+            Err(AuthorizationError::InvalidContext(
+                "supervised mutation topic is invalid".to_owned(),
+            ))
+        }
+    }
+
+    fn require_group(group: &str) -> AuthorizationResult<&str> {
+        validate_subscription_group_name(group).map_err(|_| {
+            AuthorizationError::InvalidContext("supervised mutation consumer group is invalid".to_owned())
+        })?;
+        Ok(group)
+    }
+
+    fn supervised_request_requires_context(request_code: RequestCode) -> bool {
+        matches!(
+            request_code,
+            RequestCode::UpdateTopicConfigStateCas
+                | RequestCode::UpdateSubscriptionGroupConfigStateCas
+                | RequestCode::UpdateConsumerOffsetConditional
+                | RequestCode::GetBrokerMutationConfig
+                | RequestCode::GetMessageRequestMode
+                | RequestCode::SetMessageRequestModeCas
+        )
+    }
+
+    fn require_body<'a>(command: &'a RemotingCommand, label: &str) -> AuthorizationResult<&'a [u8]> {
+        command
+            .body()
+            .map(AsRef::as_ref)
+            .ok_or_else(|| AuthorizationError::InvalidContext(format!("{label} body is missing")))
     }
 
     fn push_topic_sub_if_not_retry(
@@ -495,12 +540,13 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
         let mut contexts = Vec::new();
         let empty_fields = HashMap::new();
+        let request_code = RequestCode::from(command.code());
         let fields = match command.ext_fields() {
             Some(fields) => fields,
             None if matches!(
-                RequestCode::from(command.code()),
+                request_code,
                 RequestCode::DeleteTopicInBrokerList | RequestCode::DeleteSubscriptionGroupList
-            ) =>
+            ) || Self::supervised_request_requires_context(request_code) =>
             {
                 &empty_fields
             }
@@ -512,7 +558,136 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
         let source_ip = Self::source_ip(auth_context)?;
         let rpc_code = command.code().to_string();
 
-        match RequestCode::from(command.code()) {
+        match request_code {
+            RequestCode::UpdateTopicConfigStateCas => {
+                let header = command
+                    .decode_command_custom_header::<GetTopicConfigRequestHeader>()
+                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                let topic = Self::require_topic(header.topic.as_str())?;
+                let body = serde_json::from_slice::<SupervisedTopicConfigCasRequestBody>(Self::require_body(
+                    command,
+                    "supervised Topic replacement",
+                )?)
+                .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                let action = match body.expected_state {
+                    ExpectedState::Absent => Action::Create,
+                    ExpectedState::Present { .. } => Action::Update,
+                };
+                contexts.push(self.build_context(
+                    subject_key,
+                    Resource::of_topic(topic),
+                    vec![action],
+                    &source_ip,
+                    &rpc_code,
+                ));
+            }
+            RequestCode::UpdateSubscriptionGroupConfigStateCas => {
+                let header = command
+                    .decode_command_custom_header::<GetSubscriptionGroupConfigRequestHeader>()
+                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                let group = Self::require_group(header.group.as_str())?;
+                let body = serde_json::from_slice::<SupervisedSubscriptionGroupConfigCasRequestBody>(
+                    Self::require_body(command, "supervised Subscription Group replacement")?,
+                )
+                .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                let action = match body.expected_state {
+                    ExpectedState::Absent => Action::Create,
+                    ExpectedState::Present { .. } => Action::Update,
+                };
+                contexts.push(self.build_context(
+                    subject_key,
+                    Resource::of_group(group.to_owned()),
+                    vec![action],
+                    &source_ip,
+                    &rpc_code,
+                ));
+            }
+            RequestCode::UpdateConsumerOffsetConditional => {
+                let header = command
+                    .decode_command_custom_header::<UpdateConsumerOffsetConditionalHeader>()
+                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                let topic = Self::require_topic(header.topic.as_str())?;
+                let group = Self::require_group(header.consumer_group.as_str())?;
+                contexts.push(self.build_context(
+                    subject_key,
+                    Resource::of_topic(topic),
+                    vec![Action::Sub, Action::Update],
+                    &source_ip,
+                    &rpc_code,
+                ));
+                contexts.push(self.build_context(
+                    subject_key,
+                    Resource::of_group(group.to_owned()),
+                    vec![Action::Sub, Action::Update],
+                    &source_ip,
+                    &rpc_code,
+                ));
+            }
+            RequestCode::GetBrokerMutationConfig => self.push_java_annotation_cluster_default(
+                &mut contexts,
+                subject_key,
+                vec![Action::Get],
+                &source_ip,
+                &rpc_code,
+            ),
+            RequestCode::GetMessageRequestMode => {
+                let body = serde_json::from_slice::<GetMessageRequestModeRequestBody>(Self::require_body(
+                    command,
+                    "request-mode query",
+                )?)
+                .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                let topic = Self::require_topic(&body.topic)?;
+                let group = Self::require_group(&body.consumer_group)?;
+                contexts.push(self.build_context(
+                    subject_key,
+                    Resource::of_topic(topic),
+                    vec![Action::Get],
+                    &source_ip,
+                    &rpc_code,
+                ));
+                contexts.push(self.build_context(
+                    subject_key,
+                    Resource::of_group(group.to_owned()),
+                    vec![Action::Get],
+                    &source_ip,
+                    &rpc_code,
+                ));
+            }
+            RequestCode::SetMessageRequestModeCas => {
+                let body = serde_json::from_slice::<SetMessageRequestModeCasRequestBody>(Self::require_body(
+                    command,
+                    "request-mode replacement",
+                )?)
+                .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                let topic = Self::require_topic(&body.topic)?;
+                let group = Self::require_group(&body.consumer_group)?;
+                if let ExpectedMessageRequestMode::Present { mode, .. } = &body.expected_state {
+                    if !matches!(mode.as_str(), "PULL" | "POP") {
+                        return Err(AuthorizationError::InvalidContext(
+                            "expected request mode is invalid".to_owned(),
+                        ));
+                    }
+                }
+                if !matches!(body.replacement.mode.as_str(), "PULL" | "POP") {
+                    return Err(AuthorizationError::InvalidContext(
+                        "replacement request mode is invalid".to_owned(),
+                    ));
+                }
+                contexts.push(self.build_context(
+                    subject_key,
+                    Resource::of_topic(topic),
+                    vec![Action::Update],
+                    &source_ip,
+                    &rpc_code,
+                ));
+                contexts.push(self.build_context(
+                    subject_key,
+                    Resource::of_group(group.to_owned()),
+                    vec![Action::Update],
+                    &source_ip,
+                    &rpc_code,
+                ));
+            }
             RequestCode::GetRouteinfoByTopic => {
                 if let Some(topic) = self.field_value(fields, TOPIC) {
                     if NamespaceUtil::is_retry_topic(topic) {
@@ -830,6 +1005,12 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             ),
         }
 
+        if contexts.is_empty() && Self::supervised_request_requires_context(request_code) {
+            return Err(AuthorizationError::InvalidContext(
+                "supervised mutation authorization context is missing".to_owned(),
+            ));
+        }
+
         Ok(contexts)
     }
 }
@@ -1064,6 +1245,168 @@ mod tests {
             .unwrap();
         assert_eq!(contexts[0].resource_key(), Some("Cluster:ClusterA".to_string()));
         assert_eq!(contexts[0].actions(), &[Action::List]);
+    }
+
+    #[test]
+    fn supervised_mutation_codes_build_exact_non_empty_contexts() {
+        let builder = DefaultAuthorizationContextBuilder::new(AuthConfig {
+            cluster_name: CheetahString::from_static_str("DefaultCluster"),
+            ..AuthConfig::default()
+        });
+        let auth_context = RemotingAuthContext::embedded("test-session");
+        let access = [("AccessKey", "operator")];
+
+        for (expected_state, action) in [
+            (ExpectedState::Absent, Action::Create),
+            (ExpectedState::Present { version: 7 }, Action::Update),
+        ] {
+            let topic = command_with_fields(
+                RequestCode::UpdateTopicConfigStateCas,
+                &[("AccessKey", "operator"), ("topic", "TopicA")],
+            )
+            .set_body(
+                serde_json::to_vec(&SupervisedTopicConfigCasRequestBody {
+                    expected_state,
+                    replacement: rocketmq_protocol::protocol::body::supervised_mutation::SupervisedTopicConfig {
+                        read_queue_nums: 4,
+                        write_queue_nums: 4,
+                        perm: 6,
+                        order: false,
+                        message_type: "NORMAL".to_owned(),
+                    },
+                })
+                .unwrap(),
+            );
+            let contexts = builder.build_from_remoting(&auth_context, &topic).unwrap();
+            assert_eq!(contexts.len(), 1);
+            assert_eq!(contexts[0].resource_key().as_deref(), Some("Topic:TopicA"));
+            assert_eq!(contexts[0].actions(), &[action]);
+            assert!(!contexts[0].actions().contains(&Action::Delete));
+
+            let group = command_with_fields(
+                RequestCode::UpdateSubscriptionGroupConfigStateCas,
+                &[("AccessKey", "operator"), ("group", "GroupA")],
+            )
+            .set_body(
+                serde_json::to_vec(&SupervisedSubscriptionGroupConfigCasRequestBody {
+                    expected_state,
+                    replacement:
+                        rocketmq_protocol::protocol::body::supervised_mutation::SupervisedSubscriptionGroupConfig {
+                            consume_enable: true,
+                            consume_from_min_enable: true,
+                            consume_broadcast_enable: true,
+                            consume_message_orderly: false,
+                            retry_queue_nums: 1,
+                            retry_max_times: 16,
+                            broker_id: 0,
+                            which_broker_when_consume_slowly: 1,
+                            notify_consumer_ids_changed_enable: true,
+                            group_sys_flag: 0,
+                            consume_timeout_minute: 15,
+                        },
+                })
+                .unwrap(),
+            );
+            let contexts = builder.build_from_remoting(&auth_context, &group).unwrap();
+            assert_eq!(contexts.len(), 1);
+            assert_eq!(contexts[0].resource_key().as_deref(), Some("Group:GroupA"));
+            assert_eq!(contexts[0].actions(), &[action]);
+            assert!(!contexts[0].actions().contains(&Action::Delete));
+        }
+
+        let offset = command_with_fields(
+            RequestCode::UpdateConsumerOffsetConditional,
+            &[
+                ("AccessKey", "operator"),
+                ("consumerGroup", "GroupA"),
+                ("topic", "TopicA"),
+                ("queueId", "0"),
+                ("expectedOffset", "9"),
+                ("newOffset", "4"),
+            ],
+        );
+        let contexts = builder.build_from_remoting(&auth_context, &offset).unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].resource_key().as_deref(), Some("Topic:TopicA"));
+        assert_eq!(contexts[1].resource_key().as_deref(), Some("Group:GroupA"));
+        assert!(contexts
+            .iter()
+            .all(|context| context.actions() == [Action::Sub, Action::Update]));
+
+        let broker = command_with_fields(RequestCode::GetBrokerMutationConfig, &access);
+        let contexts = builder.build_from_remoting(&auth_context, &broker).unwrap();
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].resource_key().as_deref(), Some("Cluster:DefaultCluster"));
+        assert_eq!(contexts[0].actions(), &[Action::Get]);
+
+        let get_mode = command_with_fields(RequestCode::GetMessageRequestMode, &access).set_body(
+            serde_json::to_vec(&GetMessageRequestModeRequestBody {
+                topic: "TopicA".to_owned(),
+                consumer_group: "GroupA".to_owned(),
+            })
+            .unwrap(),
+        );
+        let contexts = builder.build_from_remoting(&auth_context, &get_mode).unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].actions(), &[Action::Get]);
+        assert_eq!(contexts[1].actions(), &[Action::Get]);
+
+        let set_mode = command_with_fields(RequestCode::SetMessageRequestModeCas, &access).set_body(
+            serde_json::to_vec(&SetMessageRequestModeCasRequestBody {
+                topic: "TopicA".to_owned(),
+                consumer_group: "GroupA".to_owned(),
+                expected_state: ExpectedMessageRequestMode::Absent,
+                replacement: rocketmq_protocol::protocol::body::supervised_mutation::SupervisedMessageRequestMode {
+                    mode: "POP".to_owned(),
+                    pop_share_queue_num: 4,
+                },
+            })
+            .unwrap(),
+        );
+        let contexts = builder.build_from_remoting(&auth_context, &set_mode).unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert!(contexts.iter().all(|context| context.actions() == [Action::Update]));
+    }
+
+    #[test]
+    fn supervised_mutation_codes_reject_missing_or_malformed_authorization_inputs() {
+        let builder = DefaultAuthorizationContextBuilder::new(AuthConfig {
+            cluster_name: CheetahString::from_static_str("DefaultCluster"),
+            ..AuthConfig::default()
+        });
+        let auth_context = RemotingAuthContext::embedded("test-session");
+        let invalid = [
+            command_with_fields(
+                RequestCode::UpdateTopicConfigStateCas,
+                &[("AccessKey", "operator"), ("topic", "TopicA")],
+            ),
+            command_with_fields(
+                RequestCode::UpdateSubscriptionGroupConfigStateCas,
+                &[("AccessKey", "operator"), ("group", "GroupA")],
+            )
+            .set_body(b"not-json".to_vec()),
+            command_with_fields(
+                RequestCode::UpdateConsumerOffsetConditional,
+                &[
+                    ("AccessKey", "operator"),
+                    ("consumerGroup", "GroupA"),
+                    ("topic", "TopicA"),
+                    ("queueId", "0"),
+                ],
+            ),
+            command_with_fields(RequestCode::GetMessageRequestMode, &[("AccessKey", "operator")]),
+            command_with_fields(RequestCode::SetMessageRequestModeCas, &[("AccessKey", "operator")]).set_body(
+                br#"{"topic":"TopicA","consumerGroup":"GroupA","expectedState":{"kind":"absent"},"replacement":{"mode":"INVALID","popShareQueueNum":0}}"#
+                    .to_vec(),
+            ),
+        ];
+        for command in invalid {
+            assert!(
+                builder.build_from_remoting(&auth_context, &command).is_err(),
+                "malformed {:?} must fail before dispatch",
+                RequestCode::from(command.code())
+            );
+        }
     }
 
     #[test]

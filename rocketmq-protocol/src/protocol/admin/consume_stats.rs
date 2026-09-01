@@ -16,7 +16,11 @@ use std::collections::HashMap;
 
 use rocketmq_error::SerializationError;
 use rocketmq_model::message::MessageQueue;
+use serde::de::Error as DeError;
+use serde::de::MapAccess;
+use serde::de::Visitor;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde_json_any_key::*;
 
@@ -29,6 +33,45 @@ pub struct ConsumeStats {
     #[serde(with = "any_key_map")]
     pub offset_table: HashMap<MessageQueue, OffsetWrapper>,
     pub consume_tps: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StrictConsumeStats {
+    #[serde(deserialize_with = "deserialize_strict_offset_table")]
+    offset_table: HashMap<MessageQueue, OffsetWrapper>,
+    consume_tps: f64,
+}
+
+fn deserialize_strict_offset_table<'de, D>(deserializer: D) -> Result<HashMap<MessageQueue, OffsetWrapper>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StrictOffsetTableVisitor;
+
+    impl<'de> Visitor<'de> for StrictOffsetTableVisitor {
+        type Value = HashMap<MessageQueue, OffsetWrapper>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an offset table with unique MessageQueue keys")
+        }
+
+        fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut offsets = HashMap::with_capacity(access.size_hint().unwrap_or_default());
+            while let Some((encoded_queue, offset)) = access.next_entry::<String, OffsetWrapper>()? {
+                let queue = serde_json::from_str::<MessageQueue>(&encoded_queue).map_err(A::Error::custom)?;
+                if offsets.insert(queue, offset).is_some() {
+                    return Err(A::Error::custom("duplicate MessageQueue key in offset table"));
+                }
+            }
+            Ok(offsets)
+        }
+    }
+
+    deserializer.deserialize_map(StrictOffsetTableVisitor)
 }
 
 impl ConsumeStats {
@@ -87,6 +130,18 @@ impl ConsumeStats {
                 <Self as RemotingDeserializable>::decode_str(&normalized_body)
             }
         }
+    }
+
+    /// Decodes a consume-stats body while rejecting duplicate logical queue keys.
+    pub fn decode_strict(body: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
+        let raw_body = std::str::from_utf8(body)?;
+        let normalized_body = normalize_nonstandard_offset_table_keys(raw_body);
+        let strict = serde_json::from_str::<StrictConsumeStats>(&normalized_body)
+            .map_err(|error| SerializationError::source("deserialize", "JSON", error))?;
+        Ok(Self {
+            offset_table: strict.offset_table,
+            consume_tps: strict.consume_tps,
+        })
     }
 
     pub fn encode_java_compatible(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
@@ -413,6 +468,16 @@ mod tests {
         assert_eq!(offset.get_consumer_offset(), 20);
         assert_eq!(offset.get_pull_offset(), 80);
         assert_eq!(offset.get_last_timestamp(), 1_700_000_000_000);
+    }
+
+    #[test]
+    fn strict_decode_rejects_duplicate_logical_queue_keys() {
+        let queue = serde_json::to_string(&create_mq("TopicTest", 1)).expect("queue key");
+        let encoded_key = serde_json::to_string(&queue).expect("encoded key");
+        let offset = r#"{"brokerOffset":120,"consumerOffset":20,"pullOffset":80,"lastTimestamp":0}"#;
+        let body = format!(r#"{{"offsetTable":{{{encoded_key}:{offset},{encoded_key}:{offset}}},"consumeTps":1.5}}"#);
+
+        assert!(ConsumeStats::decode_strict(body.as_bytes()).is_err());
     }
 
     #[test]
