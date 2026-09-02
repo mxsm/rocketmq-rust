@@ -2055,33 +2055,56 @@ impl MQClientInstance {
             heartbeat_data_with_sub.clone()
         };
 
-        // Send heartbeat and get result with V2 support info
-        let (result, support_v2) = self
-            .send_heartbeat_to_broker_inner(id, broker_name, addr, &heartbeat_data)
-            .await;
+        let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
+            warn!(
+                "send heart beat to broker[{} {} {}] skipped because mq_client_api_impl is None",
+                broker_name, id, addr
+            );
+            return false;
+        };
 
-        if result {
-            if let Some(support_v2) = support_v2 {
-                if support_v2 {
-                    // Update V2 support set
+        match mq_client_api_impl
+            .send_heartbeat_v2(addr, &heartbeat_data, self.client_config.mq_client_api_timeout)
+            .await
+        {
+            Ok(result) => {
+                self.broker_version_table
+                    .entry(broker_name.clone())
+                    .or_default()
+                    .insert(addr.clone(), result.version());
+                let times = self
+                    .send_heartbeat_times_total
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if times % 20 == 0 {
+                    info!("send heart beat to broker[{} {} {}] success", broker_name, id, addr);
+                }
+                if !result.is_support_v2() {
+                    self.broker_support_v2_heartbeat_set.remove(addr);
+                    self.broker_heartbeat_fingerprint_table.remove(addr);
+                    warn!("Broker {} does not support HeartbeatV2, downgrading to V1", addr);
+                } else {
                     self.broker_support_v2_heartbeat_set.insert(addr.clone(), ());
-
-                    // Update fingerprint cache only when sending full data
-                    if !should_send_minimal {
+                    if result.is_sub_change() {
+                        self.broker_heartbeat_fingerprint_table.remove(addr);
+                    } else if !should_send_minimal {
                         self.broker_heartbeat_fingerprint_table
                             .insert(addr.clone(), current_fingerprint);
                     }
-                } else {
-                    // Broker doesn't support V2, remove from set and clear fingerprint
-                    self.broker_support_v2_heartbeat_set.remove(addr);
-                    self.broker_heartbeat_fingerprint_table.remove(addr);
-
-                    warn!("Broker {} does not support HeartbeatV2, downgrading to V1", addr);
                 }
+                true
+            }
+            Err(_) => {
+                if self.is_broker_in_name_server(addr) {
+                    warn!("send heart beat to broker[{} {} {}] failed", broker_name, id, addr);
+                } else {
+                    warn!(
+                        "send heart beat to broker[{} {} {}] exception, because the broker not up, forget it",
+                        broker_name, id, addr
+                    );
+                }
+                false
             }
         }
-
-        result
     }
 
     async fn send_heartbeat_to_broker_inner(
