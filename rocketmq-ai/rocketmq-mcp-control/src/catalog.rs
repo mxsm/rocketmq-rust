@@ -20,10 +20,19 @@ use rmcp::model::ToolAnnotations;
 
 use crate::config::MutationPolicyConfig;
 use crate::model::ControlOperation;
+use crate::tools::BrokerConfigMutationToolResponse;
 use crate::tools::ConsumerGroupMutationToolResponse;
+use crate::tools::OffsetMutationToolResponse;
+use crate::tools::PatchBrokerConfigArgs;
+use crate::tools::RequestModeMutationToolResponse;
+use crate::tools::ResetConsumerOffsetArgs;
+use crate::tools::SetConsumerRequestModeArgs;
 use crate::tools::TopicMutationToolResponse;
 use crate::tools::UpsertConsumerGroupArgs;
 use crate::tools::UpsertTopicArgs;
+use crate::tools::PATCH_BROKER_CONFIG_TOOL;
+use crate::tools::RESET_CONSUMER_OFFSET_TOOL;
+use crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL;
 use crate::tools::UPSERT_CONSUMER_GROUP_TOOL;
 use crate::tools::UPSERT_TOPIC_TOOL;
 
@@ -41,12 +50,7 @@ impl OperationCatalog {
         #[cfg(feature = "write-tools")]
         if policy.mutations_enabled {
             for operation in &policy.allowed_operations {
-                if matches!(
-                    operation,
-                    ControlOperation::TopicUpsert | ControlOperation::ConsumerGroupUpsert
-                ) {
-                    operations.insert(*operation);
-                }
+                operations.insert(*operation);
             }
         }
         #[cfg(not(feature = "write-tools"))]
@@ -82,7 +86,9 @@ fn tool_definition(operation: ControlOperation) -> Option<Tool> {
     let annotations = ToolAnnotations::with_title(match operation {
         ControlOperation::TopicUpsert => "Upsert RocketMQ topic",
         ControlOperation::ConsumerGroupUpsert => "Upsert RocketMQ consumer group",
-        _ => "Unavailable RocketMQ mutation",
+        ControlOperation::ConsumerOffsetReset => "Reset RocketMQ consumer offset",
+        ControlOperation::BrokerConfigPatch => "Patch RocketMQ Broker configuration",
+        ControlOperation::ConsumerRequestMode => "Set RocketMQ consumer request mode",
     })
     .read_only(false)
     .destructive(true)
@@ -111,7 +117,39 @@ fn tool_definition(operation: ControlOperation) -> Option<Tool> {
             .with_output_schema::<ConsumerGroupMutationToolResponse>()
             .with_annotations(annotations),
         ),
-        _ => None,
+        ControlOperation::ConsumerOffsetReset => Some(
+            Tool::new(
+                RESET_CONSUMER_OFFSET_TOOL,
+                "Dry-run or conditionally reset exact consumer queue offsets from a sealed RFC3339 preview.",
+                std::sync::Arc::new(Default::default()),
+            )
+            .with_title("Reset RocketMQ consumer offset")
+            .with_input_schema::<ResetConsumerOffsetArgs>()
+            .with_output_schema::<OffsetMutationToolResponse>()
+            .with_annotations(annotations),
+        ),
+        ControlOperation::BrokerConfigPatch => Some(
+            Tool::new(
+                PATCH_BROKER_CONFIG_TOOL,
+                "Dry-run or generation-conditionally patch six allowlisted settings on one logical Broker.",
+                std::sync::Arc::new(Default::default()),
+            )
+            .with_title("Patch RocketMQ Broker configuration")
+            .with_input_schema::<PatchBrokerConfigArgs>()
+            .with_output_schema::<BrokerConfigMutationToolResponse>()
+            .with_annotations(annotations),
+        ),
+        ControlOperation::ConsumerRequestMode => Some(
+            Tool::new(
+                SET_CONSUMER_REQUEST_MODE_TOOL,
+                "Dry-run or conditionally set pull/pop request mode on validated cluster masters.",
+                std::sync::Arc::new(Default::default()),
+            )
+            .with_title("Set RocketMQ consumer request mode")
+            .with_input_schema::<SetConsumerRequestModeArgs>()
+            .with_output_schema::<RequestModeMutationToolResponse>()
+            .with_annotations(annotations),
+        ),
     }
 }
 
@@ -130,12 +168,12 @@ mod tests {
     }
 
     #[test]
-    fn catalog_is_policy_derived_and_registers_only_stage_b_operations() {
+    fn catalog_is_policy_derived_and_registers_all_reviewed_operations() {
         assert_eq!(
             OperationCatalog::from_policy(&policy(false, vec![ControlOperation::TopicUpsert])).registered_operations(),
             0
         );
-        let future_only = OperationCatalog::from_policy(&policy(
+        let stage_c = OperationCatalog::from_policy(&policy(
             true,
             vec![
                 ControlOperation::ConsumerOffsetReset,
@@ -143,7 +181,10 @@ mod tests {
                 ControlOperation::ConsumerRequestMode,
             ],
         ));
-        assert_eq!(future_only.registered_operations(), 0);
+        #[cfg(feature = "write-tools")]
+        assert_eq!(stage_c.registered_operations(), 3);
+        #[cfg(not(feature = "write-tools"))]
+        assert_eq!(stage_c.registered_operations(), 0);
 
         #[cfg(feature = "write-tools")]
         {
@@ -165,6 +206,17 @@ mod tests {
                 assert_eq!(annotations.idempotent_hint, Some(true));
                 assert_eq!(annotations.open_world_hint, Some(true));
             }
+            let all = OperationCatalog::from_policy(&policy(
+                true,
+                vec![
+                    ControlOperation::TopicUpsert,
+                    ControlOperation::ConsumerGroupUpsert,
+                    ControlOperation::ConsumerOffsetReset,
+                    ControlOperation::BrokerConfigPatch,
+                    ControlOperation::ConsumerRequestMode,
+                ],
+            ));
+            assert_eq!(all.registered_operations(), 5);
         }
     }
 
@@ -173,7 +225,13 @@ mod tests {
     fn reviewed_tool_schema_snapshot() {
         let catalog = OperationCatalog::from_policy(&policy(
             true,
-            vec![ControlOperation::TopicUpsert, ControlOperation::ConsumerGroupUpsert],
+            vec![
+                ControlOperation::TopicUpsert,
+                ControlOperation::ConsumerGroupUpsert,
+                ControlOperation::ConsumerOffsetReset,
+                ControlOperation::BrokerConfigPatch,
+                ControlOperation::ConsumerRequestMode,
+            ],
         ));
         insta::assert_json_snapshot!("control_reviewed_tool_schemas", catalog.list_tools().tools);
     }

@@ -2,8 +2,8 @@
 
 `rocketmq-mcp-control` is an isolated, deny-by-default server for supervised RocketMQ mutations. It is a
 standalone Cargo project and is not part of the root workspace. The reviewed `write-tools` surface contains
-exactly `rocketmq_upsert_topic` and `rocketmq_upsert_consumer_group`; the default build contains neither Admin
-Core nor production mutation tools.
+exactly five typed tools: Topic and Consumer Group upsert, consumer offset reset, Broker configuration patch,
+and consumer request mode. The default build contains neither Admin Core nor production mutation tools.
 
 ## Security boundary
 
@@ -30,13 +30,13 @@ operation is registered. Resource templates and prompts remain empty.
 |---|---|---:|---:|---:|
 | default | none | off or on | 0 | false |
 | `write-tools` | mutation-only adapter | off | 0 | false |
-| `write-tools` | mutation-only adapter | on, future-only allowlist | 0 | false |
+| `write-tools` | mutation-only adapter | on, empty allowlist | 0 | false |
 | `write-tools` | mutation-only adapter | on, one reviewed operation | 1 | true |
-| `write-tools` | mutation-only adapter | on, both reviewed operations | 2 | true |
+| `write-tools` | mutation-only adapter | on, all reviewed operations | 5 | true |
 
 The optional feature enables only `rocketmq-admin-core/mutation-client-adapter`, whose client dependency enables
-only `admin-mutation`. It does not enable read or full Admin adapters. Offset reset, broker configuration,
-consumer request mode, delete, skip, resend, CLI, shell, and free-form RPC remain outside this delivery.
+only `admin-mutation`. It does not enable read or full Admin adapters. Delete, skip, resend, CLI, shell, and
+free-form RPC remain outside this delivery.
 
 ## Configuration
 
@@ -49,8 +49,8 @@ restart.
 
 The private cluster registry maps a logical alias to a NameServer endpoint, TLS policy, and optional environment
 variable names for credentials. Inline credentials are rejected. Registry values and resolved credentials have
-redacted debug behavior and never enter MCP responses or audit records. Every server-allowed cluster for one of
-the two registered operations must have a registry entry.
+redacted debug behavior and never enter MCP responses or audit records. Every server-allowed cluster for a
+registered operation must have a registry entry.
 
 [`conf/permissions.example.toml`](conf/permissions.example.toml) documents the closed operation and cluster
 claim vocabulary for an authorization server. It is an identity-provider example, not a local authorization
@@ -62,17 +62,17 @@ unknown fields. Omitted `dry_run` uses the configured default and omitted `confi
 omit `reason` and `request_key`; execution requires `confirm = true` and a 5–256 byte safe reason. A request key is
 optional and, when present, is a bounded safe identifier.
 
-Both registered tools accept 1–64 unique logical broker names. Admin Core validates the complete selected
-cluster membership, embedded broker identity, master presence, and endpoint uniqueness before reading any
-target state. Only selected masters are processed, in broker-name order. Requests use complete Topic or Consumer
-Group replacements and closed message-type/numeric bounds. The Consumer Group validator reuses Admin Core's
+The upsert tools accept 1–64 unique logical broker names. All five tools validate the complete selected cluster
+membership, embedded broker identity, master presence, and endpoint uniqueness before reading target state.
+Offset and request-mode operations use every validated master; Broker patch uses exactly one named master.
+Requests use closed typed fields and bounds. The Consumer Group validator reuses Admin Core's
 single canonical protected-group classifier, including RocketMQ defaults, tools/scheduler/filter/monitor groups,
 ONS groups, transaction/system prefixes, and the heartbeat syncer group. System names, addresses, inline
 secrets, and unknown fields are rejected before audit or session creation; Admin constructors repeat the same
 check as defense in depth.
 
-Each result uses `rocketmq-mcp-mutation.v1`, returns the closed `topic_upsert` or `consumer_group_upsert`
-operation, and has an operation-specific top-level `target`: `topic` or `consumer_group` plus sorted `brokers`.
+Each result uses `rocketmq-mcp-mutation.v1`, returns one of the five closed operations, and has an
+operation-specific logical top-level `target`.
 Top-level `before`, `requested`, and post-read `after` preserve the complete aggregate state; broker-sorted
 `targets` retain per-target persistence, verification, and failure evidence rather than replacing that aggregate
 contract. Schema version and operation are single-value enums in each tool output schema. Conflict, partial, and

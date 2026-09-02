@@ -18,21 +18,21 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use tokio_util::sync::CancellationToken;
 
-use super::UpsertRequest;
-use super::UpsertResponse;
-use super::UpsertSessionFactory;
+use super::MutationToolRequest;
+use super::MutationToolResponse;
+use super::MutationToolSessionFactory;
 use super::SESSION_SHUTDOWN_TIMEOUT;
 use crate::error::ControlError;
 use crate::model::ClusterName;
 
 pub(super) async fn supervise_session(
-    factory: Arc<dyn UpsertSessionFactory>,
+    factory: Arc<dyn MutationToolSessionFactory>,
     cluster: ClusterName,
-    request: UpsertRequest,
+    request: MutationToolRequest,
     timeout: Duration,
     request_cancellation: CancellationToken,
     owner_cancellation: CancellationToken,
-) -> Result<UpsertResponse, ControlError> {
+) -> Result<MutationToolResponse, ControlError> {
     let deadline = tokio::time::Instant::now() + timeout;
     let opened = tokio::time::timeout_at(deadline, AssertUnwindSafe(factory.open(&cluster)).catch_unwind());
     tokio::pin!(opened);

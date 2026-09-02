@@ -125,17 +125,20 @@ for forbidden in (
 ):
     if forbidden in production_source:
         fail(f"production source contains unmanaged lifecycle surface {forbidden}")
-if "spawn_service(\"mcp-control-upsert-supervisor\"" not in production_source:
+if "spawn_service(\"mcp-control-mutation-supervisor\"" not in production_source:
     fail("reviewed tool execution is not visibly owned by the injected task group")
 
-for required in ("rocketmq_upsert_topic", "rocketmq_upsert_consumer_group"):
+for required in (
+    "rocketmq_upsert_topic",
+    "rocketmq_upsert_consumer_group",
+    "rocketmq_reset_consumer_offset",
+    "rocketmq_patch_broker_config",
+    "rocketmq_set_consumer_request_mode",
+):
     if required not in source:
         fail(f"reviewed write catalog is missing {required}")
 
 for forbidden in (
-    "rocketmq_reset_consumer_offset",
-    "rocketmq_patch_broker_config",
-    "rocketmq_set_consumer_request_mode",
     "rocketmq_delete_",
     "rocketmq_skip_",
     "rocketmq_resend_",

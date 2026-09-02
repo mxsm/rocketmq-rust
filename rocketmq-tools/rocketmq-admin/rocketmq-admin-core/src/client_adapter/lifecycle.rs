@@ -121,7 +121,7 @@ pub struct AdminSession {
 }
 
 impl AdminSession {
-    #[cfg(feature = "client-adapter")]
+    #[cfg(any(feature = "client-adapter", test))]
     pub(crate) fn from_started(inner: DefaultMQAdminExt, clock: Arc<dyn Clock>) -> Self {
         let client_runtime = inner.client_runtime();
         Self {

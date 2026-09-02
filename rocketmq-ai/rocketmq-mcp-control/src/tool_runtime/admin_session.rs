@@ -30,19 +30,22 @@ use super::map_topic_to_admin;
 use super::topic_before;
 use super::topic_dry_run;
 use super::topic_executed;
+use super::MutationToolRequest;
+use super::MutationToolResponse;
+use super::MutationToolSession;
+use super::MutationToolSessionFactory;
 use super::RuntimeFuture;
-use super::UpsertRequest;
-use super::UpsertResponse;
-use super::UpsertSession;
-use super::UpsertSessionFactory;
 use crate::config::MutationClusterConfig;
 use crate::error::ControlError;
 use crate::model::ClusterName;
 use crate::tools;
 
-pub(crate) trait SupervisedUpsertBackend: Send {
+pub(crate) trait SupervisedMutationBackend: Send {
     type TopicPlan: Send;
     type GroupPlan: Send;
+    type OffsetPlan: Send;
+    type BrokerPlan: Send;
+    type RequestModePlan: Send;
 
     fn preflight_topic<'a>(
         &'a mut self,
@@ -76,12 +79,60 @@ pub(crate) trait SupervisedUpsertBackend: Send {
         plan: &'a Self::GroupPlan,
     ) -> RuntimeFuture<'a, Result<admin::MetadataMutationOutcome, ControlError>>;
 
+    fn preview_offset<'a>(
+        &'a mut self,
+        request: &'a admin::OffsetResetPreviewRequest,
+    ) -> RuntimeFuture<'a, Result<Self::OffsetPlan, ControlError>>;
+
+    fn offset_rows(plan: &Self::OffsetPlan) -> Vec<admin::OffsetResetPreviewRow>;
+
+    fn offset_failures(plan: &Self::OffsetPlan) -> &[admin::MutationTargetFailure];
+
+    fn execute_offset<'a>(
+        &'a mut self,
+        plan: &'a Self::OffsetPlan,
+    ) -> RuntimeFuture<'a, Result<admin::OffsetResetOutcome, ControlError>>;
+
+    fn preflight_broker<'a>(
+        &'a mut self,
+        cluster: &'a str,
+        broker_name: &'a str,
+    ) -> RuntimeFuture<'a, Result<Self::BrokerPlan, ControlError>>;
+
+    fn broker_targets(plan: &Self::BrokerPlan) -> Vec<admin::BrokerMutationConfigTarget>;
+
+    fn broker_failures(plan: &Self::BrokerPlan) -> &[admin::MutationTargetFailure];
+
+    fn execute_broker<'a>(
+        &'a mut self,
+        plan: &'a Self::BrokerPlan,
+        patch: admin::BrokerMutationConfigPatch,
+    ) -> RuntimeFuture<'a, Result<admin::BrokerMutationConfigOutcome, ControlError>>;
+
+    fn preflight_request_mode<'a>(
+        &'a mut self,
+        request: &'a admin::RequestModePreflightRequest,
+    ) -> RuntimeFuture<'a, Result<Self::RequestModePlan, ControlError>>;
+
+    fn request_mode_targets(plan: &Self::RequestModePlan) -> Vec<(String, Option<admin::RequestModeValue>)>;
+
+    fn request_mode_failures(plan: &Self::RequestModePlan) -> &[admin::MutationTargetFailure];
+
+    fn execute_request_mode<'a>(
+        &'a mut self,
+        plan: &'a Self::RequestModePlan,
+        timeout_millis: u64,
+    ) -> RuntimeFuture<'a, Result<admin::RequestModeMutationOutcome, ControlError>>;
+
     fn shutdown(&mut self) -> RuntimeFuture<'_, Result<(), ControlError>>;
 }
 
-impl SupervisedUpsertBackend for MutationAdminSession {
+impl SupervisedMutationBackend for MutationAdminSession {
     type TopicPlan = admin::TopicMutationPlan;
     type GroupPlan = admin::SubscriptionGroupMutationPlan;
+    type OffsetPlan = admin::OffsetResetPlan;
+    type BrokerPlan = admin::BrokerMutationConfigPlan;
+    type RequestModePlan = admin::RequestModeMutationPlan;
 
     fn preflight_topic<'a>(
         &'a mut self,
@@ -147,6 +198,99 @@ impl SupervisedUpsertBackend for MutationAdminSession {
         })
     }
 
+    fn preview_offset<'a>(
+        &'a mut self,
+        request: &'a admin::OffsetResetPreviewRequest,
+    ) -> RuntimeFuture<'a, Result<Self::OffsetPlan, ControlError>> {
+        Box::pin(async move {
+            self.preview_offset_reset(request)
+                .await
+                .map_err(|_| ControlError::execution_failed())
+        })
+    }
+
+    fn offset_rows(plan: &Self::OffsetPlan) -> Vec<admin::OffsetResetPreviewRow> {
+        plan.rows()
+    }
+
+    fn offset_failures(plan: &Self::OffsetPlan) -> &[admin::MutationTargetFailure] {
+        plan.failures()
+    }
+
+    fn execute_offset<'a>(
+        &'a mut self,
+        plan: &'a Self::OffsetPlan,
+    ) -> RuntimeFuture<'a, Result<admin::OffsetResetOutcome, ControlError>> {
+        Box::pin(async move {
+            self.execute_offset_reset(plan)
+                .await
+                .map_err(|_| ControlError::execution_failed())
+        })
+    }
+
+    fn preflight_broker<'a>(
+        &'a mut self,
+        cluster: &'a str,
+        broker_name: &'a str,
+    ) -> RuntimeFuture<'a, Result<Self::BrokerPlan, ControlError>> {
+        Box::pin(async move {
+            self.preflight_broker_config_target(cluster, broker_name)
+                .await
+                .map_err(|_| ControlError::execution_failed())
+        })
+    }
+
+    fn broker_targets(plan: &Self::BrokerPlan) -> Vec<admin::BrokerMutationConfigTarget> {
+        plan.targets()
+    }
+
+    fn broker_failures(plan: &Self::BrokerPlan) -> &[admin::MutationTargetFailure] {
+        plan.failures()
+    }
+
+    fn execute_broker<'a>(
+        &'a mut self,
+        plan: &'a Self::BrokerPlan,
+        patch: admin::BrokerMutationConfigPatch,
+    ) -> RuntimeFuture<'a, Result<admin::BrokerMutationConfigOutcome, ControlError>> {
+        Box::pin(async move {
+            self.execute_broker_config_patch_verified(plan, patch)
+                .await
+                .map_err(|_| ControlError::execution_failed())
+        })
+    }
+
+    fn preflight_request_mode<'a>(
+        &'a mut self,
+        request: &'a admin::RequestModePreflightRequest,
+    ) -> RuntimeFuture<'a, Result<Self::RequestModePlan, ControlError>> {
+        Box::pin(async move {
+            SupervisedMutationAdmin::preflight_request_mode(self, request)
+                .await
+                .map_err(|_| ControlError::execution_failed())
+        })
+    }
+
+    fn request_mode_targets(plan: &Self::RequestModePlan) -> Vec<(String, Option<admin::RequestModeValue>)> {
+        plan.targets()
+    }
+
+    fn request_mode_failures(plan: &Self::RequestModePlan) -> &[admin::MutationTargetFailure] {
+        plan.failures()
+    }
+
+    fn execute_request_mode<'a>(
+        &'a mut self,
+        plan: &'a Self::RequestModePlan,
+        timeout_millis: u64,
+    ) -> RuntimeFuture<'a, Result<admin::RequestModeMutationOutcome, ControlError>> {
+        Box::pin(async move {
+            SupervisedMutationAdmin::execute_request_mode_with_timeout(self, plan, timeout_millis)
+                .await
+                .map_err(|_| ControlError::execution_failed())
+        })
+    }
+
     fn shutdown(&mut self) -> RuntimeFuture<'_, Result<(), ControlError>> {
         Box::pin(async move {
             MutationAdminSession::shutdown(self).await;
@@ -155,27 +299,43 @@ impl SupervisedUpsertBackend for MutationAdminSession {
     }
 }
 
-pub(crate) struct AdminUpsertSession<B> {
+pub(crate) struct AdminMutationToolSession<B> {
     backend: B,
 }
 
-impl<B> AdminUpsertSession<B> {
+impl<B> AdminMutationToolSession<B> {
     pub(crate) const fn new(backend: B) -> Self {
         Self { backend }
     }
 }
 
-impl<B> UpsertSession for AdminUpsertSession<B>
+impl<B> MutationToolSession for AdminMutationToolSession<B>
 where
-    B: SupervisedUpsertBackend,
+    B: SupervisedMutationBackend,
 {
-    fn run<'a>(&'a mut self, request: UpsertRequest) -> RuntimeFuture<'a, Result<UpsertResponse, ControlError>> {
+    fn run<'a>(
+        &'a mut self,
+        request: MutationToolRequest,
+    ) -> RuntimeFuture<'a, Result<MutationToolResponse, ControlError>> {
         Box::pin(async move {
             match request {
-                UpsertRequest::Topic(args) => run_topic(&mut self.backend, args).await.map(UpsertResponse::Topic),
-                UpsertRequest::ConsumerGroup(args) => run_group(&mut self.backend, args)
+                MutationToolRequest::Topic(args) => run_topic(&mut self.backend, args)
                     .await
-                    .map(UpsertResponse::ConsumerGroup),
+                    .map(MutationToolResponse::Topic),
+                MutationToolRequest::ConsumerGroup(args) => run_group(&mut self.backend, args)
+                    .await
+                    .map(MutationToolResponse::ConsumerGroup),
+                MutationToolRequest::ConsumerOffset(args) => super::remaining::run_offset(&mut self.backend, args)
+                    .await
+                    .map(MutationToolResponse::ConsumerOffset),
+                MutationToolRequest::BrokerConfig(args) => super::remaining::run_broker(&mut self.backend, args)
+                    .await
+                    .map(MutationToolResponse::BrokerConfig),
+                MutationToolRequest::ConsumerRequestMode(args) => {
+                    super::remaining::run_request_mode(&mut self.backend, args)
+                        .await
+                        .map(MutationToolResponse::ConsumerRequestMode)
+                }
             }
         })
     }
@@ -185,7 +345,7 @@ where
     }
 }
 
-async fn run_topic<B: SupervisedUpsertBackend>(
+async fn run_topic<B: SupervisedMutationBackend>(
     backend: &mut B,
     args: tools::UpsertTopicArgs,
 ) -> Result<tools::TopicMutationToolResponse, ControlError> {
@@ -208,7 +368,7 @@ async fn run_topic<B: SupervisedUpsertBackend>(
     Ok(topic_executed(&args, before, outcome, observed))
 }
 
-async fn run_group<B: SupervisedUpsertBackend>(
+async fn run_group<B: SupervisedMutationBackend>(
     backend: &mut B,
     args: tools::UpsertConsumerGroupArgs,
 ) -> Result<tools::ConsumerGroupMutationToolResponse, ControlError> {
@@ -231,13 +391,13 @@ async fn run_group<B: SupervisedUpsertBackend>(
     Ok(group_executed(&args, before, outcome, observed))
 }
 
-pub(crate) struct AdminUpsertFactory {
+pub(crate) struct AdminMutationToolFactory {
     runtime: Arc<rocketmq_admin_core::mutation_client_adapter::ClientRuntime>,
     clusters: BTreeMap<ClusterName, MutationClusterConfig>,
     sequence: AtomicU64,
 }
 
-impl AdminUpsertFactory {
+impl AdminMutationToolFactory {
     pub(crate) fn new(
         service_context: rocketmq_runtime::ChildServiceContext,
         clusters: &[MutationClusterConfig],
@@ -258,8 +418,11 @@ impl AdminUpsertFactory {
     }
 }
 
-impl UpsertSessionFactory for AdminUpsertFactory {
-    fn open<'a>(&'a self, cluster: &'a ClusterName) -> RuntimeFuture<'a, Result<Box<dyn UpsertSession>, ControlError>> {
+impl MutationToolSessionFactory for AdminMutationToolFactory {
+    fn open<'a>(
+        &'a self,
+        cluster: &'a ClusterName,
+    ) -> RuntimeFuture<'a, Result<Box<dyn MutationToolSession>, ControlError>> {
         Box::pin(async move {
             let config = self
                 .clusters
@@ -288,7 +451,11 @@ impl UpsertSessionFactory for AdminUpsertFactory {
                 .build_and_start()
                 .await
                 .map_err(|_| ControlError::execution_failed())?;
-            Ok(Box::new(AdminUpsertSession::new(admin)) as Box<dyn UpsertSession>)
+            Ok(Box::new(AdminMutationToolSession::new(admin)) as Box<dyn MutationToolSession>)
         })
     }
 }
+
+#[cfg(test)]
+#[path = "admin_session/tests.rs"]
+mod tests;

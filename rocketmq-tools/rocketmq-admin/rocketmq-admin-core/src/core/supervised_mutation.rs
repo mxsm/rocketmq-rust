@@ -456,6 +456,25 @@ pub struct BrokerMutationConfigPlan {
     pub(crate) failures: Vec<MutationTargetFailure>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BrokerMutationConfigTargetOutcome {
+    pub broker_name: String,
+    pub before: BrokerMutationConfigState,
+    pub after: Option<BrokerMutationConfigState>,
+    pub applied: bool,
+    pub changed: bool,
+    pub persistence: MutationPersistenceState,
+    pub verification: MutationVerificationState,
+    pub failure: Option<MutationFailureCode>,
+    pub retryable: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BrokerMutationConfigOutcome {
+    pub targets: Vec<BrokerMutationConfigTargetOutcome>,
+    pub failures: Vec<MutationTargetFailure>,
+}
+
 impl BrokerMutationConfigPlan {
     pub fn targets(&self) -> Vec<BrokerMutationConfigTarget> {
         self.targets
@@ -650,11 +669,43 @@ pub trait SupervisedMutationAdmin: Send {
 
     fn preflight_broker_config<'a>(&'a mut self, cluster: &'a str) -> AdminFuture<'a, BrokerMutationConfigPlan>;
 
+    /// Preflights one logical Broker after validating the complete selected
+    /// cluster topology. The default fails closed for source compatibility.
+    fn preflight_broker_config_target<'a>(
+        &'a mut self,
+        cluster: &'a str,
+        broker_name: &'a str,
+    ) -> AdminFuture<'a, BrokerMutationConfigPlan> {
+        let _ = (cluster, broker_name);
+        Box::pin(async move {
+            Err(AdminError::backend(
+                "preflight_broker_config_target",
+                "targeted supervised Broker preflight is unavailable",
+            ))
+        })
+    }
+
     fn execute_broker_config_patch<'a>(
         &'a mut self,
         plan: &'a BrokerMutationConfigPlan,
         patch: BrokerMutationConfigPatch,
     ) -> AdminFuture<'a, MetadataMutationOutcome>;
+
+    /// Executes and verifies one sealed Broker patch without re-resolving or
+    /// expanding the target. The default fails closed for source compatibility.
+    fn execute_broker_config_patch_verified<'a>(
+        &'a mut self,
+        plan: &'a BrokerMutationConfigPlan,
+        patch: BrokerMutationConfigPatch,
+    ) -> AdminFuture<'a, BrokerMutationConfigOutcome> {
+        let _ = (plan, patch);
+        Box::pin(async move {
+            Err(AdminError::backend(
+                "execute_broker_config_patch_verified",
+                "verified supervised Broker patch is unavailable",
+            ))
+        })
+    }
 
     fn preflight_request_mode<'a>(
         &'a mut self,
@@ -665,6 +716,22 @@ pub trait SupervisedMutationAdmin: Send {
         &'a mut self,
         plan: &'a RequestModeMutationPlan,
     ) -> AdminFuture<'a, RequestModeMutationOutcome>;
+
+    /// Executes the sealed request-mode plan with the caller's bounded wire
+    /// timeout. The default fails closed rather than ignoring the value.
+    fn execute_request_mode_with_timeout<'a>(
+        &'a mut self,
+        plan: &'a RequestModeMutationPlan,
+        timeout_millis: u64,
+    ) -> AdminFuture<'a, RequestModeMutationOutcome> {
+        let _ = (plan, timeout_millis);
+        Box::pin(async move {
+            Err(AdminError::backend(
+                "execute_request_mode_with_timeout",
+                "timeout-aware supervised request-mode execution is unavailable",
+            ))
+        })
+    }
 }
 
 #[cfg(test)]

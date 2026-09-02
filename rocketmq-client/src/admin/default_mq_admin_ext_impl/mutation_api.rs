@@ -870,6 +870,32 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
             .await
     }
 
+    async fn replace_message_request_mode_if_current_with_timeout(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        expected: MutationExpectedMessageRequestMode,
+        replacement: MutationMessageRequestMode,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<MutationMessageRequestModeOutcome> {
+        if timeout_millis == 0 || timeout_millis > 24_000 {
+            return Err(RocketMQError::illegal_argument(
+                "request-mode timeoutMillis must be between 1 and 24000",
+            ));
+        }
+        self.mq_client_api()?
+            .replace_message_request_mode_if_current(
+                &broker_addr,
+                topic,
+                consumer_group,
+                expected,
+                replacement,
+                timeout_millis,
+            )
+            .await
+    }
+
     async fn set_broker_log_filter_ttl(
         &self,
         broker_addr: CheetahString,
@@ -1459,11 +1485,15 @@ mod detailed_offset_tests {
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
     use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
+    use rocketmq_protocol::protocol::body::supervised_mutation::MessageRequestModeMutationResultBody;
+    use rocketmq_protocol::protocol::body::supervised_mutation::MutationPersistenceState;
+    use rocketmq_protocol::protocol::body::supervised_mutation::SupervisedMessageRequestMode;
     use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
     use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
     use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
     use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
     use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
+    use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_protocol::RemotingCommand;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ShutdownDeadline;
@@ -1473,6 +1503,7 @@ mod detailed_offset_tests {
     use rocketmq_transport::test_support::SessionTransportServer;
     use rocketmq_transport::test_support::SessionTransportServerConfig;
 
+    use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
     use crate::base::client_config::ClientConfig;
     use crate::factory::mq_client_instance::MQClientInstance;
     use crate::runtime::test_client_runtime;
@@ -1482,6 +1513,7 @@ mod detailed_offset_tests {
     #[derive(Default)]
     struct ScriptedRequestLedger {
         responses: Mutex<HashMap<i32, VecDeque<RemotingCommand>>>,
+        delays: Mutex<HashMap<i32, VecDeque<Duration>>>,
         counts: Mutex<HashMap<i32, usize>>,
         kv_reads: Mutex<Vec<(String, String)>>,
     }
@@ -1494,6 +1526,16 @@ mod detailed_offset_tests {
                 .entry(code.to_i32())
                 .or_default()
                 .push_back(response);
+        }
+
+        fn push_delayed(&self, code: RequestCode, delay: Duration, response: RemotingCommand) {
+            self.push(code, response);
+            self.delays
+                .lock()
+                .expect("scripted delays")
+                .entry(code.to_i32())
+                .or_default()
+                .push_back(delay);
         }
 
         fn snapshot(&self) -> HashMap<i32, usize> {
@@ -1524,6 +1566,15 @@ mod detailed_offset_tests {
                     .expect("request counts")
                     .entry(request.code())
                     .or_default() += 1;
+                let delay = self
+                    .delays
+                    .lock()
+                    .expect("scripted delays")
+                    .get_mut(&request.code())
+                    .and_then(VecDeque::pop_front);
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
                 let response = self
                     .responses
                     .lock()
@@ -1540,6 +1591,7 @@ mod detailed_offset_tests {
 
     struct ProductionAdminHarness {
         admin: DefaultMQAdminExtImpl,
+        facade: DefaultMQAdminExt,
         broker_addr: CheetahString,
         client_instance: Arc<MQClientInstance>,
         client_runtime: Arc<crate::runtime::ClientRuntime>,
@@ -1591,9 +1643,17 @@ mod detailed_offset_tests {
                 CheetahString::from_string(format!("{scope}-admin")),
             );
             admin.client_instance = Some(Arc::clone(&client_instance));
+            let mut facade = DefaultMQAdminExt::with_admin_ext_group_and_timeout(
+                Arc::clone(&client_runtime),
+                format!("{scope}-facade"),
+                Duration::from_secs(5),
+            );
+            facade.client_config_mut().set_vip_channel_enabled(false);
+            facade.inner_mut().client_instance = Some(Arc::clone(&client_instance));
 
             Self {
                 admin,
+                facade,
                 broker_addr,
                 client_instance,
                 client_runtime,
@@ -1606,13 +1666,14 @@ mod detailed_offset_tests {
         async fn shutdown(self) {
             let Self {
                 admin,
+                facade,
                 client_instance,
                 client_runtime,
                 server,
                 server_runtime,
                 ..
             } = self;
-            drop(admin);
+            drop((admin, facade));
             client_instance.shutdown().await;
             client_runtime
                 .shutdown()
@@ -1683,6 +1744,112 @@ mod detailed_offset_tests {
         );
         response.make_custom_header_to_net();
         response
+    }
+
+    fn request_mode_success_response() -> RemotingCommand {
+        RemotingCommand::create_success_response_command().set_body(
+            MessageRequestModeMutationResultBody {
+                applied: true,
+                changed: true,
+                current: Some(SupervisedMessageRequestMode {
+                    mode: "POP".to_owned(),
+                    pop_share_queue_num: 4,
+                }),
+                persistence: MutationPersistenceState::Persisted,
+            }
+            .encode()
+            .expect("request-mode response body"),
+        )
+    }
+
+    #[tokio::test]
+    async fn production_request_mode_uses_the_exact_caller_timeout_on_loopback() {
+        let harness = ProductionAdminHarness::new("request-mode-exact-timeout-test").await;
+        harness.ledger.push_delayed(
+            RequestCode::SetMessageRequestModeCas,
+            Duration::from_millis(50),
+            request_mode_success_response(),
+        );
+        let replacement = MutationMessageRequestMode {
+            mode: MessageRequestMode::Pop,
+            pop_share_queue_num: 4,
+        };
+        MQAdminMutationExt::replace_message_request_mode_if_current_with_timeout(
+            &harness.admin,
+            harness.broker_addr.clone(),
+            CheetahString::from_static_str("orders"),
+            CheetahString::from_static_str("orders-consumer"),
+            MutationExpectedMessageRequestMode::Absent,
+            replacement,
+            1,
+        )
+        .await
+        .expect_err("one millisecond caller timeout must reach remoting");
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        harness
+            .ledger
+            .push(RequestCode::SetMessageRequestModeCas, request_mode_success_response());
+        let outcome = MQAdminMutationExt::replace_message_request_mode_if_current_with_timeout(
+            &harness.admin,
+            harness.broker_addr.clone(),
+            CheetahString::from_static_str("orders"),
+            CheetahString::from_static_str("orders-consumer"),
+            MutationExpectedMessageRequestMode::Absent,
+            replacement,
+            24_000,
+        )
+        .await
+        .expect("bounded caller timeout should permit immediate response");
+        assert!(outcome.applied);
+        assert!(outcome.changed);
+        assert_eq!(outcome.current, Some(replacement));
+        harness.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn public_admin_facade_delegates_the_exact_request_mode_timeout_on_loopback() {
+        let harness = ProductionAdminHarness::new("request-mode-facade-timeout-test").await;
+        harness.ledger.push_delayed(
+            RequestCode::SetMessageRequestModeCas,
+            Duration::from_millis(50),
+            request_mode_success_response(),
+        );
+        let replacement = MutationMessageRequestMode {
+            mode: MessageRequestMode::Pop,
+            pop_share_queue_num: 4,
+        };
+        MQAdminMutationExt::replace_message_request_mode_if_current_with_timeout(
+            &harness.facade,
+            harness.broker_addr.clone(),
+            CheetahString::from_static_str("orders"),
+            CheetahString::from_static_str("orders-consumer"),
+            MutationExpectedMessageRequestMode::Absent,
+            replacement,
+            1,
+        )
+        .await
+        .expect_err("the public facade must forward the one millisecond timeout");
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        harness
+            .ledger
+            .push(RequestCode::SetMessageRequestModeCas, request_mode_success_response());
+        let outcome = MQAdminMutationExt::replace_message_request_mode_if_current_with_timeout(
+            &harness.facade,
+            harness.broker_addr.clone(),
+            CheetahString::from_static_str("orders"),
+            CheetahString::from_static_str("orders-consumer"),
+            MutationExpectedMessageRequestMode::Absent,
+            replacement,
+            24_000,
+        )
+        .await
+        .expect("the public facade must forward the bounded caller timeout");
+        assert!(outcome.applied);
+        assert!(outcome.changed);
+        assert_eq!(outcome.current, Some(replacement));
+        harness.shutdown().await;
     }
 
     #[tokio::test]

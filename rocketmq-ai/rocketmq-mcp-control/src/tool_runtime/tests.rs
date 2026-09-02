@@ -15,6 +15,7 @@
 use super::idempotency::admit_cache;
 use super::idempotency::complete_cache;
 use super::idempotency::CacheAdmission;
+use super::idempotency::IdempotencyIdentity;
 use super::idempotency::IdempotencyKey;
 use super::*;
 use std::collections::BTreeSet;
@@ -136,6 +137,90 @@ fn principal(subject: &str) -> Principal {
         allowed_operations: BTreeSet::from([ControlOperation::TopicUpsert]),
         allowed_clusters: BTreeSet::from([ClusterName::try_new("cluster-a").unwrap()]),
     }
+}
+
+#[test]
+fn stage_c_idempotency_identity_covers_operation_resource_and_full_payload() {
+    let principal = principal("alice");
+    let cluster = ClusterName::try_new("cluster-a").unwrap();
+    let common = || {
+        (
+            MUTATION_ARGUMENTS_SCHEMA_VERSION.to_owned(),
+            "cluster-a".to_owned(),
+            Some("planned operation".to_owned()),
+            Some("request-1234".to_owned()),
+        )
+    };
+
+    let (schema_version, cluster_name, reason, request_key) = common();
+    let offset = MutationToolRequest::ConsumerOffset(tools::ResetConsumerOffsetArgs {
+        schema_version,
+        cluster: cluster_name,
+        topic: "orders".to_owned(),
+        consumer_group: "workers".to_owned(),
+        timestamp: "2026-08-30T00:00:00Z".to_owned(),
+        force: false,
+        dry_run: false,
+        confirm: true,
+        reason,
+        request_key,
+    });
+    let offset_identity = IdempotencyIdentity::from_request(&principal, &cluster, &offset).unwrap();
+    let offset_key = offset_identity.key.as_ref().expect("explicit offset key");
+    assert_eq!(offset_key.operation, ControlOperation::ConsumerOffsetReset);
+    assert_eq!(offset_key.targets, ["orders", "workers"]);
+
+    let (schema_version, cluster_name, reason, request_key) = common();
+    let broker = MutationToolRequest::BrokerConfig(tools::PatchBrokerConfigArgs {
+        schema_version,
+        cluster: cluster_name,
+        broker_name: "broker-a".to_owned(),
+        properties: tools::BrokerConfigProperties {
+            trace_topic_enable: Some("true".to_owned()),
+            ..tools::BrokerConfigProperties::default()
+        },
+        dry_run: false,
+        confirm: true,
+        reason,
+        request_key,
+    });
+    let broker_identity = IdempotencyIdentity::from_request(&principal, &cluster, &broker).unwrap();
+    let broker_key = broker_identity.key.as_ref().expect("explicit broker key");
+    assert_eq!(broker_key.operation, ControlOperation::BrokerConfigPatch);
+    assert_eq!(broker_key.targets, ["broker-a"]);
+
+    let (schema_version, cluster_name, reason, request_key) = common();
+    let request_mode = MutationToolRequest::ConsumerRequestMode(tools::SetConsumerRequestModeArgs {
+        schema_version,
+        cluster: cluster_name,
+        topic: "orders".to_owned(),
+        consumer_group: "workers".to_owned(),
+        mode: tools::ConsumerRequestMode::Pop,
+        pop_share_queue_num: 4,
+        timeout_millis: 12_000,
+        dry_run: false,
+        confirm: true,
+        reason,
+        request_key,
+    });
+    let request_mode_identity = IdempotencyIdentity::from_request(&principal, &cluster, &request_mode).unwrap();
+    let request_mode_key = request_mode_identity.key.as_ref().expect("explicit request-mode key");
+    assert_eq!(request_mode_key.operation, ControlOperation::ConsumerRequestMode);
+    assert_eq!(request_mode_key.targets, ["orders", "workers"]);
+
+    assert_ne!(offset_identity.payload, broker_identity.payload);
+    assert_ne!(broker_identity.payload, request_mode_identity.payload);
+    let mut changed_timeout = request_mode.clone();
+    let MutationToolRequest::ConsumerRequestMode(args) = &mut changed_timeout else {
+        unreachable!();
+    };
+    args.timeout_millis += 1;
+    assert_ne!(
+        request_mode_identity.payload,
+        IdempotencyIdentity::from_request(&principal, &cluster, &changed_timeout)
+            .unwrap()
+            .payload
+    );
 }
 
 fn runtime(
