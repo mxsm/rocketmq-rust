@@ -15,6 +15,8 @@
 //! Supervised, preflight-bound mutation adapter operations.
 
 use super::*;
+use std::collections::BTreeMap;
+
 impl SupervisedMutationAdmin for MutationAdminSession {
     fn preflight_topic<'a>(
         &'a mut self,
@@ -23,6 +25,18 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         Box::pin(async move {
             self.inner.ensure_open()?;
             preflight_topic_with_admin(&self.inner.inner, Arc::clone(&self.plan_seal), request).await
+        })
+    }
+
+    fn preflight_topic_targets<'a>(
+        &'a mut self,
+        request: &'a TopicMutationPreflightRequest,
+        broker_names: &'a [String],
+    ) -> AdminFuture<'a, TopicMutationPlan> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            preflight_topic_targets_with_admin(&self.inner.inner, Arc::clone(&self.plan_seal), request, broker_names)
+                .await
         })
     }
 
@@ -40,6 +54,23 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         Box::pin(async move {
             self.inner.ensure_open()?;
             preflight_subscription_group_with_admin(&self.inner.inner, Arc::clone(&self.plan_seal), request).await
+        })
+    }
+
+    fn preflight_subscription_group_targets<'a>(
+        &'a mut self,
+        request: &'a SubscriptionGroupMutationPreflightRequest,
+        broker_names: &'a [String],
+    ) -> AdminFuture<'a, SubscriptionGroupMutationPlan> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            preflight_subscription_group_targets_with_admin(
+                &self.inner.inner,
+                Arc::clone(&self.plan_seal),
+                request,
+                broker_names,
+            )
+            .await
         })
     }
 
@@ -178,6 +209,24 @@ async fn preflight_topic_with_admin<A: MQAdminMutationExt + ?Sized>(
     seal: Arc<MutationPlanSeal>,
     request: &TopicMutationPreflightRequest,
 ) -> AdminResult<TopicMutationPlan> {
+    preflight_topic_with_targets(admin, seal, request, None).await
+}
+
+async fn preflight_topic_targets_with_admin<A: MQAdminMutationExt + ?Sized>(
+    admin: &A,
+    seal: Arc<MutationPlanSeal>,
+    request: &TopicMutationPreflightRequest,
+    broker_names: &[String],
+) -> AdminResult<TopicMutationPlan> {
+    preflight_topic_with_targets(admin, seal, request, Some(broker_names)).await
+}
+
+async fn preflight_topic_with_targets<A: MQAdminMutationExt + ?Sized>(
+    admin: &A,
+    seal: Arc<MutationPlanSeal>,
+    request: &TopicMutationPreflightRequest,
+    broker_names: Option<&[String]>,
+) -> AdminResult<TopicMutationPlan> {
     let cluster = require_non_empty("cluster", &request.cluster)?.to_owned();
     let topic = validate_supervised_topic(&request.topic)?;
     validate_topic_replacement(&request.replacement)?;
@@ -187,7 +236,24 @@ async fn preflight_topic_with_admin<A: MQAdminMutationExt + ?Sized>(
         .map_err(|error| backend_error("mutation_cluster_info", error))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
-    for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, &cluster)? {
+    let master_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
+    let master_targets = select_metadata_targets(master_targets, broker_names)?;
+    let targeted_order_guard = if broker_names.is_some() {
+        let current = admin
+            .mutation_order_topic_config(topic.clone().into())
+            .await
+            .map_err(|error| backend_error("mutation_order_topic_config", error))?;
+        let expected = parse_order_topic_config(current.as_deref())?;
+        validate_targeted_order_state(
+            &expected,
+            master_targets.iter().map(|(broker_name, _)| broker_name.as_str()),
+            &request.replacement,
+        )?;
+        Some(TargetedTopicOrderGuard { expected })
+    } else {
+        None
+    };
+    for (broker_name, broker_addr) in master_targets {
         match admin
             .mutation_topic_config_state(broker_addr.clone(), topic.clone().into())
             .await
@@ -208,6 +274,7 @@ async fn preflight_topic_with_admin<A: MQAdminMutationExt + ?Sized>(
         replacement: request.replacement.clone(),
         targets,
         failures,
+        targeted_order_guard,
     })
 }
 
@@ -217,6 +284,16 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
     plan: &TopicMutationPlan,
 ) -> AdminResult<MetadataMutationOutcome> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
+    if let Some(guard) = &plan.targeted_order_guard {
+        let current = admin
+            .mutation_order_topic_config(plan.topic.as_str().into())
+            .await
+            .map_err(|error| backend_error("mutation_order_topic_config", error))?;
+        let current = parse_order_topic_config(current.as_deref())?;
+        if current != guard.expected {
+            return Ok(targeted_order_conflict(plan));
+        }
+    }
     let mut outcome = MetadataMutationOutcome {
         failures: plan.failures.clone(),
         ..MetadataMutationOutcome::default()
@@ -270,6 +347,28 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
             Err(error) => outcome.targets.push(metadata_client_failure(target, &error)),
         }
     }
+    if let Some(guard) = &plan.targeted_order_guard {
+        let postread = admin
+            .mutation_order_topic_config(plan.topic.as_str().into())
+            .await
+            .ok()
+            .and_then(|current| parse_order_topic_config(current.as_deref()).ok());
+        if postread.as_ref() == Some(&guard.expected) {
+            outcome.order_reconciled = Some(true);
+        } else {
+            outcome.order_reconciled = Some(false);
+            for target in &plan.targets {
+                outcome.failures.push(MutationTargetFailure {
+                    broker_name: target.broker_name.clone(),
+                    queue_id: None,
+                    code: MutationFailureCode::OrderReconciliationFailed,
+                    retryable: false,
+                });
+            }
+        }
+        return Ok(outcome);
+    }
+
     let all_applied = !plan.targets.is_empty()
         && outcome.failures.is_empty()
         && outcome.targets.iter().all(|target| {
@@ -312,10 +411,121 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
     Ok(outcome)
 }
 
+fn parse_order_topic_config(value: Option<&str>) -> AdminResult<Option<BTreeMap<String, u32>>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Err(AdminError::invalid_argument("orderTopicConfig", "must not be empty"));
+    }
+    let mut entries = BTreeMap::new();
+    for entry in value.split(';') {
+        let Some((broker_name, queues)) = entry.split_once(':') else {
+            return Err(AdminError::invalid_argument(
+                "orderTopicConfig",
+                "contains a malformed broker entry",
+            ));
+        };
+        if broker_name.is_empty()
+            || broker_name.len() > 127
+            || !broker_name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'%' | b'|' | b'-' | b'_'))
+            || broker_name
+                .as_bytes()
+                .windows(3)
+                .any(|window| window[0] == b'%' && window[1].is_ascii_hexdigit() && window[2].is_ascii_hexdigit())
+            || queues.is_empty()
+            || (queues.len() > 1 && queues.starts_with('0'))
+        {
+            return Err(AdminError::invalid_argument(
+                "orderTopicConfig",
+                "contains a non-canonical broker entry",
+            ));
+        }
+        let queues = queues
+            .parse::<u32>()
+            .ok()
+            .filter(|queues| *queues > 0)
+            .ok_or_else(|| AdminError::invalid_argument("orderTopicConfig", "contains an invalid queue count"))?;
+        if entries.insert(broker_name.to_owned(), queues).is_some() {
+            return Err(AdminError::invalid_argument(
+                "orderTopicConfig",
+                "contains a duplicate broker entry",
+            ));
+        }
+    }
+    Ok(Some(entries))
+}
+
+fn validate_targeted_order_state<'a>(
+    expected: &Option<BTreeMap<String, u32>>,
+    selected_brokers: impl Iterator<Item = &'a str>,
+    replacement: &TopicReplacement,
+) -> AdminResult<()> {
+    let entries = expected.as_ref();
+    let compatible = if replacement.order {
+        selected_brokers
+            .into_iter()
+            .all(|broker| entries.and_then(|entries| entries.get(broker)) == Some(&replacement.write_queue_nums))
+    } else {
+        selected_brokers
+            .into_iter()
+            .all(|broker| entries.is_none_or(|entries| !entries.contains_key(broker)))
+    };
+    if !compatible {
+        return Err(AdminError::invalid_argument(
+            "orderTopicConfig",
+            "targeted mutation would require a NameServer-wide order configuration write",
+        ));
+    }
+    Ok(())
+}
+
+fn targeted_order_conflict(plan: &TopicMutationPlan) -> MetadataMutationOutcome {
+    MetadataMutationOutcome {
+        targets: plan
+            .targets
+            .iter()
+            .map(|target| MetadataMutationTargetOutcome {
+                broker_name: target.broker_name.clone(),
+                expected_state: target.state,
+                resulting_state: None,
+                applied: false,
+                changed: false,
+                persistence: MutationPersistenceState::NotRequired,
+                verification: MutationVerificationState::NotPerformed,
+                failure: Some(MutationFailureCode::Conflict),
+                retryable: false,
+            })
+            .collect(),
+        failures: Vec::new(),
+        order_reconciled: Some(false),
+    }
+}
+
 async fn preflight_subscription_group_with_admin<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     seal: Arc<MutationPlanSeal>,
     request: &SubscriptionGroupMutationPreflightRequest,
+) -> AdminResult<SubscriptionGroupMutationPlan> {
+    preflight_subscription_group_with_targets(admin, seal, request, None).await
+}
+
+async fn preflight_subscription_group_targets_with_admin<A: MQAdminMutationExt + ?Sized>(
+    admin: &A,
+    seal: Arc<MutationPlanSeal>,
+    request: &SubscriptionGroupMutationPreflightRequest,
+    broker_names: &[String],
+) -> AdminResult<SubscriptionGroupMutationPlan> {
+    preflight_subscription_group_with_targets(admin, seal, request, Some(broker_names)).await
+}
+
+async fn preflight_subscription_group_with_targets<A: MQAdminMutationExt + ?Sized>(
+    admin: &A,
+    seal: Arc<MutationPlanSeal>,
+    request: &SubscriptionGroupMutationPreflightRequest,
+    broker_names: Option<&[String]>,
 ) -> AdminResult<SubscriptionGroupMutationPlan> {
     let cluster = require_non_empty("cluster", &request.cluster)?.to_owned();
     let group = validate_supervised_group(&request.consumer_group)?;
@@ -326,7 +536,9 @@ async fn preflight_subscription_group_with_admin<A: MQAdminMutationExt + ?Sized>
         .map_err(|error| backend_error("mutation_cluster_info", error))?;
     let mut targets = Vec::new();
     let mut failures = Vec::new();
-    for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, &cluster)? {
+    let master_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
+    let master_targets = select_metadata_targets(master_targets, broker_names)?;
+    for (broker_name, broker_addr) in master_targets {
         match admin
             .mutation_subscription_group_config_state(broker_addr.clone(), group.clone().into())
             .await
@@ -865,7 +1077,7 @@ fn validate_supervised_group(group: &str) -> AdminResult<String> {
     let group = require_non_empty("consumerGroup", group)?;
     rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name(group)
         .map_err(|error| AdminError::invalid_argument("consumerGroup", error.to_string()))?;
-    if rocketmq_model::common::mix_all::is_sys_consumer_group(group) {
+    if crate::core::consumer::is_protected_consumer_group(group) {
         return Err(AdminError::invalid_argument(
             "consumerGroup",
             "must not be a system consumer group",
@@ -1132,6 +1344,9 @@ mod tests {
         group_writes: AtomicUsize,
         group_persistence: Mutex<ClientMutationPersistenceState>,
         group_dirty: AtomicBool,
+        order_config: Mutex<Option<CheetahString>>,
+        order_after_topic_write: Mutex<Option<CheetahString>>,
+        order_reads: AtomicUsize,
         order_writes: AtomicUsize,
     }
 
@@ -1215,6 +1430,9 @@ mod tests {
                 group_writes: AtomicUsize::new(0),
                 group_persistence: Mutex::new(ClientMutationPersistenceState::Persisted),
                 group_dirty: AtomicBool::new(false),
+                order_config: Mutex::new(None),
+                order_after_topic_write: Mutex::new(None),
+                order_reads: AtomicUsize::new(0),
                 order_writes: AtomicUsize::new(0),
             }
         }
@@ -1432,6 +1650,14 @@ mod tests {
             Ok(())
         }
 
+        async fn mutation_order_topic_config(
+            &self,
+            _topic: CheetahString,
+        ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+            self.order_reads.fetch_add(1, Ordering::SeqCst);
+            Ok(self.order_config.lock().expect("order config").clone())
+        }
+
         async fn delete_order_topic_config(&self, _topic: CheetahString) -> rocketmq_error::RocketMQResult<()> {
             self.order_writes.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -1555,6 +1781,14 @@ mod tests {
             };
             if persistence == ClientMutationPersistenceState::Failed {
                 self.topic_dirty.store(true, Ordering::SeqCst);
+            }
+            if let Some(order) = self
+                .order_after_topic_write
+                .lock()
+                .expect("order after Topic write")
+                .take()
+            {
+                *self.order_config.lock().expect("order config") = Some(order);
             }
             Ok(rocketmq_client_rust::MutationStateCasOutcome {
                 applied: true,
@@ -1895,6 +2129,223 @@ mod tests {
         );
         assert!(calls.iter().all(|(_, endpoint)| endpoint == "10.0.0.1:10911"));
         assert!(calls.iter().all(|(_, endpoint)| endpoint != "10.0.0.1:10912"));
+    }
+
+    #[tokio::test]
+    async fn targeted_metadata_preflight_is_sorted_and_rejects_invalid_selection_before_state_rpc() {
+        let fake = CountingMutationAdmin::with_queue_counts(&[1, 1, 1]);
+        let seal = Arc::new(MutationPlanSeal);
+        let topic_request = TopicMutationPreflightRequest {
+            cluster: "cluster-a".to_owned(),
+            topic: "orders".to_owned(),
+            replacement: TopicReplacement {
+                read_queue_nums: 1,
+                write_queue_nums: 1,
+                perm: 6,
+                order: false,
+                message_type: TopicMessageType::Normal,
+            },
+        };
+        let group_request = SubscriptionGroupMutationPreflightRequest {
+            cluster: "cluster-a".to_owned(),
+            consumer_group: "orders-consumer".to_owned(),
+            replacement: SubscriptionGroupReplacement {
+                consume_enable: true,
+                consume_from_min_enable: false,
+                consume_broadcast_enable: false,
+                consume_message_orderly: false,
+                retry_queue_nums: 1,
+                retry_max_times: 16,
+                broker_id: 0,
+                which_broker_when_consume_slowly: 1,
+                notify_consumer_ids_changed_enable: true,
+                group_sys_flag: 0,
+                consume_timeout_minute: 15,
+            },
+        };
+
+        let topic_plan = preflight_topic_targets_with_admin(
+            &fake,
+            Arc::clone(&seal),
+            &topic_request,
+            &["broker-2".to_owned(), "broker-0".to_owned()],
+        )
+        .await
+        .expect("targeted topic preflight");
+        assert_eq!(
+            topic_plan
+                .preflight_targets()
+                .into_iter()
+                .map(|target| target.broker_name)
+                .collect::<Vec<_>>(),
+            ["broker-0", "broker-2"]
+        );
+        assert_eq!(fake.topic_reads.load(Ordering::SeqCst), 2);
+
+        let group_plan = preflight_subscription_group_targets_with_admin(
+            &fake,
+            Arc::clone(&seal),
+            &group_request,
+            &["broker-1".to_owned()],
+        )
+        .await
+        .expect("targeted group preflight");
+        assert_eq!(group_plan.preflight_targets()[0].broker_name, "broker-1");
+        assert_eq!(fake.group_reads.load(Ordering::SeqCst), 1);
+
+        for invalid in [
+            Vec::new(),
+            vec!["broker-0".to_owned(), "broker-0".to_owned()],
+            vec!["broker-unknown".to_owned()],
+            (0..=MAX_METADATA_MUTATION_TARGETS)
+                .map(|index| format!("broker-{index}"))
+                .collect(),
+        ] {
+            let topic_reads = fake.topic_reads.load(Ordering::SeqCst);
+            let order_reads = fake.order_reads.load(Ordering::SeqCst);
+            assert!(
+                preflight_topic_targets_with_admin(&fake, Arc::clone(&seal), &topic_request, &invalid,)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(fake.topic_reads.load(Ordering::SeqCst), topic_reads);
+            assert_eq!(fake.order_reads.load(Ordering::SeqCst), order_reads);
+        }
+
+        let mut corrupt = CountingMutationAdmin::with_queue_counts(&[1, 1]);
+        corrupt
+            .cluster_info
+            .broker_addr_table
+            .as_mut()
+            .expect("broker table")
+            .insert(
+                CheetahString::from("broker-1"),
+                broker("cluster-a", "broker-1", [(MASTER_ID, "10.0.0.1:10911")]),
+            );
+        assert!(preflight_topic_targets_with_admin(
+            &corrupt,
+            Arc::clone(&seal),
+            &topic_request,
+            &["broker-0".to_owned()],
+        )
+        .await
+        .is_err());
+        assert_eq!(corrupt.topic_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(corrupt.order_reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn targeted_topic_order_guard_never_writes_global_kv_and_detects_pre_and_post_races() {
+        let request = |order| TopicMutationPreflightRequest {
+            cluster: "cluster-a".to_owned(),
+            topic: "orders".to_owned(),
+            replacement: TopicReplacement {
+                read_queue_nums: 1,
+                write_queue_nums: 1,
+                perm: 6,
+                order,
+                message_type: TopicMessageType::Normal,
+            },
+        };
+        let selected = ["broker-0".to_owned()];
+        let seal = Arc::new(MutationPlanSeal);
+
+        let mut unordered = CountingMutationAdmin::with_queue_counts(&[1, 1]);
+        unordered
+            .cluster_info
+            .broker_addr_table
+            .as_mut()
+            .expect("broker table")
+            .insert(
+                CheetahString::from_static_str("broker-other"),
+                broker("cluster-b", "broker-other", [(MASTER_ID, "10.0.1.1:10911")]),
+            );
+        unordered
+            .cluster_info
+            .cluster_addr_table
+            .as_mut()
+            .expect("cluster table")
+            .insert(
+                CheetahString::from_static_str("cluster-b"),
+                HashSet::from([CheetahString::from_static_str("broker-other")]),
+            );
+        *unordered.order_config.lock().expect("order config") = Some("broker-other:7;broker-1:9".into());
+        let plan = preflight_topic_targets_with_admin(&unordered, Arc::clone(&seal), &request(false), &selected)
+            .await
+            .expect("unchanged unordered subset");
+        let outcome = execute_topic_checked(&unordered, &seal, &plan)
+            .await
+            .expect("guarded execute");
+        assert_eq!(outcome.order_reconciled, Some(true));
+        assert_eq!(unordered.topic_writes.load(Ordering::SeqCst), 1);
+        assert_eq!(unordered.order_writes.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            unordered.order_config.lock().expect("order config").as_deref(),
+            Some("broker-other:7;broker-1:9")
+        );
+
+        let ordered = CountingMutationAdmin::with_queue_counts(&[1, 1]);
+        *ordered.order_config.lock().expect("order config") = Some("broker-1:9;broker-0:1".into());
+        let plan = preflight_topic_targets_with_admin(&ordered, Arc::clone(&seal), &request(true), &selected)
+            .await
+            .expect("unchanged ordered subset");
+        let outcome = execute_topic_checked(&ordered, &seal, &plan)
+            .await
+            .expect("guarded execute");
+        assert_eq!(outcome.order_reconciled, Some(true));
+        assert_eq!(ordered.order_writes.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            ordered.order_config.lock().expect("order config").as_deref(),
+            Some("broker-1:9;broker-0:1")
+        );
+
+        for invalid in [
+            "broker-0:1;broker-0:1",
+            "broker-0:not-a-number",
+            "broker-0:01",
+            "broker-0:1;",
+            "broker%2d0:1",
+        ] {
+            let fake = CountingMutationAdmin::with_queue_counts(&[1, 1]);
+            *fake.order_config.lock().expect("order config") = Some(invalid.into());
+            assert!(
+                preflight_topic_targets_with_admin(&fake, Arc::clone(&seal), &request(true), &selected)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(fake.topic_reads.load(Ordering::SeqCst), 0);
+            assert_eq!(fake.topic_writes.load(Ordering::SeqCst), 0);
+            assert_eq!(fake.order_writes.load(Ordering::SeqCst), 0);
+        }
+
+        let prechange = CountingMutationAdmin::with_queue_counts(&[1, 1]);
+        let plan = preflight_topic_targets_with_admin(&prechange, Arc::clone(&seal), &request(false), &selected)
+            .await
+            .expect("initial order guard");
+        *prechange.order_config.lock().expect("order config") = Some("broker-0:1".into());
+        let outcome = execute_topic_checked(&prechange, &seal, &plan)
+            .await
+            .expect("conflict outcome");
+        assert_eq!(outcome.targets[0].failure, Some(MutationFailureCode::Conflict));
+        assert_eq!(prechange.topic_writes.load(Ordering::SeqCst), 0);
+        assert_eq!(prechange.order_writes.load(Ordering::SeqCst), 0);
+
+        let postchange = CountingMutationAdmin::with_queue_counts(&[1, 1]);
+        let plan = preflight_topic_targets_with_admin(&postchange, Arc::clone(&seal), &request(false), &selected)
+            .await
+            .expect("initial order guard");
+        *postchange
+            .order_after_topic_write
+            .lock()
+            .expect("order after Topic write") = Some("broker-0:1".into());
+        let outcome = execute_topic_checked(&postchange, &seal, &plan)
+            .await
+            .expect("partial outcome");
+        assert_eq!(outcome.order_reconciled, Some(false));
+        assert_eq!(outcome.failures[0].code, MutationFailureCode::OrderReconciliationFailed);
+        assert!(outcome.targets[0].applied);
+        assert_eq!(postchange.topic_writes.load(Ordering::SeqCst), 1);
+        assert_eq!(postchange.order_writes.load(Ordering::SeqCst), 0);
     }
 
     #[test]

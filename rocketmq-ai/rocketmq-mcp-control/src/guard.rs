@@ -84,6 +84,26 @@ impl MutationGuard {
         arguments.validate()?;
         Ok(arguments)
     }
+
+    pub const fn default_dry_run(&self) -> bool {
+        self.default_dry_run
+    }
+
+    pub fn allows_discovery(
+        &self,
+        principal: &Principal,
+        operation: ControlOperation,
+        configured_clusters: &BTreeSet<ClusterName>,
+    ) -> bool {
+        self.runtime_enabled
+            && principal.scopes.contains(REQUIRED_WRITE_SCOPE)
+            && principal.allowed_operations.contains(&operation)
+            && self.allowed_operations.contains(&operation)
+            && principal
+                .allowed_clusters
+                .iter()
+                .any(|cluster| self.allowed_clusters.contains(cluster) && configured_clusters.contains(cluster))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +154,7 @@ mod tests {
     fn scope_and_intersections_are_checked_before_availability() {
         let guard = MutationGuard::new(&policy(true));
         let denied = guard
-            .authorize_raw(&principal(&[]), "unknown", "bad.cluster", &OperationCatalog)
+            .authorize_raw(&principal(&[]), "unknown", "bad.cluster", &OperationCatalog::default())
             .unwrap_err();
         assert_eq!(denied.code(), crate::error::ControlErrorCode::PermissionDenied);
 
@@ -143,7 +163,7 @@ mod tests {
                 &principal(&[REQUIRED_WRITE_SCOPE]),
                 "topic_upsert",
                 "cluster-a",
-                &OperationCatalog,
+                &OperationCatalog::default(),
             )
             .unwrap_err();
         assert_eq!(unavailable.code(), crate::error::ControlErrorCode::OperationUnavailable);
@@ -157,7 +177,7 @@ mod tests {
                 &principal(&[REQUIRED_WRITE_SCOPE]),
                 "topic_upsert",
                 "cluster-a",
-                &OperationCatalog,
+                &OperationCatalog::default(),
             )
             .unwrap_err();
         assert_eq!(error.code(), crate::error::ControlErrorCode::OperationUnavailable);
@@ -176,7 +196,12 @@ mod tests {
         let expected = ControlError::permission_denied().envelope();
         for _raw in malformed {
             let denied = guard
-                .authorize_raw(&principal(&[]), "topic_upsert", "cluster-a", &OperationCatalog)
+                .authorize_raw(
+                    &principal(&[]),
+                    "topic_upsert",
+                    "cluster-a",
+                    &OperationCatalog::default(),
+                )
                 .unwrap_err();
             assert_eq!(denied.envelope(), expected);
         }
@@ -186,7 +211,7 @@ mod tests {
                 &principal(&[REQUIRED_WRITE_SCOPE]),
                 "topic_upsert",
                 "cluster-a",
-                &OperationCatalog,
+                &OperationCatalog::default(),
             )
             .unwrap_err();
         assert_eq!(unavailable.code(), crate::error::ControlErrorCode::OperationUnavailable);

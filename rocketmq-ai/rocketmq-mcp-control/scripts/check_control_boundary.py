@@ -91,7 +91,8 @@ for forbidden in ("admin-read", "admin-full"):
     if forbidden in client_features:
         fail(f"write-tools enabled forbidden client feature {forbidden}")
 
-source = "\n".join(path.read_text(encoding="utf-8") for path in sorted((PROJECT / "src").glob("**/*.rs")))
+source_paths = sorted((PROJECT / "src").glob("**/*.rs"))
+source = "\n".join(path.read_text(encoding="utf-8") for path in source_paths)
 for forbidden in (
     "transport-io",
     "std::process",
@@ -105,8 +106,42 @@ for forbidden in (
     if forbidden in source:
         fail(f"production source contains prohibited surface {forbidden}")
 
-if "registered_operations(&self) -> u32 {\n        0" not in source:
-    fail("foundation catalog is not visibly empty")
+# Dedicated test modules and inline `mod tests` bodies are excluded from the production lifecycle scan.
+production_units = []
+for path in source_paths:
+    if path.name == "tests.rs":
+        continue
+    unit = path.read_text(encoding="utf-8")
+    unit = unit.split("#[cfg(test)]\nmod tests", maxsplit=1)[0]
+    production_units.append(unit)
+production_source = "\n".join(production_units)
+for forbidden in (
+    "tokio::spawn",
+    "spawn_blocking",
+    "std::thread",
+    "JoinSet",
+    "tokio::runtime::Runtime::new",
+    "tokio::runtime::Runtime::block_on",
+):
+    if forbidden in production_source:
+        fail(f"production source contains unmanaged lifecycle surface {forbidden}")
+if "spawn_service(\"mcp-control-upsert-supervisor\"" not in production_source:
+    fail("reviewed tool execution is not visibly owned by the injected task group")
+
+for required in ("rocketmq_upsert_topic", "rocketmq_upsert_consumer_group"):
+    if required not in source:
+        fail(f"reviewed write catalog is missing {required}")
+
+for forbidden in (
+    "rocketmq_reset_consumer_offset",
+    "rocketmq_patch_broker_config",
+    "rocketmq_set_consumer_request_mode",
+    "rocketmq_delete_",
+    "rocketmq_skip_",
+    "rocketmq_resend_",
+):
+    if forbidden in source:
+        fail(f"production source contains unreviewed tool {forbidden}")
 
 run_query_contract([sys.executable, "scripts/check_read_only_boundary.py"])
 for arguments in (

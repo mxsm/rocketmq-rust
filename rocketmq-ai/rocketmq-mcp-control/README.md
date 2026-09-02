@@ -1,8 +1,9 @@
 # RocketMQ MCP Control
 
-`rocketmq-mcp-control` is an isolated, deny-by-default foundation for future supervised RocketMQ mutations. It is
-a standalone Cargo project and is not part of the root workspace. This delivery deliberately registers no
-production mutation tools and performs no RocketMQ mutation.
+`rocketmq-mcp-control` is an isolated, deny-by-default server for supervised RocketMQ mutations. It is a
+standalone Cargo project and is not part of the root workspace. The reviewed `write-tools` surface contains
+exactly `rocketmq_upsert_topic` and `rocketmq_upsert_consumer_group`; the default build contains neither Admin
+Core nor production mutation tools.
 
 ## Security boundary
 
@@ -21,8 +22,7 @@ production mutation tools and performs no RocketMQ mutation.
 The fixed capability Resource is `rocketmq-control://capabilities`. Its independent compile-time,
 runtime-enabled, and registered-operation fields make availability explicit. `mutation_supported` becomes true
 only when `write-tools` is compiled, runtime mutation policy is enabled, and at least one reviewed production
-operation is registered. The last condition is false in this foundation, so `tools/list` is empty in every build
-and runtime combination.
+operation is registered. Resource templates and prompts remain empty.
 
 ## Feature boundary
 
@@ -30,11 +30,13 @@ and runtime combination.
 |---|---|---:|---:|---:|
 | default | none | off or on | 0 | false |
 | `write-tools` | mutation-only adapter | off | 0 | false |
-| `write-tools` | mutation-only adapter | on | 0 | false |
+| `write-tools` | mutation-only adapter | on, future-only allowlist | 0 | false |
+| `write-tools` | mutation-only adapter | on, one reviewed operation | 1 | true |
+| `write-tools` | mutation-only adapter | on, both reviewed operations | 2 | true |
 
 The optional feature enables only `rocketmq-admin-core/mutation-client-adapter`, whose client dependency enables
-only `admin-mutation`. It does not enable read or full Admin adapters. Future operations require separate schema,
-authorization, adapter, and review work; this project does not define speculative schemas for them.
+only `admin-mutation`. It does not enable read or full Admin adapters. Offset reset, broker configuration,
+consumer request mode, delete, skip, resend, CLI, shell, and free-form RPC remain outside this delivery.
 
 ## Configuration
 
@@ -45,15 +47,53 @@ URLs must use canonical public HTTPS hostnames. The listener rejects wildcard bi
 startup; changing `mutations_enabled` or either allowlist, including an emergency disable, requires a process
 restart.
 
+The private cluster registry maps a logical alias to a NameServer endpoint, TLS policy, and optional environment
+variable names for credentials. Inline credentials are rejected. Registry values and resolved credentials have
+redacted debug behavior and never enter MCP responses or audit records. Every server-allowed cluster for one of
+the two registered operations must have a registry entry.
+
 [`conf/permissions.example.toml`](conf/permissions.example.toml) documents the closed operation and cluster
 claim vocabulary for an authorization server. It is an identity-provider example, not a local authorization
 bypass.
 
-The only accepted operation identifiers are `topic_upsert`, `consumer_group_upsert`,
+The closed policy vocabulary remains `topic_upsert`, `consumer_group_upsert`,
 `consumer_offset_reset`, `broker_config_patch`, and `consumer_request_mode`. Common request arguments reject
 unknown fields. Omitted `dry_run` uses the configured default and omitted `confirm` is false. Dry-run requests may
 omit `reason` and `request_key`; execution requires `confirm = true` and a 5–256 byte safe reason. A request key is
 optional and, when present, is a bounded safe identifier.
+
+Both registered tools accept 1–64 unique logical broker names. Admin Core validates the complete selected
+cluster membership, embedded broker identity, master presence, and endpoint uniqueness before reading any
+target state. Only selected masters are processed, in broker-name order. Requests use complete Topic or Consumer
+Group replacements and closed message-type/numeric bounds. The Consumer Group validator reuses Admin Core's
+single canonical protected-group classifier, including RocketMQ defaults, tools/scheduler/filter/monitor groups,
+ONS groups, transaction/system prefixes, and the heartbeat syncer group. System names, addresses, inline
+secrets, and unknown fields are rejected before audit or session creation; Admin constructors repeat the same
+check as defense in depth.
+
+Each result uses `rocketmq-mcp-mutation.v1`, returns the closed `topic_upsert` or `consumer_group_upsert`
+operation, and has an operation-specific top-level `target`: `topic` or `consumer_group` plus sorted `brokers`.
+Top-level `before`, `requested`, and post-read `after` preserve the complete aggregate state; broker-sorted
+`targets` retain per-target persistence, verification, and failure evidence rather than replacing that aggregate
+contract. Schema version and operation are single-value enums in each tool output schema. Conflict, partial, and
+failed outcomes set MCP `isError=true` while retaining the structured result. An unchanged success is `applied`
+with `changed=false`; there is no separate no-op status. Responses never include addresses, credential
+references, OAuth subjects, reasons, request keys, or raw backend errors.
+
+Targeted Topic upserts never update or delete the NameServer-wide order-Topic KV. Before any broker state read,
+the server reads and strictly parses the complete KV: selected ordered entries must already equal the requested
+queue count, while selected unordered entries must already be absent. The sealed value is checked again before
+broker CAS and after it. A pre-change is a zero-broker-write conflict; a post-change preserves broker-applied
+truth and returns `order_reconciliation_failed` as a partial result. Unselected and other-cluster KV entries are
+never rewritten.
+
+Optional request keys use an in-process 10-minute, 4096-entry singleflight/result cache scoped by principal,
+operation, cluster, sorted target set, and canonical payload. Matching followers and cache hits open no Admin
+session and perform no RocketMQ RPC, but every invocation writes its own started/terminal audit pair. Reusing a
+key with a different payload is rejected. If all 4096 slots are in flight, a new explicit key is rejected before
+audit or session creation; an unkeyed request may still run uncached. A follower's cancellation or timeout ends
+only that invocation and its audit pair—the leader continues and its result remains cacheable. The cache makes no
+cross-restart guarantee.
 
 ## Reliable audit and session ordering
 
@@ -71,7 +111,7 @@ record is accepted only for a matching active invocation from the same live trai
 terminal attempt can become durable. Unknown, cross-trail, and duplicate terminal attempts fail closed; a failed
 terminal write leaves the invocation active while poisoning subsequent audit operations.
 
-A future registered implementation must follow this order:
+Each registered tool follows this order:
 
 1. authenticate and authorize scope/operation/cluster;
 2. parse the common bounded arguments;

@@ -22,6 +22,16 @@ allowed_operations = []
 allowed_clusters = []
 operation_timeout_seconds = 24
 
+# A private logical cluster registry is required before either reviewed operation can be allowlisted.
+# Credential values are read from these environment variables only when a session is opened.
+[[clusters]]
+name = "production-a"
+namesrv_addr = "nameserver.example.test:9876"
+use_tls = true
+access_key_env = "ROCKETMQ_CONTROL_ACCESS_KEY"
+secret_key_env = "ROCKETMQ_CONTROL_SECRET_KEY"
+# security_token_env = "ROCKETMQ_CONTROL_SECURITY_TOKEN"
+
 [audit]
 path = "var/audit/rocketmq-mcp-control.jsonl"
 capacity = 4096

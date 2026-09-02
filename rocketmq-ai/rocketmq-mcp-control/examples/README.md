@@ -18,5 +18,8 @@ On a Unix shell:
 ROCKETMQ_MCP_CONTROL_CONFIG="$(pwd)/conf/mcp-control.example.toml" cargo run --locked
 ```
 
-The example intentionally leaves `mutations_enabled = false` and both allowlists empty. Enabling `write-tools`
-does not register a tool or make mutation supported in this foundation.
+The example intentionally leaves `mutations_enabled = false` and both allowlists empty. It also demonstrates a
+private logical cluster registry whose credential values come only from environment variables. The default
+build never links Admin Core. To make reviewed tools discoverable, compile with `--features write-tools`, enable
+the runtime policy, and intersect one or both of `topic_upsert` and `consumer_group_upsert` plus the logical
+cluster in both the server policy and authenticated claims. Any other operation remains unavailable.

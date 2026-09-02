@@ -676,6 +676,17 @@ pub trait MQAdminMutationExt: Send {
         cluster_wide: bool,
     ) -> rocketmq_error::RocketMQResult<()>;
 
+    /// Reads the exact NameServer-wide order-topic value used by a supervised mutation guard.
+    async fn mutation_order_topic_config(
+        &self,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+        let _ = topic;
+        Err(rocketmq_error::RocketMQError::illegal_argument(
+            "order Topic mutation preflight is not implemented by this admin client",
+        ))
+    }
+
     /// Deletes the global order-topic entry after an unordered update or a
     /// complete Topic deletion.
     async fn delete_order_topic_config(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<()> {
@@ -1124,6 +1135,13 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
         cluster_wide: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
         MQAdminMutationExt::upsert_order_topic_config(self.inner(), topic, value, cluster_wide).await
+    }
+
+    async fn mutation_order_topic_config(
+        &self,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+        MQAdminMutationExt::mutation_order_topic_config(self.inner(), topic).await
     }
 
     async fn delete_order_topic_config(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<()> {

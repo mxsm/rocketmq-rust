@@ -71,7 +71,7 @@ impl ConsumerWorkspaceAdmin for AdminSession {
             let mut failures = discovery.failures;
             let mut items = Vec::with_capacity(discovery.groups.len());
             for (group, meta) in &discovery.groups {
-                if request.skip_system_groups && crate::core::consumer::is_system_consumer_group(group) {
+                if request.skip_system_groups && crate::core::consumer::is_protected_consumer_group(group) {
                     continue;
                 }
                 let connection = observe_group_connection(&self.inner, group, forwarded_address.clone()).await;

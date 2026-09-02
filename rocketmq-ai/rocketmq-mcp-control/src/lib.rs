@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Isolated, deny-by-default foundation for supervised RocketMQ mutations.
+//! Isolated, deny-by-default supervised RocketMQ Topic and Consumer Group upserts.
 //!
 //! Authentication test seams are intentionally not public API:
 //!
 //! ```compile_fail
 //! use rocketmq_mcp_control::auth::AuthState;
 //! ```
+
+#![recursion_limit = "256"]
 
 pub mod audit;
 mod auth;
@@ -29,6 +31,9 @@ pub mod guard;
 pub mod model;
 pub mod server;
 pub mod session;
+#[cfg(feature = "write-tools")]
+mod tool_runtime;
+pub mod tools;
 pub mod transport;
 pub mod workflow;
 

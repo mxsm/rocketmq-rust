@@ -42,7 +42,7 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name;
 
 use crate::client_adapter::lifecycle::AdminSession;
-use crate::core::consumer::is_system_consumer_group;
+use crate::core::consumer::is_protected_consumer_group;
 use crate::core::dashboard;
 use crate::core::AdminError;
 use crate::core::AdminFuture;
@@ -332,7 +332,7 @@ impl dashboard::DashboardAdmin for AdminSession {
         Box::pin(async move {
             self.ensure_open()?;
             let group = group.trim();
-            if group.is_empty() || group.starts_with("%SYS%") || is_system_consumer_group(group) {
+            if group.is_empty() || is_protected_consumer_group(group) {
                 return Err(AdminError::invalid_argument(
                     "consumerGroup",
                     "System consumer groups cannot be inspected for deletion.",

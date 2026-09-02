@@ -713,7 +713,7 @@ fn first_address(value: Option<&str>) -> Option<CheetahString> {
 }
 
 fn classify_consumer_group(group: &str, meta: &ConsumerGroupMeta) -> String {
-    if is_system_consumer_group(group) {
+    if is_protected_consumer_group(group) {
         "SYSTEM".to_string()
     } else if !meta.orderly_flags.is_empty() && meta.orderly_flags.iter().all(|flag| *flag) {
         "FIFO".to_string()
@@ -722,8 +722,8 @@ fn classify_consumer_group(group: &str, meta: &ConsumerGroupMeta) -> String {
     }
 }
 
-fn is_system_consumer_group(group: &str) -> bool {
-    consumer::is_system_consumer_group(group)
+fn is_protected_consumer_group(group: &str) -> bool {
+    consumer::is_protected_consumer_group(group)
 }
 
 fn collect_master_broker_targets(cluster_info: &ClusterInfo) -> Vec<(String, CheetahString)> {
