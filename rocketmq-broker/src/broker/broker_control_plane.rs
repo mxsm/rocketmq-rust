@@ -308,10 +308,8 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
 
         self.escape_policy.update_controller_role(role, outcome.master_epoch);
         self.role_state.set_isolated(false);
-        if outcome.should_register_to_namesrv {
-            if self.registration.register().await.is_err() {
-                tracing::warn!("failed to register broker after controller role transition");
-            }
+        if outcome.should_register_to_namesrv && self.registration.register().await.is_err() {
+            tracing::warn!("failed to register broker after controller role transition");
         }
         Ok(true)
     }
