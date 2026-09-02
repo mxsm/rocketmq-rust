@@ -42,16 +42,22 @@ const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 pub(crate) type RuntimeFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Clone)]
-pub(crate) enum UpsertRequest {
+pub(crate) enum MutationToolRequest {
     Topic(tools::UpsertTopicArgs),
     ConsumerGroup(tools::UpsertConsumerGroupArgs),
+    ConsumerOffset(tools::ResetConsumerOffsetArgs),
+    BrokerConfig(tools::PatchBrokerConfigArgs),
+    ConsumerRequestMode(tools::SetConsumerRequestModeArgs),
 }
 
-impl UpsertRequest {
+impl MutationToolRequest {
     fn operation(&self) -> ControlOperation {
         match self {
             Self::Topic(_) => ControlOperation::TopicUpsert,
             Self::ConsumerGroup(_) => ControlOperation::ConsumerGroupUpsert,
+            Self::ConsumerOffset(_) => ControlOperation::ConsumerOffsetReset,
+            Self::BrokerConfig(_) => ControlOperation::BrokerConfigPatch,
+            Self::ConsumerRequestMode(_) => ControlOperation::ConsumerRequestMode,
         }
     }
 
@@ -59,6 +65,9 @@ impl UpsertRequest {
         match self {
             Self::Topic(args) => args.dry_run,
             Self::ConsumerGroup(args) => args.dry_run,
+            Self::ConsumerOffset(args) => args.dry_run,
+            Self::BrokerConfig(args) => args.dry_run,
+            Self::ConsumerRequestMode(args) => args.dry_run,
         }
     }
 
@@ -66,13 +75,19 @@ impl UpsertRequest {
         match self {
             Self::Topic(args) => args.request_key.as_deref(),
             Self::ConsumerGroup(args) => args.request_key.as_deref(),
+            Self::ConsumerOffset(args) => args.request_key.as_deref(),
+            Self::BrokerConfig(args) => args.request_key.as_deref(),
+            Self::ConsumerRequestMode(args) => args.request_key.as_deref(),
         }
     }
 
-    fn target_names(&self) -> &[String] {
+    fn target_names(&self) -> Vec<String> {
         match self {
-            Self::Topic(args) => &args.broker_names,
-            Self::ConsumerGroup(args) => &args.broker_names,
+            Self::Topic(args) => args.broker_names.clone(),
+            Self::ConsumerGroup(args) => args.broker_names.clone(),
+            Self::ConsumerOffset(args) => vec![args.topic.clone(), args.consumer_group.clone()],
+            Self::BrokerConfig(args) => vec![args.broker_name.clone()],
+            Self::ConsumerRequestMode(args) => vec![args.topic.clone(), args.consumer_group.clone()],
         }
     }
 
@@ -81,12 +96,13 @@ impl UpsertRequest {
         match &mut canonical {
             Self::Topic(args) => args.broker_names.sort(),
             Self::ConsumerGroup(args) => args.broker_names.sort(),
+            Self::ConsumerOffset(_) | Self::BrokerConfig(_) | Self::ConsumerRequestMode(_) => {}
         }
         serde_json::to_string(&canonical).map_err(|_| ControlError::invalid_arguments())
     }
 }
 
-impl Serialize for UpsertRequest {
+impl Serialize for MutationToolRequest {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -94,22 +110,31 @@ impl Serialize for UpsertRequest {
         match self {
             Self::Topic(args) => args.serialize(serializer),
             Self::ConsumerGroup(args) => args.serialize(serializer),
+            Self::ConsumerOffset(args) => args.serialize(serializer),
+            Self::BrokerConfig(args) => args.serialize(serializer),
+            Self::ConsumerRequestMode(args) => args.serialize(serializer),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
-pub(crate) enum UpsertResponse {
+pub(crate) enum MutationToolResponse {
     Topic(tools::TopicMutationToolResponse),
     ConsumerGroup(tools::ConsumerGroupMutationToolResponse),
+    ConsumerOffset(tools::OffsetMutationToolResponse),
+    BrokerConfig(tools::BrokerConfigMutationToolResponse),
+    ConsumerRequestMode(tools::RequestModeMutationToolResponse),
 }
 
-impl UpsertResponse {
+impl MutationToolResponse {
     pub(crate) fn is_error(&self) -> bool {
         match self {
             Self::Topic(response) => response.is_error(),
             Self::ConsumerGroup(response) => response.is_error(),
+            Self::ConsumerOffset(response) => response.is_error(),
+            Self::BrokerConfig(response) => response.is_error(),
+            Self::ConsumerRequestMode(response) => response.is_error(),
         }
     }
 
@@ -117,6 +142,9 @@ impl UpsertResponse {
         let status = match self {
             Self::Topic(response) => response.status,
             Self::ConsumerGroup(response) => response.status,
+            Self::ConsumerOffset(response) => response.status,
+            Self::BrokerConfig(response) => response.status,
+            Self::ConsumerRequestMode(response) => response.status,
         };
         match status {
             tools::MutationStatus::Conflict => Some(crate::error::ControlErrorCode::Conflict),
@@ -128,19 +156,25 @@ impl UpsertResponse {
     }
 }
 
-pub(crate) trait UpsertSession: Send {
-    fn run<'a>(&'a mut self, request: UpsertRequest) -> RuntimeFuture<'a, Result<UpsertResponse, ControlError>>;
+pub(crate) trait MutationToolSession: Send {
+    fn run<'a>(
+        &'a mut self,
+        request: MutationToolRequest,
+    ) -> RuntimeFuture<'a, Result<MutationToolResponse, ControlError>>;
     fn shutdown(&mut self) -> RuntimeFuture<'_, Result<(), ControlError>>;
 }
 
-pub(crate) trait UpsertSessionFactory: Send + Sync {
-    fn open<'a>(&'a self, cluster: &'a ClusterName) -> RuntimeFuture<'a, Result<Box<dyn UpsertSession>, ControlError>>;
+pub(crate) trait MutationToolSessionFactory: Send + Sync {
+    fn open<'a>(
+        &'a self,
+        cluster: &'a ClusterName,
+    ) -> RuntimeFuture<'a, Result<Box<dyn MutationToolSession>, ControlError>>;
 }
 
 #[derive(Clone)]
 pub(crate) struct ToolRuntime {
     audit: AuditTrail,
-    factory: Arc<dyn UpsertSessionFactory>,
+    factory: Arc<dyn MutationToolSessionFactory>,
     operation_timeout: Duration,
     owner: TaskGroup,
     idempotency: Arc<Mutex<IdempotencyState>>,
@@ -149,7 +183,7 @@ pub(crate) struct ToolRuntime {
 impl ToolRuntime {
     pub(crate) fn new(
         audit: AuditTrail,
-        factory: Arc<dyn UpsertSessionFactory>,
+        factory: Arc<dyn MutationToolSessionFactory>,
         operation_timeout: Duration,
         owner: TaskGroup,
     ) -> Self {
@@ -166,9 +200,9 @@ impl ToolRuntime {
         &self,
         principal: &Principal,
         authorized: &AuthorizedMutation,
-        request: UpsertRequest,
+        request: MutationToolRequest,
         cancellation: CancellationToken,
-    ) -> Result<UpsertResponse, ControlError> {
+    ) -> Result<MutationToolResponse, ControlError> {
         let cluster = authorized.cluster().clone();
         let identity = IdempotencyIdentity::from_request(principal, &cluster, &request)?;
         let admission =
@@ -207,7 +241,7 @@ impl ToolRuntime {
         let cache = self.idempotency.clone();
         let cleanup_identity = identity.clone();
         let task_invocation = invocation.clone();
-        let spawn = self.owner.spawn_service("mcp-control-upsert-supervisor", async move {
+        let spawn = self.owner.spawn_service("mcp-control-mutation-supervisor", async move {
             let result = execute_admitted(
                 cache,
                 identity,
@@ -243,11 +277,21 @@ impl ToolRuntime {
 pub(crate) mod admin_session;
 mod execution;
 mod idempotency;
+mod remaining;
 
-pub(crate) use admin_session::AdminUpsertFactory;
+pub(crate) use admin_session::AdminMutationToolFactory;
 use idempotency::execute_admitted;
 use idempotency::IdempotencyIdentity;
 use idempotency::IdempotencyState;
+
+#[cfg(test)]
+pub(crate) use MutationToolRequest as UpsertRequest;
+#[cfg(test)]
+pub(crate) use MutationToolResponse as UpsertResponse;
+#[cfg(test)]
+pub(crate) use MutationToolSession as UpsertSession;
+#[cfg(test)]
+pub(crate) use MutationToolSessionFactory as UpsertSessionFactory;
 
 fn topic_before(
     args: &tools::UpsertTopicArgs,

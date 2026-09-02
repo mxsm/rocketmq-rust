@@ -108,6 +108,23 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         })
     }
 
+    fn preflight_broker_config_target<'a>(
+        &'a mut self,
+        cluster: &'a str,
+        broker_name: &'a str,
+    ) -> AdminFuture<'a, BrokerMutationConfigPlan> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            preflight_broker_config_target_with_admin(
+                &self.inner.inner,
+                Arc::clone(&self.plan_seal),
+                cluster,
+                broker_name,
+            )
+            .await
+        })
+    }
+
     fn execute_broker_config_patch<'a>(
         &'a mut self,
         plan: &'a BrokerMutationConfigPlan,
@@ -183,6 +200,17 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         })
     }
 
+    fn execute_broker_config_patch_verified<'a>(
+        &'a mut self,
+        plan: &'a BrokerMutationConfigPlan,
+        patch: BrokerMutationConfigPatch,
+    ) -> AdminFuture<'a, BrokerMutationConfigOutcome> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            execute_broker_config_patch_verified_with_admin(&self.inner.inner, &self.plan_seal, plan, patch).await
+        })
+    }
+
     fn preflight_request_mode<'a>(
         &'a mut self,
         request: &'a RequestModePreflightRequest,
@@ -200,6 +228,23 @@ impl SupervisedMutationAdmin for MutationAdminSession {
         Box::pin(async move {
             self.inner.ensure_open()?;
             execute_request_mode_checked(&self.inner.inner, &self.plan_seal, plan).await
+        })
+    }
+
+    fn execute_request_mode_with_timeout<'a>(
+        &'a mut self,
+        plan: &'a RequestModeMutationPlan,
+        timeout_millis: u64,
+    ) -> AdminFuture<'a, RequestModeMutationOutcome> {
+        Box::pin(async move {
+            self.inner.ensure_open()?;
+            if !(1..=24_000).contains(&timeout_millis) {
+                return Err(AdminError::invalid_argument(
+                    "timeoutMillis",
+                    "must be between 1 and 24000",
+                ));
+            }
+            execute_request_mode_checked_with_timeout(&self.inner.inner, &self.plan_seal, plan, timeout_millis).await
         })
     }
 }
@@ -644,6 +689,56 @@ async fn preflight_request_mode_with_admin<A: MQAdminMutationExt + ?Sized>(
     let mut targets = Vec::new();
     let mut failures = Vec::new();
     for (broker_name, broker_addr) in master_targets_by_cluster_name(&cluster_info, &cluster)? {
+        let topic_state = match admin
+            .mutation_topic_config_state(broker_addr.clone(), topic.clone().into())
+            .await
+        {
+            Ok(state) => state,
+            Err(error) => {
+                failures.push(client_failure(broker_name, None, &error));
+                continue;
+            }
+        };
+        if !matches!(
+            topic_state,
+            rocketmq_client_rust::MutationTopicConfigState {
+                state: ClientExpectedState::Present { .. },
+                config: Some(_),
+            }
+        ) {
+            failures.push(MutationTargetFailure {
+                broker_name,
+                queue_id: None,
+                code: MutationFailureCode::InvalidData,
+                retryable: false,
+            });
+            continue;
+        }
+        let group_state = match admin
+            .mutation_subscription_group_config_state(broker_addr.clone(), group.clone().into())
+            .await
+        {
+            Ok(state) => state,
+            Err(error) => {
+                failures.push(client_failure(broker_name, None, &error));
+                continue;
+            }
+        };
+        if !matches!(
+            group_state,
+            rocketmq_client_rust::MutationSubscriptionGroupConfigState {
+                state: ClientExpectedState::Present { .. },
+                config: Some(_),
+            }
+        ) {
+            failures.push(MutationTargetFailure {
+                broker_name,
+                queue_id: None,
+                code: MutationFailureCode::InvalidData,
+                retryable: false,
+            });
+            continue;
+        }
         match admin
             .mutation_message_request_mode(broker_addr.clone(), topic.clone().into(), group.clone().into())
             .await
@@ -693,10 +788,140 @@ async fn preflight_broker_config_with_admin<A: MQAdminMutationExt + ?Sized>(
     })
 }
 
+async fn preflight_broker_config_target_with_admin<A: MQAdminMutationExt + ?Sized>(
+    admin: &A,
+    seal: Arc<MutationPlanSeal>,
+    cluster: &str,
+    broker_name: &str,
+) -> AdminResult<BrokerMutationConfigPlan> {
+    let cluster = require_non_empty("cluster", cluster)?.to_owned();
+    let broker_name = require_non_empty("brokerName", broker_name)?.to_owned();
+    let cluster_info = admin
+        .mutation_cluster_info()
+        .await
+        .map_err(|error| backend_error("mutation_cluster_info", error))?;
+    let all_targets = master_targets_by_cluster_name(&cluster_info, &cluster)?;
+    let selected = vec![broker_name];
+    let selected_targets = select_metadata_targets(all_targets, Some(&selected))?;
+    let mut targets = Vec::with_capacity(1);
+    let mut failures = Vec::new();
+    for (broker_name, broker_addr) in selected_targets {
+        match admin.broker_mutation_config_state(broker_addr.clone()).await {
+            Ok(state) => targets.push((broker_name, broker_addr.to_string(), map_client_broker_state(state))),
+            Err(error) => failures.push(client_failure(broker_name, None, &error)),
+        }
+    }
+    Ok(BrokerMutationConfigPlan {
+        seal,
+        cluster,
+        targets,
+        failures,
+    })
+}
+
+async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt + ?Sized>(
+    admin: &A,
+    session_seal: &Arc<MutationPlanSeal>,
+    plan: &BrokerMutationConfigPlan,
+    patch: BrokerMutationConfigPatch,
+) -> AdminResult<BrokerMutationConfigOutcome> {
+    ensure_same_plan_seal(session_seal, &plan.seal)?;
+    let properties = broker_patch_properties(patch)?;
+    let mut outcome = BrokerMutationConfigOutcome {
+        failures: plan.failures.clone(),
+        ..BrokerMutationConfigOutcome::default()
+    };
+    for (broker_name, broker_addr, before) in &plan.targets {
+        let planned_changed = broker_patch_changes(*before, patch);
+        match admin
+            .patch_broker_config_if_generation(broker_addr.as_str().into(), before.generation, properties.clone())
+            .await
+        {
+            Ok(ClientBrokerConfigPatchOutcome::Applied { .. }) => {
+                match admin.broker_mutation_config_state(broker_addr.as_str().into()).await {
+                    Ok(observed) => {
+                        let observed = map_client_broker_state(observed);
+                        let verified = broker_patch_matches(observed, patch);
+                        outcome.targets.push(BrokerMutationConfigTargetOutcome {
+                            broker_name: broker_name.clone(),
+                            before: *before,
+                            after: Some(observed),
+                            applied: true,
+                            changed: planned_changed,
+                            persistence: MutationPersistenceState::Persisted,
+                            verification: if verified {
+                                MutationVerificationState::Verified
+                            } else {
+                                MutationVerificationState::Failed
+                            },
+                            failure: (!verified).then_some(MutationFailureCode::VerificationFailed),
+                            retryable: false,
+                        });
+                    }
+                    Err(error) => outcome.targets.push(BrokerMutationConfigTargetOutcome {
+                        broker_name: broker_name.clone(),
+                        before: *before,
+                        after: None,
+                        applied: true,
+                        changed: planned_changed,
+                        persistence: MutationPersistenceState::Persisted,
+                        verification: MutationVerificationState::Failed,
+                        failure: Some(MutationFailureCode::VerificationFailed),
+                        retryable: error.boundary_view().is_retryable(),
+                    }),
+                }
+            }
+            Ok(ClientBrokerConfigPatchOutcome::GenerationConflict { .. }) => {
+                outcome.targets.push(BrokerMutationConfigTargetOutcome {
+                    broker_name: broker_name.clone(),
+                    before: *before,
+                    after: None,
+                    applied: false,
+                    changed: false,
+                    persistence: MutationPersistenceState::NotRequired,
+                    verification: MutationVerificationState::NotPerformed,
+                    failure: Some(MutationFailureCode::Conflict),
+                    retryable: false,
+                });
+            }
+            Err(error) => outcome.targets.push(BrokerMutationConfigTargetOutcome {
+                broker_name: broker_name.clone(),
+                before: *before,
+                after: None,
+                applied: false,
+                changed: false,
+                persistence: MutationPersistenceState::NotRequired,
+                verification: MutationVerificationState::NotPerformed,
+                failure: Some(MutationFailureCode::Unavailable),
+                retryable: error.boundary_view().is_retryable(),
+            }),
+        }
+    }
+    Ok(outcome)
+}
+
 async fn execute_request_mode_checked<A: MQAdminMutationExt + ?Sized>(
     admin: &A,
     session_seal: &Arc<MutationPlanSeal>,
     plan: &RequestModeMutationPlan,
+) -> AdminResult<RequestModeMutationOutcome> {
+    execute_request_mode_checked_inner(admin, session_seal, plan, None).await
+}
+
+async fn execute_request_mode_checked_with_timeout<A: MQAdminMutationExt + ?Sized>(
+    admin: &A,
+    session_seal: &Arc<MutationPlanSeal>,
+    plan: &RequestModeMutationPlan,
+    timeout_millis: u64,
+) -> AdminResult<RequestModeMutationOutcome> {
+    execute_request_mode_checked_inner(admin, session_seal, plan, Some(timeout_millis)).await
+}
+
+async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
+    admin: &A,
+    session_seal: &Arc<MutationPlanSeal>,
+    plan: &RequestModeMutationPlan,
+    timeout_millis: Option<u64>,
 ) -> AdminResult<RequestModeMutationOutcome> {
     ensure_same_plan_seal(session_seal, &plan.seal)?;
     let mut outcome = RequestModeMutationOutcome {
@@ -707,16 +932,30 @@ async fn execute_request_mode_checked<A: MQAdminMutationExt + ?Sized>(
         let expected = current.map_or(ClientExpectedMessageRequestMode::Absent, |value| {
             ClientExpectedMessageRequestMode::Present(map_request_mode_to_client(value))
         });
-        match admin
-            .replace_message_request_mode_if_current(
-                broker_addr.as_str().into(),
-                plan.topic.as_str().into(),
-                plan.consumer_group.as_str().into(),
-                expected,
-                map_request_mode_to_client(plan.replacement),
-            )
-            .await
-        {
+        let replacement = map_request_mode_to_client(plan.replacement);
+        let result = if let Some(timeout_millis) = timeout_millis {
+            admin
+                .replace_message_request_mode_if_current_with_timeout(
+                    broker_addr.as_str().into(),
+                    plan.topic.as_str().into(),
+                    plan.consumer_group.as_str().into(),
+                    expected,
+                    replacement,
+                    timeout_millis,
+                )
+                .await
+        } else {
+            admin
+                .replace_message_request_mode_if_current(
+                    broker_addr.as_str().into(),
+                    plan.topic.as_str().into(),
+                    plan.consumer_group.as_str().into(),
+                    expected,
+                    replacement,
+                )
+                .await
+        };
+        match result {
             Ok(result) if result.applied || result.persistence == ClientMutationPersistenceState::Failed => {
                 let observed = admin
                     .mutation_message_request_mode(
@@ -742,7 +981,7 @@ async fn execute_request_mode_checked<A: MQAdminMutationExt + ?Sized>(
                         )
                     }
                     Err(error) => (
-                        result.current.map(map_client_request_mode),
+                        None,
                         MutationVerificationState::Failed,
                         true,
                         error.boundary_view().is_retryable(),
@@ -996,7 +1235,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                         observed_offset: None,
                         applied: true,
                         changed: true,
-                        failure: Some(MutationFailureCode::Unavailable),
+                        failure: Some(MutationFailureCode::VerificationFailed),
                         retryable: error.boundary_view().is_retryable(),
                     }),
                 }
@@ -1312,6 +1551,31 @@ fn broker_patch_properties(patch: BrokerMutationConfigPatch) -> AdminResult<Hash
     Ok(properties)
 }
 
+fn broker_patch_matches(state: BrokerMutationConfigState, patch: BrokerMutationConfigPatch) -> bool {
+    patch
+        .auto_create_topic_enable
+        .is_none_or(|value| state.auto_create_topic_enable == value)
+        && patch
+            .auto_create_subscription_group
+            .is_none_or(|value| state.auto_create_subscription_group == value)
+        && patch
+            .broker_permission
+            .is_none_or(|value| state.broker_permission == value)
+        && patch
+            .default_topic_queue_nums
+            .is_none_or(|value| state.default_topic_queue_nums == value)
+        && patch
+            .message_index_enable
+            .is_none_or(|value| state.message_index_enable == value)
+        && patch
+            .trace_topic_enable
+            .is_none_or(|value| state.trace_topic_enable == value)
+}
+
+fn broker_patch_changes(state: BrokerMutationConfigState, patch: BrokerMutationConfigPatch) -> bool {
+    !broker_patch_matches(state, patch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1319,6 +1583,9 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Mutex;
+    use std::time::Duration;
+
+    use rocketmq_runtime::RuntimeContext;
 
     struct CountingMutationAdmin {
         cluster_info: ClusterInfo,
@@ -1328,10 +1595,18 @@ mod tests {
         preview_calls: AtomicUsize,
         reset_calls: AtomicUsize,
         verify_calls: AtomicUsize,
+        offset_fail_postread: AtomicBool,
         endpoint_calls: Mutex<Vec<(&'static str, String)>>,
+        broker_state: Mutex<ClientBrokerMutationConfigState>,
+        broker_reads: AtomicUsize,
+        broker_writes: AtomicUsize,
+        broker_conflict: AtomicBool,
+        broker_fail_postread: AtomicBool,
         request_mode: Mutex<Option<ClientMessageRequestMode>>,
         request_mode_reads: AtomicUsize,
         request_mode_writes: AtomicUsize,
+        request_mode_fail_postread: AtomicBool,
+        request_mode_timeouts: Mutex<Vec<u64>>,
         request_mode_persistence: Mutex<ClientMutationPersistenceState>,
         request_mode_dirty: AtomicBool,
         topic_state: Mutex<rocketmq_client_rust::MutationTopicConfigState>,
@@ -1408,10 +1683,26 @@ mod tests {
                 preview_calls: AtomicUsize::new(0),
                 reset_calls: AtomicUsize::new(0),
                 verify_calls: AtomicUsize::new(0),
+                offset_fail_postread: AtomicBool::new(false),
                 endpoint_calls: Mutex::new(Vec::new()),
+                broker_state: Mutex::new(ClientBrokerMutationConfigState {
+                    generation: 1,
+                    auto_create_topic_enable: true,
+                    auto_create_subscription_group: true,
+                    broker_permission: 6,
+                    default_topic_queue_nums: 8,
+                    message_index_enable: true,
+                    trace_topic_enable: false,
+                }),
+                broker_reads: AtomicUsize::new(0),
+                broker_writes: AtomicUsize::new(0),
+                broker_conflict: AtomicBool::new(false),
+                broker_fail_postread: AtomicBool::new(false),
                 request_mode: Mutex::new(None),
                 request_mode_reads: AtomicUsize::new(0),
                 request_mode_writes: AtomicUsize::new(0),
+                request_mode_fail_postread: AtomicBool::new(false),
+                request_mode_timeouts: Mutex::new(Vec::new()),
                 request_mode_persistence: Mutex::new(ClientMutationPersistenceState::Persisted),
                 request_mode_dirty: AtomicBool::new(false),
                 topic_state: Mutex::new(rocketmq_client_rust::MutationTopicConfigState {
@@ -1447,6 +1738,36 @@ mod tests {
                 .expect("endpoint calls")
                 .push((operation, broker_addr.to_string()));
         }
+
+        fn enable_request_mode_target(&self) {
+            *self.topic_state.lock().expect("topic state") = rocketmq_client_rust::MutationTopicConfigState {
+                state: ClientExpectedState::Present { version: 1 },
+                config: Some(map_topic_replacement_to_client(&TopicReplacement {
+                    read_queue_nums: 1,
+                    write_queue_nums: 1,
+                    perm: 6,
+                    order: false,
+                    message_type: TopicMessageType::Normal,
+                })),
+            };
+            *self.group_state.lock().expect("group state") =
+                rocketmq_client_rust::MutationSubscriptionGroupConfigState {
+                    state: ClientExpectedState::Present { version: 1 },
+                    config: Some(map_group_replacement_to_client(&SubscriptionGroupReplacement {
+                        consume_enable: true,
+                        consume_from_min_enable: false,
+                        consume_broadcast_enable: false,
+                        consume_message_orderly: false,
+                        retry_queue_nums: 1,
+                        retry_max_times: 16,
+                        broker_id: 0,
+                        which_broker_when_consume_slowly: 1,
+                        notify_consumer_ids_changed_enable: true,
+                        group_sys_flag: 0,
+                        consume_timeout_minute: 15,
+                    })),
+                };
+        }
     }
 
     fn unsupported<T>() -> rocketmq_error::RocketMQResult<T> {
@@ -1478,11 +1799,44 @@ mod tests {
 
         async fn patch_broker_config_if_generation(
             &self,
-            _broker_addr: CheetahString,
-            _expected_generation: u64,
-            _properties: HashMap<CheetahString, CheetahString>,
+            broker_addr: CheetahString,
+            expected_generation: u64,
+            properties: HashMap<CheetahString, CheetahString>,
         ) -> rocketmq_error::RocketMQResult<ClientBrokerConfigPatchOutcome> {
-            unsupported()
+            self.record_endpoint("broker_write", &broker_addr);
+            self.broker_writes.fetch_add(1, Ordering::SeqCst);
+            let mut state = self.broker_state.lock().expect("broker state");
+            if self.broker_conflict.load(Ordering::SeqCst) || state.generation != expected_generation {
+                return Ok(ClientBrokerConfigPatchOutcome::GenerationConflict {
+                    expected_generation,
+                    actual_generation: state.generation,
+                });
+            }
+            for (key, value) in properties {
+                match key.as_str() {
+                    "autoCreateTopicEnable" => state.auto_create_topic_enable = value == "true",
+                    "autoCreateSubscriptionGroup" => state.auto_create_subscription_group = value == "true",
+                    "brokerPermission" => {
+                        state.broker_permission = value
+                            .parse()
+                            .map_err(|_| RocketMQError::illegal_argument("invalid test broker permission"))?;
+                    }
+                    "defaultTopicQueueNums" => {
+                        state.default_topic_queue_nums = value
+                            .parse()
+                            .map_err(|_| RocketMQError::illegal_argument("invalid test queue count"))?;
+                    }
+                    "messageIndexEnable" => state.message_index_enable = value == "true",
+                    "traceTopicEnable" => state.trace_topic_enable = value == "true",
+                    _ => return unsupported(),
+                }
+            }
+            let previous_generation = state.generation;
+            state.generation += 1;
+            Ok(ClientBrokerConfigPatchOutcome::Applied {
+                previous_generation,
+                generation: state.generation,
+            })
         }
 
         async fn patch_topic_config_if_version(
@@ -1722,6 +2076,12 @@ mod tests {
             queue_id: i32,
         ) -> rocketmq_error::RocketMQResult<i64> {
             self.verify_calls.fetch_add(1, Ordering::SeqCst);
+            if self.offset_fail_postread.load(Ordering::SeqCst) && self.reset_calls.load(Ordering::SeqCst) > 0 {
+                return Err(RocketMQError::network_connection_failed(
+                    "test-broker",
+                    "test offset postread failure",
+                ));
+            }
             self.offsets
                 .lock()
                 .expect("offsets")
@@ -1863,15 +2223,11 @@ mod tests {
             broker_addr: CheetahString,
         ) -> rocketmq_error::RocketMQResult<ClientBrokerMutationConfigState> {
             self.record_endpoint("broker", &broker_addr);
-            Ok(ClientBrokerMutationConfigState {
-                generation: 1,
-                auto_create_topic_enable: true,
-                auto_create_subscription_group: true,
-                broker_permission: 6,
-                default_topic_queue_nums: 8,
-                message_index_enable: true,
-                trace_topic_enable: false,
-            })
+            self.broker_reads.fetch_add(1, Ordering::SeqCst);
+            if self.broker_fail_postread.load(Ordering::SeqCst) && self.broker_writes.load(Ordering::SeqCst) > 0 {
+                return Err(RocketMQError::illegal_argument("test postread failure"));
+            }
+            Ok(*self.broker_state.lock().expect("broker state"))
         }
 
         async fn mutation_message_request_mode(
@@ -1882,6 +2238,14 @@ mod tests {
         ) -> rocketmq_error::RocketMQResult<Option<ClientMessageRequestMode>> {
             self.record_endpoint("request_mode", &broker_addr);
             self.request_mode_reads.fetch_add(1, Ordering::SeqCst);
+            if self.request_mode_fail_postread.load(Ordering::SeqCst)
+                && self.request_mode_writes.load(Ordering::SeqCst) > 0
+            {
+                return Err(RocketMQError::network_connection_failed(
+                    "test-broker",
+                    "test request-mode postread failure",
+                ));
+            }
             Ok(*self.request_mode.lock().expect("request mode"))
         }
 
@@ -1932,6 +2296,23 @@ mod tests {
                 current: *current,
                 persistence,
             })
+        }
+
+        async fn replace_message_request_mode_if_current_with_timeout(
+            &self,
+            broker_addr: CheetahString,
+            topic: CheetahString,
+            consumer_group: CheetahString,
+            expected: ClientExpectedMessageRequestMode,
+            replacement: ClientMessageRequestMode,
+            timeout_millis: u64,
+        ) -> rocketmq_error::RocketMQResult<rocketmq_client_rust::MutationMessageRequestModeOutcome> {
+            self.request_mode_timeouts
+                .lock()
+                .expect("request mode timeouts")
+                .push(timeout_millis);
+            self.replace_message_request_mode_if_current(broker_addr, topic, consumer_group, expected, replacement)
+                .await
         }
     }
 
@@ -2058,6 +2439,7 @@ mod tests {
     #[tokio::test]
     async fn production_preflights_use_only_selected_cluster_master_endpoints() {
         let fake = CountingMutationAdmin::new(1);
+        fake.enable_request_mode_target();
         let seal = Arc::new(MutationPlanSeal);
         preflight_topic_with_admin(
             &fake,
@@ -2122,7 +2504,7 @@ mod tests {
         .expect("request-mode preflight");
 
         let calls = fake.endpoint_calls.lock().expect("endpoint calls");
-        assert_eq!(calls.len(), 5);
+        assert_eq!(calls.len(), 7);
         assert_eq!(
             calls.iter().map(|(operation, _)| *operation).collect::<HashSet<_>>(),
             HashSet::from(["topic", "group", "offset", "broker", "request_mode"])
@@ -2374,6 +2756,114 @@ mod tests {
         assert!(broker_patch_properties(BrokerMutationConfigPatch::default()).is_err());
     }
 
+    #[tokio::test]
+    async fn targeted_broker_patch_seals_one_validated_master_and_verifies_full_state() {
+        let fake = CountingMutationAdmin::with_queue_counts(&[1, 1]);
+        let seal = Arc::new(MutationPlanSeal);
+        let plan = preflight_broker_config_target_with_admin(&fake, Arc::clone(&seal), "cluster-a", "broker-1")
+            .await
+            .expect("targeted broker preflight");
+        assert_eq!(plan.targets()[0].broker_name, "broker-1");
+        assert_eq!(fake.broker_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            fake.endpoint_calls.lock().expect("endpoint calls").as_slice(),
+            [("broker", "10.0.0.2:10911".to_owned())]
+        );
+
+        let patch = BrokerMutationConfigPatch {
+            auto_create_topic_enable: Some(false),
+            auto_create_subscription_group: Some(false),
+            broker_permission: Some(4),
+            default_topic_queue_nums: Some(16),
+            message_index_enable: Some(false),
+            trace_topic_enable: Some(true),
+        };
+        let outcome = execute_broker_config_patch_verified_with_admin(&fake, &seal, &plan, patch)
+            .await
+            .expect("verified broker patch");
+        assert_eq!(outcome.targets.len(), 1);
+        let target = &outcome.targets[0];
+        assert!(target.applied);
+        assert!(target.changed);
+        assert_eq!(target.verification, MutationVerificationState::Verified);
+        assert_eq!(target.after.expect("postread").generation, 2);
+        assert_eq!(target.after.expect("postread").broker_permission, 4);
+        assert_eq!(fake.broker_writes.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.broker_reads.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            fake.endpoint_calls.lock().expect("endpoint calls").as_slice(),
+            [
+                ("broker", "10.0.0.2:10911".to_owned()),
+                ("broker_write", "10.0.0.2:10911".to_owned()),
+                ("broker", "10.0.0.2:10911".to_owned()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn targeted_broker_patch_never_retries_conflict_and_retains_applied_postread_failure() {
+        let conflict = CountingMutationAdmin::new(1);
+        let seal = Arc::new(MutationPlanSeal);
+        let plan = preflight_broker_config_target_with_admin(&conflict, Arc::clone(&seal), "cluster-a", "broker-0")
+            .await
+            .expect("broker preflight");
+        conflict.broker_conflict.store(true, Ordering::SeqCst);
+        let patch = BrokerMutationConfigPatch {
+            trace_topic_enable: Some(true),
+            ..BrokerMutationConfigPatch::default()
+        };
+        let outcome = execute_broker_config_patch_verified_with_admin(&conflict, &seal, &plan, patch)
+            .await
+            .expect("conflict outcome");
+        assert_eq!(conflict.broker_writes.load(Ordering::SeqCst), 1);
+        assert_eq!(conflict.broker_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(outcome.targets[0].failure, Some(MutationFailureCode::Conflict));
+        assert!(!outcome.targets[0].applied);
+
+        let postread = CountingMutationAdmin::new(1);
+        let seal = Arc::new(MutationPlanSeal);
+        let plan = preflight_broker_config_target_with_admin(&postread, Arc::clone(&seal), "cluster-a", "broker-0")
+            .await
+            .expect("broker preflight");
+        postread.broker_fail_postread.store(true, Ordering::SeqCst);
+        let outcome = execute_broker_config_patch_verified_with_admin(&postread, &seal, &plan, patch)
+            .await
+            .expect("postread outcome");
+        assert_eq!(postread.broker_writes.load(Ordering::SeqCst), 1);
+        assert_eq!(postread.broker_reads.load(Ordering::SeqCst), 2);
+        assert!(outcome.targets[0].applied);
+        assert_eq!(outcome.targets[0].after, None);
+        assert_eq!(outcome.targets[0].verification, MutationVerificationState::Failed);
+        assert_eq!(
+            outcome.targets[0].failure,
+            Some(MutationFailureCode::VerificationFailed)
+        );
+    }
+
+    #[tokio::test]
+    async fn targeted_broker_preflight_validates_full_topology_before_state_read() {
+        let mut corrupt = CountingMutationAdmin::with_queue_counts(&[1, 1]);
+        corrupt
+            .cluster_info
+            .broker_addr_table
+            .as_mut()
+            .expect("broker table")
+            .insert(
+                CheetahString::from("broker-1"),
+                broker("cluster-a", "broker-1", [(MASTER_ID, "10.0.0.1:10911")]),
+            );
+        assert!(preflight_broker_config_target_with_admin(
+            &corrupt,
+            Arc::new(MutationPlanSeal),
+            "cluster-a",
+            "broker-0",
+        )
+        .await
+        .is_err());
+        assert_eq!(corrupt.broker_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(corrupt.broker_writes.load(Ordering::SeqCst), 0);
+    }
+
     #[test]
     fn partial_failures_expose_only_logical_identity() {
         let error = RocketMQError::illegal_argument("backend at 10.0.0.9:10911 with accessKey=secret");
@@ -2443,6 +2933,27 @@ mod tests {
             .await
             .expect("force execute");
         assert!(outcome.targets[0].changed);
+        assert_eq!(fake.reset_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.verify_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn production_offset_postread_error_preserves_applied_truth_as_verification_failure() {
+        let fake = CountingMutationAdmin::new(1);
+        fake.offset_fail_postread.store(true, Ordering::SeqCst);
+        let seal = Arc::new(MutationPlanSeal);
+        let plan = preview_offset_reset_with_admin(&fake, Arc::clone(&seal), &offset_request(true))
+            .await
+            .expect("offset preflight");
+        let outcome = execute_offset_reset_checked(&fake, &seal, &plan)
+            .await
+            .expect("offset execute");
+        let target = &outcome.targets[0];
+        assert!(target.applied);
+        assert!(target.changed);
+        assert_eq!(target.observed_offset, None);
+        assert_eq!(target.failure, Some(MutationFailureCode::VerificationFailed));
+        assert!(target.retryable);
         assert_eq!(fake.reset_calls.load(Ordering::SeqCst), 1);
         assert_eq!(fake.verify_calls.load(Ordering::SeqCst), 1);
     }
@@ -2541,6 +3052,7 @@ mod tests {
     #[tokio::test]
     async fn production_request_mode_workflow_checks_current_cas_and_verifies_once() {
         let fake = CountingMutationAdmin::new(1);
+        fake.enable_request_mode_target();
         let seal = Arc::new(MutationPlanSeal);
         let request = RequestModePreflightRequest {
             cluster: "cluster-a".to_owned(),
@@ -2566,8 +3078,175 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn production_request_mode_postread_error_never_uses_cas_current_as_after() {
+        let fake = CountingMutationAdmin::new(1);
+        fake.enable_request_mode_target();
+        fake.request_mode_fail_postread.store(true, Ordering::SeqCst);
+        let seal = Arc::new(MutationPlanSeal);
+        let request = RequestModePreflightRequest {
+            cluster: "cluster-a".to_owned(),
+            topic: "orders".to_owned(),
+            consumer_group: "orders-consumer".to_owned(),
+            replacement: RequestModeValue {
+                mode: RequestMode::Pop,
+                pop_share_queue_num: 4,
+            },
+        };
+        let plan = preflight_request_mode_with_admin(&fake, Arc::clone(&seal), &request)
+            .await
+            .expect("request-mode preflight");
+        let outcome = execute_request_mode_checked_with_timeout(&fake, &seal, &plan, 12_345)
+            .await
+            .expect("request-mode execute");
+        let target = &outcome.targets[0];
+        assert!(target.applied);
+        assert!(target.changed);
+        assert_eq!(target.current, None);
+        assert_eq!(target.persistence, MutationPersistenceState::Persisted);
+        assert_eq!(target.verification, MutationVerificationState::Failed);
+        assert_eq!(target.failure, Some(MutationFailureCode::VerificationFailed));
+        assert!(target.retryable);
+        assert_eq!(fake.request_mode_writes.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.request_mode_reads.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn production_request_mode_preflight_requires_topic_and_group_before_mode_query() {
+        let fake = CountingMutationAdmin::new(1);
+        let request = RequestModePreflightRequest {
+            cluster: "cluster-a".to_owned(),
+            topic: "orders".to_owned(),
+            consumer_group: "orders-consumer".to_owned(),
+            replacement: RequestModeValue {
+                mode: RequestMode::Pull,
+                pop_share_queue_num: 0,
+            },
+        };
+        let plan = preflight_request_mode_with_admin(&fake, Arc::new(MutationPlanSeal), &request)
+            .await
+            .expect("missing topic is a target failure");
+        assert!(plan.targets().is_empty());
+        assert_eq!(plan.failures()[0].code, MutationFailureCode::InvalidData);
+        assert_eq!(fake.topic_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.group_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(fake.request_mode_reads.load(Ordering::SeqCst), 0);
+
+        *fake.topic_state.lock().expect("topic state") = rocketmq_client_rust::MutationTopicConfigState {
+            state: ClientExpectedState::Present { version: 1 },
+            config: Some(map_topic_replacement_to_client(&TopicReplacement {
+                read_queue_nums: 1,
+                write_queue_nums: 1,
+                perm: 6,
+                order: false,
+                message_type: TopicMessageType::Normal,
+            })),
+        };
+        let plan = preflight_request_mode_with_admin(&fake, Arc::new(MutationPlanSeal), &request)
+            .await
+            .expect("missing group is a target failure");
+        assert!(plan.targets().is_empty());
+        assert_eq!(plan.failures()[0].code, MutationFailureCode::InvalidData);
+        assert_eq!(fake.group_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.request_mode_reads.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn production_request_mode_timeout_is_forwarded_exactly() {
+        let fake = CountingMutationAdmin::new(1);
+        fake.enable_request_mode_target();
+        let seal = Arc::new(MutationPlanSeal);
+        let request = RequestModePreflightRequest {
+            cluster: "cluster-a".to_owned(),
+            topic: "orders".to_owned(),
+            consumer_group: "orders-consumer".to_owned(),
+            replacement: RequestModeValue {
+                mode: RequestMode::Pop,
+                pop_share_queue_num: 3,
+            },
+        };
+        let plan = preflight_request_mode_with_admin(&fake, Arc::clone(&seal), &request)
+            .await
+            .expect("request-mode preflight");
+        let outcome = execute_request_mode_checked_with_timeout(&fake, &seal, &plan, 12_345)
+            .await
+            .expect("timeout-aware request-mode execute");
+        assert!(outcome.targets[0].applied);
+        assert_eq!(
+            fake.request_mode_timeouts
+                .lock()
+                .expect("request mode timeouts")
+                .as_slice(),
+            [12_345]
+        );
+    }
+
+    #[tokio::test]
+    async fn mutation_admin_session_uses_the_real_facade_timeout_dispatch() {
+        let runtime_context = RuntimeContext::from_current("mutation-session-facade-dispatch-test");
+        let client_runtime =
+            create_mutation_client_runtime(runtime_context.service_context("client")).expect("client runtime");
+        let facade = rocketmq_client_rust::DefaultMQAdminExt::new(Arc::clone(&client_runtime));
+        let inner = crate::client_adapter::lifecycle::AdminSession::from_started(
+            facade,
+            Arc::new(crate::core::clock::SystemClock),
+        );
+        let mut session = MutationAdminSession {
+            inner,
+            plan_seal: Arc::new(MutationPlanSeal),
+        };
+        let plan = RequestModeMutationPlan {
+            seal: Arc::clone(&session.plan_seal),
+            cluster: "cluster-a".to_owned(),
+            topic: "orders".to_owned(),
+            consumer_group: "orders-consumer".to_owned(),
+            replacement: RequestModeValue {
+                mode: RequestMode::Pop,
+                pop_share_queue_num: 4,
+            },
+            targets: vec![("broker-a".to_owned(), "127.0.0.1:10911".to_owned(), None)],
+            failures: Vec::new(),
+        };
+        let outcome = SupervisedMutationAdmin::execute_request_mode_with_timeout(&mut session, &plan, 12_345)
+            .await
+            .expect("the real mutation session maps facade failures into a typed target outcome");
+        assert_eq!(outcome.targets.len(), 1);
+        assert!(!outcome.targets[0].applied);
+        assert_eq!(outcome.targets[0].failure, Some(MutationFailureCode::Unavailable));
+
+        let error = MQAdminMutationExt::replace_message_request_mode_if_current_with_timeout(
+            &session.inner.inner,
+            "127.0.0.1:10911".into(),
+            "orders".into(),
+            "orders-consumer".into(),
+            ClientExpectedMessageRequestMode::Absent,
+            ClientMessageRequestMode {
+                mode: rocketmq_model::common::message::message_enum::MessageRequestMode::Pop,
+                pop_share_queue_num: 4,
+            },
+            12_345,
+        )
+        .await
+        .expect_err("an unstarted real facade must reach its concrete inner implementation");
+        assert!(matches!(error, RocketMQError::ClientNotStarted));
+
+        session.shutdown().await;
+        drop(session);
+        client_runtime
+            .shutdown()
+            .await
+            .assert_no_task_leak()
+            .expect("client runtime tasks drained");
+        runtime_context
+            .shutdown_tasks(Duration::from_secs(5))
+            .await
+            .assert_no_task_leak()
+            .expect("runtime tasks drained");
+    }
+
+    #[tokio::test]
     async fn production_request_mode_persistence_failure_retains_applied_truth_and_rereads_once() {
         let fake = CountingMutationAdmin::new(1);
+        fake.enable_request_mode_target();
         *fake.request_mode_persistence.lock().expect("persistence") = ClientMutationPersistenceState::Failed;
         let seal = Arc::new(MutationPlanSeal);
         let request = RequestModePreflightRequest {

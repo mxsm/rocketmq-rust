@@ -1,0 +1,31 @@
+{
+  "rocketmq_reset_consumer_offset": {
+    "schema_version": "rocketmq-mcp-control.arguments.v1",
+    "cluster": "production-a",
+    "topic": "orders",
+    "consumer_group": "orders-consumer",
+    "timestamp": "2026-08-30T08:00:00+08:00",
+    "force": false,
+    "dry_run": true
+  },
+  "rocketmq_patch_broker_config": {
+    "schema_version": "rocketmq-mcp-control.arguments.v1",
+    "cluster": "production-a",
+    "broker_name": "broker-a",
+    "properties": {
+      "brokerPermission": "6",
+      "traceTopicEnable": "true"
+    },
+    "dry_run": true
+  },
+  "rocketmq_set_consumer_request_mode": {
+    "schema_version": "rocketmq-mcp-control.arguments.v1",
+    "cluster": "production-a",
+    "topic": "orders",
+    "consumer_group": "orders-consumer",
+    "mode": "pop",
+    "pop_share_queue_num": 4,
+    "timeout_millis": 12000,
+    "dry_run": true
+  }
+}

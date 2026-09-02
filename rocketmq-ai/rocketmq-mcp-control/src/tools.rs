@@ -22,6 +22,10 @@ use serde::Serialize;
 use crate::error::ControlError;
 use crate::model::MutationArguments;
 
+#[path = "tools/remaining.rs"]
+mod remaining;
+pub use remaining::*;
+
 pub const MUTATION_RESULT_SCHEMA_VERSION: &str = "rocketmq-mcp-mutation.v1";
 pub const UPSERT_TOPIC_TOOL: &str = "rocketmq_upsert_topic";
 pub const UPSERT_CONSUMER_GROUP_TOOL: &str = "rocketmq_upsert_consumer_group";
@@ -266,7 +270,7 @@ impl UpsertConsumerGroupArgs {
     }
 }
 
-fn validate_common(
+pub(super) fn validate_common(
     schema_version: &str,
     dry_run: bool,
     confirm: bool,
@@ -299,13 +303,13 @@ fn validate_target_set(broker_names: &[String]) -> Result<(), ControlError> {
 }
 
 #[derive(Clone, Copy)]
-enum NameKind {
+pub(super) enum NameKind {
     Topic,
     ConsumerGroup,
     Broker,
 }
 
-fn validate_user_name(value: &str, kind: NameKind) -> Result<(), ControlError> {
+pub(super) fn validate_user_name(value: &str, kind: NameKind) -> Result<(), ControlError> {
     let max = if matches!(kind, NameKind::ConsumerGroup) {
         255
     } else {
@@ -354,7 +358,7 @@ fn contains_encoded_octet(value: &str) -> bool {
         .any(|window| window[0] == b'%' && window[1].is_ascii_hexdigit() && window[2].is_ascii_hexdigit())
 }
 
-const fn default_dry_run() -> bool {
+pub(super) const fn default_dry_run() -> bool {
     true
 }
 

@@ -482,6 +482,34 @@ pub trait MQAdminMutationExt: Send {
         ))
     }
 
+    /// Conditionally replaces one exact Topic/group request-mode entry using
+    /// the caller's bounded request timeout.
+    ///
+    /// The default deliberately fails closed so existing trait implementers
+    /// remain source compatible without silently ignoring the requested
+    /// timeout.
+    async fn replace_message_request_mode_if_current_with_timeout(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        expected: MutationExpectedMessageRequestMode,
+        replacement: MutationMessageRequestMode,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<MutationMessageRequestModeOutcome> {
+        let _ = (
+            broker_addr,
+            topic,
+            consumer_group,
+            expected,
+            replacement,
+            timeout_millis,
+        );
+        Err(rocketmq_error::RocketMQError::illegal_argument(
+            "timeout-aware conditional request-mode mutation is not implemented by this admin client",
+        ))
+    }
+
     /// Applies one bounded Broker logger override with an automatic TTL.
     ///
     /// Implementations must reject arbitrary filter expressions. `logger`
@@ -913,6 +941,27 @@ impl MQAdminMutationExt for DefaultMQAdminExt {
             consumer_group,
             expected,
             replacement,
+        )
+        .await
+    }
+
+    async fn replace_message_request_mode_if_current_with_timeout(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        consumer_group: CheetahString,
+        expected: MutationExpectedMessageRequestMode,
+        replacement: MutationMessageRequestMode,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<MutationMessageRequestModeOutcome> {
+        MQAdminMutationExt::replace_message_request_mode_if_current_with_timeout(
+            self.inner(),
+            broker_addr,
+            topic,
+            consumer_group,
+            expected,
+            replacement,
+            timeout_millis,
         )
         .await
     }

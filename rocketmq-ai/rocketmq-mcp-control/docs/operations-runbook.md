@@ -8,12 +8,13 @@
    JSONL audit path.
 3. Add a private cluster-registry entry for each logical cluster. Reference credentials only through protected
    environment-variable names; inline credentials are rejected.
-4. Configure `mutations_enabled=true` and allowlist only `topic_upsert`, `consumer_group_upsert`, or both, plus
+4. Configure `mutations_enabled=true` and allowlist only the required subset of `topic_upsert`,
+   `consumer_group_upsert`, `consumer_offset_reset`, `broker_config_patch`, and `consumer_request_mode`, plus
    their logical clusters. The identity provider must issue matching closed claims and `rocketmq:write`.
 5. Restart the process. Configuration and emergency-disable changes are startup-time controls and do not hot
    reload.
 
-Verify authenticated `tools/list`: a principal can see zero, one, or two tools according to the intersection.
+Verify authenticated `tools/list`: a principal can see zero through five tools according to the intersection.
 The capability Resource must report compile/runtime/registered state consistent with that catalog. Resource
 templates and prompts remain empty.
 

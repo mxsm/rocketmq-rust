@@ -410,13 +410,15 @@ mod tests {
         {
             Box::pin(async move {
                 self.counters.opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(Box::new(crate::tool_runtime::admin_session::AdminUpsertSession::new(
-                    ProtocolBackend {
-                        counters: self.counters.clone(),
-                        topic_executed: false,
-                        group_executed: false,
-                    },
-                )) as Box<dyn crate::tool_runtime::UpsertSession>)
+                Ok(
+                    Box::new(crate::tool_runtime::admin_session::AdminMutationToolSession::new(
+                        ProtocolBackend {
+                            counters: self.counters.clone(),
+                            topic_executed: false,
+                            group_executed: false,
+                        },
+                    )) as Box<dyn crate::tool_runtime::UpsertSession>,
+                )
             })
         }
     }
@@ -449,9 +451,12 @@ mod tests {
     }
 
     #[cfg(feature = "write-tools")]
-    impl crate::tool_runtime::admin_session::SupervisedUpsertBackend for ProtocolBackend {
+    impl crate::tool_runtime::admin_session::SupervisedMutationBackend for ProtocolBackend {
         type TopicPlan = ProtocolTopicPlan;
         type GroupPlan = ProtocolGroupPlan;
+        type OffsetPlan = ();
+        type BrokerPlan = ();
+        type RequestModePlan = ();
 
         fn preflight_topic<'a>(
             &'a mut self,
@@ -619,6 +624,99 @@ mod tests {
             })
         }
 
+        fn preview_offset<'a>(
+            &'a mut self,
+            _request: &'a rocketmq_admin_core::core::supervised_mutation::OffsetResetPreviewRequest,
+        ) -> crate::tool_runtime::RuntimeFuture<'a, Result<Self::OffsetPlan, ControlError>> {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn offset_rows(
+            _plan: &Self::OffsetPlan,
+        ) -> Vec<rocketmq_admin_core::core::supervised_mutation::OffsetResetPreviewRow> {
+            Vec::new()
+        }
+
+        fn offset_failures(
+            _plan: &Self::OffsetPlan,
+        ) -> &[rocketmq_admin_core::core::supervised_mutation::MutationTargetFailure] {
+            &[]
+        }
+
+        fn execute_offset<'a>(
+            &'a mut self,
+            _plan: &'a Self::OffsetPlan,
+        ) -> crate::tool_runtime::RuntimeFuture<
+            'a,
+            Result<rocketmq_admin_core::core::supervised_mutation::OffsetResetOutcome, ControlError>,
+        > {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn preflight_broker<'a>(
+            &'a mut self,
+            _cluster: &'a str,
+            _broker_name: &'a str,
+        ) -> crate::tool_runtime::RuntimeFuture<'a, Result<Self::BrokerPlan, ControlError>> {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn broker_targets(
+            _plan: &Self::BrokerPlan,
+        ) -> Vec<rocketmq_admin_core::core::supervised_mutation::BrokerMutationConfigTarget> {
+            Vec::new()
+        }
+
+        fn broker_failures(
+            _plan: &Self::BrokerPlan,
+        ) -> &[rocketmq_admin_core::core::supervised_mutation::MutationTargetFailure] {
+            &[]
+        }
+
+        fn execute_broker<'a>(
+            &'a mut self,
+            _plan: &'a Self::BrokerPlan,
+            _patch: rocketmq_admin_core::core::supervised_mutation::BrokerMutationConfigPatch,
+        ) -> crate::tool_runtime::RuntimeFuture<
+            'a,
+            Result<rocketmq_admin_core::core::supervised_mutation::BrokerMutationConfigOutcome, ControlError>,
+        > {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn preflight_request_mode<'a>(
+            &'a mut self,
+            _request: &'a rocketmq_admin_core::core::supervised_mutation::RequestModePreflightRequest,
+        ) -> crate::tool_runtime::RuntimeFuture<'a, Result<Self::RequestModePlan, ControlError>> {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
+        fn request_mode_targets(
+            _plan: &Self::RequestModePlan,
+        ) -> Vec<(
+            String,
+            Option<rocketmq_admin_core::core::supervised_mutation::RequestModeValue>,
+        )> {
+            Vec::new()
+        }
+
+        fn request_mode_failures(
+            _plan: &Self::RequestModePlan,
+        ) -> &[rocketmq_admin_core::core::supervised_mutation::MutationTargetFailure] {
+            &[]
+        }
+
+        fn execute_request_mode<'a>(
+            &'a mut self,
+            _plan: &'a Self::RequestModePlan,
+            _timeout_millis: u64,
+        ) -> crate::tool_runtime::RuntimeFuture<
+            'a,
+            Result<rocketmq_admin_core::core::supervised_mutation::RequestModeMutationOutcome, ControlError>,
+        > {
+            Box::pin(async { Err(ControlError::operation_unavailable()) })
+        }
+
         fn shutdown(&mut self) -> crate::tool_runtime::RuntimeFuture<'_, Result<(), ControlError>> {
             Box::pin(async move {
                 self.counters
@@ -639,7 +737,13 @@ mod tests {
         config.mutations = MutationPolicyConfig {
             mutations_enabled: true,
             dry_run: true,
-            allowed_operations: vec![ControlOperation::TopicUpsert, ControlOperation::ConsumerGroupUpsert],
+            allowed_operations: vec![
+                ControlOperation::TopicUpsert,
+                ControlOperation::ConsumerGroupUpsert,
+                ControlOperation::ConsumerOffsetReset,
+                ControlOperation::BrokerConfigPatch,
+                ControlOperation::ConsumerRequestMode,
+            ],
             allowed_clusters: vec![ClusterName::try_new("cluster-a").unwrap()],
             operation_timeout_seconds: 2,
         };
@@ -904,6 +1008,43 @@ mod tests {
     #[tokio::test]
     async fn authenticated_tool_discovery_and_call_enforce_claims_before_schema() {
         let (router, counters, _sink) = write_router().await;
+        let all = token_with_claims(
+            REQUIRED_WRITE_SCOPE,
+            vec![
+                "topic_upsert",
+                "consumer_group_upsert",
+                "consumer_offset_reset",
+                "broker_config_patch",
+                "consumer_request_mode",
+            ],
+            vec!["cluster-a"],
+        );
+        let tools = router
+            .clone()
+            .oneshot(request(
+                "/mcp",
+                Body::from(r#"{"jsonrpc":"2.0","id":19,"method":"tools/list","params":{}}"#),
+                Some(&all),
+            ))
+            .await
+            .unwrap();
+        let body = to_bytes(tools.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+        let listed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            listed["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "rocketmq_upsert_topic",
+                "rocketmq_upsert_consumer_group",
+                "rocketmq_reset_consumer_offset",
+                "rocketmq_patch_broker_config",
+                "rocketmq_set_consumer_request_mode",
+            ]
+        );
         let both = token_with_claims(
             REQUIRED_WRITE_SCOPE,
             vec!["topic_upsert", "consumer_group_upsert"],
@@ -1354,6 +1495,184 @@ mod tests {
         assert_eq!(counters.executes.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(counters.shutdowns.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert_eq!(sink.records().await.unwrap().len(), 4);
+    }
+
+    #[cfg(feature = "write-tools")]
+    #[tokio::test]
+    async fn stage_c_authorization_and_validation_precede_audit_session_and_backend() {
+        let (router, counters, sink) = write_router().await;
+        let denied = token_with_claims(REQUIRED_WRITE_SCOPE, Vec::new(), vec!["cluster-a"]);
+        for (index, tool) in [
+            crate::tools::RESET_CONSUMER_OFFSET_TOOL,
+            crate::tools::PATCH_BROKER_CONFIG_TOOL,
+            crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 300 + index,
+                "method": "tools/call",
+                "params": {
+                    "name": tool,
+                    "arguments": {"cluster": "cluster-a", "unknown": true}
+                }
+            });
+            let response = router
+                .clone()
+                .oneshot(request("/mcp", Body::from(body.to_string()), Some(&denied)))
+                .await
+                .unwrap();
+            let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["result"]["structuredContent"]["code"], "permission_denied");
+        }
+
+        let allowed = token_with_claims(
+            REQUIRED_WRITE_SCOPE,
+            vec!["consumer_offset_reset", "broker_config_patch", "consumer_request_mode"],
+            vec!["cluster-a"],
+        );
+        let schema = crate::model::MUTATION_ARGUMENTS_SCHEMA_VERSION;
+        let invalid = [
+            (
+                crate::tools::RESET_CONSUMER_OFFSET_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "topic": "orders",
+                    "consumer_group": "workers",
+                    "timestamp": "2026-08-30T08:00:00",
+                }),
+            ),
+            (
+                crate::tools::RESET_CONSUMER_OFFSET_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "topic": "RMQ_SYS_TRACE_TOPIC",
+                    "consumer_group": "workers",
+                    "timestamp": "2026-08-30T00:00:00Z",
+                }),
+            ),
+            (
+                crate::tools::RESET_CONSUMER_OFFSET_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "topic": "orders",
+                    "consumer_group": "CID_RMQ_SYS_TRANS",
+                    "timestamp": "2026-08-30T00:00:00Z",
+                }),
+            ),
+            (
+                crate::tools::RESET_CONSUMER_OFFSET_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "topic": "orders%2fhidden",
+                    "consumer_group": "workers",
+                    "timestamp": "2026-08-30T00:00:00Z",
+                }),
+            ),
+            (
+                crate::tools::PATCH_BROKER_CONFIG_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "broker_name": "broker-a",
+                    "properties": {},
+                }),
+            ),
+            (
+                crate::tools::PATCH_BROKER_CONFIG_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "broker_name": "broker-a",
+                    "properties": {"brokerPermission": "06"},
+                }),
+            ),
+            (
+                crate::tools::PATCH_BROKER_CONFIG_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "broker_name": "broker-a",
+                    "properties": {"unknown": "true"},
+                }),
+            ),
+            (
+                crate::tools::PATCH_BROKER_CONFIG_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "broker_name": "broker-a",
+                    "properties": {"traceTopicEnable": null},
+                }),
+            ),
+            (
+                crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "topic": "orders",
+                    "consumer_group": "workers",
+                    "mode": "pop",
+                    "pop_share_queue_num": 1,
+                    "timeout_millis": 0,
+                }),
+            ),
+            (
+                crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "topic": "orders",
+                    "consumer_group": "workers",
+                    "mode": "pop",
+                    "pop_share_queue_num": 1,
+                    "timeout_millis": 24001,
+                }),
+            ),
+            (
+                crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL,
+                serde_json::json!({
+                    "schema_version": schema,
+                    "cluster": "cluster-a",
+                    "topic": "TBW102",
+                    "consumer_group": "workers",
+                    "mode": "pull",
+                    "pop_share_queue_num": 0,
+                    "timeout_millis": 12000,
+                }),
+            ),
+        ];
+        for (index, (tool, arguments)) in invalid.into_iter().enumerate() {
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 320 + index,
+                "method": "tools/call",
+                "params": {"name": tool, "arguments": arguments}
+            });
+            let response = router
+                .clone()
+                .oneshot(request("/mcp", Body::from(body.to_string()), Some(&allowed)))
+                .await
+                .unwrap();
+            let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                value["result"]["structuredContent"]["code"], "invalid_arguments",
+                "case {index}"
+            );
+        }
+        assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.executes.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.shutdowns.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(sink.records().await.unwrap().is_empty());
     }
 
     #[tokio::test(start_paused = true)]

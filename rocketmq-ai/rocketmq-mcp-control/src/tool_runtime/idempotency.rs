@@ -20,9 +20,9 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use super::execution::supervise_session;
-use super::UpsertRequest;
-use super::UpsertResponse;
-use super::UpsertSessionFactory;
+use super::MutationToolRequest;
+use super::MutationToolResponse;
+use super::MutationToolSessionFactory;
 use super::IDEMPOTENCY_CAPACITY;
 use super::IDEMPOTENCY_TTL;
 use crate::error::ControlError;
@@ -49,9 +49,9 @@ impl IdempotencyIdentity {
     pub(super) fn from_request(
         principal: &Principal,
         cluster: &ClusterName,
-        request: &UpsertRequest,
+        request: &MutationToolRequest,
     ) -> Result<Self, ControlError> {
-        let mut targets = request.target_names().to_vec();
+        let mut targets = request.target_names();
         targets.sort();
         let key = request.request_key().map(|request_key| IdempotencyKey {
             principal: principal.subject.clone(),
@@ -76,11 +76,11 @@ pub(super) struct IdempotencyState {
 pub(super) enum IdempotencyEntry {
     InFlight {
         payload: String,
-        followers: Vec<oneshot::Sender<Result<UpsertResponse, ControlError>>>,
+        followers: Vec<oneshot::Sender<Result<MutationToolResponse, ControlError>>>,
     },
     Completed {
         payload: String,
-        result: Box<Result<UpsertResponse, ControlError>>,
+        result: Box<Result<MutationToolResponse, ControlError>>,
         expires_at: tokio::time::Instant,
         sequence: u64,
     },
@@ -88,8 +88,8 @@ pub(super) enum IdempotencyEntry {
 
 pub(super) enum CacheAdmission {
     Leader,
-    Follower(oneshot::Receiver<Result<UpsertResponse, ControlError>>),
-    Hit(Box<Result<UpsertResponse, ControlError>>),
+    Follower(oneshot::Receiver<Result<MutationToolResponse, ControlError>>),
+    Hit(Box<Result<MutationToolResponse, ControlError>>),
     Uncached,
 }
 
@@ -103,13 +103,13 @@ pub(super) async fn execute_admitted(
     cache: Arc<Mutex<IdempotencyState>>,
     identity: IdempotencyIdentity,
     admission: CacheAdmission,
-    factory: Arc<dyn UpsertSessionFactory>,
+    factory: Arc<dyn MutationToolSessionFactory>,
     cluster: ClusterName,
-    request: UpsertRequest,
+    request: MutationToolRequest,
     timeout: Duration,
     request_cancellation: CancellationToken,
     owner_cancellation: CancellationToken,
-) -> Result<UpsertResponse, ControlError> {
+) -> Result<MutationToolResponse, ControlError> {
     let Some(key) = identity.key else {
         return supervise_session(
             factory,
@@ -243,7 +243,7 @@ pub(super) async fn complete_cache(
     cache: &Mutex<IdempotencyState>,
     key: IdempotencyKey,
     payload: String,
-    result: Result<UpsertResponse, ControlError>,
+    result: Result<MutationToolResponse, ControlError>,
 ) {
     let mut state = cache.lock().await;
     let followers = match state.entries.remove(&key) {

@@ -45,6 +45,9 @@ use crate::model::ClusterName;
 use crate::model::ControlCapabilities;
 use crate::model::ControlOperation;
 use crate::model::Principal;
+use crate::tools::PATCH_BROKER_CONFIG_TOOL;
+use crate::tools::RESET_CONSUMER_OFFSET_TOOL;
+use crate::tools::SET_CONSUMER_REQUEST_MODE_TOOL;
 use crate::tools::UPSERT_CONSUMER_GROUP_TOOL;
 use crate::tools::UPSERT_TOPIC_TOOL;
 
@@ -99,7 +102,7 @@ impl ControlServer {
         let tool_runtime = if catalog.registered_operations() == 0 {
             None
         } else {
-            let factory = Arc::new(crate::tool_runtime::AdminUpsertFactory::new(
+            let factory = Arc::new(crate::tool_runtime::AdminMutationToolFactory::new(
                 service_context.component("admin-factory"),
                 config.mutation_clusters(),
             )?);
@@ -126,7 +129,7 @@ impl ControlServer {
         policy: &crate::config::MutationPolicyConfig,
         configured_clusters: BTreeSet<ClusterName>,
         audit: crate::audit::AuditTrail,
-        factory: Arc<dyn crate::tool_runtime::UpsertSessionFactory>,
+        factory: Arc<dyn crate::tool_runtime::MutationToolSessionFactory>,
         owner: rocketmq_runtime::TaskGroup,
     ) -> Self {
         let catalog = OperationCatalog::from_policy(policy);
@@ -185,7 +188,7 @@ impl ServerHandler for ControlServer {
             .with_server_info(Implementation::new("rocketmq-mcp-control", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::V_2025_11_25)
             .with_instructions(
-                "Isolated RocketMQ control server. Reviewed Topic and Consumer Group upserts are available only when compile-time, runtime, server-policy, and principal authorization all intersect.",
+                "Isolated RocketMQ control server. Five reviewed typed mutations are available only when compile-time, runtime, server-policy, and principal authorization all intersect.",
             )
     }
 
@@ -239,6 +242,18 @@ impl ServerHandler for ControlServer {
                 ControlOperation::ConsumerGroupUpsert.as_str(),
                 Some(ControlOperation::ConsumerGroupUpsert),
             ),
+            RESET_CONSUMER_OFFSET_TOOL => (
+                ControlOperation::ConsumerOffsetReset.as_str(),
+                Some(ControlOperation::ConsumerOffsetReset),
+            ),
+            PATCH_BROKER_CONFIG_TOOL => (
+                ControlOperation::BrokerConfigPatch.as_str(),
+                Some(ControlOperation::BrokerConfigPatch),
+            ),
+            SET_CONSUMER_REQUEST_MODE_TOOL => (
+                ControlOperation::ConsumerRequestMode.as_str(),
+                Some(ControlOperation::ConsumerRequestMode),
+            ),
             _ => ("unknown", None),
         };
         let authorized = match self
@@ -256,7 +271,7 @@ impl ServerHandler for ControlServer {
         #[cfg(feature = "write-tools")]
         {
             let dry_run_omitted = raw.as_object().is_some_and(|object| !object.contains_key("dry_run"));
-            let upsert = match operation {
+            let mutation = match operation {
                 Some(ControlOperation::TopicUpsert) => {
                     let mut args: crate::tools::UpsertTopicArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
@@ -266,7 +281,7 @@ impl ServerHandler for ControlServer {
                         return Ok(tool_error(error).into());
                     }
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
-                    crate::tool_runtime::UpsertRequest::Topic(args)
+                    crate::tool_runtime::MutationToolRequest::Topic(args)
                 }
                 Some(ControlOperation::ConsumerGroupUpsert) => {
                     let mut args: crate::tools::UpsertConsumerGroupArgs = match serde_json::from_value(raw) {
@@ -277,7 +292,40 @@ impl ServerHandler for ControlServer {
                         return Ok(tool_error(error).into());
                     }
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
-                    crate::tool_runtime::UpsertRequest::ConsumerGroup(args)
+                    crate::tool_runtime::MutationToolRequest::ConsumerGroup(args)
+                }
+                Some(ControlOperation::ConsumerOffsetReset) => {
+                    let mut args: crate::tools::ResetConsumerOffsetArgs = match serde_json::from_value(raw) {
+                        Ok(args) => args,
+                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into()),
+                    };
+                    if args.validate(self.guard.default_dry_run(), dry_run_omitted).is_err() {
+                        return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into());
+                    }
+                    args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
+                    crate::tool_runtime::MutationToolRequest::ConsumerOffset(args)
+                }
+                Some(ControlOperation::BrokerConfigPatch) => {
+                    let mut args: crate::tools::PatchBrokerConfigArgs = match serde_json::from_value(raw) {
+                        Ok(args) => args,
+                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into()),
+                    };
+                    if args.validate(self.guard.default_dry_run(), dry_run_omitted).is_err() {
+                        return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into());
+                    }
+                    args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
+                    crate::tool_runtime::MutationToolRequest::BrokerConfig(args)
+                }
+                Some(ControlOperation::ConsumerRequestMode) => {
+                    let mut args: crate::tools::SetConsumerRequestModeArgs = match serde_json::from_value(raw) {
+                        Ok(args) => args,
+                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into()),
+                    };
+                    if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
+                        return Ok(tool_error(error).into());
+                    }
+                    args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
+                    crate::tool_runtime::MutationToolRequest::ConsumerRequestMode(args)
                 }
                 _ => return Ok(tool_error(crate::error::ControlError::permission_denied()).into()),
             };
@@ -285,7 +333,7 @@ impl ServerHandler for ControlServer {
                 return Ok(tool_error(crate::error::ControlError::operation_unavailable()).into());
             };
             let result = runtime
-                .execute(&principal, &authorized, upsert, context.ct.clone())
+                .execute(&principal, &authorized, mutation, context.ct.clone())
                 .await;
             Ok(match result {
                 Ok(response) => tool_response(response),
@@ -339,7 +387,7 @@ fn principal_from_context(context: &RequestContext<RoleServer>) -> Result<Princi
 }
 
 #[cfg(feature = "write-tools")]
-fn tool_response(response: crate::tool_runtime::UpsertResponse) -> CallToolResult {
+fn tool_response(response: crate::tool_runtime::MutationToolResponse) -> CallToolResult {
     let structured = serde_json::to_value(&response).unwrap_or_else(|_| {
         serde_json::to_value(crate::error::ControlError::execution_failed().envelope()).unwrap_or_default()
     });

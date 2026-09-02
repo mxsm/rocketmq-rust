@@ -18,11 +18,13 @@ jwks_url = "https://identity.example.test/.well-known/jwks.json"
 [mutations]
 mutations_enabled = false
 dry_run = true
+# Closed values: topic_upsert, consumer_group_upsert, consumer_offset_reset, broker_config_patch,
+# consumer_request_mode. Keep the allowlist empty until the matching OAuth claims and cluster are ready.
 allowed_operations = []
 allowed_clusters = []
 operation_timeout_seconds = 24
 
-# A private logical cluster registry is required before either reviewed operation can be allowlisted.
+# A private logical cluster registry is required before any reviewed operation can be allowlisted.
 # Credential values are read from these environment variables only when a session is opened.
 [[clusters]]
 name = "production-a"

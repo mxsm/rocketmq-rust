@@ -61,14 +61,7 @@ impl ControlConfig {
         self.oauth.validate()?;
         self.mutations.validate()?;
         validate_cluster_registry(&self.clusters)?;
-        if self.mutations.mutations_enabled
-            && self.mutations.allowed_operations.iter().any(|operation| {
-                matches!(
-                    operation,
-                    ControlOperation::TopicUpsert | ControlOperation::ConsumerGroupUpsert
-                )
-            })
-        {
+        if self.mutations.mutations_enabled && !self.mutations.allowed_operations.is_empty() {
             let configured = self
                 .clusters
                 .iter()
