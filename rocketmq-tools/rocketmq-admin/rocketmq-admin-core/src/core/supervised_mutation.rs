@@ -14,6 +14,7 @@
 
 //! Closed, presentation-independent contracts for supervised mutations.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::de::Error as _;
@@ -26,6 +27,7 @@ use crate::core::AdminFuture;
 use crate::core::AdminResult;
 
 pub const MAX_OFFSET_RESET_TARGETS: usize = 1_000;
+pub const MAX_METADATA_MUTATION_TARGETS: usize = 64;
 
 /// Private session identity carried by plans so they cannot cross an admin-session boundary.
 pub(crate) struct MutationPlanSeal;
@@ -119,6 +121,7 @@ pub enum MutationFailureCode {
     Unavailable,
     PersistenceFailed,
     VerificationFailed,
+    OrderReconciliationFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -164,6 +167,11 @@ pub(crate) struct ResolvedMetadataTarget<T> {
     pub(crate) current: Option<T>,
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct TargetedTopicOrderGuard {
+    pub(crate) expected: Option<BTreeMap<String, u32>>,
+}
+
 #[derive(Clone)]
 pub struct TopicMutationPlan {
     pub(crate) seal: Arc<MutationPlanSeal>,
@@ -172,6 +180,7 @@ pub struct TopicMutationPlan {
     pub(crate) replacement: TopicReplacement,
     pub(crate) targets: Vec<ResolvedMetadataTarget<TopicReplacement>>,
     pub(crate) failures: Vec<MutationTargetFailure>,
+    pub(crate) targeted_order_guard: Option<TargetedTopicOrderGuard>,
 }
 
 impl std::fmt::Debug for TopicMutationPlan {
@@ -184,6 +193,7 @@ impl std::fmt::Debug for TopicMutationPlan {
             .field("replacement", &self.replacement)
             .field("targets", &self.preflight_targets())
             .field("failures", &self.failures)
+            .field("targeted_order_guarded", &self.targeted_order_guard.is_some())
             .finish()
     }
 }
@@ -584,12 +594,47 @@ pub trait SupervisedMutationAdmin: Send {
         request: &'a TopicMutationPreflightRequest,
     ) -> AdminFuture<'a, TopicMutationPlan>;
 
+    /// Preflights a topic replacement against only the named brokers in the
+    /// selected cluster. Implementations must validate the complete selected
+    /// cluster topology before issuing any target state request.
+    fn preflight_topic_targets<'a>(
+        &'a mut self,
+        request: &'a TopicMutationPreflightRequest,
+        broker_names: &'a [String],
+    ) -> AdminFuture<'a, TopicMutationPlan> {
+        let _ = (request, broker_names);
+        Box::pin(async move {
+            Err(AdminError::backend(
+                "preflight_topic_targets",
+                "targeted supervised topic preflight is unavailable",
+            ))
+        })
+    }
+
     fn execute_topic<'a>(&'a mut self, plan: &'a TopicMutationPlan) -> AdminFuture<'a, MetadataMutationOutcome>;
 
     fn preflight_subscription_group<'a>(
         &'a mut self,
         request: &'a SubscriptionGroupMutationPreflightRequest,
     ) -> AdminFuture<'a, SubscriptionGroupMutationPlan>;
+
+    /// Preflights a subscription-group replacement against only the named
+    /// brokers in the selected cluster. Implementations must validate the
+    /// complete selected cluster topology before issuing any target state
+    /// request.
+    fn preflight_subscription_group_targets<'a>(
+        &'a mut self,
+        request: &'a SubscriptionGroupMutationPreflightRequest,
+        broker_names: &'a [String],
+    ) -> AdminFuture<'a, SubscriptionGroupMutationPlan> {
+        let _ = (request, broker_names);
+        Box::pin(async move {
+            Err(AdminError::backend(
+                "preflight_subscription_group_targets",
+                "targeted supervised subscription-group preflight is unavailable",
+            ))
+        })
+    }
 
     fn execute_subscription_group<'a>(
         &'a mut self,

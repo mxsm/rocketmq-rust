@@ -496,18 +496,7 @@ pub struct DashboardConsumerUpsertRequest {
     pub consume_timeout_minute: i32,
 }
 
-const CID_RMQ_SYS_PREFIX: &str = "CID_RMQ_SYS_";
-const SYSTEM_CONSUMER_GROUPS: &[&str] = &[
-    "TOOLS_CONSUMER",
-    "FILTERSRV_CONSUMER",
-    "SELF_TEST_C_GROUP",
-    "CID_ONS-HTTP-PROXY",
-    "CID_ONSAPI_PULL",
-    "CID_ONSAPI_PERMISSION",
-    "CID_ONSAPI_OWNER",
-    "CID_RMQ_SYS_TRANS",
-    "CID_DefaultHeartBeatSyncerTopic",
-];
+const DEFAULT_HEARTBEAT_SYNCER_CONSUMER_GROUP: &str = "CID_DefaultHeartBeatSyncerTopic";
 
 /// Validated create-or-update request for a complete multi-broker workflow.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -833,7 +822,7 @@ where
 
 fn validate_batch_consumer_group(value: impl Into<String>) -> AdminResult<String> {
     let value = required("consumerGroup", value)?;
-    if value.starts_with("%SYS%") || is_system_consumer_group(&value) {
+    if is_protected_consumer_group(&value) {
         return Err(crate::core::AdminError::invalid_argument(
             "consumerGroup",
             "System consumer groups cannot be mutated.",
@@ -866,8 +855,14 @@ fn validate_batch_consumer_limits(request: &DashboardConsumerUpsertRequest) -> A
     Ok(())
 }
 
-pub(crate) fn is_system_consumer_group(group: &str) -> bool {
-    group.starts_with(CID_RMQ_SYS_PREFIX) || SYSTEM_CONSUMER_GROUPS.contains(&group)
+/// Returns whether a consumer group is reserved for RocketMQ infrastructure.
+///
+/// Mutation callers must apply this classifier before opening an admin session.
+/// Admin request constructors apply it again as defense in depth.
+pub fn is_protected_consumer_group(group: &str) -> bool {
+    rocketmq_model::common::mix_all::is_sys_consumer_group_for_no_cold_read_limit(group)
+        || group == DEFAULT_HEARTBEAT_SYNCER_CONSUMER_GROUP
+        || group.starts_with("%SYS%")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1434,6 +1429,47 @@ pub(crate) mod batch_test_support {
 mod tests {
     use super::*;
     use crate::core::AdminFuture;
+
+    #[test]
+    fn protected_consumer_group_classifier_covers_canonical_system_groups() {
+        let protected = [
+            "DEFAULT_CONSUMER",
+            "TOOLS_CONSUMER",
+            "SCHEDULE_CONSUMER",
+            "FILTERSRV_CONSUMER",
+            "__MONITOR_CONSUMER",
+            "SELF_TEST_C_GROUP",
+            "CID_ONS-HTTP-PROXY",
+            "CID_ONSAPI_PULL",
+            "CID_ONSAPI_PERMISSION",
+            "CID_ONSAPI_OWNER",
+            "CID_RMQ_SYS_TRANS",
+            "CID_RMQ_SYS_INTERNAL",
+            "CID_DefaultHeartBeatSyncerTopic",
+            "%SYS%INTERNAL",
+        ];
+        for group in protected {
+            assert!(is_protected_consumer_group(group), "accepted {group}");
+            let request = DashboardConsumerUpsertRequest {
+                cluster_name_list: Vec::new(),
+                broker_name_list: vec!["broker-a".to_owned()],
+                consumer_group: group.to_owned(),
+                consume_enable: true,
+                consume_from_min_enable: false,
+                consume_broadcast_enable: false,
+                consume_message_orderly: false,
+                retry_queue_nums: 1,
+                retry_max_times: 16,
+                broker_id: 0,
+                which_broker_when_consume_slowly: 1,
+                notify_consumer_ids_changed_enable: true,
+                group_sys_flag: 0,
+                consume_timeout_minute: 15,
+            };
+            assert!(ConsumerBatchUpsertRequest::try_new(request).is_err());
+        }
+        assert!(!is_protected_consumer_group("orders_consumers"));
+    }
 
     struct ExistingConsumerAdmin;
 

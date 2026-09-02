@@ -1,0 +1,896 @@
+---
+source: src/catalog.rs
+expression: catalog.list_tools().tools
+---
+[
+  {
+    "name": "rocketmq_upsert_topic",
+    "title": "Upsert RocketMQ topic",
+    "description": "Dry-run or conditionally replace a complete Topic configuration on selected cluster masters.",
+    "inputSchema": {
+      "$defs": {
+        "TopicMessageType": {
+          "enum": [
+            "NORMAL",
+            "FIFO",
+            "DELAY",
+            "TRANSACTION",
+            "UNSPECIFIED"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "broker_names": {
+          "items": {
+            "maxLength": 127,
+            "minLength": 1,
+            "pattern": "^[%|a-zA-Z0-9_-]+$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        "cluster": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "confirm": {
+          "default": false,
+          "type": "boolean"
+        },
+        "dry_run": {
+          "default": true,
+          "type": "boolean"
+        },
+        "message_type": {
+          "$ref": "#/$defs/TopicMessageType"
+        },
+        "order": {
+          "type": "boolean"
+        },
+        "perm": {
+          "format": "uint32",
+          "maximum": 7,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "read_queue_nums": {
+          "format": "uint32",
+          "maximum": 127,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "reason": {
+          "default": null,
+          "maxLength": 256,
+          "minLength": 5,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_key": {
+          "default": null,
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9._:-]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
+          "type": "string"
+        },
+        "topic": {
+          "maxLength": 127,
+          "minLength": 1,
+          "pattern": "^[%|a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "write_queue_nums": {
+          "format": "uint32",
+          "maximum": 127,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster",
+        "topic",
+        "broker_names",
+        "read_queue_nums",
+        "write_queue_nums",
+        "perm",
+        "order",
+        "message_type"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "FailureCode": {
+          "enum": [
+            "conflict",
+            "invalid_data",
+            "unavailable",
+            "persistence_failed",
+            "verification_failed",
+            "order_reconciliation_failed"
+          ],
+          "type": "string"
+        },
+        "LogicalMutationTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "broker_name"
+          ],
+          "type": "object"
+        },
+        "MutationMode": {
+          "enum": [
+            "dry_run",
+            "execute"
+          ],
+          "type": "string"
+        },
+        "MutationResultSchemaVersion": {
+          "const": "rocketmq-mcp-mutation.v1",
+          "type": "string"
+        },
+        "MutationStatus": {
+          "enum": [
+            "planned",
+            "applied",
+            "partial",
+            "conflict",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "MutationTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VisibleState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "applied": {
+              "type": "boolean"
+            },
+            "before": {
+              "$ref": "#/$defs/VisibleState"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FailureCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "persistence": {
+              "$ref": "#/$defs/PersistenceState"
+            },
+            "requested": {
+              "$ref": "#/$defs/TopicReplacement"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "target": {
+              "$ref": "#/$defs/LogicalMutationTarget"
+            },
+            "verification": {
+              "$ref": "#/$defs/VerificationState"
+            }
+          },
+          "required": [
+            "target",
+            "before",
+            "requested",
+            "applied",
+            "changed",
+            "persistence",
+            "verification",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "PersistenceState": {
+          "enum": [
+            "not_required",
+            "persisted",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "TopicMessageType": {
+          "enum": [
+            "NORMAL",
+            "FIFO",
+            "DELAY",
+            "TRANSACTION",
+            "UNSPECIFIED"
+          ],
+          "type": "string"
+        },
+        "TopicMutationResource": {
+          "additionalProperties": false,
+          "properties": {
+            "brokers": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "brokers"
+          ],
+          "type": "object"
+        },
+        "TopicReplacement": {
+          "additionalProperties": false,
+          "properties": {
+            "message_type": {
+              "$ref": "#/$defs/TopicMessageType"
+            },
+            "order": {
+              "type": "boolean"
+            },
+            "perm": {
+              "format": "uint32",
+              "maximum": 7,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "read_queue_nums": {
+              "format": "uint32",
+              "maximum": 127,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "write_queue_nums": {
+              "format": "uint32",
+              "maximum": 127,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "read_queue_nums",
+            "write_queue_nums",
+            "perm",
+            "order",
+            "message_type"
+          ],
+          "type": "object"
+        },
+        "TopicUpsertOperation": {
+          "const": "topic_upsert",
+          "type": "string"
+        },
+        "VerificationState": {
+          "enum": [
+            "not_performed",
+            "verified",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "VisibleState": {
+          "oneOf": [
+            {
+              "properties": {
+                "kind": {
+                  "const": "unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "absent",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "present",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/$defs/TopicReplacement"
+                },
+                "version": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "version",
+                "value"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "additionalProperties": {
+            "$ref": "#/$defs/VisibleState"
+          },
+          "type": "object"
+        },
+        "before": {
+          "additionalProperties": {
+            "$ref": "#/$defs/VisibleState"
+          },
+          "type": "object"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/MutationMode"
+        },
+        "operation": {
+          "$ref": "#/$defs/TopicUpsertOperation"
+        },
+        "requested": {
+          "$ref": "#/$defs/TopicReplacement"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/MutationResultSchemaVersion"
+        },
+        "status": {
+          "$ref": "#/$defs/MutationStatus"
+        },
+        "target": {
+          "$ref": "#/$defs/TopicMutationResource"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/MutationTarget"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation",
+        "cluster",
+        "mode",
+        "status",
+        "target",
+        "before",
+        "requested",
+        "after",
+        "targets",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "title": "Upsert RocketMQ topic",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "rocketmq_upsert_consumer_group",
+    "title": "Upsert RocketMQ consumer group",
+    "description": "Dry-run or conditionally replace a complete Consumer Group configuration on selected cluster masters.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "broker_id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "broker_names": {
+          "items": {
+            "maxLength": 127,
+            "minLength": 1,
+            "pattern": "^[%|a-zA-Z0-9_-]+$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        "cluster": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "confirm": {
+          "default": false,
+          "type": "boolean"
+        },
+        "consume_broadcast_enable": {
+          "type": "boolean"
+        },
+        "consume_enable": {
+          "type": "boolean"
+        },
+        "consume_from_min_enable": {
+          "type": "boolean"
+        },
+        "consume_message_orderly": {
+          "type": "boolean"
+        },
+        "consume_timeout_minute": {
+          "format": "int32",
+          "maximum": 10080,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "consumer_group": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[%|a-zA-Z0-9_-]+$",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "type": "boolean"
+        },
+        "group_sys_flag": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "notify_consumer_ids_changed_enable": {
+          "type": "boolean"
+        },
+        "reason": {
+          "default": null,
+          "maxLength": 256,
+          "minLength": 5,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_key": {
+          "default": null,
+          "maxLength": 64,
+          "minLength": 8,
+          "pattern": "^[a-zA-Z0-9._:-]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retry_max_times": {
+          "format": "int32",
+          "maximum": 10000,
+          "minimum": -1,
+          "type": "integer"
+        },
+        "retry_queue_nums": {
+          "format": "int32",
+          "maximum": 127,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema_version": {
+          "pattern": "^rocketmq-mcp-control\\.arguments\\.v1$",
+          "type": "string"
+        },
+        "which_broker_when_consume_slowly": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_version",
+        "cluster",
+        "consumer_group",
+        "broker_names",
+        "consume_enable",
+        "consume_from_min_enable",
+        "consume_broadcast_enable",
+        "consume_message_orderly",
+        "retry_queue_nums",
+        "retry_max_times",
+        "broker_id",
+        "which_broker_when_consume_slowly",
+        "notify_consumer_ids_changed_enable",
+        "group_sys_flag",
+        "consume_timeout_minute"
+      ],
+      "type": "object"
+    },
+    "outputSchema": {
+      "$defs": {
+        "ConsumerGroupMutationResource": {
+          "additionalProperties": false,
+          "properties": {
+            "brokers": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "consumer_group": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "consumer_group",
+            "brokers"
+          ],
+          "type": "object"
+        },
+        "ConsumerGroupReplacement": {
+          "additionalProperties": false,
+          "properties": {
+            "broker_id": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "consume_broadcast_enable": {
+              "type": "boolean"
+            },
+            "consume_enable": {
+              "type": "boolean"
+            },
+            "consume_from_min_enable": {
+              "type": "boolean"
+            },
+            "consume_message_orderly": {
+              "type": "boolean"
+            },
+            "consume_timeout_minute": {
+              "format": "int32",
+              "maximum": 10080,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "group_sys_flag": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "notify_consumer_ids_changed_enable": {
+              "type": "boolean"
+            },
+            "retry_max_times": {
+              "format": "int32",
+              "maximum": 10000,
+              "minimum": -1,
+              "type": "integer"
+            },
+            "retry_queue_nums": {
+              "format": "int32",
+              "maximum": 127,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "which_broker_when_consume_slowly": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "consume_enable",
+            "consume_from_min_enable",
+            "consume_broadcast_enable",
+            "consume_message_orderly",
+            "retry_queue_nums",
+            "retry_max_times",
+            "broker_id",
+            "which_broker_when_consume_slowly",
+            "notify_consumer_ids_changed_enable",
+            "group_sys_flag",
+            "consume_timeout_minute"
+          ],
+          "type": "object"
+        },
+        "ConsumerGroupUpsertOperation": {
+          "const": "consumer_group_upsert",
+          "type": "string"
+        },
+        "FailureCode": {
+          "enum": [
+            "conflict",
+            "invalid_data",
+            "unavailable",
+            "persistence_failed",
+            "verification_failed",
+            "order_reconciliation_failed"
+          ],
+          "type": "string"
+        },
+        "LogicalMutationTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "broker_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "broker_name"
+          ],
+          "type": "object"
+        },
+        "MutationMode": {
+          "enum": [
+            "dry_run",
+            "execute"
+          ],
+          "type": "string"
+        },
+        "MutationResultSchemaVersion": {
+          "const": "rocketmq-mcp-mutation.v1",
+          "type": "string"
+        },
+        "MutationStatus": {
+          "enum": [
+            "planned",
+            "applied",
+            "partial",
+            "conflict",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "MutationTarget": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VisibleState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "applied": {
+              "type": "boolean"
+            },
+            "before": {
+              "$ref": "#/$defs/VisibleState"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FailureCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "persistence": {
+              "$ref": "#/$defs/PersistenceState"
+            },
+            "requested": {
+              "$ref": "#/$defs/ConsumerGroupReplacement"
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "target": {
+              "$ref": "#/$defs/LogicalMutationTarget"
+            },
+            "verification": {
+              "$ref": "#/$defs/VerificationState"
+            }
+          },
+          "required": [
+            "target",
+            "before",
+            "requested",
+            "applied",
+            "changed",
+            "persistence",
+            "verification",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "PersistenceState": {
+          "enum": [
+            "not_required",
+            "persisted",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "VerificationState": {
+          "enum": [
+            "not_performed",
+            "verified",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "VisibleState": {
+          "oneOf": [
+            {
+              "properties": {
+                "kind": {
+                  "const": "unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "absent",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "present",
+                  "type": "string"
+                },
+                "value": {
+                  "$ref": "#/$defs/ConsumerGroupReplacement"
+                },
+                "version": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "version",
+                "value"
+              ],
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "additionalProperties": {
+            "$ref": "#/$defs/VisibleState"
+          },
+          "type": "object"
+        },
+        "before": {
+          "additionalProperties": {
+            "$ref": "#/$defs/VisibleState"
+          },
+          "type": "object"
+        },
+        "cluster": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/MutationMode"
+        },
+        "operation": {
+          "$ref": "#/$defs/ConsumerGroupUpsertOperation"
+        },
+        "requested": {
+          "$ref": "#/$defs/ConsumerGroupReplacement"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/MutationResultSchemaVersion"
+        },
+        "status": {
+          "$ref": "#/$defs/MutationStatus"
+        },
+        "target": {
+          "$ref": "#/$defs/ConsumerGroupMutationResource"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/MutationTarget"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "operation",
+        "cluster",
+        "mode",
+        "status",
+        "target",
+        "before",
+        "requested",
+        "after",
+        "targets",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "annotations": {
+      "title": "Upsert RocketMQ consumer group",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  }
+]

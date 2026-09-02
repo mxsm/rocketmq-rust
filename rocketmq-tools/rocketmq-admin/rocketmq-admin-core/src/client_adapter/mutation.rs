@@ -1754,6 +1754,60 @@ fn master_targets_by_cluster_name(
     Ok(targets)
 }
 
+/// Creates the isolated client runtime used by mutation-only applications.
+///
+/// This constructor keeps telemetry and the concrete client dependency behind
+/// the mutation adapter boundary.
+///
+/// # Errors
+///
+/// Returns an administration error when the bounded client runtime cannot be
+/// initialized from the supplied lifecycle context.
+pub fn create_mutation_client_runtime(
+    service_context: rocketmq_runtime::ChildServiceContext,
+) -> AdminResult<Arc<ClientRuntime>> {
+    ClientRuntime::try_new(
+        service_context,
+        ClientRuntimeConfig::default(),
+        rocketmq_observability::TelemetryHandle::noop(),
+    )
+    .map_err(|_| AdminError::backend("mutation_client_runtime", "client runtime initialization failed"))
+}
+
+fn select_metadata_targets(
+    all_targets: Vec<(String, CheetahString)>,
+    selected_broker_names: Option<&[String]>,
+) -> AdminResult<Vec<(String, CheetahString)>> {
+    let Some(selected_broker_names) = selected_broker_names else {
+        return Ok(all_targets);
+    };
+    if selected_broker_names.is_empty() || selected_broker_names.len() > MAX_METADATA_MUTATION_TARGETS {
+        return Err(AdminError::invalid_argument(
+            "brokerNames",
+            format!("must contain between 1 and {MAX_METADATA_MUTATION_TARGETS} broker names"),
+        ));
+    }
+    let selected = selected_broker_names.iter().collect::<HashSet<_>>();
+    if selected.len() != selected_broker_names.len() {
+        return Err(AdminError::invalid_argument(
+            "brokerNames",
+            "must not contain duplicates",
+        ));
+    }
+    let mut targets = all_targets
+        .into_iter()
+        .filter(|(broker_name, _)| selected.contains(broker_name))
+        .collect::<Vec<_>>();
+    if targets.len() != selected.len() {
+        return Err(AdminError::invalid_argument(
+            "brokerNames",
+            "contains a broker outside the selected cluster master topology",
+        ));
+    }
+    targets.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(targets)
+}
+
 fn build_order_conf(broker_names: &HashSet<String>, write_queue_nums: u32) -> String {
     let mut broker_names = broker_names.iter().cloned().collect::<Vec<_>>();
     broker_names.sort();

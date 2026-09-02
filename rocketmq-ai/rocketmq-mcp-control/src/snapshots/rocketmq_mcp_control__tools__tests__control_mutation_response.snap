@@ -1,0 +1,79 @@
+---
+source: src/tools.rs
+expression: response
+---
+{
+  "schema_version": "rocketmq-mcp-mutation.v1",
+  "operation": "topic_upsert",
+  "cluster": "cluster-a",
+  "mode": "execute",
+  "status": "partial",
+  "target": {
+    "topic": "orders",
+    "brokers": [
+      "broker-a"
+    ]
+  },
+  "before": {
+    "broker-a": {
+      "kind": "absent"
+    }
+  },
+  "requested": {
+    "read_queue_nums": 8,
+    "write_queue_nums": 8,
+    "perm": 6,
+    "order": false,
+    "message_type": "NORMAL"
+  },
+  "after": {
+    "broker-a": {
+      "kind": "present",
+      "version": 1,
+      "value": {
+        "read_queue_nums": 8,
+        "write_queue_nums": 8,
+        "perm": 6,
+        "order": false,
+        "message_type": "NORMAL"
+      }
+    }
+  },
+  "targets": [
+    {
+      "target": {
+        "broker_name": "broker-a"
+      },
+      "before": {
+        "kind": "absent"
+      },
+      "requested": {
+        "read_queue_nums": 8,
+        "write_queue_nums": 8,
+        "perm": 6,
+        "order": false,
+        "message_type": "NORMAL"
+      },
+      "after": {
+        "kind": "present",
+        "version": 1,
+        "value": {
+          "read_queue_nums": 8,
+          "write_queue_nums": 8,
+          "perm": 6,
+          "order": false,
+          "message_type": "NORMAL"
+        }
+      },
+      "applied": true,
+      "changed": true,
+      "persistence": "persisted",
+      "verification": "verified",
+      "failure": "order_reconciliation_failed",
+      "retryable": false
+    }
+  ],
+  "warnings": [
+    "topic order configuration was not reconciled"
+  ]
+}

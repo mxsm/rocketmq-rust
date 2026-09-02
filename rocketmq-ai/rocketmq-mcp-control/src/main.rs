@@ -48,8 +48,8 @@ async fn run(
     service_context: rocketmq_runtime::ChildServiceContext,
 ) -> Result<(), ControlError> {
     let sink = JsonlAuditSink::open(&config.audit.path, config.audit.capacity, config.audit.max_record_bytes).await?;
-    let _audit = AuditTrail::resume(Arc::new(sink)).await?;
-    transport::serve(config, service_context, async {
+    let audit = AuditTrail::resume(Arc::new(sink)).await?;
+    transport::serve(config, service_context, audit, async {
         if rocketmq_runtime::wait_for_signal_result().await.is_err() {
             tracing::warn!("control termination signal observation failed");
         }

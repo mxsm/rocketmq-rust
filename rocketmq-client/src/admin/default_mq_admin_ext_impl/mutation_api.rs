@@ -1350,6 +1350,19 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         .await
     }
 
+    async fn mutation_order_topic_config(
+        &self,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+        self.mq_client_api()?
+            .get_kvconfig_value(
+                CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
+                topic,
+                self.remoting_timeout_millis()?,
+            )
+            .await
+    }
+
     async fn delete_order_topic_config(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<()> {
         self.mq_client_api()?
             .delete_kvconfig_value(
@@ -1447,6 +1460,8 @@ mod detailed_offset_tests {
     use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
     use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
     use rocketmq_protocol::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+    use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
+    use rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
     use rocketmq_protocol::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
     use rocketmq_protocol::protocol::header::search_offset_response_header::SearchOffsetResponseHeader;
     use rocketmq_protocol::RemotingCommand;
@@ -1468,6 +1483,7 @@ mod detailed_offset_tests {
     struct ScriptedRequestLedger {
         responses: Mutex<HashMap<i32, VecDeque<RemotingCommand>>>,
         counts: Mutex<HashMap<i32, usize>>,
+        kv_reads: Mutex<Vec<(String, String)>>,
     }
 
     impl ScriptedRequestLedger {
@@ -1483,6 +1499,10 @@ mod detailed_offset_tests {
         fn snapshot(&self) -> HashMap<i32, usize> {
             self.counts.lock().expect("request counts").clone()
         }
+
+        fn kv_reads(&self) -> Vec<(String, String)> {
+            self.kv_reads.lock().expect("KV reads").clone()
+        }
     }
 
     impl SessionProcessor for ScriptedRequestLedger {
@@ -1491,6 +1511,13 @@ mod detailed_offset_tests {
             request: RemotingCommand,
         ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
             Box::pin(async move {
+                if request.code() == RequestCode::GetKvConfig.to_i32() {
+                    let header = request.decode_command_custom_header::<GetKVConfigRequestHeader>()?;
+                    self.kv_reads
+                        .lock()
+                        .expect("KV reads")
+                        .push((header.namespace.to_string(), header.key.to_string()));
+                }
                 *self
                     .counts
                     .lock()
@@ -1656,6 +1683,53 @@ mod detailed_offset_tests {
         );
         response.make_custom_header_to_net();
         response
+    }
+
+    #[tokio::test]
+    async fn production_admin_reads_the_exact_order_topic_value_without_merging() {
+        let harness = ProductionAdminHarness::new("order-topic-exact-read-test").await;
+        harness
+            .client_instance
+            .get_mq_client_api_impl()
+            .expect("client API")
+            .update_name_server_address_list_sync(harness.broker_addr.as_str());
+        let exact = "broker-a:8;broker-z:4";
+        let mut found = RemotingCommand::create_response_command_with_code_and_header(
+            ResponseCode::Success,
+            GetKVConfigResponseHeader::new(Some(exact.into())),
+        );
+        found.make_custom_header_to_net();
+        harness.ledger.push(RequestCode::GetKvConfig, found);
+        let before = harness.ledger.snapshot();
+        let value =
+            MQAdminMutationExt::mutation_order_topic_config(&harness.admin, CheetahString::from_static_str("orders"))
+                .await
+                .expect("exact order Topic read");
+        assert_eq!(value.as_deref(), Some(exact));
+        let after = harness.ledger.snapshot();
+        assert_request_delta(&before, &after, &[(RequestCode::GetKvConfig, 1)]);
+        assert_eq!(
+            harness.ledger.kv_reads(),
+            vec![(NAMESPACE_ORDER_TOPIC_CONFIG.to_owned(), "orders".to_owned())]
+        );
+
+        harness.ledger.push(
+            RequestCode::GetKvConfig,
+            RemotingCommand::create_response_command_with_code(ResponseCode::QueryNotFound),
+        );
+        let missing =
+            MQAdminMutationExt::mutation_order_topic_config(&harness.admin, CheetahString::from_static_str("missing"))
+                .await
+                .expect("missing exact order Topic read");
+        assert_eq!(missing, None);
+        assert_eq!(
+            harness.ledger.kv_reads(),
+            vec![
+                (NAMESPACE_ORDER_TOPIC_CONFIG.to_owned(), "orders".to_owned()),
+                (NAMESPACE_ORDER_TOPIC_CONFIG.to_owned(), "missing".to_owned()),
+            ]
+        );
+        harness.shutdown().await;
     }
 
     #[tokio::test]

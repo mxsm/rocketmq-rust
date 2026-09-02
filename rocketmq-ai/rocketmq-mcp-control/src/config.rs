@@ -32,6 +32,8 @@ pub struct ControlConfig {
     pub oauth: OAuthConfig,
     #[serde(default)]
     pub mutations: MutationPolicyConfig,
+    #[serde(default)]
+    pub(crate) clusters: Vec<MutationClusterConfig>,
     pub audit: AuditConfig,
 }
 
@@ -58,7 +60,121 @@ impl ControlConfig {
         self.server.validate()?;
         self.oauth.validate()?;
         self.mutations.validate()?;
+        validate_cluster_registry(&self.clusters)?;
+        if self.mutations.mutations_enabled
+            && self.mutations.allowed_operations.iter().any(|operation| {
+                matches!(
+                    operation,
+                    ControlOperation::TopicUpsert | ControlOperation::ConsumerGroupUpsert
+                )
+            })
+        {
+            let configured = self
+                .clusters
+                .iter()
+                .map(|cluster| &cluster.name)
+                .collect::<BTreeSet<_>>();
+            if self
+                .mutations
+                .allowed_clusters
+                .iter()
+                .any(|cluster| !configured.contains(cluster))
+            {
+                return Err(ControlError::invalid_config());
+            }
+        }
         self.audit.validate()
+    }
+
+    #[cfg(feature = "write-tools")]
+    pub(crate) fn mutation_clusters(&self) -> &[MutationClusterConfig] {
+        &self.clusters
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MutationClusterConfig {
+    name: ClusterName,
+    namesrv_addr: String,
+    #[serde(default)]
+    use_tls: bool,
+    #[serde(default)]
+    access_key_env: Option<String>,
+    #[serde(default)]
+    secret_key_env: Option<String>,
+    #[serde(default)]
+    security_token_env: Option<String>,
+}
+
+#[cfg(feature = "write-tools")]
+impl MutationClusterConfig {
+    pub(crate) fn name(&self) -> &ClusterName {
+        &self.name
+    }
+
+    pub(crate) fn namesrv_addr(&self) -> &str {
+        &self.namesrv_addr
+    }
+
+    pub(crate) const fn use_tls(&self) -> bool {
+        self.use_tls
+    }
+
+    pub(crate) fn credential_envs(&self) -> (Option<&str>, Option<&str>, Option<&str>) {
+        (
+            self.access_key_env.as_deref(),
+            self.secret_key_env.as_deref(),
+            self.security_token_env.as_deref(),
+        )
+    }
+}
+
+fn validate_cluster_registry(clusters: &[MutationClusterConfig]) -> Result<(), ControlError> {
+    let mut names = BTreeSet::new();
+    for cluster in clusters {
+        if !names.insert(cluster.name.clone())
+            || !valid_namesrv_addr(&cluster.namesrv_addr)
+            || !valid_credential_env_pair(cluster)
+        {
+            return Err(ControlError::invalid_config());
+        }
+    }
+    Ok(())
+}
+
+fn valid_namesrv_addr(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 1024
+        && value.split(';').all(|endpoint| {
+            let Some((host, port)) = endpoint.rsplit_once(':') else {
+                return false;
+            };
+            !host.is_empty()
+                && host.len() <= 253
+                && host
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'[' | b']' | b':'))
+                && port.parse::<u16>().is_ok_and(|port| port != 0)
+        })
+}
+
+fn valid_credential_env_pair(cluster: &MutationClusterConfig) -> bool {
+    let valid_env = |value: &str| {
+        (1..=128).contains(&value.len())
+            && value
+                .bytes()
+                .enumerate()
+                .all(|(index, byte)| byte == b'_' || byte.is_ascii_uppercase() || (index > 0 && byte.is_ascii_digit()))
+    };
+    match (&cluster.access_key_env, &cluster.secret_key_env) {
+        (None, None) => cluster.security_token_env.is_none(),
+        (Some(access), Some(secret)) => {
+            valid_env(access)
+                && valid_env(secret)
+                && cluster.security_token_env.as_deref().map(valid_env).unwrap_or(true)
+        }
+        _ => false,
     }
 }
 
@@ -338,6 +454,7 @@ mod tests {
                 jwks_ca_path: None,
             },
             mutations: MutationPolicyConfig::default(),
+            clusters: Vec::new(),
             audit: AuditConfig {
                 path: "audit.jsonl".to_string(),
                 capacity: 64,
@@ -415,5 +532,32 @@ mod tests {
         assert_eq!(rendered, "ControlConfig { redacted: true }");
         assert!(!rendered.contains("127.0.0.1"));
         assert!(!rendered.contains("issuer.example.test"));
+    }
+
+    #[test]
+    fn mutation_cluster_registry_is_closed_and_required_for_registered_operations() {
+        let cluster = MutationClusterConfig {
+            name: ClusterName::try_new("cluster-a").unwrap(),
+            namesrv_addr: "namesrv.example.test:9876".to_owned(),
+            use_tls: true,
+            access_key_env: Some("ROCKETMQ_ACCESS_KEY".to_owned()),
+            secret_key_env: Some("ROCKETMQ_SECRET_KEY".to_owned()),
+            security_token_env: Some("ROCKETMQ_SECURITY_TOKEN".to_owned()),
+        };
+        let mut config = valid_config();
+        config.mutations.mutations_enabled = true;
+        config.mutations.allowed_operations = vec![ControlOperation::TopicUpsert];
+        config.mutations.allowed_clusters = vec![ClusterName::try_new("cluster-a").unwrap()];
+        assert!(config.validate().is_err());
+        config.clusters.push(cluster.clone());
+        assert!(config.validate().is_ok());
+        config.clusters.push(cluster);
+        assert!(config.validate().is_err());
+
+        let inline_secret = format!(
+            "{}\n[[clusters]]\nname='cluster-a'\nnamesrv_addr='namesrv.example.test:9876'\naccess_key='secret'\n",
+            include_str!("../conf/mcp-control.example.toml")
+        );
+        assert!(toml::from_str::<ControlConfig>(&inline_secret).is_err());
     }
 }
