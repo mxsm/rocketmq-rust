@@ -2176,19 +2176,19 @@ impl MQClientInstance {
         };
 
         for entry in self.consumer_table.iter() {
-            let mut consumer_data = ConsumerData {
+            let subscription_data_set = if is_without_sub {
+                HashSet::new()
+            } else {
+                entry.value().subscriptions()
+            };
+            let consumer_data = ConsumerData {
                 group_name: entry.value().group_name(),
                 consume_type: entry.value().consume_type(),
                 message_model: entry.value().message_model(),
                 consume_from_where: entry.value().consume_from_where(),
-                subscription_data_set: entry.value().subscriptions(),
+                subscription_data_set,
                 unit_mode: entry.value().is_unit_mode(),
             };
-            if !is_without_sub {
-                entry.value().subscriptions().iter().for_each(|sub| {
-                    consumer_data.subscription_data_set.insert(sub.clone());
-                });
-            }
             heartbeat_data.consumer_data_set.insert(consumer_data);
         }
         for entry in self.producer_table.iter() {
@@ -2905,6 +2905,51 @@ mod tests {
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )
+    }
+
+    #[tokio::test]
+    async fn heartbeat_without_subscriptions_omits_only_subscription_payloads() {
+        let instance = test_instance(ClientConfig::default(), "heartbeat-without-subscriptions");
+        let consumer_group = CheetahString::from_static_str("heartbeat-consumer");
+        let consumer = Arc::new(DefaultMQPushConsumerImpl::new(
+            crate::runtime::test_client_runtime("heartbeat-consumer-test"),
+            ClientConfig::default(),
+            ConsumerConfig {
+                consumer_group: consumer_group.clone(),
+                ..Default::default()
+            },
+            None,
+        ));
+        consumer.initialize_self_reference();
+        for topic in ["topic-a", "topic-b"] {
+            consumer.rebalance_impl.put_subscription_data(
+                topic.into(),
+                SubscriptionData {
+                    topic: topic.into(),
+                    ..Default::default()
+                },
+            );
+        }
+        assert!(
+            instance
+                .register_consumer(&consumer_group, MQConsumerInnerImpl::from_push(consumer))
+                .await
+        );
+
+        let full = instance.prepare_heartbeat_data(false).await;
+        let minimal = instance.prepare_heartbeat_data(true).await;
+        let full_consumer = full.consumer_data_set.iter().next().expect("full consumer data");
+        let minimal_consumer = minimal.consumer_data_set.iter().next().expect("minimal consumer data");
+
+        assert!(!full.is_without_sub);
+        assert!(minimal.is_without_sub);
+        assert_eq!(full_consumer.subscription_data_set.len(), 2);
+        assert!(minimal_consumer.subscription_data_set.is_empty());
+        assert_eq!(minimal_consumer.group_name, full_consumer.group_name);
+        assert_eq!(minimal_consumer.consume_type, full_consumer.consume_type);
+        assert_eq!(minimal_consumer.message_model, full_consumer.message_model);
+        assert_eq!(minimal_consumer.consume_from_where, full_consumer.consume_from_where);
+        assert_eq!(minimal_consumer.unit_mode, full_consumer.unit_mode);
     }
 
     #[test]
