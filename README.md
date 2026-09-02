@@ -275,7 +275,7 @@ We welcome contributions from the community! Whether you're fixing bugs, adding 
 - Ensure CI passes before submitting PR
 - Use meaningful commit messages
 
-For detailed guidelines, please read our [Contribution Guide](https://rocketmqrust.com/docs/contribute-guide/).
+For detailed guidelines, please read our [Contribution Guide](https://rocketmqrust.com/docs/contributing/overview).
 
 ### Repository Activity
 
