@@ -41,7 +41,9 @@ impl Hash for ConsumerData {
         self.consume_type.hash(state);
         self.message_model.hash(state);
         self.consume_from_where.hash(state);
-        self.subscription_data_set.iter().for_each(|code| code.hash(state));
+        let mut subscriptions = self.subscription_data_set.iter().collect::<Vec<_>>();
+        subscriptions.sort_unstable();
+        subscriptions.hash(state);
         self.unit_mode.hash(state);
     }
 }
@@ -121,7 +123,6 @@ mod tests {
     #[test]
     fn consumer_data_hash() {
         use std::collections::hash_map::DefaultHasher;
-        use std::hash::Hash;
         use std::hash::Hasher;
 
         let consumer_data = ConsumerData {
@@ -129,18 +130,30 @@ mod tests {
             consume_type: ConsumeType::default(),
             message_model: MessageModel::default(),
             consume_from_where: ConsumeFromWhere::default(),
-            subscription_data_set: HashSet::new(),
+            subscription_data_set: ["topic-c", "topic-a", "topic-b"]
+                .into_iter()
+                .map(|topic| SubscriptionData {
+                    topic: topic.into(),
+                    ..Default::default()
+                })
+                .collect(),
             unit_mode: false,
         };
 
         let mut hasher = DefaultHasher::new();
         consumer_data.hash(&mut hasher);
-        let hash1 = hasher.finish();
+        let expected = hasher.finish();
 
-        let mut hasher = DefaultHasher::new();
-        consumer_data.hash(&mut hasher);
-        let hash2 = hasher.finish();
+        for _ in 0..32 {
+            let equal_consumer = ConsumerData {
+                subscription_data_set: consumer_data.subscription_data_set.iter().cloned().collect(),
+                ..consumer_data.clone()
+            };
+            let mut hasher = DefaultHasher::new();
+            equal_consumer.hash(&mut hasher);
 
-        assert_eq!(hash1, hash2);
+            assert_eq!(consumer_data, equal_consumer);
+            assert_eq!(expected, hasher.finish());
+        }
     }
 }

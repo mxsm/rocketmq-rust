@@ -15,12 +15,16 @@
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
+use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::hasher::string_hasher::JavaStringHasher;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::protocol::heartbeat::consume_type::ConsumeType;
 use crate::protocol::heartbeat::consumer_data::ConsumerData;
+use crate::protocol::heartbeat::message_model::MessageModel;
 use crate::protocol::heartbeat::producer_data::ProducerData;
+use crate::protocol::heartbeat::subscription_data::SubscriptionData;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -37,43 +41,76 @@ pub struct HeartbeatData {
     pub is_without_sub: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CanonicalHeartbeatData {
+    #[serde(rename = "clientID")]
+    client_id: &'static str,
+    producer_data_set: Vec<ProducerData>,
+    consumer_data_set: Vec<CanonicalConsumerData>,
+    heartbeat_fingerprint: i32,
+    #[serde(rename = "withoutSub")]
+    is_without_sub: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CanonicalConsumerData {
+    group_name: CheetahString,
+    consume_type: ConsumeType,
+    message_model: MessageModel,
+    consume_from_where: ConsumeFromWhere,
+    subscription_data_set: Vec<SubscriptionData>,
+    unit_mode: bool,
+}
+
+impl From<&ConsumerData> for CanonicalConsumerData {
+    fn from(value: &ConsumerData) -> Self {
+        let mut subscription_data_set = value.subscription_data_set.iter().cloned().collect::<Vec<_>>();
+        for subscription in &mut subscription_data_set {
+            subscription.sub_version = 0;
+        }
+        subscription_data_set.sort_unstable();
+
+        Self {
+            group_name: value.group_name.clone(),
+            consume_type: value.consume_type,
+            message_model: value.message_model,
+            consume_from_where: value.consume_from_where,
+            subscription_data_set,
+            unit_mode: value.unit_mode,
+        }
+    }
+}
+
 impl HeartbeatData {
     /// Compute fingerprint for HeartbeatV2 protocol
     pub fn compute_heartbeat_fingerprint(&self) -> i32 {
-        // Clone via JSON to ensure deep copy
-        let json_str = match serde_json::to_string(self) {
-            Ok(s) => s,
-            Err(_) => return 0,
-        };
-
-        let mut copy: HeartbeatData = match serde_json::from_str(&json_str) {
-            Ok(c) => c,
-            Err(_) => return 0,
-        };
-
-        // Reset subVersion to 0 for all consumer subscriptions
-        let mut new_consumer_set = HashSet::new();
-        for mut consumer_data in copy.consumer_data_set {
-            let mut new_subscription_set = HashSet::new();
-            for mut subscription_data in consumer_data.subscription_data_set {
-                subscription_data.sub_version = 0;
-                new_subscription_set.insert(subscription_data);
-            }
-            consumer_data.subscription_data_set = new_subscription_set;
-            new_consumer_set.insert(consumer_data);
-        }
-        copy.consumer_data_set = new_consumer_set;
-
-        // Reset fields that should not affect fingerprint
-        copy.is_without_sub = false;
-        copy.heartbeat_fingerprint = 0;
-        copy.client_id = CheetahString::new();
-
-        // Serialize to JSON and compute Java String hashCode
-        match serde_json::to_string(&copy) {
-            Ok(final_json) => JavaStringHasher::hash_str(&final_json),
+        match self.canonical_fingerprint_json() {
+            Ok(json) => JavaStringHasher::hash_str(&json),
             Err(_) => 0,
         }
+    }
+
+    fn canonical_fingerprint_json(&self) -> serde_json::Result<String> {
+        let mut producer_data_set = self.producer_data_set.iter().cloned().collect::<Vec<_>>();
+        producer_data_set.sort_unstable_by(|left, right| left.group_name.cmp(&right.group_name));
+
+        let mut keyed_consumers = Vec::with_capacity(self.consumer_data_set.len());
+        for consumer in &self.consumer_data_set {
+            let canonical = CanonicalConsumerData::from(consumer);
+            let sort_key = serde_json::to_vec(&canonical)?;
+            keyed_consumers.push((sort_key, canonical));
+        }
+        keyed_consumers.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+
+        serde_json::to_string(&CanonicalHeartbeatData {
+            client_id: "",
+            producer_data_set,
+            consumer_data_set: keyed_consumers.into_iter().map(|(_, consumer)| consumer).collect(),
+            heartbeat_fingerprint: 0,
+            is_without_sub: false,
+        })
     }
 }
 #[cfg(test)]
@@ -152,24 +189,40 @@ mod tests {
 
     #[test]
     fn test_compute_heartbeat_fingerprint_consistency() {
-        let mut producer_set = HashSet::new();
-        producer_set.insert(ProducerData {
-            group_name: "producer_group1".into(),
-        });
+        let producer_data_set = ["producer-c", "producer-a", "producer-b"]
+            .into_iter()
+            .map(|group_name| ProducerData {
+                group_name: group_name.into(),
+            })
+            .collect();
+        let consumer_data_set = ["consumer-b", "consumer-a"]
+            .into_iter()
+            .map(|group_name| ConsumerData {
+                group_name: group_name.into(),
+                subscription_data_set: ["topic-c", "topic-a", "topic-b"]
+                    .into_iter()
+                    .map(|topic| SubscriptionData {
+                        topic: topic.into(),
+                        sub_version: 123,
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+            .collect();
 
         let heartbeat_data = HeartbeatData {
             client_id: "client1".into(),
-            producer_data_set: producer_set.clone(),
-            consumer_data_set: HashSet::new(),
+            producer_data_set,
+            consumer_data_set,
             heartbeat_fingerprint: 0,
             is_without_sub: false,
         };
 
-        let fingerprint1 = heartbeat_data.compute_heartbeat_fingerprint();
-        let fingerprint2 = heartbeat_data.compute_heartbeat_fingerprint();
-
-        // Same data should produce same fingerprint
-        assert_eq!(fingerprint1, fingerprint2);
+        let fingerprints = (0..32)
+            .map(|_| heartbeat_data.compute_heartbeat_fingerprint())
+            .collect::<HashSet<_>>();
+        assert_eq!(fingerprints.len(), 1);
     }
 
     #[test]
