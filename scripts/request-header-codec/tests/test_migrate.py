@@ -56,17 +56,17 @@ class MigrationGuardTests(unittest.TestCase):
             self.manifest,
         )
         self.assertEqual(migrate.serialize(expected), migrate.serialize(self.manifest))
-        self.assertEqual(len(self.headers), 152)
-        self.assertEqual(sum(header.codec == "v3" for header in self.headers.values()), 152)
+        self.assertEqual(len(self.headers), 153)
+        self.assertEqual(sum(header.codec == "v3" for header in self.headers.values()), 153)
         self.assertEqual(
             {
-                "entryCount": 152,
+                "entryCount": 153,
                 "mappedCount": 143,
-                "rustOnlyExtensionCount": 9,
+                "rustOnlyExtensionCount": 10,
                 "v2Count": 0,
-                "v3Count": 152,
+                "v3Count": 153,
                 "pendingCount": 0,
-                "migratedCount": 152,
+                "migratedCount": 153,
             },
             self.manifest["summary"],
         )
@@ -81,7 +81,7 @@ class MigrationGuardTests(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertEqual(
             "request-header migration guard passed: "
-            "152 registered, 152 V3, 0 V2, 0 pending, 0 production legacy derive uses\n",
+            "153 registered, 153 V3, 0 V2, 0 pending, 0 production legacy derive uses\n",
             output.getvalue(),
         )
 

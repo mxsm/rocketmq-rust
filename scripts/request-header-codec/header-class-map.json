@@ -4,11 +4,11 @@
   "javaCommit": "2daf0e2ca91a1592d18235d43e5d709d1c35d15f",
   "generatedBy": "scripts/request-header-codec/generate_header_class_map.py",
   "historicalDeriveCount": 150,
-  "currentDeriveCount": 151,
+  "currentDeriveCount": 152,
   "manualHeaderCount": 1,
-  "entryCount": 152,
+  "entryCount": 153,
   "mappedCount": 143,
-  "rustOnlyExtensionCount": 9,
+  "rustOnlyExtensionCount": 10,
   "entries": [
     {
       "rustTypeId": "rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader",
@@ -2146,6 +2146,22 @@
       "javaFast": false,
       "status": "rust-only-extension",
       "reason": "Rust compare-and-set broker configuration response extension"
+    },
+    {
+      "rustTypeId": "rocketmq_protocol::protocol::header::update_consumer_offset_conditional_header::UpdateConsumerOffsetConditionalHeader",
+      "rustType": "UpdateConsumerOffsetConditionalHeader",
+      "rustAliases": [],
+      "rustSource": "rocketmq-protocol/src/protocol/header/update_consumer_offset_conditional_header.rs",
+      "javaClass": null,
+      "javaSource": null,
+      "direction": "request",
+      "requestCodes": [
+        "UPDATE_CONSUMER_OFFSET_CONDITIONAL"
+      ],
+      "exactName": false,
+      "javaFast": false,
+      "status": "rust-only-extension",
+      "reason": "Rust conditional consumer offset update extension"
     },
     {
       "rustTypeId": "rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader",

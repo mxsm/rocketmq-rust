@@ -641,6 +641,7 @@ fn registry() -> Vec<RegisteredSchema> {
         register::<rocketmq_protocol::protocol::header::namesrv::config_header::GetNamesrvConfigRequestHeader>(),
         register::<rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader>(),
         register::<rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader>(),
+        register::<rocketmq_protocol::protocol::header::update_consumer_offset_conditional_header::UpdateConsumerOffsetConditionalHeader>(),
         register::<rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader>(),
         register_value(
             &rocketmq_protocol::protocol::header::update_subscription_group_config_cas_request_header::UpdateSubscriptionGroupConfigCasRequestHeader {
