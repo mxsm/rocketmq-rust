@@ -94,6 +94,27 @@ struct ControlConfigMaterial {
     tls_private_key_markers: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum RestorationState {
+    #[default]
+    Clean,
+    Required,
+}
+
+impl RestorationState {
+    fn before_execute(&mut self) {
+        *self = Self::Required;
+    }
+
+    fn complete(&mut self) {
+        *self = Self::Clean;
+    }
+
+    const fn is_required(self) -> bool {
+        matches!(self, Self::Required)
+    }
+}
+
 pub(super) struct E2eHarness {
     temp: Option<TempDir>,
     root: PathBuf,
@@ -114,9 +135,9 @@ pub(super) struct E2eHarness {
     broker_repeat_generation: Option<u64>,
     broker_restore_generation: Option<u64>,
     broker_restart_generation: Option<u64>,
-    broker_patch_touched: bool,
+    broker_restoration: RestorationState,
     request_mode_baseline: Option<RequestModeValue>,
-    request_mode_touched: bool,
+    request_mode_restoration: RestorationState,
     topic_created: bool,
     group_created: bool,
     cleanup_outcome: Option<Result<CleanupEvidence, String>>,
@@ -189,9 +210,9 @@ impl E2eHarness {
             broker_repeat_generation: None,
             broker_restore_generation: None,
             broker_restart_generation: None,
-            broker_patch_touched: false,
+            broker_restoration: RestorationState::default(),
             request_mode_baseline: None,
-            request_mode_touched: false,
+            request_mode_restoration: RestorationState::default(),
             topic_created: false,
             group_created: false,
             cleanup_outcome: None,
@@ -442,6 +463,7 @@ impl E2eHarness {
             "Broker dry-run changed the configuration or generation",
         )?;
 
+        self.broker_restoration.before_execute();
         let applied = self
             .invoke(
                 PATCH_BROKER_CONFIG_TOOL,
@@ -451,7 +473,6 @@ impl E2eHarness {
                 AuditResult::Applied,
             )
             .await?;
-        self.broker_patch_touched = true;
         ensure(
             applied["before"][BROKER] == broker_state_json(original),
             "Broker execute pre-state differed from its dry-run pre-state",
@@ -491,6 +512,7 @@ impl E2eHarness {
             "typed fixture did not observe the exact Broker configuration patch",
         )?;
 
+        self.broker_restoration.before_execute();
         let repeat = self
             .invoke(
                 PATCH_BROKER_CONFIG_TOOL,
@@ -559,6 +581,8 @@ impl E2eHarness {
             after_baseline_dry == before_baseline_dry,
             "request-mode baseline dry-run changed real Broker state",
         )?;
+        self.request_mode_baseline = Some(baseline);
+        self.request_mode_restoration.before_execute();
         self.invoke(
             SET_CONSUMER_REQUEST_MODE_TOOL,
             request_mode_args(&self.topic, &self.group, "pull", 0, false, "mode-exec-base"),
@@ -567,7 +591,6 @@ impl E2eHarness {
             AuditResult::Applied,
         )
         .await?;
-        self.request_mode_baseline = Some(baseline);
         ensure(
             self.fixture_mut()?.request_mode(&topic, &group).await?.as_ref() == Some(&baseline),
             "typed fixture did not observe the request-mode baseline",
@@ -587,6 +610,7 @@ impl E2eHarness {
             after_change_dry == before_change_dry,
             "request-mode change dry-run changed real Broker state",
         )?;
+        self.request_mode_restoration.before_execute();
         let changed = self
             .invoke(
                 SET_CONSUMER_REQUEST_MODE_TOOL,
@@ -596,7 +620,6 @@ impl E2eHarness {
                 AuditResult::Applied,
             )
             .await?;
-        self.request_mode_touched = true;
         ensure(
             changed["after"][BROKER]["mode"] == "pop" && changed["after"][BROKER]["pop_share_queue_num"] == 1,
             "request-mode change was not verified",
@@ -609,6 +632,7 @@ impl E2eHarness {
             self.fixture_mut()?.request_mode(&topic, &group).await?.as_ref() == Some(&expected),
             "typed fixture did not observe the exact request-mode change",
         )?;
+        self.request_mode_restoration.before_execute();
         let repeat = self
             .invoke(
                 SET_CONSUMER_REQUEST_MODE_TOOL,
@@ -782,8 +806,12 @@ impl E2eHarness {
         }
 
         let mut failures = Vec::new();
-        let needs_live_broker =
-            self.broker_patch_touched || self.request_mode_touched || self.topic_created || self.group_created;
+        let broker_restore_was_required = self.broker_restoration.is_required();
+        let request_mode_restore_was_required = self.request_mode_restoration.is_required();
+        let needs_live_broker = broker_restore_was_required
+            || request_mode_restore_was_required
+            || self.topic_created
+            || self.group_created;
         if needs_live_broker {
             if self.cluster.ensure_broker_running().await.is_err() {
                 failures.push("Broker was unavailable during cleanup".to_owned());
@@ -796,14 +824,14 @@ impl E2eHarness {
         }
 
         let request_mode_restored = self.restore_request_mode().await.unwrap_or(false);
-        if self.request_mode_touched && !request_mode_restored {
+        if request_mode_restore_was_required && !request_mode_restored {
             failures.push("Consumer request mode restoration failed".to_owned());
         }
         let broker_config_restored = self
             .restore_broker_config(None, "broker-cleanup-1")
             .await
             .unwrap_or(false);
-        if self.broker_patch_touched && !broker_config_restored {
+        if broker_restore_was_required && !broker_config_restored {
             failures.push("Broker configuration restoration failed".to_owned());
         }
 
@@ -852,8 +880,8 @@ impl E2eHarness {
             Ok(CleanupEvidence {
                 cluster_root_removed,
                 children_reaped,
-                broker_config_restored: !self.broker_patch_touched || broker_config_restored,
-                consumer_request_mode_restored: !self.request_mode_touched || request_mode_restored,
+                broker_config_restored: !broker_restore_was_required || broker_config_restored,
+                consumer_request_mode_restored: !request_mode_restore_was_required || request_mode_restored,
             })
         } else {
             Err(failures.join("; "))
@@ -863,7 +891,7 @@ impl E2eHarness {
     }
 
     async fn restore_broker_config(&mut self, expected_changed: Option<bool>, request_key: &str) -> E2eResult<bool> {
-        if !self.broker_patch_touched {
+        if !self.broker_restoration.is_required() {
             return Ok(true);
         }
         let Some(original) = self.original_broker_state else {
@@ -881,6 +909,7 @@ impl E2eHarness {
                 "Broker restoration did not start from the saved repeat generation",
             )?;
         }
+        self.broker_restoration.before_execute();
         let response = self
             .invoke(
                 PATCH_BROKER_CONFIG_TOOL,
@@ -921,12 +950,12 @@ impl E2eHarness {
             "typed fixture did not observe the exact Broker restoration generation and fields",
         )?;
         self.broker_restore_generation = Some(restored_generation);
-        self.broker_patch_touched = false;
+        self.broker_restoration.complete();
         Ok(true)
     }
 
     async fn restore_request_mode(&mut self) -> E2eResult<bool> {
-        if !self.request_mode_touched {
+        if !self.request_mode_restoration.is_required() {
             return Ok(true);
         }
         let Some(baseline) = self.request_mode_baseline else {
@@ -936,21 +965,29 @@ impl E2eHarness {
             RequestMode::Pull => ("pull", baseline.pop_share_queue_num),
             RequestMode::Pop => ("pop", baseline.pop_share_queue_num),
         };
-        self.invoke(
-            SET_CONSUMER_REQUEST_MODE_TOOL,
-            request_mode_args(&self.topic, &self.group, mode, share, false, "mode-restore-01"),
-            ControlOperation::ConsumerRequestMode,
-            AuditMode::Execute,
-            AuditResult::Applied,
-        )
-        .await?;
+        self.request_mode_restoration.before_execute();
+        let response = self
+            .invoke(
+                SET_CONSUMER_REQUEST_MODE_TOOL,
+                request_mode_args(&self.topic, &self.group, mode, share, false, "mode-restore-01"),
+                ControlOperation::ConsumerRequestMode,
+                AuditMode::Execute,
+                AuditResult::Applied,
+            )
+            .await?;
+        let response_restored =
+            response["after"][BROKER]["mode"] == mode && response["after"][BROKER]["pop_share_queue_num"] == share;
         let restored = self
             .fixture
             .as_mut()
             .ok_or_else(|| E2eError::new("fixture Admin is unavailable"))?
             .request_mode(&self.topic, &self.group)
             .await?;
-        Ok(restored.as_ref() == Some(&baseline))
+        let verified = response_restored && restored.as_ref() == Some(&baseline);
+        if verified {
+            self.request_mode_restoration.complete();
+        }
+        Ok(verified)
     }
 
     async fn stop_control(&mut self) -> E2eResult<()> {
@@ -1523,11 +1560,28 @@ fn safe_admin_error(error: &AdminError) -> String {
 #[cfg(test)]
 mod tests {
     use super::ensure_audit_cardinality;
+    use super::RestorationState;
 
     #[test]
     fn audit_cardinality_cannot_adapt_to_missing_calls_or_records() {
         assert!(ensure_audit_cardinality(22, 44).is_ok());
         assert!(ensure_audit_cardinality(21, 42).is_err());
         assert!(ensure_audit_cardinality(22, 42).is_err());
+    }
+
+    #[test]
+    fn restoration_state_survives_execute_error_and_clears_only_after_verified_restore() {
+        let mut state = RestorationState::default();
+        assert!(!state.is_required());
+
+        state.before_execute();
+        let invoke_result = Result::<(), ()>::Err(());
+        assert!(invoke_result.is_err());
+        assert!(state.is_required());
+
+        state.before_execute();
+        assert!(state.is_required());
+        state.complete();
+        assert!(!state.is_required());
     }
 }
