@@ -478,15 +478,7 @@ fn push_path_redactions(redactions: &mut Vec<String>, path: &Path) {
 fn sanitize_diagnostic(input: &str, redactions: &[String]) -> String {
     let mut diagnostic = strip_terminal_sequences(input)
         .chars()
-        .map(|character| {
-            if character == '\r' || character == '\n' || character == '\t' {
-                ' '
-            } else if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
+        .map(|character| if character.is_control() { ' ' } else { character })
         .collect::<String>();
     for sensitive in redactions {
         if !sensitive.is_empty() {
