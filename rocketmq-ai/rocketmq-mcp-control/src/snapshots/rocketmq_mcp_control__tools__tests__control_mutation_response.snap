@@ -8,6 +8,7 @@ expression: response
   "cluster": "cluster-a",
   "mode": "execute",
   "status": "partial",
+  "error_code": "partial_apply",
   "target": {
     "topic": "orders",
     "brokers": [

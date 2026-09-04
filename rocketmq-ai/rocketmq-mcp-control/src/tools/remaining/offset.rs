@@ -23,6 +23,7 @@ use super::super::{
 use super::nullable_schema;
 use super::validate_consumer_group;
 use crate::error::ControlError;
+use crate::error::ControlErrorCode;
 
 pub const RESET_CONSUMER_OFFSET_TOOL: &str = "rocketmq_reset_consumer_offset";
 
@@ -89,10 +90,10 @@ impl ResetConsumerOffsetArgs {
         validate_user_name(&self.topic, NameKind::Topic)?;
         validate_consumer_group(&self.consumer_group)?;
         let timestamp = DateTime::parse_from_rfc3339(&self.timestamp)
-            .map_err(|_| ControlError::invalid_arguments())?
+            .map_err(|_| ControlError::invalid_argument())?
             .timestamp_millis();
         if timestamp < 0 {
-            return Err(ControlError::invalid_arguments());
+            return Err(ControlError::invalid_argument());
         }
         Ok(timestamp)
     }
@@ -159,6 +160,8 @@ pub struct OffsetMutationToolResponse {
     pub cluster: String,
     pub mode: MutationMode,
     pub status: MutationStatus,
+    #[schemars(required, schema_with = "nullable_schema::<ControlErrorCode>")]
+    pub error_code: Option<ControlErrorCode>,
     pub target: OffsetResetResource,
     pub before: Vec<OffsetQueueState>,
     pub requested: OffsetRequested,

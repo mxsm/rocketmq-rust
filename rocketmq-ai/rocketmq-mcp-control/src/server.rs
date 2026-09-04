@@ -275,7 +275,7 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::TopicUpsert) => {
                     let mut args: crate::tools::UpsertTopicArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into()),
+                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
                     };
                     if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
                         return Ok(tool_error(error).into());
@@ -286,7 +286,7 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::ConsumerGroupUpsert) => {
                     let mut args: crate::tools::UpsertConsumerGroupArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into()),
+                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
                     };
                     if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
                         return Ok(tool_error(error).into());
@@ -297,10 +297,10 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::ConsumerOffsetReset) => {
                     let mut args: crate::tools::ResetConsumerOffsetArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into()),
+                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
                     };
-                    if args.validate(self.guard.default_dry_run(), dry_run_omitted).is_err() {
-                        return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into());
+                    if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
+                        return Ok(tool_error(error).into());
                     }
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerOffset(args)
@@ -308,10 +308,10 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::BrokerConfigPatch) => {
                     let mut args: crate::tools::PatchBrokerConfigArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into()),
+                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
                     };
-                    if args.validate(self.guard.default_dry_run(), dry_run_omitted).is_err() {
-                        return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into());
+                    if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
+                        return Ok(tool_error(error).into());
                     }
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::BrokerConfig(args)
@@ -319,7 +319,7 @@ impl ServerHandler for ControlServer {
                 Some(ControlOperation::ConsumerRequestMode) => {
                     let mut args: crate::tools::SetConsumerRequestModeArgs = match serde_json::from_value(raw) {
                         Ok(args) => args,
-                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_arguments()).into()),
+                        Err(_) => return Ok(tool_error(crate::error::ControlError::invalid_argument()).into()),
                     };
                     if let Err(error) = args.validate(self.guard.default_dry_run(), dry_run_omitted) {
                         return Ok(tool_error(error).into());
@@ -327,7 +327,7 @@ impl ServerHandler for ControlServer {
                     args.dry_run = args.effective_dry_run(self.guard.default_dry_run(), dry_run_omitted);
                     crate::tool_runtime::MutationToolRequest::ConsumerRequestMode(args)
                 }
-                _ => return Ok(tool_error(crate::error::ControlError::permission_denied()).into()),
+                _ => return Ok(tool_error(crate::error::ControlError::operation_not_allowed()).into()),
             };
             let Some(runtime) = &self.tool_runtime else {
                 return Ok(tool_error(crate::error::ControlError::operation_unavailable()).into());

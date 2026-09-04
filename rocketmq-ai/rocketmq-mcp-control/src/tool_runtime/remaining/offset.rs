@@ -142,6 +142,7 @@ fn offset_response(
             tools::MutationMode::Execute
         },
         status,
+        error_code: tools::response_error_code(status, targets.iter().map(|target| target.failure)),
         target: tools::OffsetResetResource {
             topic: args.topic.clone(),
             consumer_group: args.consumer_group.clone(),

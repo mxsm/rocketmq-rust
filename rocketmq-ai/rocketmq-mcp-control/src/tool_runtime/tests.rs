@@ -30,6 +30,7 @@ use crate::model::MUTATION_ARGUMENTS_SCHEMA_VERSION;
 enum Behavior {
     Success,
     Partial,
+    VerificationFailed,
     Block,
     Panic,
 }
@@ -76,15 +77,31 @@ impl UpsertSession for FakeSession {
             match self.behavior {
                 Behavior::Block => self.gate.notified().await,
                 Behavior::Panic => panic!("synthetic adapter panic"),
-                Behavior::Success | Behavior::Partial => {}
+                Behavior::Success | Behavior::Partial | Behavior::VerificationFailed => {}
             }
             let UpsertRequest::Topic(args) = request else {
                 return Err(ControlError::execution_failed());
             };
-            let status = if matches!(self.behavior, Behavior::Partial) {
-                tools::MutationStatus::Partial
-            } else {
-                tools::MutationStatus::Applied
+            let (status, targets) = match self.behavior {
+                Behavior::Partial => (tools::MutationStatus::Partial, Vec::new()),
+                Behavior::VerificationFailed => (
+                    tools::MutationStatus::Failed,
+                    vec![tools::MutationTarget {
+                        target: tools::LogicalMutationTarget {
+                            broker_name: "broker-a".to_owned(),
+                        },
+                        before: tools::VisibleState::Unknown,
+                        requested: args.replacement.clone(),
+                        after: None,
+                        applied: true,
+                        changed: true,
+                        persistence: tools::PersistenceState::Persisted,
+                        verification: tools::VerificationState::Failed,
+                        failure: Some(tools::FailureCode::VerificationFailed),
+                        retryable: true,
+                    }],
+                ),
+                Behavior::Success | Behavior::Block | Behavior::Panic => (tools::MutationStatus::Applied, Vec::new()),
             };
             Ok(UpsertResponse::Topic(topic_response(
                 &args,
@@ -96,7 +113,7 @@ impl UpsertSession for FakeSession {
                 status,
                 BTreeMap::new(),
                 None,
-                Vec::new(),
+                targets,
                 Vec::new(),
             )))
         })
@@ -262,8 +279,8 @@ fn authorized() -> AuthorizedMutation {
 }
 
 #[tokio::test]
-async fn completed_and_partial_results_are_cached_with_per_invocation_audit() {
-    for behavior in [Behavior::Success, Behavior::Partial] {
+async fn completed_partial_and_verification_failures_are_cached_with_exact_audit() {
+    for behavior in [Behavior::Success, Behavior::Partial, Behavior::VerificationFailed] {
         let (runtime, counters, sink, _) = runtime(behavior, Duration::from_secs(1));
         let first = runtime
             .execute(
@@ -283,12 +300,38 @@ async fn completed_and_partial_results_are_cached_with_per_invocation_audit() {
             )
             .await
             .unwrap();
-        assert_eq!(first.is_error(), matches!(behavior, Behavior::Partial));
-        assert_eq!(second.is_error(), first.is_error());
+        assert_eq!(
+            serde_json::to_value(&second).unwrap(),
+            serde_json::to_value(&first).unwrap()
+        );
+        let (expected_result, expected_code) = match behavior {
+            Behavior::Success => (crate::audit::AuditResult::Applied, None),
+            Behavior::Partial => (
+                crate::audit::AuditResult::Partial,
+                Some(crate::error::ControlErrorCode::PartialApply),
+            ),
+            Behavior::VerificationFailed => (
+                crate::audit::AuditResult::Failed,
+                Some(crate::error::ControlErrorCode::VerificationFailed),
+            ),
+            Behavior::Block | Behavior::Panic => unreachable!(),
+        };
+        assert_eq!(first.is_error(), !matches!(behavior, Behavior::Success));
+        for response in [&first, &second] {
+            let UpsertResponse::Topic(response) = response else {
+                unreachable!();
+            };
+            assert_eq!(response.error_code, expected_code);
+        }
         assert_eq!(counters.opens.load(Ordering::SeqCst), 1);
         assert_eq!(counters.runs.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
-        assert_eq!(sink.records().await.unwrap().len(), 4);
+        let records = sink.records().await.unwrap();
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[1].result, expected_result);
+        assert_eq!(records[3].result, expected_result);
+        assert_eq!(records[1].error_code, expected_code);
+        assert_eq!(records[3].error_code, expected_code);
     }
 }
 
@@ -315,7 +358,7 @@ async fn request_key_collision_and_principal_isolation_are_fail_closed() {
             .await
             .unwrap_err()
             .code(),
-        crate::error::ControlErrorCode::InvalidArguments
+        crate::error::ControlErrorCode::InvalidArgument
     );
     runtime
         .execute(
@@ -697,6 +740,10 @@ fn failed_postread_preserves_applied_and_persisted_target_truth() {
     };
     let response = topic_executed(&args, before, outcome, None);
     assert_eq!(response.status, tools::MutationStatus::Failed);
+    assert_eq!(
+        response.error_code,
+        Some(crate::error::ControlErrorCode::VerificationFailed)
+    );
     assert!(response.is_error());
     assert_eq!(response.targets[0].after, None);
     assert!(response.targets[0].applied);

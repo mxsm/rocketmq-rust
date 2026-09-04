@@ -117,6 +117,29 @@ expression: catalog.list_tools().tools
     },
     "outputSchema": {
       "$defs": {
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
+          "type": "string"
+        },
         "FailureCode": {
           "enum": [
             "conflict",
@@ -376,6 +399,16 @@ expression: catalog.list_tools().tools
         "cluster": {
           "type": "string"
         },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -413,6 +446,7 @@ expression: catalog.list_tools().tools
         "cluster",
         "mode",
         "status",
+        "error_code",
         "target",
         "before",
         "requested",
@@ -650,6 +684,29 @@ expression: catalog.list_tools().tools
           "const": "consumer_group_upsert",
           "type": "string"
         },
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
+          "type": "string"
+        },
         "FailureCode": {
           "enum": [
             "conflict",
@@ -839,6 +896,16 @@ expression: catalog.list_tools().tools
         "cluster": {
           "type": "string"
         },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -876,6 +943,7 @@ expression: catalog.list_tools().tools
         "cluster",
         "mode",
         "status",
+        "error_code",
         "target",
         "before",
         "requested",
@@ -973,6 +1041,29 @@ expression: catalog.list_tools().tools
       "$defs": {
         "ConsumerOffsetResetOperation": {
           "const": "consumer_offset_reset",
+          "type": "string"
+        },
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
           "type": "string"
         },
         "FailureCode": {
@@ -1194,6 +1285,16 @@ expression: catalog.list_tools().tools
         "cluster": {
           "type": "string"
         },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -1231,6 +1332,7 @@ expression: catalog.list_tools().tools
         "cluster",
         "mode",
         "status",
+        "error_code",
         "target",
         "before",
         "requested",
@@ -1518,6 +1620,29 @@ expression: catalog.list_tools().tools
           ],
           "type": "object"
         },
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
+          "type": "string"
+        },
         "FailureCode": {
           "enum": [
             "conflict",
@@ -1592,6 +1717,16 @@ expression: catalog.list_tools().tools
         "cluster": {
           "type": "string"
         },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -1629,6 +1764,7 @@ expression: catalog.list_tools().tools
         "cluster",
         "mode",
         "status",
+        "error_code",
         "target",
         "before",
         "requested",
@@ -1749,6 +1885,29 @@ expression: catalog.list_tools().tools
         },
         "ConsumerRequestModeOperation": {
           "const": "consumer_request_mode",
+          "type": "string"
+        },
+        "ControlErrorCode": {
+          "enum": [
+            "invalid_config",
+            "request_rejected",
+            "unauthorized",
+            "permission_denied",
+            "cluster_not_allowed",
+            "operation_not_allowed",
+            "mutation_disabled",
+            "operation_unavailable",
+            "confirmation_required",
+            "invalid_argument",
+            "audit_unavailable",
+            "precondition_conflict",
+            "partial_apply",
+            "verification_failed",
+            "timeout",
+            "cancelled",
+            "execution_failed",
+            "shutdown_failed"
+          ],
           "type": "string"
         },
         "FailureCode": {
@@ -1972,6 +2131,16 @@ expression: catalog.list_tools().tools
         "cluster": {
           "type": "string"
         },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ControlErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/MutationMode"
         },
@@ -2009,6 +2178,7 @@ expression: catalog.list_tools().tools
         "cluster",
         "mode",
         "status",
+        "error_code",
         "target",
         "before",
         "requested",

@@ -34,9 +34,10 @@ timeout, cancellation, or contained adapter panic does not abandon an acquired s
 Interpret results conservatively:
 
 - `planned` and `applied` are non-error statuses; unchanged success is `applied` with `changed=false`;
-- `conflict` means the conditional expected state no longer matched and is not retried;
-- `partial` retains per-target applied/persistence/verification truth and requires operator review;
-- `failed` may still contain an applied target whose persistence or post-read verification failed;
+- `conflict` has `error_code=precondition_conflict`; the conditional expected state no longer matched and is not retried;
+- `partial` has `error_code=partial_apply`, retains per-target applied/persistence/verification truth, and requires operator review;
+- `failed` uses `verification_failed` when every actual failure is a verification or order-reconciliation failure,
+  otherwise `execution_failed`; it may still contain an applied target whose persistence or post-read verification failed;
 - `order_reconciliation_failed` means the sealed NameServer-wide order value changed after broker CAS; the
   targeted path never tries to repair that global value and preserves the broker-applied truth.
 
@@ -46,8 +47,11 @@ Never infer success from HTTP delivery alone; consume the closed structured resu
 
 If audit `started` is unavailable, the operation opens no session and performs no RocketMQ RPC. Treat audit
 poison, shutdown failure, persistence failure, or verification failure as fail-closed and investigate the
-durable audit plus RocketMQ state using separately authorized operational systems. Audit records deliberately
-contain no credentials, endpoints, principals, request reasons/keys, or backend error text.
+durable audit plus RocketMQ state using separately authorized operational systems. Version-2 audit records
+contain the validated OAuth subject and optional safe request reason strictly as durable operator evidence.
+Neither value appears in responses, errors, tracing, or ordinary logs. Audit records contain no credentials,
+tokens, endpoints, request keys, message bodies, or backend error text. Existing version-1 and mixed-version
+JSONL is recovered in place and is never rewritten; new writes are version 2 only.
 
 To stop new mutations, set `mutations_enabled=false` and restart. Removing an operation or cluster from the
 server allowlist also requires restart. Keep the service unavailable until incomplete or partial targets are

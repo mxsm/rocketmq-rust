@@ -1,0 +1,59 @@
+---
+source: src/error.rs
+expression: "schemars::schema_for!(ControlErrorEnvelope)"
+---
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ControlErrorEnvelope",
+  "type": "object",
+  "properties": {
+    "code": {
+      "$ref": "#/$defs/ControlErrorCode"
+    },
+    "message": {
+      "type": "string"
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "schema_version": {
+      "$ref": "#/$defs/ControlErrorSchemaVersion"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "code",
+    "message",
+    "retryable"
+  ],
+  "$defs": {
+    "ControlErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_config",
+        "request_rejected",
+        "unauthorized",
+        "permission_denied",
+        "cluster_not_allowed",
+        "operation_not_allowed",
+        "mutation_disabled",
+        "operation_unavailable",
+        "confirmation_required",
+        "invalid_argument",
+        "audit_unavailable",
+        "precondition_conflict",
+        "partial_apply",
+        "verification_failed",
+        "timeout",
+        "cancelled",
+        "execution_failed",
+        "shutdown_failed"
+      ]
+    },
+    "ControlErrorSchemaVersion": {
+      "type": "string",
+      "const": "rocketmq-mcp-control.error.v2"
+    }
+  }
+}

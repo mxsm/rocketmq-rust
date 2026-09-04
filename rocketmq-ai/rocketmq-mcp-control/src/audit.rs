@@ -20,8 +20,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -37,7 +35,13 @@ use crate::error::ControlErrorCode;
 use crate::model::ClusterName;
 use crate::model::ControlOperation;
 
-pub const AUDIT_SCHEMA_VERSION: &str = "rocketmq-mcp-control.audit.v1";
+use self::recovery::duration_millis;
+use self::recovery::recover_audit_state;
+use self::recovery::terminal_event;
+use self::recovery::timestamp_unix_millis;
+use self::recovery::validate_terminal;
+
+pub const AUDIT_SCHEMA_VERSION: &str = "rocketmq-mcp-control.audit.v2";
 const MAX_AUDIT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const AUDIT_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -51,30 +55,129 @@ pub enum AuditEvent {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+pub enum AuditSchemaVersion {
+    V1,
+    V2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditMode {
+    DryRun,
+    Execute,
+}
+
+impl AuditMode {
+    const fn from_dry_run(dry_run: bool) -> Self {
+        if dry_run {
+            Self::DryRun
+        } else {
+            Self::Execute
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditResult {
+    Started,
+    Planned,
+    Applied,
+    Partial,
+    Conflict,
+    Failed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema)]
 #[serde(transparent)]
 pub struct AuditInvocationId(u64);
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, JsonSchema)]
 pub struct AuditRecord {
-    pub schema_version: String,
+    pub schema_version: AuditSchemaVersion,
     pub sequence: u64,
     pub invocation_id: AuditInvocationId,
     pub timestamp_unix_millis: u64,
     pub event: AuditEvent,
     pub operation: ControlOperation,
     pub cluster: ClusterName,
-    pub dry_run: bool,
+    pub operator: Option<String>,
+    pub reason: Option<String>,
+    pub mode: AuditMode,
+    pub result: AuditResult,
     pub error_code: Option<ControlErrorCode>,
+    pub duration_millis: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for AuditRecord {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuditRecord")
+            .field("schema_version", &self.schema_version)
+            .field("sequence", &self.sequence)
+            .field("invocation_id", &self.invocation_id)
+            .field("timestamp_unix_millis", &self.timestamp_unix_millis)
+            .field("event", &self.event)
+            .field("operation", &self.operation)
+            .field("cluster", &self.cluster)
+            .field("identity_recorded", &self.operator.is_some())
+            .field("reason_recorded", &self.reason.is_some())
+            .field("mode", &self.mode)
+            .field("result", &self.result)
+            .field("error_code", &self.error_code)
+            .field("duration_millis", &self.duration_millis)
+            .finish()
+    }
+}
+
+mod recovery;
+mod wire;
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct AuditContext {
+    operator: String,
+    reason: Option<String>,
+}
+
+impl AuditContext {
+    /// Creates the identity evidence written only to the durable audit sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed authorization or argument error when either value is unsafe to persist.
+    pub fn try_new(operator: &str, reason: Option<&str>) -> Result<Self, ControlError> {
+        if !crate::model::valid_operator(operator) {
+            return Err(ControlError::permission_denied());
+        }
+        if reason.is_some_and(|value| !crate::model::valid_reason(value)) {
+            return Err(ControlError::invalid_argument());
+        }
+        Ok(Self {
+            operator: operator.to_owned(),
+            reason: reason.map(ToOwned::to_owned),
+        })
+    }
+}
+
+impl std::fmt::Debug for AuditContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuditContext")
+            .field("operator_validated", &true)
+            .field("reason_recorded", &self.reason.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct AuditInvocation {
     id: AuditInvocationId,
     operation: ControlOperation,
     cluster: ClusterName,
-    dry_run: bool,
+    context: AuditContext,
+    mode: AuditMode,
+    started_at: tokio::time::Instant,
     trail_identity: Arc<TrailIdentity>,
 }
 
@@ -107,9 +210,12 @@ struct AuditTrailState {
 
 #[derive(Clone)]
 struct RecoveredInvocation {
+    schema_version: AuditSchemaVersion,
     operation: ControlOperation,
     cluster: ClusterName,
-    dry_run: bool,
+    operator: Option<String>,
+    reason: Option<String>,
+    mode: AuditMode,
     terminal: bool,
 }
 
@@ -158,7 +264,8 @@ impl AuditTrail {
     pub async fn resume(sink: Arc<dyn ReliableAuditSink>) -> Result<Self, ControlError> {
         let records = tokio::time::timeout(AUDIT_TRANSACTION_TIMEOUT, sink.records())
             .await
-            .map_err(|_| ControlError::audit_unavailable())??;
+            .map_err(|_| ControlError::audit_unavailable())?
+            .map_err(|_| ControlError::audit_unavailable())?;
         let state = recover_audit_state(&records)?;
         Ok(Self {
             sink,
@@ -170,6 +277,7 @@ impl AuditTrail {
 
     pub async fn start(
         &self,
+        context: &AuditContext,
         operation: ControlOperation,
         cluster: &ClusterName,
         dry_run: bool,
@@ -185,28 +293,37 @@ impl AuditTrail {
             id: AuditInvocationId(sequence),
             operation,
             cluster: cluster.clone(),
-            dry_run,
+            context: context.clone(),
+            mode: AuditMode::from_dry_run(dry_run),
+            started_at: tokio::time::Instant::now(),
             trail_identity: self.identity.clone(),
         };
         let record = AuditRecord {
-            schema_version: AUDIT_SCHEMA_VERSION.to_string(),
+            schema_version: AuditSchemaVersion::V2,
             sequence,
             invocation_id: invocation.id,
             timestamp_unix_millis: timestamp_unix_millis()?,
             event: AuditEvent::Started,
             operation,
             cluster: cluster.clone(),
-            dry_run,
+            operator: Some(context.operator.clone()),
+            reason: context.reason.clone(),
+            mode: invocation.mode,
+            result: AuditResult::Started,
             error_code: None,
+            duration_millis: None,
         };
         self.append_record(&record).await?;
         state.sequence = sequence;
         state.invocations.insert(
             invocation.id,
             RecoveredInvocation {
+                schema_version: AuditSchemaVersion::V2,
                 operation,
                 cluster: cluster.clone(),
-                dry_run,
+                operator: Some(context.operator.clone()),
+                reason: context.reason.clone(),
+                mode: invocation.mode,
                 terminal: false,
             },
         );
@@ -216,6 +333,7 @@ impl AuditTrail {
     pub async fn terminal(
         &self,
         invocation: &AuditInvocation,
+        result: AuditResult,
         error_code: Option<ControlErrorCode>,
     ) -> Result<(), ControlError> {
         self.ensure_available()?;
@@ -229,30 +347,34 @@ impl AuditTrail {
             .get(&invocation.id)
             .ok_or_else(ControlError::audit_unavailable)?;
         if recovered.terminal
+            || recovered.schema_version != AuditSchemaVersion::V2
             || recovered.operation != invocation.operation
             || recovered.cluster != invocation.cluster
-            || recovered.dry_run != invocation.dry_run
+            || recovered.operator.as_deref() != Some(invocation.context.operator.as_str())
+            || recovered.reason != invocation.context.reason
+            || recovered.mode != invocation.mode
         {
             return Err(ControlError::audit_unavailable());
         }
+        validate_terminal(result, error_code)?;
         let sequence = state
             .sequence
             .checked_add(1)
             .ok_or_else(ControlError::audit_unavailable)?;
         let record = AuditRecord {
-            schema_version: AUDIT_SCHEMA_VERSION.to_string(),
+            schema_version: AuditSchemaVersion::V2,
             sequence,
             invocation_id: invocation.id,
             timestamp_unix_millis: timestamp_unix_millis()?,
-            event: if error_code.is_some() {
-                AuditEvent::Failed
-            } else {
-                AuditEvent::Completed
-            },
+            event: terminal_event(result),
             operation: invocation.operation,
             cluster: invocation.cluster.clone(),
-            dry_run: invocation.dry_run,
+            operator: Some(invocation.context.operator.clone()),
+            reason: invocation.context.reason.clone(),
+            mode: invocation.mode,
+            result,
             error_code,
+            duration_millis: Some(duration_millis(invocation.started_at.elapsed())?),
         };
         self.append_record(&record).await?;
         state.sequence = sequence;
@@ -267,6 +389,7 @@ impl AuditTrail {
         tokio::time::timeout(AUDIT_TRANSACTION_TIMEOUT, self.sink.records())
             .await
             .map_err(|_| ControlError::audit_unavailable())?
+            .map_err(|_| ControlError::audit_unavailable())
     }
 
     async fn append_record(&self, record: &AuditRecord) -> Result<(), ControlError> {
@@ -276,7 +399,7 @@ impl AuditTrail {
                 poison.disarm();
                 Ok(())
             }
-            Ok(Err(error)) => Err(error),
+            Ok(Err(_)) => Err(ControlError::audit_unavailable()),
             Err(_) => Err(ControlError::audit_unavailable()),
         }
     }
@@ -288,61 +411,6 @@ impl AuditTrail {
             Ok(())
         }
     }
-}
-
-fn recover_audit_state(records: &[AuditRecord]) -> Result<AuditTrailState, ControlError> {
-    let mut sequence = 0;
-    let mut invocations = BTreeMap::new();
-    for record in records {
-        if record.schema_version != AUDIT_SCHEMA_VERSION || record.sequence <= sequence {
-            return Err(ControlError::audit_unavailable());
-        }
-        match record.event {
-            AuditEvent::Started => {
-                if record.invocation_id.0 != record.sequence
-                    || record.error_code.is_some()
-                    || invocations
-                        .insert(
-                            record.invocation_id,
-                            RecoveredInvocation {
-                                operation: record.operation,
-                                cluster: record.cluster.clone(),
-                                dry_run: record.dry_run,
-                                terminal: false,
-                            },
-                        )
-                        .is_some()
-                {
-                    return Err(ControlError::audit_unavailable());
-                }
-            }
-            AuditEvent::Completed | AuditEvent::Failed => {
-                let recovered = invocations
-                    .get_mut(&record.invocation_id)
-                    .ok_or_else(ControlError::audit_unavailable)?;
-                if recovered.terminal
-                    || recovered.operation != record.operation
-                    || recovered.cluster != record.cluster
-                    || recovered.dry_run != record.dry_run
-                    || matches!(record.event, AuditEvent::Completed) != record.error_code.is_none()
-                {
-                    return Err(ControlError::audit_unavailable());
-                }
-                recovered.terminal = true;
-            }
-        }
-        sequence = record.sequence;
-    }
-    Ok(AuditTrailState { sequence, invocations })
-}
-
-fn timestamp_unix_millis() -> Result<u64, ControlError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| ControlError::audit_unavailable())?
-        .as_millis()
-        .try_into()
-        .map_err(|_| ControlError::audit_unavailable())
 }
 
 pub struct MemoryAuditSink {
@@ -389,6 +457,9 @@ impl MemoryAuditSink {
 impl ReliableAuditSink for MemoryAuditSink {
     fn append<'a>(&'a self, record: &'a AuditRecord) -> AuditFuture<'a, Result<(), ControlError>> {
         Box::pin(async move {
+            if record.schema_version != AuditSchemaVersion::V2 {
+                return Err(ControlError::audit_unavailable());
+            }
             let encoded = encode_record(record, self.max_record_bytes)?;
             let encoded_len = u64::try_from(encoded.len()).map_err(|_| ControlError::audit_unavailable())?;
             let mut state = self.state.lock().await;
@@ -541,7 +612,7 @@ impl JsonlAuditSink {
 impl ReliableAuditSink for JsonlAuditSink {
     fn append<'a>(&'a self, record: &'a AuditRecord) -> AuditFuture<'a, Result<(), ControlError>> {
         Box::pin(async move {
-            if self.poisoned.load(Ordering::Acquire) {
+            if record.schema_version != AuditSchemaVersion::V2 || self.poisoned.load(Ordering::Acquire) {
                 return Err(ControlError::audit_unavailable());
             }
             let encoded = encode_record(record, self.max_record_bytes)?;
@@ -620,8 +691,6 @@ async fn parse_existing_file(
         .map_err(|_| ControlError::audit_unavailable())?;
     let mut reader = BufReader::new(file);
     let mut records = Vec::new();
-    let mut last_sequence = 0;
-    let mut invocations = std::collections::BTreeMap::new();
     let mut bytes_read = 0_u64;
     loop {
         let Some(mut line) = read_bounded_line(&mut reader, max_record_bytes).await? else {
@@ -636,45 +705,9 @@ async fn parse_existing_file(
         }
         line.pop();
         let record: AuditRecord = serde_json::from_slice(&line).map_err(|_| ControlError::audit_unavailable())?;
-        if record.schema_version != AUDIT_SCHEMA_VERSION {
-            return Err(ControlError::audit_unavailable());
-        }
-        if record.sequence <= last_sequence {
-            return Err(ControlError::audit_unavailable());
-        }
-        match record.event {
-            AuditEvent::Started => {
-                if record.invocation_id.0 != record.sequence
-                    || record.error_code.is_some()
-                    || invocations
-                        .insert(
-                            record.invocation_id,
-                            (record.operation, record.cluster.clone(), record.dry_run, false),
-                        )
-                        .is_some()
-                {
-                    return Err(ControlError::audit_unavailable());
-                }
-            }
-            AuditEvent::Completed | AuditEvent::Failed => {
-                let Some((operation, cluster, dry_run, terminal_seen)) = invocations.get_mut(&record.invocation_id)
-                else {
-                    return Err(ControlError::audit_unavailable());
-                };
-                if *terminal_seen
-                    || *operation != record.operation
-                    || cluster != &record.cluster
-                    || *dry_run != record.dry_run
-                    || matches!(record.event, AuditEvent::Completed) != record.error_code.is_none()
-                {
-                    return Err(ControlError::audit_unavailable());
-                }
-                *terminal_seen = true;
-            }
-        }
-        last_sequence = record.sequence;
         records.push(record);
     }
+    recover_audit_state(&records)?;
     Ok(records)
 }
 
@@ -716,499 +749,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::AtomicU8;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering as AtomicOrdering;
-    use std::sync::Mutex as StdMutex;
-
-    use futures_util::future::join_all;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn jsonl_sink_persists_queryable_ordered_bounded_records() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("control-audit.jsonl");
-        let sink = Arc::new(JsonlAuditSink::open(&path, 16, 4096).await.unwrap());
-        let audit = AuditTrail::new(sink.clone());
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        let invocation = audit
-            .start(ControlOperation::TopicUpsert, &cluster, true)
-            .await
-            .unwrap();
-        audit.terminal(&invocation, None).await.unwrap();
-
-        let records = sink.records().await.unwrap();
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].sequence, 1);
-        assert_eq!(records[1].sequence, 2);
-        assert_eq!(records[0].invocation_id, records[1].invocation_id);
-        let disk = tokio::fs::read_to_string(&path).await.unwrap();
-        assert_eq!(disk.lines().count(), 2);
-        for forbidden in [
-            "Bearer",
-            "access_key",
-            "secret_key",
-            "127.0.0.1",
-            "operator@example.test",
-            "request-1234",
-            "raw backend",
-        ] {
-            assert!(!disk.contains(forbidden));
-        }
-        drop(audit);
-        drop(sink);
-
-        let resumed_sink = Arc::new(JsonlAuditSink::open(&path, 16, 4096).await.unwrap());
-        let resumed = AuditTrail::resume(resumed_sink.clone()).await.unwrap();
-        let invocation = resumed
-            .start(ControlOperation::TopicUpsert, &cluster, true)
-            .await
-            .unwrap();
-        resumed
-            .terminal(&invocation, Some(ControlErrorCode::Conflict))
-            .await
-            .unwrap();
-        let resumed_records = resumed_sink.records().await.unwrap();
-        assert_eq!(resumed_records[2].sequence, 3);
-        assert_eq!(resumed_records[3].sequence, 4);
-        assert_eq!(resumed_records[2].invocation_id, resumed_records[3].invocation_id);
-    }
-
-    #[tokio::test]
-    async fn bounded_sinks_fail_instead_of_dropping_records() {
-        let sink = MemoryAuditSink::new(1, 4096);
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        let record = AuditRecord {
-            schema_version: AUDIT_SCHEMA_VERSION.to_string(),
-            sequence: 1,
-            invocation_id: AuditInvocationId(1),
-            timestamp_unix_millis: 1,
-            event: AuditEvent::Started,
-            operation: ControlOperation::TopicUpsert,
-            cluster,
-            dry_run: true,
-            error_code: None,
-        };
-        sink.append(&record).await.unwrap();
-        assert_eq!(
-            sink.append(&record).await.unwrap_err().code(),
-            ControlErrorCode::AuditUnavailable
-        );
-    }
-
-    #[tokio::test]
-    async fn concurrent_invocations_keep_global_order_and_stable_links() {
-        let sink = Arc::new(MemoryAuditSink::new(64, 4096));
-        let audit = AuditTrail::new(sink.clone());
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        join_all((0..16).map(|_| {
-            let audit = audit.clone();
-            let cluster = cluster.clone();
-            async move {
-                let invocation = audit
-                    .start(ControlOperation::TopicUpsert, &cluster, true)
-                    .await
-                    .unwrap();
-                audit.terminal(&invocation, None).await.unwrap();
-            }
-        }))
-        .await;
-        let records = sink.records().await.unwrap();
-        assert_eq!(records.len(), 32);
-        assert!(records.windows(2).all(|pair| pair[0].sequence < pair[1].sequence));
-        for invocation_id in records
-            .iter()
-            .map(|record| record.invocation_id)
-            .collect::<std::collections::BTreeSet<_>>()
-        {
-            let linked = records
-                .iter()
-                .filter(|record| record.invocation_id == invocation_id)
-                .collect::<Vec<_>>();
-            assert_eq!(linked.len(), 2);
-            assert_eq!(linked[0].event, AuditEvent::Started);
-            assert_eq!(linked[1].event, AuditEvent::Completed);
-        }
-    }
-
-    #[tokio::test]
-    async fn terminal_state_rejects_duplicate_unknown_and_cross_trail_tokens() {
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        let sink = Arc::new(MemoryAuditSink::new(32, 4096));
-        let audit = AuditTrail::new(sink.clone());
-
-        let sequential = audit
-            .start(ControlOperation::TopicUpsert, &cluster, true)
-            .await
-            .unwrap();
-        audit.terminal(&sequential, None).await.unwrap();
-        assert!(audit.terminal(&sequential, None).await.is_err());
-
-        let concurrent = audit
-            .start(ControlOperation::ConsumerGroupUpsert, &cluster, true)
-            .await
-            .unwrap();
-        let (first, second) = tokio::join!(
-            audit.terminal(&concurrent, None),
-            audit.terminal(&concurrent, Some(ControlErrorCode::Conflict))
-        );
-        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
-
-        let other_sink = Arc::new(MemoryAuditSink::new(8, 4096));
-        let other = AuditTrail::new(other_sink);
-        let other_invocation = other
-            .start(ControlOperation::TopicUpsert, &cluster, true)
-            .await
-            .unwrap();
-        assert!(other.terminal(&concurrent, None).await.is_err());
-        other.terminal(&other_invocation, None).await.unwrap();
-
-        let unknown = AuditInvocation {
-            id: AuditInvocationId(u64::MAX),
-            operation: ControlOperation::TopicUpsert,
-            cluster,
-            dry_run: true,
-            trail_identity: audit.identity.clone(),
-        };
-        assert!(audit.terminal(&unknown, None).await.is_err());
-        assert_eq!(sink.records().await.unwrap().len(), 4);
-    }
-
-    #[tokio::test]
-    async fn restart_preserves_dangling_start_and_allocates_a_new_invocation() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("dangling.jsonl");
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        let sink = Arc::new(JsonlAuditSink::open(&path, 16, 4096).await.unwrap());
-        let audit = AuditTrail::new(sink.clone());
-        let completed = audit
-            .start(ControlOperation::ConsumerGroupUpsert, &cluster, true)
-            .await
-            .unwrap();
-        audit.terminal(&completed, None).await.unwrap();
-        let dangling = audit
-            .start(ControlOperation::TopicUpsert, &cluster, true)
-            .await
-            .unwrap();
-        drop(audit);
-        drop(sink);
-
-        let resumed_sink = Arc::new(JsonlAuditSink::open(&path, 16, 4096).await.unwrap());
-        let resumed = AuditTrail::resume(resumed_sink.clone()).await.unwrap();
-        {
-            let recovered = resumed.state.lock().await;
-            assert!(recovered.invocations[&completed.id()].terminal);
-            assert!(!recovered.invocations[&dangling.id()].terminal);
-        }
-        let next = resumed
-            .start(ControlOperation::ConsumerGroupUpsert, &cluster, true)
-            .await
-            .unwrap();
-        resumed.terminal(&next, None).await.unwrap();
-        assert!(next.id() > dangling.id());
-        let records = resumed_sink.records().await.unwrap();
-        assert_eq!(
-            records
-                .iter()
-                .filter(|record| record.invocation_id == dangling.id())
-                .count(),
-            1
-        );
-    }
-
-    #[tokio::test]
-    async fn metadata_cap_tail_and_corruption_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let limit = audit_file_limit(16, 512).unwrap();
-        assert_eq!(limit, 16 * 513);
-
-        let sparse = directory.path().join("sparse.jsonl");
-        let file = tokio::fs::File::create(&sparse).await.unwrap();
-        file.set_len(limit + 1).await.unwrap();
-        drop(file);
-        assert!(JsonlAuditSink::open(&sparse, 16, 512).await.is_err());
-
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        let record = AuditRecord {
-            schema_version: AUDIT_SCHEMA_VERSION.to_string(),
-            sequence: 1,
-            invocation_id: AuditInvocationId(1),
-            timestamp_unix_millis: 1,
-            event: AuditEvent::Started,
-            operation: ControlOperation::TopicUpsert,
-            cluster,
-            dry_run: true,
-            error_code: None,
-        };
-        let tail = directory.path().join("tail.jsonl");
-        let encoded = serde_json::to_vec(&record).unwrap();
-        tokio::fs::write(&tail, &encoded).await.unwrap();
-        assert!(JsonlAuditSink::open(&tail, 16, 4096).await.is_err());
-
-        let exact = directory.path().join("exact.jsonl");
-        let mut exact_line = encoded.clone();
-        exact_line.push(b'\n');
-        tokio::fs::write(&exact, exact_line).await.unwrap();
-        assert!(JsonlAuditSink::open(&exact, 16, encoded.len()).await.is_ok());
-
-        let plus_one = directory.path().join("plus-one.jsonl");
-        let mut oversized_line = encoded.clone();
-        oversized_line.extend_from_slice(b" \n");
-        tokio::fs::write(&plus_one, oversized_line).await.unwrap();
-        assert!(JsonlAuditSink::open(&plus_one, 16, encoded.len()).await.is_err());
-
-        let corrupt = directory.path().join("corrupt.jsonl");
-        tokio::fs::write(&corrupt, b"{not-json}\n").await.unwrap();
-        assert!(JsonlAuditSink::open(&corrupt, 16, 4096).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn file_and_query_budgets_clamp_and_overflow_fail_closed() {
-        assert_eq!(audit_file_limit(65_536, 16_384).unwrap(), MAX_AUDIT_FILE_BYTES);
-        assert!(audit_file_limit(usize::MAX, 1).is_err());
-        assert!(audit_file_limit(1, usize::MAX).is_err());
-
-        let directory = tempfile::tempdir().unwrap();
-        let oversized = directory.path().join("oversized.jsonl");
-        let file = tokio::fs::File::create(&oversized).await.unwrap();
-        file.set_len(MAX_AUDIT_FILE_BYTES + 1).await.unwrap();
-        drop(file);
-        assert!(JsonlAuditSink::open(&oversized, 65_536, 16_384).await.is_err());
-
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        let record = AuditRecord {
-            schema_version: AUDIT_SCHEMA_VERSION.to_string(),
-            sequence: 1,
-            invocation_id: AuditInvocationId(1),
-            timestamp_unix_millis: 1,
-            event: AuditEvent::Started,
-            operation: ControlOperation::TopicUpsert,
-            cluster,
-            dry_run: true,
-            error_code: None,
-        };
-        let encoded_len = u64::try_from(encode_record(&record, 4096).unwrap().len()).unwrap();
-        let sink = MemoryAuditSink {
-            state: Mutex::new(MemoryAuditState {
-                records: Vec::new(),
-                bytes_used: 0,
-            }),
-            capacity: 2,
-            max_record_bytes: 4096,
-            max_file_bytes: Some(encoded_len),
-            reject_writes: false,
-        };
-        sink.append(&record).await.unwrap();
-        assert!(sink.append(&record).await.is_err());
-        let state = sink.state.lock().await;
-        assert_eq!(state.records.len(), 1);
-        assert!(state.bytes_used <= sink.max_file_bytes.unwrap());
-    }
-
-    #[derive(Clone, Copy)]
-    enum FailureStage {
-        Append,
-        Flush,
-        Sync,
-    }
-
-    struct StageFailWriter {
-        stage: FailureStage,
-        append_calls: AtomicUsize,
-        flush_calls: AtomicUsize,
-        sync_calls: AtomicUsize,
-    }
-
-    struct SwitchableHangWriter {
-        stage: AtomicU8,
-        buffer: StdMutex<Vec<u8>>,
-        entered: AtomicUsize,
-    }
-
-    impl SwitchableHangWriter {
-        fn new() -> Self {
-            Self {
-                stage: AtomicU8::new(0),
-                buffer: StdMutex::new(Vec::new()),
-                entered: AtomicUsize::new(0),
-            }
-        }
-
-        fn hang_at(&self, stage: FailureStage) {
-            self.stage.store(
-                match stage {
-                    FailureStage::Append => 1,
-                    FailureStage::Flush => 2,
-                    FailureStage::Sync => 3,
-                },
-                AtomicOrdering::SeqCst,
-            );
-        }
-
-        fn stage(&self) -> u8 {
-            self.stage.load(AtomicOrdering::SeqCst)
-        }
-    }
-
-    impl DurableAuditWriter for SwitchableHangWriter {
-        fn append<'a>(&'a self, encoded: &'a [u8]) -> AuditFuture<'a, Result<(), ControlError>> {
-            Box::pin(async move {
-                if self.stage() == 1 {
-                    let prefix = encoded.len().min(8);
-                    self.buffer.lock().unwrap().extend_from_slice(&encoded[..prefix]);
-                    self.entered.fetch_add(1, AtomicOrdering::SeqCst);
-                    std::future::pending().await
-                } else {
-                    self.buffer.lock().unwrap().extend_from_slice(encoded);
-                    Ok(())
-                }
-            })
-        }
-
-        fn flush(&self) -> AuditFuture<'_, Result<(), ControlError>> {
-            Box::pin(async move {
-                if self.stage() == 2 {
-                    self.entered.fetch_add(1, AtomicOrdering::SeqCst);
-                    std::future::pending().await
-                } else {
-                    Ok(())
-                }
-            })
-        }
-
-        fn sync(&self) -> AuditFuture<'_, Result<(), ControlError>> {
-            Box::pin(async move {
-                if self.stage() == 3 {
-                    self.entered.fetch_add(1, AtomicOrdering::SeqCst);
-                    std::future::pending().await
-                } else {
-                    Ok(())
-                }
-            })
-        }
-    }
-
-    impl DurableAuditWriter for StageFailWriter {
-        fn append<'a>(&'a self, _encoded: &'a [u8]) -> AuditFuture<'a, Result<(), ControlError>> {
-            Box::pin(async move {
-                self.append_calls.fetch_add(1, AtomicOrdering::SeqCst);
-                if matches!(self.stage, FailureStage::Append) {
-                    Err(ControlError::audit_unavailable())
-                } else {
-                    Ok(())
-                }
-            })
-        }
-
-        fn flush(&self) -> AuditFuture<'_, Result<(), ControlError>> {
-            Box::pin(async move {
-                self.flush_calls.fetch_add(1, AtomicOrdering::SeqCst);
-                if matches!(self.stage, FailureStage::Flush) {
-                    Err(ControlError::audit_unavailable())
-                } else {
-                    Ok(())
-                }
-            })
-        }
-
-        fn sync(&self) -> AuditFuture<'_, Result<(), ControlError>> {
-            Box::pin(async move {
-                self.sync_calls.fetch_add(1, AtomicOrdering::SeqCst);
-                if matches!(self.stage, FailureStage::Sync) {
-                    Err(ControlError::audit_unavailable())
-                } else {
-                    Ok(())
-                }
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn append_flush_and_sync_failures_poison_queries() {
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        for stage in [FailureStage::Append, FailureStage::Flush, FailureStage::Sync] {
-            let writer = Arc::new(StageFailWriter {
-                stage,
-                append_calls: AtomicUsize::new(0),
-                flush_calls: AtomicUsize::new(0),
-                sync_calls: AtomicUsize::new(0),
-            });
-            let sink = Arc::new(JsonlAuditSink::with_writer(writer.clone(), 16, 4096).unwrap());
-            let audit = AuditTrail::new(sink.clone());
-            assert!(audit
-                .start(ControlOperation::TopicUpsert, &cluster, true)
-                .await
-                .is_err());
-            assert_eq!(writer.append_calls.load(AtomicOrdering::SeqCst), 1);
-            assert_eq!(
-                writer.flush_calls.load(AtomicOrdering::SeqCst),
-                usize::from(!matches!(stage, FailureStage::Append))
-            );
-            assert_eq!(
-                writer.sync_calls.load(AtomicOrdering::SeqCst),
-                usize::from(matches!(stage, FailureStage::Sync))
-            );
-            assert!(sink.records().await.is_err());
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn hanging_terminal_transactions_poison_and_leave_no_recoverable_partial_record() {
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        for stage in [FailureStage::Append, FailureStage::Flush, FailureStage::Sync] {
-            let writer = Arc::new(SwitchableHangWriter::new());
-            let sink = Arc::new(JsonlAuditSink::with_writer(writer.clone(), 16, 4096).unwrap());
-            let audit = AuditTrail::new(sink.clone());
-            let invocation = audit
-                .start(ControlOperation::TopicUpsert, &cluster, true)
-                .await
-                .unwrap();
-            writer.hang_at(stage);
-            assert_eq!(
-                audit.terminal(&invocation, None).await.unwrap_err().code(),
-                ControlErrorCode::AuditUnavailable
-            );
-            assert!(!audit.state.lock().await.invocations[&invocation.id()].terminal);
-            assert!(audit.records().await.is_err());
-            assert!(audit
-                .start(ControlOperation::TopicUpsert, &cluster, true)
-                .await
-                .is_err());
-
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("partial.jsonl");
-            let bytes = writer.buffer.lock().unwrap().clone();
-            tokio::fs::write(&path, bytes).await.unwrap();
-            assert!(JsonlAuditSink::open(&path, 16, 4096).await.is_err());
-        }
-    }
-
-    #[tokio::test]
-    async fn dropping_a_hanging_audit_caller_permanently_poisoned_the_transaction() {
-        let cluster = ClusterName::try_new("cluster-a").unwrap();
-        let writer = Arc::new(SwitchableHangWriter::new());
-        let sink = Arc::new(JsonlAuditSink::with_writer(writer.clone(), 16, 4096).unwrap());
-        let audit = AuditTrail::new(sink);
-        let invocation = audit
-            .start(ControlOperation::TopicUpsert, &cluster, true)
-            .await
-            .unwrap();
-        writer.hang_at(FailureStage::Append);
-        let task = tokio::spawn({
-            let audit = audit.clone();
-            async move { audit.terminal(&invocation, None).await }
-        });
-        while writer.entered.load(AtomicOrdering::SeqCst) == 0 {
-            tokio::task::yield_now().await;
-        }
-        task.abort();
-        assert!(task.await.unwrap_err().is_cancelled());
-        assert!(audit.records().await.is_err());
-        assert!(audit
-            .start(ControlOperation::TopicUpsert, &cluster, true)
-            .await
-            .is_err());
-    }
-}
+#[path = "audit/tests.rs"]
+mod tests;

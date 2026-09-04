@@ -387,6 +387,7 @@ async fn production_session_orchestrates_all_stage_c_operations_and_preserves_tr
         panic!("unexpected response variant");
     };
     assert_eq!(offset.status, tools::MutationStatus::Partial);
+    assert_eq!(offset.error_code, Some(crate::error::ControlErrorCode::PartialApply));
     assert_eq!(offset.targets.len(), 2);
     assert!(offset.targets.iter().any(|target| {
         target.broker_name == "broker-0-preview-failed"
@@ -424,6 +425,10 @@ async fn production_session_orchestrates_all_stage_c_operations_and_preserves_tr
         panic!("unexpected response variant");
     };
     assert_eq!(broker.status, tools::MutationStatus::Failed);
+    assert_eq!(
+        broker.error_code,
+        Some(crate::error::ControlErrorCode::VerificationFailed)
+    );
     assert!(broker.after.is_none());
     assert!(broker.targets[0].applied);
     assert!(broker.targets[0].after.is_none());
@@ -452,6 +457,7 @@ async fn production_session_orchestrates_all_stage_c_operations_and_preserves_tr
         panic!("unexpected response variant");
     };
     assert_eq!(request_mode.status, tools::MutationStatus::Applied);
+    assert_eq!(request_mode.error_code, None);
     assert_eq!(
         request_mode.targets[0].after.expect("postread").mode,
         tools::ConsumerRequestMode::Pop
@@ -571,6 +577,7 @@ async fn production_session_preserves_sorted_mixed_request_mode_postread_truth()
     };
 
     assert_eq!(response.status, tools::MutationStatus::Partial);
+    assert_eq!(response.error_code, Some(crate::error::ControlErrorCode::PartialApply));
     assert_eq!(response.targets.len(), 2);
     assert_eq!(
         response
@@ -645,6 +652,7 @@ async fn production_session_dry_runs_all_stage_c_operations_without_execute() {
     };
     assert_eq!(offset.mode, tools::MutationMode::DryRun);
     assert_eq!(offset.status, tools::MutationStatus::Partial);
+    assert_eq!(offset.error_code, Some(crate::error::ControlErrorCode::PartialApply));
 
     let (schema_version, cluster, _, confirm, reason, request_key) = common();
     let broker = session
@@ -668,6 +676,7 @@ async fn production_session_dry_runs_all_stage_c_operations_without_execute() {
     };
     assert_eq!(broker.mode, tools::MutationMode::DryRun);
     assert_eq!(broker.status, tools::MutationStatus::Planned);
+    assert_eq!(broker.error_code, None);
 
     let (schema_version, cluster, _, confirm, reason, request_key) = common();
     let request_mode = session
@@ -693,6 +702,7 @@ async fn production_session_dry_runs_all_stage_c_operations_without_execute() {
     };
     assert_eq!(request_mode.mode, tools::MutationMode::DryRun);
     assert_eq!(request_mode.status, tools::MutationStatus::Planned);
+    assert_eq!(request_mode.error_code, None);
     assert_eq!(evidence.offset_executes.load(Ordering::SeqCst), 0);
     assert_eq!(evidence.broker_executes.load(Ordering::SeqCst), 0);
     assert_eq!(evidence.request_mode_executes.load(Ordering::SeqCst), 0);

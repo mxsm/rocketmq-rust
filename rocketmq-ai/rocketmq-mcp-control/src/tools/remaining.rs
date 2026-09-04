@@ -56,7 +56,7 @@ fn validate_consumer_group(group: &str) -> Result<(), ControlError> {
     validate_user_name(group, NameKind::ConsumerGroup)?;
     #[cfg(feature = "write-tools")]
     if rocketmq_admin_core::core::consumer::is_protected_consumer_group(group) {
-        return Err(ControlError::invalid_arguments());
+        return Err(ControlError::invalid_argument());
     }
     Ok(())
 }

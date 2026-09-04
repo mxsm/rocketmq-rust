@@ -23,6 +23,7 @@ use super::super::{
 };
 use super::nullable_schema;
 use crate::error::ControlError;
+use crate::error::ControlErrorCode;
 
 pub const PATCH_BROKER_CONFIG_TOOL: &str = "rocketmq_patch_broker_config";
 
@@ -123,7 +124,7 @@ impl BrokerConfigProperties {
 
     pub fn typed(&self) -> Result<BrokerConfigPatch, ControlError> {
         if self.count() == 0 {
-            return Err(ControlError::invalid_arguments());
+            return Err(ControlError::invalid_argument());
         }
         Ok(BrokerConfigPatch {
             auto_create_topic_enable: parse_bool(self.auto_create_topic_enable.as_deref())?,
@@ -131,7 +132,7 @@ impl BrokerConfigProperties {
             broker_permission: parse_u32(self.broker_permission.as_deref(), 1, 7)?
                 .map(|value| {
                     if value & 0b110 == 0 {
-                        Err(ControlError::invalid_arguments())
+                        Err(ControlError::invalid_argument())
                     } else {
                         Ok(value)
                     }
@@ -171,7 +172,7 @@ fn parse_bool(value: Option<&str>) -> Result<Option<bool>, ControlError> {
         .map(|value| match value {
             "true" => Ok(true),
             "false" => Ok(false),
-            _ => Err(ControlError::invalid_arguments()),
+            _ => Err(ControlError::invalid_argument()),
         })
         .transpose()
 }
@@ -179,9 +180,9 @@ fn parse_bool(value: Option<&str>) -> Result<Option<bool>, ControlError> {
 fn parse_u32(value: Option<&str>, min: u32, max: u32) -> Result<Option<u32>, ControlError> {
     value
         .map(|value| {
-            let parsed = value.parse::<u32>().map_err(|_| ControlError::invalid_arguments())?;
+            let parsed = value.parse::<u32>().map_err(|_| ControlError::invalid_argument())?;
             if !(min..=max).contains(&parsed) || parsed.to_string() != value {
-                return Err(ControlError::invalid_arguments());
+                return Err(ControlError::invalid_argument());
             }
             Ok(parsed)
         })
@@ -243,6 +244,8 @@ pub struct BrokerConfigMutationToolResponse {
     pub cluster: String,
     pub mode: MutationMode,
     pub status: MutationStatus,
+    #[schemars(required, schema_with = "nullable_schema::<ControlErrorCode>")]
+    pub error_code: Option<ControlErrorCode>,
     pub target: BrokerConfigResource,
     pub before: BTreeMap<String, BrokerConfigState>,
     pub requested: BrokerConfigPatch,
@@ -290,7 +293,7 @@ mod tests {
             let mut case = value.clone();
             case["properties"] = properties;
             let rejected = serde_json::from_value::<PatchBrokerConfigArgs>(case)
-                .map_err(|_| ControlError::invalid_arguments())
+                .map_err(|_| ControlError::invalid_argument())
                 .and_then(|args| args.validate(true, false));
             assert!(rejected.is_err());
         }

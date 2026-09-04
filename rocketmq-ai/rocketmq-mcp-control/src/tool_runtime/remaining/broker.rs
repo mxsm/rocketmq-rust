@@ -158,6 +158,7 @@ fn broker_response(
             tools::MutationMode::Execute
         },
         status,
+        error_code: tools::response_error_code(status, targets.iter().map(|target| target.failure)),
         target: tools::BrokerConfigResource {
             broker_name: args.broker_name.clone(),
         },
