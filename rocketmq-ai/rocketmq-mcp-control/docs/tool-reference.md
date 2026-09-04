@@ -114,6 +114,207 @@ Endpoints remain internal.
 }
 ```
 
+## Complete request examples
+
+The following are complete `tools/call.params.arguments` values for the five reviewed Tools. They
+use only the checked-in `rocketmq-mcp-control.arguments.v1` schema. A dry-run is a plan request and
+therefore uses `dry_run=true` with `confirm=false`; it does not require `reason`. Every execute
+example sets `dry_run=false`, `confirm=true`, and a safe, bounded reason. The logical `cluster`
+must be allowed by both the principal and server cluster allowlists, and the operation must be
+allowed by both their operation allowlists. Broker names are not allowlisted in either policy; each
+must instead be a member of the selected cluster topology.
+
+### `rocketmq_upsert_topic`
+
+Dry-run:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "topic": "orders",
+  "broker_names": ["broker-a"],
+  "read_queue_nums": 8,
+  "write_queue_nums": 8,
+  "perm": 6,
+  "order": false,
+  "message_type": "NORMAL",
+  "dry_run": true,
+  "confirm": false
+}
+```
+
+Execute:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "topic": "orders",
+  "broker_names": ["broker-a"],
+  "read_queue_nums": 8,
+  "write_queue_nums": 8,
+  "perm": 6,
+  "order": false,
+  "message_type": "NORMAL",
+  "dry_run": false,
+  "confirm": true,
+  "reason": "CHG-10016 create orders Topic"
+}
+```
+
+### `rocketmq_upsert_consumer_group`
+
+Dry-run:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "consumer_group": "orders-consumer",
+  "broker_names": ["broker-a"],
+  "consume_enable": true,
+  "consume_from_min_enable": false,
+  "consume_broadcast_enable": false,
+  "consume_message_orderly": false,
+  "retry_queue_nums": 1,
+  "retry_max_times": 16,
+  "broker_id": 0,
+  "which_broker_when_consume_slowly": 1,
+  "notify_consumer_ids_changed_enable": true,
+  "group_sys_flag": 0,
+  "consume_timeout_minute": 15,
+  "dry_run": true,
+  "confirm": false
+}
+```
+
+Execute:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "consumer_group": "orders-consumer",
+  "broker_names": ["broker-a"],
+  "consume_enable": true,
+  "consume_from_min_enable": false,
+  "consume_broadcast_enable": false,
+  "consume_message_orderly": false,
+  "retry_queue_nums": 1,
+  "retry_max_times": 16,
+  "broker_id": 0,
+  "which_broker_when_consume_slowly": 1,
+  "notify_consumer_ids_changed_enable": true,
+  "group_sys_flag": 0,
+  "consume_timeout_minute": 15,
+  "dry_run": false,
+  "confirm": true,
+  "reason": "CHG-10016 configure orders Consumer Group"
+}
+```
+
+### `rocketmq_reset_consumer_offset`
+
+Dry-run:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "topic": "orders",
+  "consumer_group": "orders-consumer",
+  "timestamp": "2026-09-04T12:00:00Z",
+  "force": false,
+  "dry_run": true,
+  "confirm": false
+}
+```
+
+Execute:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "topic": "orders",
+  "consumer_group": "orders-consumer",
+  "timestamp": "2026-09-04T12:00:00Z",
+  "force": false,
+  "dry_run": false,
+  "confirm": true,
+  "reason": "CHG-10016 reset orders Consumer offset"
+}
+```
+
+### `rocketmq_patch_broker_config`
+
+Dry-run:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "broker_name": "broker-a",
+  "properties": {
+    "traceTopicEnable": "true"
+  },
+  "dry_run": true,
+  "confirm": false
+}
+```
+
+Execute:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "broker_name": "broker-a",
+  "properties": {
+    "traceTopicEnable": "true"
+  },
+  "dry_run": false,
+  "confirm": true,
+  "reason": "CHG-10016 enable trace Topic"
+}
+```
+
+### `rocketmq_set_consumer_request_mode`
+
+Dry-run:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "topic": "orders",
+  "consumer_group": "orders-consumer",
+  "mode": "pop",
+  "pop_share_queue_num": 4,
+  "timeout_millis": 12000,
+  "dry_run": true,
+  "confirm": false
+}
+```
+
+Execute:
+
+```json
+{
+  "schema_version": "rocketmq-mcp-control.arguments.v1",
+  "cluster": "production-a",
+  "topic": "orders",
+  "consumer_group": "orders-consumer",
+  "mode": "pop",
+  "pop_share_queue_num": 4,
+  "timeout_millis": 12000,
+  "dry_run": false,
+  "confirm": true,
+  "reason": "CHG-10016 enable orders pop mode"
+}
+```
+
 ## Result contract
 
 Every successful tool invocation returns `rocketmq-mcp-mutation.v1` structured content. Each tool schema fixes
@@ -149,6 +350,8 @@ mutation schema before those checks pass.
 
 | Code | Trigger | Operator action |
 | --- | --- | --- |
+| `invalid_config` | Control startup or session creation cannot read, parse, validate, bind, or resolve configured transport, TLS, OAuth/JWKS, cluster, runtime, or credential-reference inputs. | Correct the referenced Control configuration and protected TLS/credential inputs, then restart. Do not retry a Tool until initialization succeeds. |
+| `request_rejected` | The `Host` does not exactly match the configured public host, or a supplied `Origin` does not exactly match the configured public HTTPS origin. | Send the request to the configured public HTTPS origin with the exact `Host` and, when present, matching `Origin`; do not bypass the origin policy. |
 | `unauthorized` | Bearer authentication fails, or the OAuth subject violates the audit-operator grammar | Issue a valid RS256 token with a documented operator ID; never retry a malformed or unsafe subject unchanged. |
 | `permission_denied` | OAuth principal lacks `rocketmq:write` | Request the write scope; do not retry unchanged credentials. |
 | `cluster_not_allowed` | Cluster alias is invalid or outside the principal/server intersection | Use an allowed logical alias or update both policies. |

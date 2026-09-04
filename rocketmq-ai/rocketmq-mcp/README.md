@@ -8,6 +8,8 @@ Production release gates, external-cluster expectations, and rollback guidance a
 [production validation guide](docs/production-validation.md).
 The checked-in surface and validation baseline are listed in the
 [implementation baseline](docs/implementation-baseline.md).
+The complete argument, output, pagination, authorization, and example reference for the checked-in Tool catalog is
+available in the [Tool Reference](docs/tool-reference.md).
 
 ## What It Is
 
