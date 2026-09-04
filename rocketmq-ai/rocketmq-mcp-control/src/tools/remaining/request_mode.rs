@@ -24,6 +24,7 @@ use super::super::{
 use super::nullable_schema;
 use super::validate_consumer_group;
 use crate::error::ControlError;
+use crate::error::ControlErrorCode;
 
 pub const SET_CONSUMER_REQUEST_MODE_TOOL: &str = "rocketmq_set_consumer_request_mode";
 pub const MAX_REQUEST_MODE_TIMEOUT_MILLIS: u64 = 24_000;
@@ -101,7 +102,7 @@ impl SetConsumerRequestModeArgs {
         validate_user_name(&self.topic, NameKind::Topic)?;
         validate_consumer_group(&self.consumer_group)?;
         if self.pop_share_queue_num < 0 || !(1..=MAX_REQUEST_MODE_TIMEOUT_MILLIS).contains(&self.timeout_millis) {
-            return Err(ControlError::invalid_arguments());
+            return Err(ControlError::invalid_argument());
         }
         Ok(())
     }
@@ -165,6 +166,8 @@ pub struct RequestModeMutationToolResponse {
     pub cluster: String,
     pub mode: MutationMode,
     pub status: MutationStatus,
+    #[schemars(required, schema_with = "nullable_schema::<ControlErrorCode>")]
+    pub error_code: Option<ControlErrorCode>,
     pub target: RequestModeResource,
     pub before: BTreeMap<String, Option<RequestModeValue>>,
     pub requested: RequestModeRequested,

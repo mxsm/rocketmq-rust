@@ -12,11 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
+
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-pub const ERROR_SCHEMA_VERSION: &str = "rocketmq-mcp-control.error.v1";
+pub const ERROR_SCHEMA_VERSION: &str = "rocketmq-mcp-control.error.v2";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ControlErrorSchemaVersion {
+    #[serde(rename = "rocketmq-mcp-control.error.v2")]
+    V2,
+}
+
+impl JsonSchema for ControlErrorSchemaVersion {
+    fn schema_name() -> Cow<'static, str> {
+        "ControlErrorSchemaVersion".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": "string", "const": "rocketmq-mcp-control.error.v2"})
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -25,10 +43,16 @@ pub enum ControlErrorCode {
     RequestRejected,
     Unauthorized,
     PermissionDenied,
+    ClusterNotAllowed,
+    OperationNotAllowed,
+    MutationDisabled,
     OperationUnavailable,
-    InvalidArguments,
+    ConfirmationRequired,
+    InvalidArgument,
     AuditUnavailable,
-    Conflict,
+    PreconditionConflict,
+    PartialApply,
+    VerificationFailed,
     Timeout,
     Cancelled,
     ExecutionFailed,
@@ -42,10 +66,16 @@ impl ControlErrorCode {
             Self::RequestRejected => "request_rejected",
             Self::Unauthorized => "unauthorized",
             Self::PermissionDenied => "permission_denied",
+            Self::ClusterNotAllowed => "cluster_not_allowed",
+            Self::OperationNotAllowed => "operation_not_allowed",
+            Self::MutationDisabled => "mutation_disabled",
             Self::OperationUnavailable => "operation_unavailable",
-            Self::InvalidArguments => "invalid_arguments",
+            Self::ConfirmationRequired => "confirmation_required",
+            Self::InvalidArgument => "invalid_argument",
             Self::AuditUnavailable => "audit_unavailable",
-            Self::Conflict => "conflict",
+            Self::PreconditionConflict => "precondition_conflict",
+            Self::PartialApply => "partial_apply",
+            Self::VerificationFailed => "verification_failed",
             Self::Timeout => "timeout",
             Self::Cancelled => "cancelled",
             Self::ExecutionFailed => "execution_failed",
@@ -54,12 +84,12 @@ impl ControlErrorCode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ControlErrorEnvelope {
-    pub schema_version: &'static str,
+    pub schema_version: ControlErrorSchemaVersion,
     pub code: ControlErrorCode,
-    pub message: &'static str,
+    pub message: Cow<'static, str>,
     pub retryable: bool,
 }
 
@@ -86,9 +116,9 @@ impl ControlError {
 
     pub const fn envelope(&self) -> ControlErrorEnvelope {
         ControlErrorEnvelope {
-            schema_version: ERROR_SCHEMA_VERSION,
+            schema_version: ControlErrorSchemaVersion::V2,
             code: self.code,
-            message: self.message,
+            message: Cow::Borrowed(self.message),
             retryable: self.retryable,
         }
     }
@@ -110,7 +140,35 @@ impl ControlError {
     }
 
     pub const fn permission_denied() -> Self {
-        Self::new(ControlErrorCode::PermissionDenied, "mutation is not authorized", false)
+        Self::new(
+            ControlErrorCode::PermissionDenied,
+            "write permission is required",
+            false,
+        )
+    }
+
+    pub const fn cluster_not_allowed() -> Self {
+        Self::new(
+            ControlErrorCode::ClusterNotAllowed,
+            "mutation cluster is not allowed",
+            false,
+        )
+    }
+
+    pub const fn operation_not_allowed() -> Self {
+        Self::new(
+            ControlErrorCode::OperationNotAllowed,
+            "mutation operation is not allowed",
+            false,
+        )
+    }
+
+    pub const fn mutation_disabled() -> Self {
+        Self::new(
+            ControlErrorCode::MutationDisabled,
+            "mutation execution is disabled",
+            false,
+        )
     }
 
     pub const fn operation_unavailable() -> Self {
@@ -121,12 +179,16 @@ impl ControlError {
         )
     }
 
-    pub const fn invalid_arguments() -> Self {
+    pub const fn confirmation_required() -> Self {
         Self::new(
-            ControlErrorCode::InvalidArguments,
-            "mutation arguments are invalid",
+            ControlErrorCode::ConfirmationRequired,
+            "explicit mutation confirmation is required",
             false,
         )
+    }
+
+    pub const fn invalid_argument() -> Self {
+        Self::new(ControlErrorCode::InvalidArgument, "mutation argument is invalid", false)
     }
 
     pub const fn audit_unavailable() -> Self {
@@ -137,8 +199,28 @@ impl ControlError {
         )
     }
 
-    pub const fn conflict() -> Self {
-        Self::new(ControlErrorCode::Conflict, "mutation precondition conflict", false)
+    pub const fn precondition_conflict() -> Self {
+        Self::new(
+            ControlErrorCode::PreconditionConflict,
+            "mutation precondition conflict",
+            false,
+        )
+    }
+
+    pub const fn partial_apply() -> Self {
+        Self::new(
+            ControlErrorCode::PartialApply,
+            "mutation applied to only part of the target set",
+            false,
+        )
+    }
+
+    pub const fn verification_failed() -> Self {
+        Self::new(
+            ControlErrorCode::VerificationFailed,
+            "mutation result could not be verified",
+            true,
+        )
     }
 
     pub const fn timeout() -> Self {
@@ -159,5 +241,65 @@ impl ControlError {
             "mutation session shutdown failed",
             true,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_error_vocabulary_is_closed_and_uses_only_v2_names() {
+        let required = [
+            ControlError::mutation_disabled(),
+            ControlError::confirmation_required(),
+            ControlError::permission_denied(),
+            ControlError::cluster_not_allowed(),
+            ControlError::operation_not_allowed(),
+            ControlError::invalid_argument(),
+            ControlError::precondition_conflict(),
+            ControlError::partial_apply(),
+            ControlError::verification_failed(),
+            ControlError::audit_unavailable(),
+        ];
+        let names = required.iter().map(|error| error.code().as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "mutation_disabled",
+                "confirmation_required",
+                "permission_denied",
+                "cluster_not_allowed",
+                "operation_not_allowed",
+                "invalid_argument",
+                "precondition_conflict",
+                "partial_apply",
+                "verification_failed",
+                "audit_unavailable",
+            ]
+        );
+        for error in required {
+            let envelope = serde_json::to_value(error.envelope()).unwrap();
+            assert_eq!(envelope["schema_version"], ERROR_SCHEMA_VERSION);
+            assert!(envelope.get("operator").is_none());
+            assert!(envelope.get("reason").is_none());
+        }
+        assert!(serde_json::from_str::<ControlErrorCode>(r#""invalid_arguments""#).is_err());
+        assert!(serde_json::from_str::<ControlErrorCode>(r#""conflict""#).is_err());
+
+        let encoded = serde_json::to_string(&ControlError::invalid_argument().envelope()).unwrap();
+        let decoded: ControlErrorEnvelope = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.code, ControlErrorCode::InvalidArgument);
+        let mut unknown = serde_json::to_value(decoded).unwrap();
+        unknown["operator"] = serde_json::json!("must-not-be-public");
+        assert!(serde_json::from_value::<ControlErrorEnvelope>(unknown).is_err());
+    }
+
+    #[test]
+    fn public_error_envelope_schema_snapshot() {
+        insta::assert_json_snapshot!(
+            "control_error_envelope_schema_v2",
+            schemars::schema_for!(ControlErrorEnvelope)
+        );
     }
 }

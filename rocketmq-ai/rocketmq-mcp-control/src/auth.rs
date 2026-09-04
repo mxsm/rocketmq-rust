@@ -45,6 +45,7 @@ use tokio::time::Instant;
 use crate::config::OAuthConfig;
 use crate::config::REQUIRED_WRITE_SCOPE;
 use crate::error::ControlError;
+use crate::model::valid_operator;
 use crate::model::ClusterName;
 use crate::model::ControlOperation;
 use crate::model::Principal;
@@ -351,9 +352,7 @@ impl<S: JwksSource> AuthState<S> {
         if !scopes.contains(REQUIRED_WRITE_SCOPE) {
             return Err(AuthError::InsufficientScope);
         }
-        if decoded.claims.sub.is_empty()
-            || decoded.claims.sub.len() > 128
-            || decoded.claims.sub.chars().any(char::is_control)
+        if !valid_operator(&decoded.claims.sub)
             || scopes.len() > 64
             || scopes.iter().any(|scope| scope.len() > 128 || !scope.is_ascii())
             || decoded.claims.rocketmq_operations.len() > 64
@@ -749,6 +748,27 @@ mod tests {
         )
     }
 
+    fn token_with_subject(subject: &str) -> String {
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("test-key".to_owned());
+        let claims = TestClaims {
+            sub: subject,
+            iss: "https://issuer.example.test",
+            aud: "rocketmq-mcp-control",
+            exp: 4_102_444_800,
+            nbf: None,
+            scope: "rocketmq:write",
+            rocketmq_operations: vec!["topic_upsert"],
+            rocketmq_clusters: vec!["cluster-a"],
+        };
+        encode(
+            &header,
+            &claims,
+            &EncodingKey::from_rsa_pem(include_bytes!("../tests/fixtures/oauth-private-key.pem")).unwrap(),
+        )
+        .unwrap()
+    }
+
     fn alternate_modulus() -> String {
         let mut bytes = URL_SAFE_NO_PAD.decode(RSA_N).unwrap();
         bytes[64] ^= 1;
@@ -866,6 +886,47 @@ mod tests {
             );
         }
 
+        let oversized = "x".repeat(129);
+        for subject in [
+            "",
+            " operator",
+            "operator ",
+            "operator name",
+            "operator\nadmin",
+            "https://identity.invalid/operator",
+            "token=top-secret",
+            "token",
+            "svc-secret",
+            "Bearer abc.def.ghi",
+            "a.b._",
+            "a.b.",
+            "a.b._@example.test",
+            "eyJhbGciOiJSUzI1NiJ9.e30.x@example.test",
+            "eyJhbGciOiJub25lIn0.e30.x@example.test",
+            "eyJhbGciOiJSUzk5OSJ9.e30.x@example.test",
+            "eyJ0eXAiOiJKV1QifQ.e30.x@example.test",
+            "eyJhbGciOm51bGx9.e30.x@example.test",
+            "10.0.0.1",
+            "10.0.0.1:10911",
+            "broker.internal.",
+            "operator@10.0.0.1.",
+            "operator@broker.internal",
+            "operator@broker.internal.",
+            "operator@example.123",
+            "operator%25admin",
+            "operator/path",
+            "operator\u{202e}admin",
+            "operator\u{2028}admin",
+            "operator：admin",
+            "＠operator",
+            oversized.as_str(),
+        ] {
+            let token = token_with_subject(subject);
+            let error = state.authenticate(&bearer(&token)).await.unwrap_err();
+            assert_eq!(error, AuthError::Unauthorized);
+            assert_eq!(error.to_string(), "OAuth token was rejected");
+        }
+
         let missing_scope = token_with(
             Algorithm::RS256,
             Some("test-key"),
@@ -895,6 +956,24 @@ mod tests {
                 .unwrap_err(),
             AuthError::Unauthorized
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_subject_accepts_documented_audit_operator_ids() {
+        let state = state().await;
+        for subject in [
+            "operator@example.test",
+            "operator@sub.example.test",
+            "operator@team.example.com",
+            "first.middle.last@example.test",
+            "operator@mail.example.co.uk",
+            "123e4567-e89b-12d3-a456-426614174000",
+            "svc-control_01",
+            "1-service",
+        ] {
+            let principal = state.authenticate(&bearer(&token_with_subject(subject))).await.unwrap();
+            assert_eq!(principal.subject, subject);
+        }
     }
 
     #[tokio::test]

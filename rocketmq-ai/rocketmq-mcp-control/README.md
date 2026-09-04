@@ -15,8 +15,9 @@ and consumer request mode. The default build contains neither Admin Core nor pro
   unknown keys use a bounded negative cache and refresh cooldown. DNS answers are rechecked at connection time,
   and any private, loopback, link-local, or reserved answer rejects the connection.
 - The listener accepts at most 1 MiB per request and applies a 30-second request timeout.
-- Principal scope, closed operation and cluster claims, and server allowlists are evaluated before common
-  argument schema parsing or adapter/session creation.
+- Principal scope, closed cluster claim/allowlist, closed operation claim/allowlist, runtime enablement, and
+  compile/catalog availability are evaluated in that order before common argument schema parsing or
+  adapter/session creation.
 - The project exposes no CLI, shell, subprocess, free-form RPC, arbitrary Admin command, or stdout protocol path.
 
 The fixed capability Resource is `rocketmq-control://capabilities`. Its independent compile-time,
@@ -59,8 +60,15 @@ bypass.
 The closed policy vocabulary remains `topic_upsert`, `consumer_group_upsert`,
 `consumer_offset_reset`, `broker_config_patch`, and `consumer_request_mode`. Common request arguments reject
 unknown fields. Omitted `dry_run` uses the configured default and omitted `confirm` is false. Dry-run requests may
-omit `reason` and `request_key`; execution requires `confirm = true` and a 5–256 byte safe reason. A request key is
-optional and, when present, is a bounded safe identifier.
+omit `reason` and `request_key`; execution requires `confirm = true` and a trimmed 5–256 byte safe reason. A
+reason contains only ASCII letters/digits, ordinary space, and `._,#-`. That exact punctuation set supports
+sentence stops, identifiers, ticket markers, hyphenated terms, and comma-separated prose. Syntax punctuation
+such as `/ \ | : = @ [ ] { } ( ) ' " % < >` and backtick, plus controls and all non-ASCII, is rejected by
+grammar before audit. Whitespace tokens and their comma/hash/underscore/hyphen or repeated-dot-delimited subtokens
+are checked again after stripping allowed edge punctuation; bearer/compact-JWT, IP, and FQDN values therefore fail
+closed even when embedded in allowed punctuation, including `route,broker.internal,now`. Safe examples
+include `CHG-1234 increase queue count` and `ticket INC_42, increase queue count`. A request key is optional and,
+when present, is a bounded safe identifier.
 
 The upsert tools accept 1–64 unique logical broker names. All five tools validate the complete selected cluster
 membership, embedded broker identity, master presence, and endpoint uniqueness before reading target state.
@@ -76,8 +84,11 @@ operation-specific logical top-level `target`.
 Top-level `before`, `requested`, and post-read `after` preserve the complete aggregate state; broker-sorted
 `targets` retain per-target persistence, verification, and failure evidence rather than replacing that aggregate
 contract. Schema version and operation are single-value enums in each tool output schema. Conflict, partial, and
-failed outcomes set MCP `isError=true` while retaining the structured result. An unchanged success is `applied`
-with `changed=false`; there is no separate no-op status. Responses never include addresses, credential
+failed outcomes set MCP `isError=true` while retaining the structured result. The required-nullable top-level
+`error_code` is null for `planned` and `applied`, `partial_apply` for `partial`, `precondition_conflict` for
+`conflict`, and `verification_failed` for a complete verification failure; other failed execution results use
+`execution_failed`. An unchanged success is `applied` with `changed=false`; there is no separate no-op status.
+Responses never include addresses, credential
 references, OAuth subjects, reasons, request keys, or raw backend errors.
 
 Targeted Topic upserts never update or delete the NameServer-wide order-Topic KV. Before any broker state read,
@@ -101,12 +112,35 @@ The JSONL audit sink checks file metadata against a practical cap, parses existi
 and awaits append, flush, and storage confirmation. Payloads are synced before a newline commit, and each
 transaction has an internal two-second budget. Cancellation or an incomplete transaction permanently poisons
 the live trail; a partial disk tail is rejected during restart. Its records are queryable by the owning service
-without adding an MCP audit tool. A bounded memory sink supports deterministic tests. Records contain only a
-non-sensitive invocation id, the closed operation, safe cluster alias, event, dry-run state, stable error code,
-sequence, and timestamp. They never contain tokens, credentials, client identities, network addresses, reasons,
-request keys, message bodies, or raw backend errors.
+without adding an MCP audit tool. A bounded memory sink supports deterministic tests. New records use
+`rocketmq-mcp-control.audit.v2` and contain sequence, invocation id, timestamp, event, closed operation, safe
+cluster alias, validated OAuth subject as `operator`, optional validated request `reason`,
+`dry_run|execute` mode, closed `started|planned|applied|partial|conflict|failed` result, terminal error code, and
+terminal monotonic duration. Operator and reason are a durable-audit-only exception: they never enter MCP
+responses, error envelopes, tracing, or ordinary logs. Audit records never contain tokens, credentials, network
+addresses, request keys, message bodies, endpoints, or raw backend errors.
 
-On restart, the trail reconstructs completed and dangling invocation state from the validated file. A terminal
+The audit operator grammar is 1–128 ASCII bytes: it starts with an ASCII letter or digit, then uses only ASCII
+letters/digits plus `._@-`. Without `@`, endpoint-shaped dotted subjects are rejected. Email-like IDs contain
+exactly one `@`; their local side starts and ends alphanumeric without consecutive dots, while the domain is a
+non-IP, non-rooted, valid multi-label hostname whose top-level label contains a letter and is not `internal`,
+`local`, `localhost`, or `lan`. A compact local side is rejected when its base64url header decodes to a JSON
+object with JOSE/JWT marker fields, regardless of the declared algorithm, or its signature is empty/underscore.
+This deliberately allows UUIDs, `svc-control_01`-style service IDs, and
+normal email-like values such as `first.middle.last@example.test`. The validated DNS domain is never scanned as
+a compact token. Non-email IDs reject every compact three-segment base64url shape. Whitespace, controls, Unicode,
+paths/URLs, percent escapes, credentials, bearer material, IP/socket values, numeric top-level labels, and
+endpoint-shaped identities remain invalid. The same operator and reason rules run during OAuth principal construction, audit-context creation,
+and version-2 recovery. Version-1 records remain readable under their original identity-free rules.
+
+Every reliable audit sink read, recovery, append error, or two-second transaction timeout is exposed only as
+`audit_unavailable`; a sink-provided code or message is never propagated. Repair and validate durable audit
+storage before retrying. In particular, a failed `started` append opens no Admin session and performs no RPC;
+a terminal append failure is reported only after the acquired session has completed bounded shutdown.
+
+On restart, the trail reconstructs completed and dangling invocation state from strict version-1, version-2, or
+mixed JSONL without rewriting old bytes. Version-1 `invalid_arguments` and `conflict` values recover as
+`invalid_argument` and `precondition_conflict`; new writes are version 2 only. A terminal
 record is accepted only for a matching active invocation from the same live trail, and only one concurrent
 terminal attempt can become durable. Unknown, cross-trail, and duplicate terminal attempts fail closed; a failed
 terminal write leaves the invocation active while poisoning subsequent audit operations.

@@ -27,6 +27,8 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::audit::AuditContext;
+use crate::audit::AuditResult;
 use crate::audit::AuditTrail;
 use crate::error::ControlError;
 use crate::guard::AuthorizedMutation;
@@ -81,6 +83,16 @@ impl MutationToolRequest {
         }
     }
 
+    fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Topic(args) => args.reason.as_deref(),
+            Self::ConsumerGroup(args) => args.reason.as_deref(),
+            Self::ConsumerOffset(args) => args.reason.as_deref(),
+            Self::BrokerConfig(args) => args.reason.as_deref(),
+            Self::ConsumerRequestMode(args) => args.reason.as_deref(),
+        }
+    }
+
     fn target_names(&self) -> Vec<String> {
         match self {
             Self::Topic(args) => args.broker_names.clone(),
@@ -98,7 +110,7 @@ impl MutationToolRequest {
             Self::ConsumerGroup(args) => args.broker_names.sort(),
             Self::ConsumerOffset(_) | Self::BrokerConfig(_) | Self::ConsumerRequestMode(_) => {}
         }
-        serde_json::to_string(&canonical).map_err(|_| ControlError::invalid_arguments())
+        serde_json::to_string(&canonical).map_err(|_| ControlError::invalid_argument())
     }
 }
 
@@ -138,20 +150,20 @@ impl MutationToolResponse {
         }
     }
 
-    fn audit_error(&self) -> Option<crate::error::ControlErrorCode> {
-        let status = match self {
-            Self::Topic(response) => response.status,
-            Self::ConsumerGroup(response) => response.status,
-            Self::ConsumerOffset(response) => response.status,
-            Self::BrokerConfig(response) => response.status,
-            Self::ConsumerRequestMode(response) => response.status,
+    fn audit_terminal(&self) -> (AuditResult, Option<crate::error::ControlErrorCode>) {
+        let (status, error_code) = match self {
+            Self::Topic(response) => (response.status, response.error_code),
+            Self::ConsumerGroup(response) => (response.status, response.error_code),
+            Self::ConsumerOffset(response) => (response.status, response.error_code),
+            Self::BrokerConfig(response) => (response.status, response.error_code),
+            Self::ConsumerRequestMode(response) => (response.status, response.error_code),
         };
         match status {
-            tools::MutationStatus::Conflict => Some(crate::error::ControlErrorCode::Conflict),
-            tools::MutationStatus::Partial | tools::MutationStatus::Failed => {
-                Some(crate::error::ControlErrorCode::ExecutionFailed)
-            }
-            tools::MutationStatus::Planned | tools::MutationStatus::Applied => None,
+            tools::MutationStatus::Planned => (AuditResult::Planned, error_code),
+            tools::MutationStatus::Applied => (AuditResult::Applied, error_code),
+            tools::MutationStatus::Partial => (AuditResult::Partial, error_code),
+            tools::MutationStatus::Conflict => (AuditResult::Conflict, error_code),
+            tools::MutationStatus::Failed => (AuditResult::Failed, error_code),
         }
     }
 }
@@ -203,6 +215,7 @@ impl ToolRuntime {
         request: MutationToolRequest,
         cancellation: CancellationToken,
     ) -> Result<MutationToolResponse, ControlError> {
+        let audit_context = AuditContext::try_new(authorized.operator(), request.reason())?;
         let cluster = authorized.cluster().clone();
         let identity = IdempotencyIdentity::from_request(principal, &cluster, &request)?;
         let admission =
@@ -212,17 +225,29 @@ impl ToolRuntime {
                 Err(idempotency::AdmissionError::Collision) => {
                     let invocation = self
                         .audit
-                        .start(authorized.operation(), authorized.cluster(), request.dry_run())
+                        .start(
+                            &audit_context,
+                            authorized.operation(),
+                            authorized.cluster(),
+                            request.dry_run(),
+                        )
                         .await?;
-                    let error = ControlError::invalid_arguments();
-                    self.audit.terminal(&invocation, Some(error.code())).await?;
+                    let error = ControlError::invalid_argument();
+                    self.audit
+                        .terminal(&invocation, AuditResult::Failed, Some(error.code()))
+                        .await?;
                     return Err(error);
                 }
             };
         let is_leader = matches!(&admission, idempotency::CacheAdmission::Leader);
         let invocation = match self
             .audit
-            .start(authorized.operation(), authorized.cluster(), request.dry_run())
+            .start(
+                &audit_context,
+                authorized.operation(),
+                authorized.cluster(),
+                request.dry_run(),
+            )
             .await
         {
             Ok(invocation) => invocation,
@@ -254,11 +279,14 @@ impl ToolRuntime {
                 owner_cancellation,
             )
             .await;
-            let error_code = match &result {
-                Ok(response) => response.audit_error(),
-                Err(error) => Some(error.code()),
+            let (audit_result, error_code) = match &result {
+                Ok(response) => response.audit_terminal(),
+                Err(error) if error.code() == crate::error::ControlErrorCode::PreconditionConflict => {
+                    (AuditResult::Conflict, Some(error.code()))
+                }
+                Err(error) => (AuditResult::Failed, Some(error.code())),
             };
-            let terminal = audit.terminal(&task_invocation, error_code).await;
+            let terminal = audit.terminal(&task_invocation, audit_result, error_code).await;
             let delivered = terminal.map_or_else(Err, |_| result);
             let _ = sender.send(delivered);
         });
@@ -267,7 +295,9 @@ impl ToolRuntime {
             if is_leader {
                 idempotency::abort_cache_reservation(&self.idempotency, &cleanup_identity, error.clone()).await;
             }
-            self.audit.terminal(&invocation, Some(error.code())).await?;
+            self.audit
+                .terminal(&invocation, AuditResult::Failed, Some(error.code()))
+                .await?;
             return Err(error);
         }
         receiver.await.map_err(|_| ControlError::audit_unavailable())?
@@ -571,6 +601,7 @@ fn topic_response(
         cluster: args.cluster.clone(),
         mode,
         status,
+        error_code: tools::response_error_code(status, targets.iter().map(|target| target.failure)),
         target: tools::TopicMutationResource {
             topic: args.topic.clone(),
             brokers,
@@ -600,6 +631,7 @@ fn group_response(
         cluster: args.cluster.clone(),
         mode,
         status,
+        error_code: tools::response_error_code(status, targets.iter().map(|target| target.failure)),
         target: tools::ConsumerGroupMutationResource {
             consumer_group: args.consumer_group.clone(),
             brokers,

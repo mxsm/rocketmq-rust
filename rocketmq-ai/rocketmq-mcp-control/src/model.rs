@@ -14,8 +14,12 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::str::FromStr;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -132,25 +136,228 @@ pub struct MutationArguments {
 impl MutationArguments {
     pub fn validate(&self) -> Result<(), ControlError> {
         if self.schema_version != MUTATION_ARGUMENTS_SCHEMA_VERSION
-            || self.reason.as_deref().is_some_and(|value| !valid_reason(value))
             || self
                 .request_key
                 .as_deref()
                 .is_some_and(|value| !valid_request_key(value))
-            || (!self.dry_run && (!self.confirm || self.reason.is_none()))
         {
-            return Err(ControlError::invalid_arguments());
+            return Err(ControlError::invalid_argument());
+        }
+        if !self.dry_run && !self.confirm {
+            return Err(ControlError::confirmation_required());
+        }
+        if self.reason.as_deref().is_some_and(|value| !valid_reason(value)) || (!self.dry_run && self.reason.is_none())
+        {
+            return Err(ControlError::invalid_argument());
         }
         Ok(())
     }
 }
 
-fn valid_reason(value: &str) -> bool {
-    (5..=256).contains(&value.len())
-        && value.trim().len() >= 5
-        && value
-            .chars()
-            .all(|character| !character.is_control() && !matches!(character, '`' | '<' | '>'))
+pub(crate) fn valid_operator(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if !(1..=128).contains(&bytes.len()) || !bytes.first().is_some_and(u8::is_ascii_alphanumeric) {
+        return false;
+    }
+    if !bytes
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'@' | b'-'))
+        || contains_bearer_material(value)
+        || contains_credential_identifier(value)
+    {
+        return false;
+    }
+    match value.split_once('@') {
+        Some((local, domain)) if value.matches('@').count() == 1 => valid_email_like_operator(local, domain),
+        Some(_) => false,
+        None => !contains_jwt_material(value) && !is_network_endpoint(value),
+    }
+}
+
+fn valid_email_like_operator(local: &str, domain: &str) -> bool {
+    let domain_without_root = domain.strip_suffix('.').unwrap_or(domain);
+    if domain_without_root.parse::<IpAddr>().is_ok() || domain_without_root != domain {
+        return false;
+    }
+    let Some(top_level) = domain.rsplit('.').next() else {
+        return false;
+    };
+    !local.is_empty()
+        && local.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+        && local.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+        && !local.contains("..")
+        && !unsafe_email_local_token(local)
+        && domain.contains('.')
+        && is_hostname(domain)
+        && top_level.bytes().any(|byte| byte.is_ascii_alphabetic())
+        && !["internal", "local", "localhost", "lan"]
+            .iter()
+            .any(|reserved| top_level.eq_ignore_ascii_case(reserved))
+}
+
+fn unsafe_email_local_token(local: &str) -> bool {
+    compact_token_segments(local)
+        .is_some_and(|(header, _, signature)| signature.is_empty() || signature == "_" || has_jose_header(header))
+}
+
+fn has_jose_header(header: &str) -> bool {
+    let Ok(decoded) = URL_SAFE_NO_PAD.decode(header) else {
+        return false;
+    };
+    let Ok(serde_json::Value::Object(object)) = serde_json::from_slice(&decoded) else {
+        return false;
+    };
+    [
+        "alg", "typ", "kid", "jwk", "jku", "x5u", "x5c", "x5t", "x5t#S256", "crit", "cty", "enc", "zip", "b64",
+    ]
+    .iter()
+    .any(|field| object.contains_key(*field))
+}
+
+pub(crate) fn valid_reason(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (5..=256).contains(&bytes.len())
+        && value.trim() == value
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'.' | b'_' | b',' | b'#' | b'-'))
+        && !contains_bearer_material(value)
+        && !contains_reason_jwt_material(value)
+        && !contains_reason_network_endpoint(value)
+}
+
+fn contains_bearer_material(value: &str) -> bool {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|word| word.eq_ignore_ascii_case("bearer"))
+}
+
+fn contains_jwt_material(value: &str) -> bool {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric() && !matches!(character, '_' | '-' | '.'))
+        .any(|token| compact_token_segments(token).is_some())
+}
+
+fn contains_reason_jwt_material(value: &str) -> bool {
+    contains_unsafe_reason_candidate(value, |candidate| compact_token_segments(candidate).is_some())
+}
+
+fn compact_token_segments(value: &str) -> Option<(&str, &str, &str)> {
+    let mut segments = value.split('.');
+    let header = segments.next()?;
+    let payload = segments.next()?;
+    let signature = segments.next()?;
+    if segments.next().is_some()
+        || header.is_empty()
+        || payload.is_empty()
+        || ![header, payload, signature].iter().all(|segment| {
+            segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
+    {
+        None
+    } else {
+        Some((header, payload, signature))
+    }
+}
+
+fn contains_credential_identifier(value: &str) -> bool {
+    let words = value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    words.iter().enumerate().any(|(start, _)| {
+        (1..=3.min(words.len() - start)).any(|count| is_credential_key(&words[start..start + count].concat()))
+    })
+}
+
+fn is_credential_key(key: &str) -> bool {
+    matches!(
+        key,
+        "ak" | "sk"
+            | "accesskey"
+            | "secret"
+            | "secretkey"
+            | "securitytoken"
+            | "token"
+            | "password"
+            | "passwd"
+            | "apikey"
+            | "clientsecret"
+            | "authorization"
+            | "credential"
+            | "credentials"
+    )
+}
+
+fn contains_reason_network_endpoint(value: &str) -> bool {
+    contains_unsafe_reason_candidate(value, is_network_endpoint)
+}
+
+fn contains_unsafe_reason_candidate(value: &str, is_unsafe: impl Fn(&str) -> bool) -> bool {
+    value.split_ascii_whitespace().any(|token| {
+        std::iter::once(token)
+            .chain(token.split([',', '#', '_', '-']))
+            .any(|part| {
+                std::iter::once(part)
+                    .chain(part.split(".."))
+                    .map(|candidate| candidate.trim_matches(|character: char| !character.is_ascii_alphanumeric()))
+                    .filter(|candidate| !candidate.is_empty())
+                    .any(&is_unsafe)
+            })
+    })
+}
+
+fn is_network_endpoint(token: &str) -> bool {
+    let token = token.trim_matches(|character: char| matches!(character, '.' | '!' | '?'));
+    let authority = token.split(['/', '?', '#']).next().unwrap_or(token);
+    if authority.parse::<IpAddr>().is_ok() || authority.parse::<SocketAddr>().is_ok() {
+        return true;
+    }
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        if let Some((address, suffix)) = bracketed.split_once(']') {
+            let address = address.split_once('%').map_or(address, |(address, _)| address);
+            if address.parse::<IpAddr>().is_ok()
+                && (suffix.is_empty()
+                    || suffix
+                        .strip_prefix(':')
+                        .is_some_and(|port| port.parse::<u16>().is_ok_and(|port| port != 0)))
+            {
+                return true;
+            }
+        }
+    }
+    if let Some((address, zone)) = authority.split_once('%') {
+        if !zone.is_empty() && address.parse::<IpAddr>().is_ok() {
+            return true;
+        }
+    }
+    let Some((host, port)) = authority.rsplit_once(':') else {
+        return is_fqdn(authority);
+    };
+    let valid_port = port.parse::<u16>().is_ok_and(|port| port != 0);
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let valid_host = host.parse::<IpAddr>().is_ok() || is_hostname(host);
+    valid_port && valid_host
+}
+
+fn is_fqdn(value: &str) -> bool {
+    let value = value.strip_suffix('.').unwrap_or(value);
+    value.contains('.') && value.bytes().any(|byte| byte.is_ascii_alphabetic()) && is_hostname(value)
+}
+
+fn is_hostname(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+                && label.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 const fn default_dry_run() -> bool {
@@ -324,9 +531,216 @@ mod tests {
 
         for case in cases {
             let rejected = serde_json::from_value::<MutationArguments>(case)
-                .map_err(|_| ControlError::invalid_arguments())
+                .map_err(|_| ControlError::invalid_argument())
                 .and_then(|arguments| arguments.validate());
             assert!(rejected.is_err());
+        }
+    }
+
+    #[test]
+    fn confirmation_operator_and_reason_validation_have_stable_codes() {
+        let execute_without_confirmation: MutationArguments = serde_json::from_value(serde_json::json!({
+            "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
+            "dry_run": false,
+            "confirm": false,
+            "reason": "token=must-not-be-inspected-first"
+        }))
+        .unwrap();
+        assert_eq!(
+            execute_without_confirmation.validate().unwrap_err().code(),
+            crate::error::ControlErrorCode::ConfirmationRequired
+        );
+
+        let execute_without_reason: MutationArguments = serde_json::from_value(serde_json::json!({
+            "schema_version": MUTATION_ARGUMENTS_SCHEMA_VERSION,
+            "dry_run": false,
+            "confirm": true
+        }))
+        .unwrap();
+        assert_eq!(
+            execute_without_reason.validate().unwrap_err().code(),
+            crate::error::ControlErrorCode::InvalidArgument
+        );
+
+        for (case, unsafe_reason) in [
+            "token=top-secret",
+            "token%3dtop-secret",
+            "token%253dtop-secret",
+            "token%25253dtop-secret",
+            "\"token\" = top-secret",
+            "[secret_key]: top-secret",
+            "credentials['access_key'] = top-secret",
+            "Bearer abc.def.ghi",
+            "Bearer%20abc.def.ghi",
+            "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvcGVyYXRvciJ9.signature-value",
+            "compact a.b._ material",
+            "unsigned a.b. material",
+            "token=a.b._",
+            "https://control.invalid/change",
+            "https%3a%2f%2fcontrol.invalid%2fchange",
+            "//control.invalid/change",
+            "custom:opaque-location",
+            "broker.internal:10911",
+            "broker.internal.",
+            "broker.internal.:10911",
+            "broker%2einternal%3a10911",
+            "broker.internal:10911/admin",
+            "10.0.0.1",
+            "[fe80::1%eth0]:10911",
+            "fe80::1%eth0",
+            "endpoint=broker.internal:10911",
+            "endpoint='10.0.0.1:10911'",
+            "endpoint=[fe80::1%eth0]:10911",
+            "target=[broker.internal:10911]",
+            "user@broker.internal:10911",
+            "ops@10.0.0.1",
+            "host=(broker.internal.)",
+            "target=/broker.internal/",
+            "target=\\broker.internal\\",
+            "|broker.internal|",
+            ":broker.internal:",
+            "-broker.internal-",
+            "[broker.internal]/",
+            "owner@broker.internal",
+            "http:broker.internal",
+            "{10.0.0.1}",
+            "(a.b._)",
+            "route,broker.internal,now",
+            "route 10.0.0.1,next",
+            "route#broker.internal#now",
+            "route_10.0.0.1_now",
+            "route..10.0.0.1..now",
+            "route..broker.internal..now",
+            "note..a.b.c..now",
+            "approved fullwidth token＝secret",
+            "approved fullwidth colon：secret",
+            "approved bidi \u{202e} text",
+            "approved format \u{200b} text",
+            "approved separator \u{2028} text",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(!valid_reason(unsafe_reason), "unsafe reason case {case} was accepted");
+            let error = crate::audit::AuditContext::try_new("operator@example.test", Some(unsafe_reason)).unwrap_err();
+            assert_eq!(error.code(), crate::error::ControlErrorCode::InvalidArgument);
+            assert_eq!(error.to_string(), "mutation argument is invalid");
+        }
+        for (case, safe_reason) in [
+            "approved maintenance change",
+            "increase topic queue count",
+            "repair consumer request mode",
+            "change increase queue count",
+            "CHG-1234 increase queue count",
+            "ticket INC_42, increase queue count",
+            "issue #42 release 1.2 approved",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(valid_reason(safe_reason), "safe reason case {case} was rejected");
+        }
+        for valid in [
+            "operator@example.test",
+            "operator@sub.example.test",
+            "operator@team.example.com",
+            "first.middle.last@example.test",
+            "operator@mail.example.co.uk",
+            "123e4567-e89b-12d3-a456-426614174000",
+            "svc-control_01",
+            "1-service",
+        ] {
+            assert!(valid_operator(valid));
+        }
+        for (case, invalid) in [
+            "",
+            " operator",
+            "operator ",
+            "operator name",
+            "operator\nadmin",
+            "https://identity.invalid/operator",
+            "token=top-secret",
+            "token",
+            "svc-secret",
+            "Bearer abc.def.ghi",
+            "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvcGVyYXRvciJ9.signature-value",
+            "a.b._",
+            "a.b.",
+            "a.b._@example.test",
+            "eyJhbGciOiJSUzI1NiJ9.e30.x@example.test",
+            "eyJhbGciOiJub25lIn0.e30.x@example.test",
+            "eyJhbGciOiJSUzk5OSJ9.e30.x@example.test",
+            "eyJ0eXAiOiJKV1QifQ.e30.x@example.test",
+            "eyJhbGciOm51bGx9.e30.x@example.test",
+            "10.0.0.1",
+            "10.0.0.1:10911",
+            "broker.internal.",
+            "operator%25admin",
+            "operator/path",
+            "operator\u{202e}admin",
+            "operator\u{2028}admin",
+            "operator：admin",
+            "＠operator",
+            "operator@",
+            "operator@10.0.0.1",
+            "operator@10.0.0.1.",
+            "operator@broker.internal",
+            "operator@broker.internal.",
+            "operator@example.123",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(!valid_operator(invalid), "unsafe operator case {case} was accepted");
+            let error = crate::audit::AuditContext::try_new(invalid, None).unwrap_err();
+            assert_eq!(error.code(), crate::error::ControlErrorCode::PermissionDenied);
+            assert_eq!(error.to_string(), "write permission is required");
+        }
+        assert!(!valid_operator(&"x".repeat(129)));
+    }
+
+    #[test]
+    fn reason_endpoint_candidates_fail_closed_across_contexts() {
+        for (endpoint_case, endpoint) in ["broker.internal", "broker.internal.", "10.0.0.1"]
+            .into_iter()
+            .enumerate()
+        {
+            for (context_case, reason) in [
+                endpoint.to_owned(),
+                format!("-{endpoint}-"),
+                format!("#{endpoint}#"),
+                format!(",,,{endpoint},,,"),
+                format!("route,{endpoint},now"),
+                format!("route#{endpoint}#now"),
+                format!("route_{endpoint}_now"),
+                format!("route-{endpoint}-now"),
+                format!("route,_#{endpoint}#_,now"),
+                format!("route..{endpoint}..now"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert!(
+                    !valid_reason(&reason),
+                    "endpoint case {endpoint_case}, context case {context_case} was accepted"
+                );
+                let error = crate::audit::AuditContext::try_new("operator@example.test", Some(&reason)).unwrap_err();
+                assert_eq!(error, ControlError::invalid_argument());
+                assert_eq!(error.to_string(), "mutation argument is invalid");
+            }
+        }
+
+        for (case, syntax) in [
+            '/', '\\', '|', ':', '=', '@', '[', ']', '{', '}', '(', ')', '\'', '"', '%', '<', '>', '`',
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let reason = format!("approved{syntax}change");
+            assert!(!valid_reason(&reason), "unsafe syntax case {case} was accepted");
+            let error = crate::audit::AuditContext::try_new("operator@example.test", Some(&reason)).unwrap_err();
+            assert_eq!(error, ControlError::invalid_argument());
+            assert_eq!(error.to_string(), "mutation argument is invalid");
         }
     }
 

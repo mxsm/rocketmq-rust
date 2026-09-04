@@ -9,8 +9,12 @@ All five tools use input schema version `rocketmq-mcp-control.arguments.v1`. Unk
 `cluster` is a closed logical alias; it is never a NameServer or broker address. `broker_names` contains 1--64
 unique logical masters and is validated against the complete selected-cluster topology before a target state
 RPC. Omitted `dry_run` uses the server default, and omitted `confirm` is false. Execution requires
-`dry_run=false`, `confirm=true`, and a safe 5--256 byte `reason`. An optional `request_key` is an 8--64 byte safe
-identifier.
+`dry_run=false`, `confirm=true`, and a trimmed 5--256 byte ASCII `reason`. The only permitted characters are
+letters, digits, ordinary space, and `._,#-`; the five punctuation marks support prose, ticket IDs, separators,
+and hyphenated terms. All syntax punctuation—including `/ \ | : = @ [ ] { } ( ) ' " % < >` and backtick—is
+rejected by grammar. Each whitespace token and its comma/hash/underscore/hyphen or repeated-dot-delimited
+subtokens are scanned after allowed edge punctuation is stripped, so embedded bearer/compact-JWT, IP, and
+FQDN-shaped values are also rejected. An optional `request_key` is an 8--64 byte safe identifier.
 
 ## `rocketmq_upsert_topic`
 
@@ -119,6 +123,70 @@ uses `status=applied` with `changed=false`; `noop` is not part of the status voc
 contains endpoints, credential references or values, OAuth subjects, reasons, request keys, or raw backend
 errors. Operation-specific post-read fields are required in the schema but nullable: a missing observation is
 represented by JSON `null`, never by omitting the field.
+
+Every one of the five response schemas also requires a nullable, typed top-level `error_code`:
+
+| `status` | `error_code` |
+| --- | --- |
+| `planned`, `applied` | `null` |
+| `partial` | `partial_apply` |
+| `conflict` | `precondition_conflict` |
+| `failed`, with every actual failure being verification or order reconciliation | `verification_failed` |
+| other `failed` result | `execution_failed` |
+
+Per-target failure codes remain available and more specific; for example, a mixed partial result keeps every
+target's failure while its aggregate `error_code` remains `partial_apply`. Cache hits return the same complete
+structured value as the original result.
+
+## Error envelope
+
+Errors outside a logical mutation result use the closed `rocketmq-mcp-control.error.v2` envelope. The server
+applies authorization in scope, cluster, operation, runtime, then compile/catalog order and does not parse the
+mutation schema before those checks pass.
+
+| Code | Trigger | Operator action |
+| --- | --- | --- |
+| `unauthorized` | Bearer authentication fails, or the OAuth subject violates the audit-operator grammar | Issue a valid RS256 token with a documented operator ID; never retry a malformed or unsafe subject unchanged. |
+| `permission_denied` | OAuth principal lacks `rocketmq:write` | Request the write scope; do not retry unchanged credentials. |
+| `cluster_not_allowed` | Cluster alias is invalid or outside the principal/server intersection | Use an allowed logical alias or update both policies. |
+| `operation_not_allowed` | Operation is invalid or outside the principal/server intersection | Use a listed reviewed operation or update both policies. |
+| `mutation_disabled` | Runtime mutation policy is disabled | Enable the reviewed policy and restart only through the normal change process. |
+| `confirmation_required` | Execute mode does not set `confirm=true` | Review the dry-run, then explicitly confirm. |
+| `invalid_argument` | Schema, bounds, request key, or required safe reason is invalid | Use trimmed reason text containing only letters, digits, ordinary space, and `._,#-`; remove bearer/JWT, IP, and FQDN-shaped tokens. |
+| `precondition_conflict` | A sealed CAS precondition changed | Re-run dry-run and review the new state; no automatic retry occurs. |
+| `partial_apply` | Some, but not all, logical targets succeeded | Reconcile using returned per-target truth before another change. |
+| `verification_failed` | Every actual failure is post-apply verification/order reconciliation | Inspect returned applied/persistence truth and verify through an authorized operational path. |
+| `audit_unavailable` | Durable audit recovery/read/append fails or times out, including a sink returning another code | Stop mutation attempts and repair durable audit storage first. |
+
+Distinct infrastructure codes remain narrow: `operation_unavailable` means the reviewed adapter/catalog is not
+available (and can also signal bounded idempotency admission exhaustion), while `execution_failed`, `timeout`,
+`cancelled`, and `shutdown_failed` describe their corresponding session/runtime failures. Authentication and
+transport rejection retain `unauthorized`, `request_rejected`, and `invalid_config` where applicable. No error
+envelope contains operator, reason, endpoint, credential, request key, or raw backend text.
+
+New durable records use `rocketmq-mcp-control.audit.v2`. They store only validated operator evidence (OAuth
+subject), optional safe request reason, operation, cluster, mode, event, closed result, terminal error code, and
+terminal monotonic duration plus ordering identifiers/timestamp. Operator and reason are durable-audit-only and
+never appear in MCP responses, errors, tracing, or ordinary logs. Version-1 JSONL, including legacy
+`invalid_arguments` and `conflict`, remains recoverable in mixed files without rewriting it; all new records are
+version 2.
+
+The operator is 1--128 ASCII bytes, begins with an ASCII letter or digit, and thereafter contains only ASCII
+letters/digits or `._@-`. Without `@`, endpoint-shaped dotted subjects are rejected. An email-like ID has exactly
+one `@`, a local side that starts/ends alphanumeric without consecutive dots, and a non-IP/non-rooted valid
+multi-label domain with an alphabetic top-level label other than `internal`, `local`, `localhost`, or `lan`.
+UUID, service, and ordinary email-like IDs such as `first.middle.last@example.test` are supported. A validated
+domain is not treated as a compact token. Email local parts reject compact values whose base64url header is a
+JSON object with JOSE/JWT marker fields, regardless of the declared algorithm, plus empty/underscore compact
+signatures; non-email IDs reject every compact three-segment base64url shape.
+Whitespace, Unicode/control/format characters, paths/URLs, percent escapes, credential/Bearer values, numeric
+top-level labels, IP/socket values, and endpoint-shaped identities are rejected. OAuth construction, audit-context creation,
+and version-2 recovery enforce the same grammar; legacy version-1 records remain identity-free.
+
+All durable sink read/recovery/append errors and transaction timeouts map to `audit_unavailable`, regardless of
+the sink's supplied code or message. Stop mutation attempts, repair durable audit storage, and retry only after
+recovery succeeds. A failed `started` append creates no session/RPC; a failed terminal append is surfaced after
+session shutdown.
 
 ## Request-key semantics
 

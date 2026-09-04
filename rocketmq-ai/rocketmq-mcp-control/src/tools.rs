@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::error::ControlError;
+use crate::error::ControlErrorCode;
 use crate::model::MutationArguments;
 
 #[path = "tools/remaining.rs"]
@@ -67,6 +68,15 @@ const_string_schema!(
     "MutationResultSchemaVersion",
     "rocketmq-mcp-mutation.v1"
 );
+
+fn nullable_schema<T: JsonSchema>(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "anyOf": [
+            generator.subschema_for::<T>(),
+            { "type": "null" }
+        ]
+    })
+}
 const_string_schema!(TopicUpsertOperation, "TopicUpsertOperation", "topic_upsert");
 const_string_schema!(
     ConsumerGroupUpsertOperation,
@@ -216,7 +226,7 @@ impl UpsertTopicArgs {
             || !(1..=7).contains(&self.replacement.perm)
             || self.replacement.perm & 0b110 == 0
         {
-            return Err(ControlError::invalid_arguments());
+            return Err(ControlError::invalid_argument());
         }
         Ok(())
     }
@@ -247,7 +257,7 @@ impl UpsertConsumerGroupArgs {
         validate_user_name(&self.consumer_group, NameKind::ConsumerGroup)?;
         #[cfg(feature = "write-tools")]
         if rocketmq_admin_core::core::consumer::is_protected_consumer_group(&self.consumer_group) {
-            return Err(ControlError::invalid_arguments());
+            return Err(ControlError::invalid_argument());
         }
         if self.replacement.retry_queue_nums < 0
             || self.replacement.retry_queue_nums > 127
@@ -256,7 +266,7 @@ impl UpsertConsumerGroupArgs {
             || self.replacement.consume_timeout_minute <= 0
             || self.replacement.consume_timeout_minute > 10_080
         {
-            return Err(ControlError::invalid_arguments());
+            return Err(ControlError::invalid_argument());
         }
         Ok(())
     }
@@ -289,12 +299,12 @@ pub(super) fn validate_common(
 
 fn validate_target_set(broker_names: &[String]) -> Result<(), ControlError> {
     if !(1..=64).contains(&broker_names.len()) {
-        return Err(ControlError::invalid_arguments());
+        return Err(ControlError::invalid_argument());
     }
     let mut canonical = broker_names.to_vec();
     canonical.sort();
     if canonical.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(ControlError::invalid_arguments());
+        return Err(ControlError::invalid_argument());
     }
     for broker in broker_names {
         validate_user_name(broker, NameKind::Broker)?;
@@ -346,7 +356,7 @@ pub(super) fn validate_user_name(value: &str, kind: NameKind) -> Result<(), Cont
         NameKind::Broker => false,
     };
     if !valid || system {
-        return Err(ControlError::invalid_arguments());
+        return Err(ControlError::invalid_argument());
     }
     Ok(())
 }
@@ -406,6 +416,35 @@ pub enum FailureCode {
     OrderReconciliationFailed,
 }
 
+#[cfg(any(feature = "write-tools", test))]
+pub(crate) fn response_error_code(
+    status: MutationStatus,
+    failures: impl IntoIterator<Item = Option<FailureCode>>,
+) -> Option<ControlErrorCode> {
+    match status {
+        MutationStatus::Planned | MutationStatus::Applied => None,
+        MutationStatus::Partial => Some(ControlErrorCode::PartialApply),
+        MutationStatus::Conflict => Some(ControlErrorCode::PreconditionConflict),
+        MutationStatus::Failed => {
+            let mut found = false;
+            for failure in failures.into_iter().flatten() {
+                found = true;
+                if !matches!(
+                    failure,
+                    FailureCode::VerificationFailed | FailureCode::OrderReconciliationFailed
+                ) {
+                    return Some(ControlErrorCode::ExecutionFailed);
+                }
+            }
+            if found {
+                Some(ControlErrorCode::VerificationFailed)
+            } else {
+                Some(ControlErrorCode::ExecutionFailed)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum VisibleState<T> {
@@ -457,6 +496,8 @@ pub struct MutationToolResponse<O, R, T> {
     pub cluster: String,
     pub mode: MutationMode,
     pub status: MutationStatus,
+    #[schemars(required, schema_with = "nullable_schema::<ControlErrorCode>")]
+    pub error_code: Option<ControlErrorCode>,
     pub target: R,
     pub before: BTreeMap<String, VisibleState<T>>,
     pub requested: T,
@@ -523,7 +564,7 @@ mod tests {
             let mut case = valid.clone();
             case[field] = value;
             let rejected = serde_json::from_value::<UpsertTopicArgs>(case)
-                .map_err(|_| ControlError::invalid_arguments())
+                .map_err(|_| ControlError::invalid_argument())
                 .and_then(|args| args.validate(true, true));
             assert!(rejected.is_err(), "accepted {field}");
         }
@@ -617,7 +658,7 @@ mod tests {
                     .validate(true, true)
                     .unwrap_err()
                     .code(),
-                crate::error::ControlErrorCode::InvalidArguments
+                crate::error::ControlErrorCode::InvalidArgument
             );
         }
 
@@ -631,7 +672,7 @@ mod tests {
             let mut case = valid.clone();
             case[field] = value;
             let rejected = serde_json::from_value::<UpsertConsumerGroupArgs>(case)
-                .map_err(|_| ControlError::invalid_arguments())
+                .map_err(|_| ControlError::invalid_argument())
                 .and_then(|args| args.validate(true, true));
             assert!(rejected.is_err(), "accepted {field}");
         }
@@ -714,6 +755,40 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_error_code_mapping_is_closed() {
+        assert_eq!(response_error_code(MutationStatus::Planned, []), None);
+        assert_eq!(response_error_code(MutationStatus::Applied, []), None);
+        assert_eq!(
+            response_error_code(MutationStatus::Partial, [Some(FailureCode::Unavailable)]),
+            Some(ControlErrorCode::PartialApply)
+        );
+        assert_eq!(
+            response_error_code(MutationStatus::Conflict, [Some(FailureCode::Conflict)]),
+            Some(ControlErrorCode::PreconditionConflict)
+        );
+        assert_eq!(
+            response_error_code(
+                MutationStatus::Failed,
+                [
+                    Some(FailureCode::VerificationFailed),
+                    Some(FailureCode::OrderReconciliationFailed)
+                ]
+            ),
+            Some(ControlErrorCode::VerificationFailed)
+        );
+        assert_eq!(
+            response_error_code(
+                MutationStatus::Failed,
+                [
+                    Some(FailureCode::VerificationFailed),
+                    Some(FailureCode::PersistenceFailed)
+                ]
+            ),
+            Some(ControlErrorCode::ExecutionFailed)
+        );
+    }
+
+    #[test]
     fn stable_response_snapshot_exposes_only_logical_mutation_state() {
         let response = MutationToolResponse {
             schema_version: MutationResultSchemaVersion::V1,
@@ -721,6 +796,7 @@ mod tests {
             cluster: "cluster-a".to_owned(),
             mode: MutationMode::Execute,
             status: MutationStatus::Partial,
+            error_code: Some(ControlErrorCode::PartialApply),
             target: TopicMutationResource {
                 topic: "orders".to_owned(),
                 brokers: vec!["broker-a".to_owned()],

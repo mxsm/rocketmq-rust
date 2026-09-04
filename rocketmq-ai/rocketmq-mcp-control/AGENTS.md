@@ -18,7 +18,24 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
 - OAuth and closed operation/cluster authorization must complete before mutation argument parsing. A durable
   `started` audit record must then complete before session creation or RPC.
 - Do not add stdio, CLI, shell, subprocess, free-form RPC, arbitrary Admin commands, or stdout protocol output.
-- Audit and public data must exclude credentials, tokens, network addresses, raw backend errors, message bodies, and client identities.
+- Durable audit v2 records may contain only the validated OAuth subject and optional safe bounded request reason
+  as operator evidence. Responses, errors, tracing, ordinary logs, and all other public data must exclude both;
+  every surface must also exclude credentials, tokens, network addresses, raw backend errors, and message bodies.
+- An audit operator is 1--128 ASCII bytes: the first byte is alphanumeric and every remaining byte is
+  alphanumeric or one of `._@-`. Without `@`, it must not be endpoint-shaped. With exactly one `@`, the local
+  side starts/ends alphanumeric and has no consecutive dots; the domain is a non-IP, non-rooted, valid
+  multi-label hostname with an alphabetic, non-reserved top-level label. Never scan the validated domain as a
+  compact token; reject a compact local side whose base64url header is a JSON object with JOSE/JWT marker fields,
+  regardless of the declared algorithm, or whose signature is empty/underscore. Reject
+  percent-escaped, token-shaped, path, whitespace, control, non-ASCII, and Unicode-format input. A reason is a
+  trimmed 5--256 byte ASCII string containing only alphanumerics, ordinary space, and `._,#-`. These punctuation
+  marks support sentences, ticket IDs, and comma-separated prose; all syntax punctuation is rejected by grammar.
+  Scan each whitespace token and its comma/hash/underscore/hyphen and repeated-dot-delimited subtokens, stripping
+  allowed edge punctuation before rejecting bare JWT, IP, or FQDN values.
+  Apply both rules at OAuth,
+  request context, and v2 recovery boundaries; v1 recovery retains its legacy shape rules.
+- Normalize every reliable audit sink read, recovery, append, or timeout failure to `audit_unavailable`; never
+  expose a sink-provided code or message. A failed durable `started` append must precede and prevent session/RPC.
 - Each upsert accepts only 1--64 explicit broker names. All operations validate the full selected-cluster topology
   before target state RPC, keep plans sealed to one Admin session, and preserve exact-target post-read verification.
 - Targeted Topic upserts must treat the complete order-Topic KV as a sealed no-write guard. Never merge, put,

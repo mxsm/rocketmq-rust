@@ -23,7 +23,9 @@ use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use crate::audit::AuditContext;
 use crate::audit::AuditInvocation;
+use crate::audit::AuditResult;
 use crate::audit::AuditTrail;
 use crate::error::ControlError;
 use crate::guard::AuthorizedMutation;
@@ -82,9 +84,16 @@ impl WorkflowEngine {
         arguments: &MutationArguments,
         cancellation: &CancellationToken,
     ) -> Result<MutationResult, ControlError> {
+        arguments.validate()?;
+        let audit_context = AuditContext::try_new(authorized.operator(), arguments.reason.as_deref())?;
         let invocation = self
             .audit
-            .start(authorized.operation(), authorized.cluster(), arguments.dry_run)
+            .start(
+                &audit_context,
+                authorized.operation(),
+                authorized.cluster(),
+                arguments.dry_run,
+            )
             .await?;
         let (sender, receiver) = oneshot::channel();
         let audit = self.audit.clone();
@@ -175,8 +184,15 @@ async fn persist_terminal(
     invocation: &AuditInvocation,
     result: &Result<MutationResult, ControlError>,
 ) -> Result<(), ControlError> {
-    let error_code = result.as_ref().err().map(ControlError::code);
-    match AssertUnwindSafe(audit.terminal(invocation, error_code))
+    let (audit_result, error_code) = match result {
+        Ok(result) if result.outcome == MutationOutcome::DryRunCompleted => (AuditResult::Planned, None),
+        Ok(_) => (AuditResult::Applied, None),
+        Err(error) if error.code() == crate::error::ControlErrorCode::PreconditionConflict => {
+            (AuditResult::Conflict, Some(error.code()))
+        }
+        Err(error) => (AuditResult::Failed, Some(error.code())),
+    };
+    match AssertUnwindSafe(audit.terminal(invocation, audit_result, error_code))
         .catch_unwind()
         .await
     {
@@ -211,7 +227,7 @@ async fn run_steps(
 
 const fn map_session_error(error: SessionError) -> ControlError {
     match error {
-        SessionError::Conflict => ControlError::conflict(),
+        SessionError::Conflict => ControlError::precondition_conflict(),
         SessionError::Failed => ControlError::execution_failed(),
     }
 }
@@ -298,6 +314,40 @@ mod tests {
     struct HangingTerminalSink {
         records: tokio::sync::Mutex<Vec<AuditRecord>>,
         appends: AtomicUsize,
+    }
+
+    struct HostileAppendSink {
+        records: tokio::sync::Mutex<Vec<AuditRecord>>,
+        appends: AtomicUsize,
+        fail_at: usize,
+    }
+
+    impl HostileAppendSink {
+        fn new(fail_at: usize) -> Self {
+            Self {
+                records: tokio::sync::Mutex::new(Vec::new()),
+                appends: AtomicUsize::new(0),
+                fail_at,
+            }
+        }
+    }
+
+    impl ReliableAuditSink for HostileAppendSink {
+        fn append<'a>(&'a self, record: &'a AuditRecord) -> AuditFuture<'a, Result<(), ControlError>> {
+            Box::pin(async move {
+                let call = self.appends.fetch_add(1, Ordering::SeqCst);
+                if call == self.fail_at {
+                    Err(ControlError::execution_failed())
+                } else {
+                    self.records.lock().await.push(record.clone());
+                    Ok(())
+                }
+            })
+        }
+
+        fn records(&self) -> AuditFuture<'_, Result<Vec<AuditRecord>, ControlError>> {
+            Box::pin(async move { Ok(self.records.lock().await.clone()) })
+        }
     }
 
     impl HangingTerminalSink {
@@ -480,8 +530,13 @@ mod tests {
             .execute(&authorized(), &arguments(false), &CancellationToken::new())
             .await
             .unwrap_err();
-        assert_eq!(error.code(), ControlErrorCode::AuditUnavailable);
+        assert_eq!(error, ControlError::audit_unavailable());
         assert_eq!(counters.opens.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.acquired.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.preflight.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.dry_run.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.verify.load(Ordering::SeqCst), 0);
         assert_eq!(counters.shutdown.load(Ordering::SeqCst), 0);
     }
 
@@ -526,7 +581,7 @@ mod tests {
     #[tokio::test]
     async fn conflict_and_failure_shutdown_exactly_once() {
         for (behavior, expected) in [
-            (Behavior::Conflict, ControlErrorCode::Conflict),
+            (Behavior::Conflict, ControlErrorCode::PreconditionConflict),
             (Behavior::Failure, ControlErrorCode::ExecutionFailed),
         ] {
             let (engine, counters, sink, _) = engine(behavior, Duration::from_secs(1));
@@ -720,7 +775,7 @@ mod tests {
     #[tokio::test]
     async fn terminal_audit_failure_is_returned_after_shutdown() {
         let counters = Arc::new(Counters::default());
-        let sink = Arc::new(MemoryAuditSink::new(1, 4096));
+        let sink = Arc::new(HostileAppendSink::new(1));
         let factory = Arc::new(SyntheticFactory {
             counters: counters.clone(),
             behavior: Behavior::Success,
@@ -736,9 +791,39 @@ mod tests {
             .execute(&authorized(), &arguments(false), &CancellationToken::new())
             .await
             .unwrap_err();
-        assert_eq!(error.code(), ControlErrorCode::AuditUnavailable);
+        assert_eq!(error, ControlError::audit_unavailable());
         assert_eq!(counters.shutdown.load(Ordering::SeqCst), 1);
         assert_eq!(sink.records().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn hostile_started_audit_failure_opens_no_session_or_rpc() {
+        let counters = Arc::new(Counters::default());
+        let sink = Arc::new(HostileAppendSink::new(0));
+        let factory = Arc::new(SyntheticFactory {
+            counters: counters.clone(),
+            behavior: Behavior::Success,
+            gate: Arc::new(Notify::new()),
+        });
+        let runtime = rocketmq_runtime::RuntimeContext::from_current("mcp-control-started-failure-test");
+        let owner = runtime
+            .service_context("mcp-control-started-failure-test")
+            .task_group()
+            .clone();
+        let engine = WorkflowEngine::new(AuditTrail::new(sink.clone()), factory, Duration::from_secs(1), owner);
+        let error = engine
+            .execute(&authorized(), &arguments(false), &CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error, ControlError::audit_unavailable());
+        assert_eq!(counters.opens.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.acquired.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.preflight.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.dry_run.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.execute.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.verify.load(Ordering::SeqCst), 0);
+        assert_eq!(counters.shutdown.load(Ordering::SeqCst), 0);
+        assert!(sink.records().await.unwrap().is_empty());
     }
 
     #[tokio::test]

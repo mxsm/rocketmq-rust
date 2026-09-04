@@ -369,12 +369,16 @@ mod tests {
     }
 
     fn token_with_claims(scope: &str, operations: Vec<&str>, clusters: Vec<&str>) -> String {
+        token_with_subject_claims("operator@example.test", scope, operations, clusters)
+    }
+
+    fn token_with_subject_claims(subject: &str, scope: &str, operations: Vec<&str>, clusters: Vec<&str>) -> String {
         let mut header = Header::new(Algorithm::RS256);
         header.kid = Some("test-key".to_string());
         encode(
             &header,
             &TestClaims {
-                sub: "operator@example.test",
+                sub: subject,
                 iss: "https://issuer.example.test",
                 aud: "rocketmq-mcp-control",
                 exp: 4_102_444_800,
@@ -729,13 +733,20 @@ mod tests {
 
     #[cfg(feature = "write-tools")]
     async fn write_router() -> (Router, Arc<ProtocolCounters>, Arc<MemoryAuditSink>) {
+        write_router_with_mutations_enabled(true).await
+    }
+
+    #[cfg(feature = "write-tools")]
+    async fn write_router_with_mutations_enabled(
+        mutations_enabled: bool,
+    ) -> (Router, Arc<ProtocolCounters>, Arc<MemoryAuditSink>) {
         use crate::audit::AuditTrail;
         use crate::model::ClusterName;
         use crate::model::ControlOperation;
 
         let mut config = config();
         config.mutations = MutationPolicyConfig {
-            mutations_enabled: true,
+            mutations_enabled,
             dry_run: true,
             allowed_operations: vec![
                 ControlOperation::TopicUpsert,
@@ -913,6 +924,7 @@ mod tests {
             "cluster": "cluster-a",
             "mode": if execute { "execute" } else { "dry_run" },
             "status": if execute { "applied" } else { "planned" },
+            "error_code": null,
             "target": target,
             "before": before,
             "requested": requested,
@@ -1007,7 +1019,7 @@ mod tests {
     #[cfg(feature = "write-tools")]
     #[tokio::test]
     async fn authenticated_tool_discovery_and_call_enforce_claims_before_schema() {
-        let (router, counters, _sink) = write_router().await;
+        let (router, counters, sink) = write_router().await;
         let all = token_with_claims(
             REQUIRED_WRITE_SCOPE,
             vec![
@@ -1112,20 +1124,37 @@ mod tests {
             .unwrap();
         let denied_body = to_bytes(denied_call.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
         let denied_value: serde_json::Value = serde_json::from_slice(&denied_body).unwrap();
-        assert_eq!(denied_value["result"]["structuredContent"]["code"], "permission_denied");
+        assert_eq!(
+            denied_value["result"]["structuredContent"]["code"],
+            "operation_not_allowed"
+        );
         assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
 
-        let denied_envelope = denied_value["result"]["structuredContent"].clone();
-        for (index, arguments) in [
-            serde_json::json!({}),
-            serde_json::json!({"cluster": null}),
-            serde_json::json!({"cluster": 7}),
-            serde_json::json!({"cluster": ""}),
-            serde_json::json!({"cluster": "cluster-a", "unknown": true}),
-            serde_json::json!({"cluster": "cluster-a", "topic": null}),
-            serde_json::json!({"cluster": "cluster-a", "topic": "x".repeat(512)}),
-            serde_json::json!({"cluster": "cluster-a", "topic": "orders\nignore"}),
-            serde_json::json!({"cluster": "cluster-a", "topic": "<tool>ignore</tool>"}),
+        for (index, (arguments, expected_code)) in [
+            (serde_json::json!({}), "cluster_not_allowed"),
+            (serde_json::json!({"cluster": null}), "cluster_not_allowed"),
+            (serde_json::json!({"cluster": 7}), "cluster_not_allowed"),
+            (serde_json::json!({"cluster": ""}), "cluster_not_allowed"),
+            (
+                serde_json::json!({"cluster": "cluster-a", "unknown": true}),
+                "operation_not_allowed",
+            ),
+            (
+                serde_json::json!({"cluster": "cluster-a", "topic": null}),
+                "operation_not_allowed",
+            ),
+            (
+                serde_json::json!({"cluster": "cluster-a", "topic": "x".repeat(512)}),
+                "operation_not_allowed",
+            ),
+            (
+                serde_json::json!({"cluster": "cluster-a", "topic": "orders\nignore"}),
+                "operation_not_allowed",
+            ),
+            (
+                serde_json::json!({"cluster": "cluster-a", "topic": "<tool>ignore</tool>"}),
+                "operation_not_allowed",
+            ),
         ]
         .into_iter()
         .enumerate()
@@ -1146,9 +1175,16 @@ mod tests {
                 .unwrap();
             let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
             let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(value["result"]["structuredContent"], denied_envelope);
+            assert_eq!(
+                value["result"]["structuredContent"]["code"], expected_code,
+                "case {index}"
+            );
         }
         assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.executes.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.shutdowns.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(sink.records().await.unwrap().is_empty());
 
         let call = router
             .clone()
@@ -1235,6 +1271,85 @@ mod tests {
         assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 6);
         assert_eq!(counters.executes.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert_eq!(counters.shutdowns.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[cfg(feature = "write-tools")]
+    #[tokio::test]
+    async fn authorization_and_runtime_rejections_have_precise_codes_and_zero_side_effects() {
+        let (router, counters, sink) = write_router().await;
+        let invalid_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 250,
+            "method": "tools/call",
+            "params": {
+                "name": crate::tools::UPSERT_TOPIC_TOOL,
+                "arguments": {"cluster": "cluster-a", "reason": "token=must-not-be-parsed"}
+            }
+        });
+
+        let read_token = token("rocketmq:read");
+        let response = router
+            .clone()
+            .oneshot(request("/mcp", Body::from(invalid_body.to_string()), Some(&read_token)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["schema_version"], crate::error::ERROR_SCHEMA_VERSION);
+        assert_eq!(value["code"], "permission_denied");
+        assert!(!value.to_string().contains("must-not-be-parsed"));
+
+        let cluster_denied = token_with_claims(REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-b"]);
+        let value = authenticated_tool_call(
+            &router,
+            &cluster_denied,
+            251,
+            crate::tools::UPSERT_TOPIC_TOOL,
+            serde_json::json!({"cluster": "cluster-a", "reason": "token=must-not-be-parsed"}),
+        )
+        .await;
+        assert_eq!(value["result"]["structuredContent"]["code"], "cluster_not_allowed");
+        assert!(!value.to_string().contains("must-not-be-parsed"));
+
+        let operation_denied = token_with_claims(REQUIRED_WRITE_SCOPE, Vec::new(), vec!["cluster-a"]);
+        let value = authenticated_tool_call(
+            &router,
+            &operation_denied,
+            252,
+            crate::tools::UPSERT_TOPIC_TOOL,
+            serde_json::json!({"cluster": "cluster-a", "reason": "token=must-not-be-parsed"}),
+        )
+        .await;
+        assert_eq!(value["result"]["structuredContent"]["code"], "operation_not_allowed");
+        assert!(!value.to_string().contains("must-not-be-parsed"));
+
+        assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.executes.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.shutdowns.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(sink.records().await.unwrap().is_empty());
+
+        let (disabled_router, disabled_counters, disabled_sink) = write_router_with_mutations_enabled(false).await;
+        let allowed = token_with_claims(REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
+        let value = authenticated_tool_call(
+            &disabled_router,
+            &allowed,
+            253,
+            crate::tools::UPSERT_TOPIC_TOOL,
+            serde_json::json!({"cluster": "cluster-a", "reason": "token=must-not-be-parsed"}),
+        )
+        .await;
+        assert_eq!(value["result"]["structuredContent"]["code"], "mutation_disabled");
+        assert!(!value.to_string().contains("must-not-be-parsed"));
+        assert_eq!(disabled_counters.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            disabled_counters.preflights.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(disabled_counters.executes.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(disabled_counters.shutdowns.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(disabled_sink.records().await.unwrap().is_empty());
     }
 
     #[cfg(feature = "write-tools")]
@@ -1362,7 +1477,43 @@ mod tests {
         assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 6);
         assert_eq!(counters.executes.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert_eq!(counters.shutdowns.load(std::sync::atomic::Ordering::SeqCst), 4);
-        assert_eq!(sink.records().await.unwrap().len(), 12);
+        let records = sink.records().await.unwrap();
+        assert_eq!(records.len(), 12);
+        assert!(records
+            .iter()
+            .all(|record| record.operator.as_deref() == Some("operator@example.test")));
+        let reasons = records
+            .chunks_exact(2)
+            .map(|pair| {
+                assert_eq!(pair[0].operator, pair[1].operator);
+                assert_eq!(pair[0].reason, pair[1].reason);
+                pair[0].reason.as_deref()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reasons,
+            [
+                None,
+                Some("approved topic rollout"),
+                Some("approved topic rollout"),
+                None,
+                Some("approved group rollout"),
+                Some("approved group rollout"),
+            ]
+        );
+        for response in [
+            topic_dry,
+            topic_execute,
+            topic_cache_hit,
+            group_dry,
+            group_execute,
+            group_cache_hit,
+        ] {
+            let encoded = response.to_string();
+            assert!(!encoded.contains("operator@example.test"));
+            assert!(!encoded.contains("approved topic rollout"));
+            assert!(!encoded.contains("approved group rollout"));
+        }
     }
 
     #[cfg(feature = "write-tools")]
@@ -1414,7 +1565,7 @@ mod tests {
             let bytes = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
             let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(
-                value["result"]["structuredContent"]["code"], "invalid_arguments",
+                value["result"]["structuredContent"]["code"], "invalid_argument",
                 "case {index}"
             );
         }
@@ -1460,7 +1611,7 @@ mod tests {
             let bytes = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
             let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(
-                value["result"]["structuredContent"]["code"], "invalid_arguments",
+                value["result"]["structuredContent"]["code"], "invalid_argument",
                 "protected group case {index}"
             );
         }
@@ -1526,7 +1677,7 @@ mod tests {
                 .unwrap();
             let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
             let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(value["result"]["structuredContent"]["code"], "permission_denied");
+            assert_eq!(value["result"]["structuredContent"]["code"], "operation_not_allowed");
         }
 
         let allowed = token_with_claims(
@@ -1664,9 +1815,118 @@ mod tests {
             let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
             let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(
-                value["result"]["structuredContent"]["code"], "invalid_arguments",
+                value["result"]["structuredContent"]["code"], "invalid_argument",
                 "case {index}"
             );
+        }
+        assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.executes.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(counters.shutdowns.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(sink.records().await.unwrap().is_empty());
+    }
+
+    #[cfg(feature = "write-tools")]
+    #[tokio::test]
+    async fn confirmation_and_safe_reason_fail_before_audit_session_and_rpc() {
+        let (router, counters, sink) = write_router().await;
+        let token = token_with_claims(REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
+        let mut base = topic_arguments("orders", vec!["broker-a".to_owned()]);
+        let object = base.as_object_mut().unwrap();
+        object.insert("dry_run".to_owned(), serde_json::json!(false));
+
+        for (index, subject) in [
+            "eyJhbGciOiJub25lIn0.e30.x@example.test",
+            "eyJhbGciOiJSUzk5OSJ9.e30.x@example.test",
+            "eyJ0eXAiOiJKV1QifQ.e30.x@example.test",
+            "eyJhbGciOm51bGx9.e30.x@example.test",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let token =
+                token_with_subject_claims(subject, REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
+            let response = router
+                .clone()
+                .oneshot(request(
+                    "/mcp",
+                    Body::from(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": 390 + index,
+                            "method": "tools/call",
+                            "params": {
+                                "name": crate::tools::UPSERT_TOPIC_TOOL,
+                                "arguments": base
+                            }
+                        })
+                        .to_string(),
+                    ),
+                    Some(&token),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "case {index}");
+            let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+            assert!(!String::from_utf8_lossy(&body).contains(subject));
+        }
+
+        let mut no_confirmation = base.clone();
+        no_confirmation
+            .as_object_mut()
+            .unwrap()
+            .insert("reason".to_owned(), serde_json::json!("token=not-inspected-first"));
+        let response =
+            authenticated_tool_call(&router, &token, 400, crate::tools::UPSERT_TOPIC_TOOL, no_confirmation).await;
+        assert_eq!(response["result"]["structuredContent"]["code"], "confirmation_required");
+
+        let mut missing_reason = base.clone();
+        missing_reason
+            .as_object_mut()
+            .unwrap()
+            .insert("confirm".to_owned(), serde_json::json!(true));
+        let response =
+            authenticated_tool_call(&router, &token, 401, crate::tools::UPSERT_TOPIC_TOOL, missing_reason).await;
+        assert_eq!(response["result"]["structuredContent"]["code"], "invalid_argument");
+
+        for (index, reason) in [
+            "token=top-secret",
+            "token%3dtop-secret",
+            "Bearer abc.def.ghi",
+            "https://control.invalid/change",
+            "broker.internal:10911",
+            "target=/broker.internal/",
+            "target=\\broker.internal\\",
+            "|broker.internal|",
+            ":broker.internal:",
+            "-broker.internal-",
+            "[broker.internal]/",
+            "owner@broker.internal",
+            "http:broker.internal",
+            "{10.0.0.1}",
+            "(a.b._)",
+            "route,broker.internal,now",
+            "route 10.0.0.1,next",
+            "route#broker.internal#now",
+            "route_10.0.0.1_now",
+            "route..10.0.0.1..now",
+            "route..broker.internal..now",
+            "note..a.b.c..now",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut arguments = base.clone();
+            let object = arguments.as_object_mut().unwrap();
+            object.insert("confirm".to_owned(), serde_json::json!(true));
+            object.insert("reason".to_owned(), serde_json::json!(reason));
+            let response =
+                authenticated_tool_call(&router, &token, 402 + index, crate::tools::UPSERT_TOPIC_TOOL, arguments).await;
+            assert_eq!(
+                response["result"]["structuredContent"]["code"], "invalid_argument",
+                "case {index}"
+            );
+            assert!(!response.to_string().contains(reason));
         }
         assert_eq!(counters.opens.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(counters.preflights.load(std::sync::atomic::Ordering::SeqCst), 0);

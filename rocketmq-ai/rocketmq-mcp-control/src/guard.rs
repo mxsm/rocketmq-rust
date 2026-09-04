@@ -54,19 +54,25 @@ impl MutationGuard {
         if !principal.scopes.contains(REQUIRED_WRITE_SCOPE) {
             return Err(ControlError::permission_denied());
         }
-        let operation = ControlOperation::from_str(operation)?;
-        let cluster = ClusterName::try_new(cluster)?;
-        if !principal.allowed_operations.contains(&operation)
-            || !principal.allowed_clusters.contains(&cluster)
-            || !self.allowed_operations.contains(&operation)
-            || !self.allowed_clusters.contains(&cluster)
-        {
-            return Err(ControlError::permission_denied());
+        let cluster = ClusterName::try_new(cluster).map_err(|_| ControlError::cluster_not_allowed())?;
+        if !principal.allowed_clusters.contains(&cluster) || !self.allowed_clusters.contains(&cluster) {
+            return Err(ControlError::cluster_not_allowed());
         }
-        if !cfg!(feature = "write-tools") || !self.runtime_enabled || !catalog.is_registered(operation) {
+        let operation = ControlOperation::from_str(operation).map_err(|_| ControlError::operation_not_allowed())?;
+        if !principal.allowed_operations.contains(&operation) || !self.allowed_operations.contains(&operation) {
+            return Err(ControlError::operation_not_allowed());
+        }
+        if !self.runtime_enabled {
+            return Err(ControlError::mutation_disabled());
+        }
+        if !cfg!(feature = "write-tools") || !catalog.is_registered(operation) {
             return Err(ControlError::operation_unavailable());
         }
-        Ok(AuthorizedMutation { operation, cluster })
+        Ok(AuthorizedMutation {
+            operation,
+            cluster,
+            operator: principal.subject.clone(),
+        })
     }
 
     /// Parses common arguments only after an [`AuthorizedMutation`] has been minted.
@@ -77,7 +83,7 @@ impl MutationGuard {
     ) -> Result<MutationArguments, ControlError> {
         let dry_run_omitted = raw.as_object().is_some_and(|object| !object.contains_key("dry_run"));
         let mut arguments: MutationArguments =
-            serde_json::from_value(raw.clone()).map_err(|_| ControlError::invalid_arguments())?;
+            serde_json::from_value(raw.clone()).map_err(|_| ControlError::invalid_argument())?;
         if dry_run_omitted {
             arguments.dry_run = self.default_dry_run;
         }
@@ -106,10 +112,11 @@ impl MutationGuard {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuthorizedMutation {
     operation: ControlOperation,
     cluster: ClusterName,
+    operator: String,
 }
 
 impl AuthorizedMutation {
@@ -121,9 +128,28 @@ impl AuthorizedMutation {
         &self.cluster
     }
 
+    pub(crate) fn operator(&self) -> &str {
+        &self.operator
+    }
+
     #[cfg(test)]
     pub(crate) fn synthetic(operation: ControlOperation, cluster: ClusterName) -> Self {
-        Self { operation, cluster }
+        Self {
+            operation,
+            cluster,
+            operator: "test-operator".to_owned(),
+        }
+    }
+}
+
+impl std::fmt::Debug for AuthorizedMutation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthorizedMutation")
+            .field("operation", &self.operation)
+            .field("cluster", &self.cluster)
+            .field("operator_validated", &true)
+            .finish()
     }
 }
 
@@ -167,6 +193,44 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(unavailable.code(), crate::error::ControlErrorCode::OperationUnavailable);
+    }
+
+    #[test]
+    fn authorization_order_has_specific_codes_without_exposing_argument_schema() {
+        let disabled = MutationGuard::new(&policy(false));
+        let catalog = OperationCatalog::default();
+        let cases = [
+            (
+                principal(&[]),
+                "unknown",
+                "bad.cluster",
+                crate::error::ControlErrorCode::PermissionDenied,
+            ),
+            (
+                principal(&[REQUIRED_WRITE_SCOPE]),
+                "unknown",
+                "bad.cluster",
+                crate::error::ControlErrorCode::ClusterNotAllowed,
+            ),
+            (
+                principal(&[REQUIRED_WRITE_SCOPE]),
+                "unknown",
+                "cluster-a",
+                crate::error::ControlErrorCode::OperationNotAllowed,
+            ),
+            (
+                principal(&[REQUIRED_WRITE_SCOPE]),
+                "topic_upsert",
+                "cluster-a",
+                crate::error::ControlErrorCode::MutationDisabled,
+            ),
+        ];
+        for (principal, operation, cluster, expected) in cases {
+            let error = disabled
+                .authorize_raw(&principal, operation, cluster, &catalog)
+                .unwrap_err();
+            assert_eq!(error.code(), expected);
+        }
     }
 
     #[test]
