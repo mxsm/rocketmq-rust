@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::future::Future;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -71,19 +70,17 @@ pub(super) struct GeneratedTlsMaterial {
 pub(super) struct StaticJwks;
 
 impl JwksSource for StaticJwks {
-    fn fetch(&self) -> impl Future<Output = Result<Vec<u8>, AuthError>> + Send {
-        async {
-            serde_json::to_vec(&serde_json::json!({"keys": [{
-                "kty": "RSA",
-                "kid": "e2e-key",
-                "alg": "RS256",
-                "use": "sig",
-                "key_ops": ["verify"],
-                "n": RSA_N,
-                "e": "AQAB"
-            }]}))
-            .map_err(|_| AuthError::Unavailable)
-        }
+    async fn fetch(&self) -> Result<Vec<u8>, AuthError> {
+        serde_json::to_vec(&serde_json::json!({"keys": [{
+            "kty": "RSA",
+            "kid": "e2e-key",
+            "alg": "RS256",
+            "use": "sig",
+            "key_ops": ["verify"],
+            "n": RSA_N,
+            "e": "AQAB"
+        }]}))
+        .map_err(|_| AuthError::Unavailable)
     }
 }
 
