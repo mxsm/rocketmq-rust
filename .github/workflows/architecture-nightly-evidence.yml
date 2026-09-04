@@ -127,7 +127,7 @@ jobs:
           cargo +nightly-2026-07-05 miri setup
           cargo +nightly-2026-07-05 miri test \
             -p rocketmq-store-local \
-            --test mapped_write_lease_miri \
+            --lib mapped_file::write_lease_miri_tests \
             2>&1 | tee target/architecture-evidence/miri/test-output.txt
 
       - name: Upload Miri evidence

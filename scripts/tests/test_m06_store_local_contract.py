@@ -31,9 +31,9 @@ class StoreLocalContractTests(unittest.TestCase):
             "rocketmq-store-local/tests/storage_layout_golden.rs",
             "rocketmq-store-local/tests/consume_queue_record.rs",
             "rocketmq-store-local/tests/index_codec.rs",
-            "rocketmq-store-local/tests/mapped_write_lease.rs",
+            "rocketmq-store-local/src/mapped_file/write_lease_scenarios.rs",
             "rocketmq-store-local/tests/mapped_write_lease_loom.rs",
-            "rocketmq-store-local/tests/mapped_write_lease_miri.rs",
+            "rocketmq-store-local/src/mapped_file/write_lease_miri_tests.rs",
             "rocketmq-store-local/tests/commit_log_recovery_orchestration.rs",
         ):
             self.assertTrue((ROOT / relative).is_file(), relative)
