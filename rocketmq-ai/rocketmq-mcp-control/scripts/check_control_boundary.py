@@ -93,6 +93,24 @@ for forbidden in ("admin-read", "admin-full"):
 
 source_paths = sorted((PROJECT / "src").glob("**/*.rs"))
 source = "\n".join(path.read_text(encoding="utf-8") for path in source_paths)
+
+
+def is_test_only_source(path: pathlib.Path) -> bool:
+    relative = path.relative_to(PROJECT / "src")
+    return path.name == "tests.rs" or relative.parts[:2] == ("transport", "real_cluster_e2e")
+
+
+# Dedicated test source may own explicit E2E process orchestration. It must not
+# weaken the production transport and mutation dependency boundary below.
+production_units = []
+for path in source_paths:
+    if is_test_only_source(path):
+        continue
+    unit = path.read_text(encoding="utf-8")
+    unit = unit.split("#[cfg(test)]\nmod tests", maxsplit=1)[0]
+    production_units.append(unit)
+production_source = "\n".join(production_units)
+
 for forbidden in (
     "transport-io",
     "std::process",
@@ -103,18 +121,9 @@ for forbidden in (
     "read_client_adapter",
     "ReadOnlyQuery",
 ):
-    if forbidden in source:
+    if forbidden in production_source:
         fail(f"production source contains prohibited surface {forbidden}")
 
-# Dedicated test modules and inline `mod tests` bodies are excluded from the production lifecycle scan.
-production_units = []
-for path in source_paths:
-    if path.name == "tests.rs":
-        continue
-    unit = path.read_text(encoding="utf-8")
-    unit = unit.split("#[cfg(test)]\nmod tests", maxsplit=1)[0]
-    production_units.append(unit)
-production_source = "\n".join(production_units)
 for forbidden in (
     "tokio::spawn",
     "spawn_blocking",
