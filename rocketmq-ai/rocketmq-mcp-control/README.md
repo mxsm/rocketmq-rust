@@ -66,7 +66,11 @@ sentence stops, identifiers, ticket markers, hyphenated terms, and comma-separat
 such as `/ \ | : = @ [ ] { } ( ) ' " % < >` and backtick, plus controls and all non-ASCII, is rejected by
 grammar before audit. Whitespace tokens and their comma/hash/underscore/hyphen or repeated-dot-delimited subtokens
 are checked again after stripping allowed edge punctuation; bearer/compact-JWT, IP, and FQDN values therefore fail
-closed even when embedded in allowed punctuation, including `route,broker.internal,now`. Safe examples
+closed even when embedded in allowed punctuation, including `route,broker.internal,now`. IPv4 detection includes
+common 1–4 component decimal, hexadecimal, octal, and leading-zero numeric forms such as `127.1` and
+`127.000.000.001`. To avoid treating audit references as endpoints, hash-number or uppercase-tag ticket forms
+such as `#42` and `INC_42`, plus decimal version tokens immediately following `release` or `version`, remain
+allowed. Safe examples
 include `CHG-1234 increase queue count` and `ticket INC_42, increase queue count`. A request key is optional and,
 when present, is a bounded safe identifier.
 
@@ -128,9 +132,14 @@ non-IP, non-rooted, valid multi-label hostname whose top-level label contains a 
 object with JOSE/JWT marker fields, regardless of the declared algorithm, or its signature is empty/underscore.
 This deliberately allows UUIDs, `svc-control_01`-style service IDs, and
 normal email-like values such as `first.middle.last@example.test`. The validated DNS domain is never scanned as
-a compact token. Non-email IDs reject every compact three-segment base64url shape. Whitespace, controls, Unicode,
-paths/URLs, percent escapes, credentials, bearer material, IP/socket values, numeric top-level labels, and
-endpoint-shaped identities remain invalid. The same operator and reason rules run during OAuth principal construction, audit-context creation,
+a compact token. Non-email IDs reject every compact three-segment base64url shape. Both non-email IDs and email
+local parts reject dotted, hexadecimal, or long octal numeric addresses embedded through `._-`. Valid RFC4122
+UUIDs are recognized before subtoken scanning. A whole-value decimal numeric operator or email local part remains
+an address, while delimiter-separated plain decimal service-ID components such as `service-2026` and `svc_1024`
+remain valid. Whitespace, controls, Unicode,
+paths/URLs, percent escapes, credentials, bearer material, canonical or legacy numeric IP/socket values, numeric
+top-level labels, and endpoint-shaped identities remain invalid. The same operator and reason rules run during
+OAuth principal construction, audit-context creation,
 and version-2 recovery. Version-1 records remain readable under their original identity-free rules.
 
 Every reliable audit sink read, recovery, append error, or two-second transaction timeout is exposed only as

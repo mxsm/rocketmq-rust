@@ -14,7 +14,10 @@ letters, digits, ordinary space, and `._,#-`; the five punctuation marks support
 and hyphenated terms. All syntax punctuation—including `/ \ | : = @ [ ] { } ( ) ' " % < >` and backtick—is
 rejected by grammar. Each whitespace token and its comma/hash/underscore/hyphen or repeated-dot-delimited
 subtokens are scanned after allowed edge punctuation is stripped, so embedded bearer/compact-JWT, IP, and
-FQDN-shaped values are also rejected. An optional `request_key` is an 8--64 byte safe identifier.
+FQDN-shaped values are also rejected. IPv4 detection includes common 1--4 component decimal, hexadecimal,
+octal, and leading-zero numeric notation. Hash-number or uppercase-tag ticket references and decimal version
+tokens immediately following `release` or `version` remain valid reason text. An optional `request_key` is an
+8--64 byte safe identifier.
 
 ## `rocketmq_upsert_topic`
 
@@ -178,10 +181,15 @@ multi-label domain with an alphabetic top-level label other than `internal`, `lo
 UUID, service, and ordinary email-like IDs such as `first.middle.last@example.test` are supported. A validated
 domain is not treated as a compact token. Email local parts reject compact values whose base64url header is a
 JSON object with JOSE/JWT marker fields, regardless of the declared algorithm, plus empty/underscore compact
-signatures; non-email IDs reject every compact three-segment base64url shape.
+signatures; non-email IDs reject every compact three-segment base64url shape. Non-email IDs and email local
+parts also reject dotted, hexadecimal, or long octal numeric addresses embedded through `._-`. Valid RFC4122
+UUIDs are recognized before subtoken scanning. Whole-value decimal numeric operators or email local parts remain
+addresses; delimiter-separated plain decimal service-ID components such as `service-2026` and `svc_1024` remain
+valid.
 Whitespace, Unicode/control/format characters, paths/URLs, percent escapes, credential/Bearer values, numeric
-top-level labels, IP/socket values, and endpoint-shaped identities are rejected. OAuth construction, audit-context creation,
-and version-2 recovery enforce the same grammar; legacy version-1 records remain identity-free.
+top-level labels, canonical or legacy numeric IP/socket values, and endpoint-shaped identities are rejected.
+OAuth construction, audit-context creation, and version-2 recovery enforce the same grammar; legacy version-1
+records remain identity-free.
 
 All durable sink read/recovery/append errors and transaction timeouts map to `audit_unavailable`, regardless of
 the sink's supplied code or message. Stop mutation attempts, repair durable audit storage, and retry only after

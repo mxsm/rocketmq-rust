@@ -1836,10 +1836,58 @@ mod tests {
         object.insert("dry_run".to_owned(), serde_json::json!(false));
 
         for (index, subject) in [
+            "12345678-1234-4234-8234-123456789012",
+            "service-2026",
+            "svc_1024",
+            "svc_2130706433_ops",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let token =
+                token_with_subject_claims(subject, REQUIRED_WRITE_SCOPE, vec!["topic_upsert"], vec!["cluster-a"]);
+            let response = router
+                .clone()
+                .oneshot(request(
+                    "/mcp",
+                    Body::from(format!(
+                        r#"{{"jsonrpc":"2.0","id":{},"method":"tools/list","params":{{}}}}"#,
+                        370 + index
+                    )),
+                    Some(&token),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "valid case {index}");
+            let body = to_bytes(response.into_body(), MAX_HTTP_BODY_BYTES).await.unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 1);
+            assert!(!value.to_string().contains(subject));
+        }
+
+        for (index, subject) in [
             "eyJhbGciOiJub25lIn0.e30.x@example.test",
             "eyJhbGciOiJSUzk5OSJ9.e30.x@example.test",
             "eyJ0eXAiOiJKV1QifQ.e30.x@example.test",
             "eyJhbGciOm51bGx9.e30.x@example.test",
+            "127.1",
+            "127.0.1",
+            "127.000.000.001",
+            "2130706433",
+            "0x7f000001",
+            "017700000001",
+            "0x7f.0.0.1",
+            "0177.0.0.1",
+            "svc_10.0.0.1_ops",
+            "svc_127.1_ops",
+            "svc_0x7f000001_ops",
+            "svc_017700000001_ops",
+            "10.0.0.1@example.test",
+            "2130706433@example.test",
+            "svc_127.1@example.test",
+            "operator@127.0x1",
+            "operator@127.0.0x1",
+            "operator@0X7F.0X1",
         ]
         .into_iter()
         .enumerate()
@@ -1912,6 +1960,18 @@ mod tests {
             "route..10.0.0.1..now",
             "route..broker.internal..now",
             "note..a.b.c..now",
+            "127.1",
+            "127.0.1",
+            "127.000.000.001",
+            "2130706433",
+            "0x7f000001",
+            "017700000001",
+            "0x7f.0.0.1",
+            "0177.0.0.1",
+            "route,127.1,now",
+            "route_127.000.000.001_now",
+            "route#0x7f000001#now",
+            "route 0177.0.0.1 now",
         ]
         .into_iter()
         .enumerate()

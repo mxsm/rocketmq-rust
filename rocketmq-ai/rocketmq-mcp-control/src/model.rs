@@ -170,13 +170,30 @@ pub(crate) fn valid_operator(value: &str) -> bool {
     match value.split_once('@') {
         Some((local, domain)) if value.matches('@').count() == 1 => valid_email_like_operator(local, domain),
         Some(_) => false,
-        None => !contains_jwt_material(value) && !is_network_endpoint(value),
+        None if is_rfc4122_uuid(value) => true,
+        None => !contains_jwt_material(value) && !contains_operator_network_endpoint(value),
     }
+}
+
+fn is_rfc4122_uuid(value: &str) -> bool {
+    let components = value.split('-').collect::<Vec<_>>();
+    matches!(components.as_slice(), [first, second, third, fourth, fifth]
+        if first.len() == 8
+            && second.len() == 4
+            && third.len() == 4
+            && fourth.len() == 4
+            && fifth.len() == 12
+            && components.iter().all(|component| component.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            && third.as_bytes().first().is_some_and(|byte| matches!(byte, b'1'..=b'8'))
+            && fourth.as_bytes().first().is_some_and(|byte| matches!(byte, b'8' | b'9' | b'a' | b'b' | b'A' | b'B')))
 }
 
 fn valid_email_like_operator(local: &str, domain: &str) -> bool {
     let domain_without_root = domain.strip_suffix('.').unwrap_or(domain);
-    if domain_without_root.parse::<IpAddr>().is_ok() || domain_without_root != domain {
+    if domain_without_root.parse::<IpAddr>().is_ok()
+        || is_ipv4_numeric_notation(domain_without_root)
+        || domain_without_root != domain
+    {
         return false;
     }
     let Some(top_level) = domain.rsplit('.').next() else {
@@ -187,6 +204,8 @@ fn valid_email_like_operator(local: &str, domain: &str) -> bool {
         && local.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
         && !local.contains("..")
         && !unsafe_email_local_token(local)
+        && !is_ipv4_numeric_notation(local)
+        && !contains_embedded_operator_numeric_address(local)
         && domain.contains('.')
         && is_hostname(domain)
         && top_level.bytes().any(|byte| byte.is_ascii_alphabetic())
@@ -239,7 +258,15 @@ fn contains_jwt_material(value: &str) -> bool {
 }
 
 fn contains_reason_jwt_material(value: &str) -> bool {
-    contains_unsafe_reason_candidate(value, |candidate| compact_token_segments(candidate).is_some())
+    contains_unsafe_reason_candidate(
+        value,
+        |candidate| compact_token_segments(candidate).is_some(),
+        |previous, token, candidate| {
+            previous.is_some_and(is_version_marker)
+                && is_decimal_version_token(token)
+                && is_decimal_version_token(candidate)
+        },
+    )
 }
 
 fn compact_token_segments(value: &str) -> Option<(&str, &str, &str)> {
@@ -293,27 +320,103 @@ fn is_credential_key(key: &str) -> bool {
 }
 
 fn contains_reason_network_endpoint(value: &str) -> bool {
-    contains_unsafe_reason_candidate(value, is_network_endpoint)
+    contains_unsafe_reason_candidate(value, is_network_endpoint, |previous, token, candidate| {
+        is_ipv4_numeric_notation(candidate)
+            && (is_ticket_reference(token)
+                || (previous.is_some_and(is_version_marker) && is_decimal_version_token(token)))
+    })
 }
 
-fn contains_unsafe_reason_candidate(value: &str, is_unsafe: impl Fn(&str) -> bool) -> bool {
-    value.split_ascii_whitespace().any(|token| {
-        std::iter::once(token)
+fn is_version_marker(value: &str) -> bool {
+    value.eq_ignore_ascii_case("release") || value.eq_ignore_ascii_case("version")
+}
+
+fn is_decimal_version_token(value: &str) -> bool {
+    let value = value.trim_matches(|character: char| matches!(character, ',' | '.'));
+    let components = value.split('.').collect::<Vec<_>>();
+    (2..=3).contains(&components.len())
+        && components.iter().all(|component| {
+            !component.is_empty()
+                && component.bytes().all(|byte| byte.is_ascii_digit())
+                && (component.len() == 1 || !component.starts_with('0'))
+        })
+}
+
+fn is_ticket_reference(value: &str) -> bool {
+    let value = value.trim_matches(|character: char| matches!(character, ',' | '.'));
+    if let Some(number) = value.strip_prefix('#') {
+        return !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit());
+    }
+    ['-', '_'].iter().any(|separator| {
+        value.split_once(*separator).is_some_and(|(prefix, number)| {
+            (2..=16).contains(&prefix.len())
+                && prefix.bytes().all(|byte| byte.is_ascii_uppercase())
+                && !number.is_empty()
+                && number.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    })
+}
+
+fn contains_operator_network_endpoint(value: &str) -> bool {
+    is_network_endpoint(value)
+        || value.split(['_', '-']).any(|candidate| {
+            (is_network_endpoint(candidate)
+                && (!is_ipv4_numeric_notation(candidate) || is_unambiguous_embedded_numeric_address(candidate)))
+                || contains_embedded_operator_numeric_address(candidate)
+        })
+}
+
+fn contains_embedded_operator_numeric_address(value: &str) -> bool {
+    value.split(['_', '-']).any(|part| {
+        let labels = part.split('.').collect::<Vec<_>>();
+        (0..labels.len()).any(|start| {
+            (1..=4.min(labels.len() - start)).any(|count| {
+                let candidate = labels[start..start + count].join(".");
+                is_unambiguous_embedded_numeric_address(&candidate)
+            })
+        })
+    })
+}
+
+fn is_unambiguous_embedded_numeric_address(value: &str) -> bool {
+    is_ipv4_numeric_notation(value)
+        && (value.contains('.')
+            || value.starts_with("0x")
+            || value.starts_with("0X")
+            || (value.len() > 3 && value.starts_with('0') && value.bytes().all(|byte| matches!(byte, b'0'..=b'7'))))
+}
+
+fn contains_unsafe_reason_candidate(
+    value: &str,
+    is_unsafe: impl Fn(&str) -> bool,
+    is_safe: impl Fn(Option<&str>, &str, &str) -> bool,
+) -> bool {
+    let mut previous = None;
+    for token in value.split_ascii_whitespace() {
+        let contains_unsafe = std::iter::once(token)
             .chain(token.split([',', '#', '_', '-']))
             .any(|part| {
                 std::iter::once(part)
                     .chain(part.split(".."))
                     .map(|candidate| candidate.trim_matches(|character: char| !character.is_ascii_alphanumeric()))
                     .filter(|candidate| !candidate.is_empty())
-                    .any(&is_unsafe)
-            })
-    })
+                    .any(|candidate| is_unsafe(candidate) && !is_safe(previous, token, candidate))
+            });
+        if contains_unsafe {
+            return true;
+        }
+        previous = Some(token.trim_matches(|character: char| !character.is_ascii_alphanumeric()));
+    }
+    false
 }
 
 fn is_network_endpoint(token: &str) -> bool {
     let token = token.trim_matches(|character: char| matches!(character, '.' | '!' | '?'));
     let authority = token.split(['/', '?', '#']).next().unwrap_or(token);
-    if authority.parse::<IpAddr>().is_ok() || authority.parse::<SocketAddr>().is_ok() {
+    if authority.parse::<IpAddr>().is_ok()
+        || authority.parse::<SocketAddr>().is_ok()
+        || is_ipv4_numeric_notation(authority)
+    {
         return true;
     }
     if let Some(bracketed) = authority.strip_prefix('[') {
@@ -339,8 +442,45 @@ fn is_network_endpoint(token: &str) -> bool {
     };
     let valid_port = port.parse::<u16>().is_ok_and(|port| port != 0);
     let host = host.strip_suffix('.').unwrap_or(host);
-    let valid_host = host.parse::<IpAddr>().is_ok() || is_hostname(host);
+    let valid_host = host.parse::<IpAddr>().is_ok() || is_ipv4_numeric_notation(host) || is_hostname(host);
     valid_port && valid_host
+}
+
+fn is_ipv4_numeric_notation(value: &str) -> bool {
+    let components = value.split('.').collect::<Vec<_>>();
+    if !(1..=4).contains(&components.len()) {
+        return false;
+    }
+    let Some(numbers) = components
+        .iter()
+        .map(|component| parse_ipv4_numeric_component(component))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    match numbers.as_slice() {
+        [only] => *only <= u32::MAX as u64,
+        [first, last] => *first <= u8::MAX as u64 && *last <= 0x00ff_ffff,
+        [first, second, last] => *first <= u8::MAX as u64 && *second <= u8::MAX as u64 && *last <= u16::MAX as u64,
+        [_, _, _, _] => numbers.iter().all(|component| *component <= u8::MAX as u64),
+        _ => false,
+    }
+}
+
+fn parse_ipv4_numeric_component(value: &str) -> Option<u64> {
+    if let Some(hexadecimal) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+        return (!hexadecimal.is_empty())
+            .then(|| u64::from_str_radix(hexadecimal, 16).ok())
+            .flatten();
+    }
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    if value.len() > 1 && value.starts_with('0') && value.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
+        u64::from_str_radix(value, 8).ok()
+    } else {
+        value.parse::<u64>().ok()
+    }
 }
 
 fn is_fqdn(value: &str) -> bool {
@@ -586,6 +726,22 @@ mod tests {
             "broker%2einternal%3a10911",
             "broker.internal:10911/admin",
             "10.0.0.1",
+            "127.1",
+            "127.0.1",
+            "127.000.000.001",
+            "2130706433",
+            "0x7f000001",
+            "017700000001",
+            "0x7f.0.0.1",
+            "0177.0.0.1",
+            "svc_10.0.0.1_ops",
+            "svc_127.1_ops",
+            "svc_2130706433_ops",
+            "svc_0x7f000001_ops",
+            "svc_017700000001_ops",
+            "10.0.0.1@example.test",
+            "2130706433@example.test",
+            "svc_127.1@example.test",
             "[fe80::1%eth0]:10911",
             "fe80::1%eth0",
             "endpoint=broker.internal:10911",
@@ -612,6 +768,10 @@ mod tests {
             "route..10.0.0.1..now",
             "route..broker.internal..now",
             "note..a.b.c..now",
+            "route,127.1,now",
+            "route_127.000.000.001_now",
+            "route#0x7f000001#now",
+            "route 0177.0.0.1 now",
             "approved fullwidth token＝secret",
             "approved fullwidth colon：secret",
             "approved bidi \u{202e} text",
@@ -634,6 +794,7 @@ mod tests {
             "CHG-1234 increase queue count",
             "ticket INC_42, increase queue count",
             "issue #42 release 1.2 approved",
+            "version 2.10.3 approved",
         ]
         .into_iter()
         .enumerate()
@@ -647,7 +808,11 @@ mod tests {
             "first.middle.last@example.test",
             "operator@mail.example.co.uk",
             "123e4567-e89b-12d3-a456-426614174000",
+            "12345678-1234-4234-8234-123456789012",
             "svc-control_01",
+            "service-2026",
+            "svc_1024",
+            "svc_2130706433_ops",
             "1-service",
         ] {
             assert!(valid_operator(valid));
@@ -673,6 +838,14 @@ mod tests {
             "eyJ0eXAiOiJKV1QifQ.e30.x@example.test",
             "eyJhbGciOm51bGx9.e30.x@example.test",
             "10.0.0.1",
+            "127.1",
+            "127.0.1",
+            "127.000.000.001",
+            "2130706433",
+            "0x7f000001",
+            "017700000001",
+            "0x7f.0.0.1",
+            "0177.0.0.1",
             "10.0.0.1:10911",
             "broker.internal.",
             "operator%25admin",
@@ -684,6 +857,9 @@ mod tests {
             "operator@",
             "operator@10.0.0.1",
             "operator@10.0.0.1.",
+            "operator@127.0x1",
+            "operator@127.0.0x1",
+            "operator@0X7F.0X1",
             "operator@broker.internal",
             "operator@broker.internal.",
             "operator@example.123",
@@ -701,9 +877,21 @@ mod tests {
 
     #[test]
     fn reason_endpoint_candidates_fail_closed_across_contexts() {
-        for (endpoint_case, endpoint) in ["broker.internal", "broker.internal.", "10.0.0.1"]
-            .into_iter()
-            .enumerate()
+        for (endpoint_case, endpoint) in [
+            "broker.internal",
+            "broker.internal.",
+            "10.0.0.1",
+            "127.1",
+            "127.0.1",
+            "127.000.000.001",
+            "2130706433",
+            "0x7f000001",
+            "017700000001",
+            "0x7f.0.0.1",
+            "0177.0.0.1",
+        ]
+        .into_iter()
+        .enumerate()
         {
             for (context_case, reason) in [
                 endpoint.to_owned(),

@@ -331,10 +331,26 @@ async fn v2_recovery_rejects_schema_drift_unsafe_evidence_and_cross_version_pair
         "first.middle.last@example.test",
         "operator@mail.example.co.uk",
         "123e4567-e89b-12d3-a456-426614174000",
+        "12345678-1234-4234-8234-123456789012",
         "svc-control_01",
+        "service-2026",
+        "svc_1024",
+        "svc_2130706433_ops",
     ] {
         let mut value = valid.clone();
         value["operator"] = serde_json::json!(operator);
+        let record = serde_json::from_value::<AuditRecord>(value).unwrap();
+        assert_eq!(recover_audit_state(&[record]).unwrap().sequence, 1);
+    }
+
+    for reason in [
+        "CHG-1234 increase queue count",
+        "ticket INC_42, increase queue count",
+        "issue #42 release 1.2 approved",
+        "version 2.10.3 approved",
+    ] {
+        let mut value = valid.clone();
+        value["reason"] = serde_json::json!(reason);
         let record = serde_json::from_value::<AuditRecord>(value).unwrap();
         assert_eq!(recover_audit_state(&[record]).unwrap().sequence, 1);
     }
@@ -371,7 +387,25 @@ async fn v2_recovery_rejects_schema_drift_unsafe_evidence_and_cross_version_pair
         "eyJ0eXAiOiJKV1QifQ.e30.x@example.test",
         "eyJhbGciOm51bGx9.e30.x@example.test",
         "10.0.0.1:10911",
+        "127.1",
+        "127.0.1",
+        "127.000.000.001",
+        "2130706433",
+        "0x7f000001",
+        "017700000001",
+        "0x7f.0.0.1",
+        "0177.0.0.1",
+        "svc_10.0.0.1_ops",
+        "svc_127.1_ops",
+        "svc_0x7f000001_ops",
+        "svc_017700000001_ops",
+        "10.0.0.1@example.test",
+        "2130706433@example.test",
+        "svc_127.1@example.test",
         "operator@10.0.0.1.",
+        "operator@127.0x1",
+        "operator@127.0.0x1",
+        "operator@0X7F.0X1",
         "operator@broker.internal",
         "operator@broker.internal.",
         "operator@example.123",
@@ -402,6 +436,14 @@ async fn v2_recovery_rejects_schema_drift_unsafe_evidence_and_cross_version_pair
         "broker.internal:10911",
         "broker.internal.",
         "10.0.0.1",
+        "127.1",
+        "127.0.1",
+        "127.000.000.001",
+        "2130706433",
+        "0x7f000001",
+        "017700000001",
+        "0x7f.0.0.1",
+        "0177.0.0.1",
         "[fe80::1%eth0]:10911",
         "endpoint=broker.internal:10911",
         "endpoint='10.0.0.1:10911'",
@@ -427,6 +469,10 @@ async fn v2_recovery_rejects_schema_drift_unsafe_evidence_and_cross_version_pair
         "route..10.0.0.1..now",
         "route..broker.internal..now",
         "note..a.b.c..now",
+        "route,127.1,now",
+        "route_127.000.000.001_now",
+        "route#0x7f000001#now",
+        "route 0177.0.0.1 now",
         "approved fullwidth colon：secret",
         "approved bidi \u{202e} text",
         "approved format \u{200b} text",

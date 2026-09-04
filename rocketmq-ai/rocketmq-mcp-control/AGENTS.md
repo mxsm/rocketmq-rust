@@ -31,7 +31,12 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
   trimmed 5--256 byte ASCII string containing only alphanumerics, ordinary space, and `._,#-`. These punctuation
   marks support sentences, ticket IDs, and comma-separated prose; all syntax punctuation is rejected by grammar.
   Scan each whitespace token and its comma/hash/underscore/hyphen and repeated-dot-delimited subtokens, stripping
-  allowed edge punctuation before rejecting bare JWT, IP, or FQDN values.
+  allowed edge punctuation before rejecting bare JWT, IP, or FQDN values. Treat 1--4 component decimal,
+  hexadecimal, octal, and leading-zero IPv4 numeric notation as network addresses. Reject whole-value numeric
+  operators and dotted, hexadecimal, or long octal forms embedded in non-email operators or email local parts;
+  recognize valid RFC4122 UUIDs before subtoken scanning and permit plain decimal service-ID subtokens. In reasons, retain only
+  explicit hash-number or uppercase-tag ticket references and decimal version tokens immediately following
+  `release` or `version`.
   Apply both rules at OAuth,
   request context, and v2 recovery boundaries; v1 recovery retains its legacy shape rules.
 - Normalize every reliable audit sink read, recovery, append, or timeout failure to `audit_unavailable`; never
