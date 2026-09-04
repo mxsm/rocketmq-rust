@@ -1776,6 +1776,9 @@ fn rocksdb_index_build_service_batches_dispatch_request_records_into_message_roc
         properties_map: Some(properties),
         ..DispatchRequest::default()
     };
+    service
+        .initialize_dispatch_frontier(request.commit_log_offset)
+        .expect("recovery should initialize the retained CommitLog frontier");
 
     assert_eq!(
         service
@@ -1841,10 +1844,18 @@ fn rocksdb_index_build_service_applies_backpressure_on_full_queue() {
         uniq_key: Some(CheetahString::from_static_str("UniqA")),
         ..DispatchRequest::default()
     };
+    service
+        .initialize_dispatch_frontier(request.commit_log_offset)
+        .expect("recovery should initialize the retained CommitLog frontier");
 
     assert_eq!(service.build_index(&request).expect("first record should enqueue"), 1);
+    let next_request = DispatchRequest {
+        commit_log_offset: request.commit_log_offset + i64::from(request.msg_size),
+        uniq_key: Some(CheetahString::from_static_str("UniqB")),
+        ..request.clone()
+    };
     assert!(
-        service.build_index(&request).is_err(),
+        service.build_index(&next_request).is_err(),
         "full bounded index queue should reject additional records"
     );
 }

@@ -889,7 +889,7 @@ where
         let mut response_header = PullMessageResponseHeader::default();
         let policy = self.context.policy();
 
-        if !PermName::is_readable(policy.broker_permission) {
+        if !PermName::is_readable(policy.broker_permission.get()) {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
             return pull_command(
                 response

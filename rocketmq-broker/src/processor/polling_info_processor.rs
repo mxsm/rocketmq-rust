@@ -31,6 +31,7 @@ use rocketmq_transport::api::RequestProcessor;
 use tracing::error;
 use tracing::warn;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::config::broker_config::BrokerConfig;
 
 use crate::long_polling::pop_deferred::service::PollingCountProvider;
@@ -41,7 +42,8 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 /// It checks the number of polling requests for a specific topic, consumer group, and queue.
 pub struct PollingInfoProcessor {
     command_factory: RemotingCommandFactory,
-    broker_config: Arc<BrokerConfig>,
+    broker_permission: BrokerPermissionState,
+    broker_ip1: CheetahString,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
     polling_count_provider: Weak<dyn PollingCountProvider>,
@@ -57,12 +59,14 @@ impl PollingInfoProcessor {
     /// * `polling_count_provider` - Weak POP polling-count capability.
     pub(crate) fn new(
         broker_config: Arc<BrokerConfig>,
+        broker_permission: BrokerPermissionState,
         topic_config_manager: Arc<TopicConfigManager>,
         subscription_group_lookup: SubscriptionGroupConfigLookup,
         polling_count_provider: Weak<dyn PollingCountProvider>,
     ) -> Self {
         Self::new_with_factory(
             broker_config,
+            broker_permission,
             topic_config_manager,
             subscription_group_lookup,
             polling_count_provider,
@@ -72,6 +76,7 @@ impl PollingInfoProcessor {
 
     pub(crate) fn new_with_factory(
         broker_config: Arc<BrokerConfig>,
+        broker_permission: BrokerPermissionState,
         topic_config_manager: Arc<TopicConfigManager>,
         subscription_group_lookup: SubscriptionGroupConfigLookup,
         polling_count_provider: Weak<dyn PollingCountProvider>,
@@ -79,7 +84,8 @@ impl PollingInfoProcessor {
     ) -> Self {
         Self {
             command_factory,
-            broker_config,
+            broker_permission,
+            broker_ip1: broker_config.broker_ip1.clone(),
             topic_config_manager,
             subscription_group_lookup,
             polling_count_provider,
@@ -91,7 +97,8 @@ impl Clone for PollingInfoProcessor {
     fn clone(&self) -> Self {
         Self {
             command_factory: self.command_factory,
-            broker_config: Arc::clone(&self.broker_config),
+            broker_permission: self.broker_permission.clone(),
+            broker_ip1: self.broker_ip1.clone(),
             topic_config_manager: Arc::clone(&self.topic_config_manager),
             subscription_group_lookup: self.subscription_group_lookup.clone(),
             polling_count_provider: self.polling_count_provider.clone(),
@@ -146,12 +153,11 @@ impl PollingInfoProcessor {
         // Set response opaque to match request
         response.set_opaque_mut(request.opaque());
 
-        let broker_permission = self.broker_config.broker_permission;
+        let broker_permission = self.broker_permission.get();
         if !PermName::is_readable(broker_permission) {
-            let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
-                "the broker[{}] peeking message is forbidden",
-                self.broker_config.broker_ip1
-            ));
+            let response = response
+                .set_code(ResponseCode::NoPermission)
+                .set_remark(format!("the broker[{}] peeking message is forbidden", self.broker_ip1));
             return Ok(Some(response));
         }
 
@@ -287,6 +293,7 @@ mod tests {
 
     use super::PollingCountProvider;
     use super::PollingInfoProcessor;
+    use crate::broker::broker_runtime_config_state::BrokerPermissionState;
     use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
     use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManagerConfig;
     use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -362,7 +369,8 @@ mod tests {
             None,
         );
         PollingInfoProcessor::new(
-            broker_config,
+            Arc::clone(&broker_config),
+            BrokerPermissionState::new(broker_config.broker_permission),
             topic_config_manager,
             subscription_group_manager.config_lookup(),
             provider,
@@ -392,6 +400,21 @@ mod tests {
         assert_eq!(processor.get_polling_num(&topic, &group, 0), 7);
         drop(provider);
         assert_eq!(processor.get_polling_num(&topic, &group, 0), 0);
+    }
+
+    #[test]
+    fn polling_info_observes_live_permission_changes_and_restore() {
+        let provider: Arc<dyn PollingCountProvider> = Arc::new(FixedPollingCount(0));
+        let processor = test_processor(Arc::downgrade(&provider));
+
+        assert_eq!(
+            processor.broker_permission.get(),
+            BrokerConfig::default().broker_permission
+        );
+        processor.broker_permission.update(2);
+        assert_eq!(processor.broker_permission.get(), 2);
+        processor.broker_permission.update(6);
+        assert_eq!(processor.broker_permission.get(), 6);
     }
 
     #[tokio::test]

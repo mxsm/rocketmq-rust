@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 #[cfg(feature = "rocksdb_store")]
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -46,6 +48,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::broker_path_config_helper::get_subscription_group_path;
 #[cfg(feature = "rocksdb_store")]
 use crate::config::rocksdb_manager::RocksDbBrokerConfigManager;
@@ -86,7 +89,8 @@ pub(crate) enum SubscriptionGroupConfigCasError {
 #[derive(Clone)]
 pub(crate) struct SubscriptionGroupManagerConfig {
     store_path_root_dir: CheetahString,
-    auto_create_subscription_group: bool,
+    auto_create_subscription_group: Arc<AtomicBool>,
+    runtime_config: Option<BrokerPermissionState>,
     #[cfg(feature = "rocksdb_store")]
     real_time_persist_rocksdb_config: bool,
 }
@@ -98,10 +102,16 @@ impl SubscriptionGroupManagerConfig {
 
         Self {
             store_path_root_dir: broker_config.store_path_root_dir.clone(),
-            auto_create_subscription_group: broker_config.auto_create_subscription_group,
+            auto_create_subscription_group: Arc::new(AtomicBool::new(broker_config.auto_create_subscription_group)),
+            runtime_config: None,
             #[cfg(feature = "rocksdb_store")]
             real_time_persist_rocksdb_config: message_store_config.real_time_persist_rocksdb_config,
         }
+    }
+
+    pub(crate) fn with_runtime_config(mut self, runtime_config: BrokerPermissionState) -> Self {
+        self.runtime_config = Some(runtime_config);
+        self
     }
 }
 
@@ -776,6 +786,21 @@ impl ConfigManager for SubscriptionGroupManager {
 }
 
 impl SubscriptionGroupManager {
+    #[cfg(test)]
+    pub(crate) fn update_auto_create_subscription_group(&self, enabled: bool) {
+        self.config
+            .auto_create_subscription_group
+            .store(enabled, Ordering::Release);
+    }
+
+    pub(crate) fn auto_create_subscription_group_enabled(&self) -> bool {
+        self.config
+            .runtime_config
+            .as_ref()
+            .and_then(BrokerPermissionState::auto_create_subscription_group)
+            .unwrap_or_else(|| self.config.auto_create_subscription_group.load(Ordering::Acquire))
+    }
+
     pub fn contains_subscription_group(&self, group: &CheetahString) -> bool {
         if group.is_empty() {
             return false;
@@ -786,7 +811,7 @@ impl SubscriptionGroupManager {
     pub fn find_subscription_group_config(&self, group: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
         let mut subscription_group_config = self.find_subscription_group_config_inner(group);
         if subscription_group_config.is_none()
-            && (self.config.auto_create_subscription_group || is_sys_consumer_group(group))
+            && (self.auto_create_subscription_group_enabled() || is_sys_consumer_group(group))
         {
             let start_time = Instant::now();
             if validate_subscription_group_name(group.as_str()).is_err() {
@@ -1652,6 +1677,39 @@ impl SubscriptionGroupWrapperInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_auto_create_policy_is_shared_by_live_manager_clones() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+        let root = CheetahString::from_string(temp_dir.path().to_string_lossy().to_string());
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone(),
+            auto_create_subscription_group: false,
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root,
+            ..MessageStoreConfig::default()
+        };
+        let manager = SubscriptionGroupManager::new(
+            SubscriptionGroupManagerConfig::from_configs(&broker_config, &message_store_config),
+            StateMachineVersionView::default(),
+            None,
+        );
+        let live_clone = manager.clone();
+        let disabled_group = CheetahString::from_static_str("RUNTIME_DISABLED_GROUP");
+        assert!(manager.find_subscription_group_config(&disabled_group).is_none());
+
+        manager.update_auto_create_subscription_group(true);
+        assert!(live_clone.auto_create_subscription_group_enabled());
+        let enabled_group = CheetahString::from_static_str("RUNTIME_ENABLED_GROUP");
+        assert!(live_clone.find_subscription_group_config(&enabled_group).is_some());
+
+        live_clone.update_auto_create_subscription_group(false);
+        assert!(!manager.auto_create_subscription_group_enabled());
+        let disabled_again = CheetahString::from_static_str("RUNTIME_DISABLED_AGAIN_GROUP");
+        assert!(manager.find_subscription_group_config(&disabled_again).is_none());
+    }
 
     #[test]
     fn invalid_single_batch_and_cas_updates_do_not_mutate_state() {

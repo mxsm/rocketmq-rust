@@ -40,6 +40,7 @@ use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
@@ -124,7 +125,7 @@ pub(crate) struct BrokerPreOnlinePolicy {
     sync_master_flush_offset_when_startup: bool,
     enable_split_registration: bool,
     split_registration_size: i32,
-    broker_permission: u32,
+    broker_permission: BrokerPermissionState,
     force_register: bool,
     register_broker_timeout_millis: u64,
     is_in_broker_container: bool,
@@ -136,6 +137,7 @@ impl BrokerPreOnlinePolicy {
         message_store_config: &MessageStoreConfig,
         broker_addr: CheetahString,
         ha_server_addr: CheetahString,
+        broker_permission: BrokerPermissionState,
     ) -> Self {
         Self {
             broker_cluster_name: broker_config.broker_identity.broker_cluster_name.clone(),
@@ -146,11 +148,25 @@ impl BrokerPreOnlinePolicy {
             sync_master_flush_offset_when_startup: message_store_config.sync_master_flush_offset_when_startup,
             enable_split_registration: broker_config.enable_split_registration,
             split_registration_size: broker_config.split_registration_size,
-            broker_permission: broker_config.broker_permission,
+            broker_permission,
             force_register: broker_config.force_register,
             register_broker_timeout_millis: broker_config.register_broker_timeout_mills as u64,
             is_in_broker_container: broker_config.is_in_broker_container,
         }
+    }
+
+    fn topic_config_for_registration(&self, topic_config: &TopicConfig) -> TopicConfig {
+        let mut topic_config = topic_config.clone();
+        let broker_permission = self.broker_permission.get();
+        if !PermName::is_writeable(broker_permission) || !PermName::is_readable(broker_permission) {
+            topic_config.perm &= broker_permission;
+        }
+        topic_config
+    }
+
+    #[cfg(test)]
+    pub(crate) fn topic_config_for_registration_for_test(&self, topic_config: &TopicConfig) -> TopicConfig {
+        self.topic_config_for_registration(topic_config)
     }
 }
 
@@ -455,13 +471,7 @@ impl BrokerRegistrationCapability {
     }
 
     fn topic_config_for_registration(&self, topic_config: &TopicConfig) -> TopicConfig {
-        let mut topic_config = topic_config.clone();
-        if !PermName::is_writeable(self.policy.broker_permission)
-            || !PermName::is_readable(self.policy.broker_permission)
-        {
-            topic_config.perm &= self.policy.broker_permission;
-        }
-        topic_config
+        self.policy.topic_config_for_registration(topic_config)
     }
 
     async fn register_wrapper(

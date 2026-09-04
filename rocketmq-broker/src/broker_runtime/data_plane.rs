@@ -20,6 +20,7 @@ use crate::broker_path_config_helper::get_transaction_metrics_path;
 use crate::transaction::transaction_metrics::TransactionMetrics;
 #[cfg(feature = "otel-metrics")]
 use crate::transaction::transactional_message_service::TransactionalMessageService;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStorePort;
 
@@ -63,8 +64,29 @@ impl BrokerRuntime {
             Some(message_store) => BrokerStorePort::load(message_store).await,
             None => false,
         };
+        let index_runtime_ready = if loaded {
+            let (max_phy_offset, index_safe_offset) =
+                self.composition.state.message_store().map_or((0, None), |store| {
+                    (store.get_max_phy_offset(), store.message_index_safe_offset())
+                });
+            match self
+                .composition
+                .state
+                .config_state
+                .initialize_index_completeness(max_phy_offset, index_safe_offset)
+                .await
+            {
+                Ok(()) => true,
+                Err(error) => {
+                    error!(%error, "failed to initialize persistent message-index gap state");
+                    false
+                }
+            }
+        } else {
+            false
+        };
         self.bind_message_store_provider();
-        loaded
+        loaded && index_runtime_ready
     }
 
     pub(super) async fn start_message_store(&mut self) -> Result<(), StoreError> {
@@ -112,6 +134,10 @@ impl BrokerRuntime {
         };
         info!(backend = ?opened.backend(), "Use configured message store");
         let (message_store, timer_message_store) = opened.into_parts();
+        if !message_store.install_message_index_runtime(Arc::new(self.composition.state.config_state.clone())) {
+            error!("configured message store has no message-index dispatcher");
+            return false;
+        }
         self.composition.state.timer_message_store = timer_message_store;
         let message_store = Arc::new(message_store);
         self.composition.state.broker_stats = Some(Arc::new(BrokerStats::from_manager(

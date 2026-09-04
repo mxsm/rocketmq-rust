@@ -34,9 +34,19 @@ impl QueryPolicy {
     }
 
     pub fn index_safety(self, safe_offset: i64, confirm_offset: i64) -> IndexQuerySafety {
+        self.index_safety_with_runtime(self.message_index_enabled, false, safe_offset, confirm_offset)
+    }
+
+    pub fn index_safety_with_runtime(
+        self,
+        enabled: bool,
+        incomplete: bool,
+        safe_offset: i64,
+        confirm_offset: i64,
+    ) -> IndexQuerySafety {
         let confirm_offset = confirm_offset.max(0);
         IndexQuerySafety {
-            safe: !self.message_index_enabled || safe_offset >= confirm_offset,
+            safe: enabled && !incomplete && safe_offset >= confirm_offset,
             safe_offset,
             confirm_offset,
         }
@@ -52,11 +62,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disabled_index_is_always_safe() {
+    fn disabled_index_is_never_safe() {
         let policy = QueryPolicy::new(LocalQueryConfig {
             message_index_enabled: false,
         });
-        assert!(policy.index_safety(0, 100).safe);
+        assert!(!policy.index_safety(0, 100).safe);
     }
 
     #[test]
@@ -68,5 +78,16 @@ mod tests {
         assert!(policy.should_record_degradation(true, lagging));
         assert!(!policy.should_record_degradation(false, lagging));
         assert!(!policy.should_record_degradation(true, policy.index_safety(100, 100)));
+    }
+
+    #[test]
+    fn enabled_index_with_a_disabled_period_gap_is_never_reported_safe() {
+        let policy = QueryPolicy::new(LocalQueryConfig {
+            message_index_enabled: false,
+        });
+        let safety = policy.index_safety_with_runtime(true, true, 100, 100);
+
+        assert!(!safety.safe);
+        assert!(policy.should_record_degradation(true, safety));
     }
 }

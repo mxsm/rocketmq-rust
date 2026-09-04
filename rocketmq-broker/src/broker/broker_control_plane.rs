@@ -15,6 +15,11 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
+#[cfg(test)]
+use std::future::Future;
+#[cfg(test)]
+use std::pin::Pin;
+
 use cheetah_string::CheetahString;
 
 use parking_lot::lock_api::MappedRwLockWriteGuard;
@@ -26,6 +31,8 @@ use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerM
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::BrokerReplicationStore;
+#[cfg(test)]
+use rocketmq_store::StoreError;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
@@ -44,6 +51,10 @@ use crate::slave::slave_synchronize::SlaveMasterAddress;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 mod bootstrap;
+
+#[cfg(test)]
+pub(crate) type ControllerStoreRoleAction =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<bool, StoreError>> + Send>> + Send + Sync>;
 
 /// Shared controller state with a separate asynchronous operation gate.
 ///
@@ -134,6 +145,8 @@ pub(crate) struct BrokerControllerRuntime<MS: BrokerReplicationStore> {
     escape_policy: EscapeBridgePolicyState,
     metadata_io: Option<MetadataIoActor>,
     blocking: Option<BlockingExecutor>,
+    #[cfg(test)]
+    store_role_action: Arc<Mutex<Option<ControllerStoreRoleAction>>>,
 }
 
 impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
@@ -180,7 +193,19 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             escape_policy,
             metadata_io,
             blocking,
+            #[cfg(test)]
+            store_role_action: Arc::new(Mutex::new(None)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_store_role_action_for_test(&self, action: ControllerStoreRoleAction) {
+        *self.store_role_action.lock() = Some(action);
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn await_runtime_config_permit_for_test(&self) {
+        drop(self.config.lock_mutation().await);
     }
 
     pub(crate) fn controller_initialized(&self) -> bool {
@@ -217,11 +242,6 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         sync_state_set: std::collections::HashSet<i64>,
     ) -> rocketmq_error::RocketMQResult<bool> {
         let _operation_guard = self.controller.lock_operation().await;
-        // Revoke the old authority before publishing any new role metadata.
-        // Store remains fail-closed until a quorum-committed heartbeat installs
-        // a lease for the newly published authority.
-        let _ = self.store.fence_controller_writes();
-        self.escape_policy.fence_controller_role();
         let outcome = self
             .controller
             .with_replicas_mut(|replicas_manager| {
@@ -250,8 +270,44 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             return Ok(true);
         };
 
+        // Revoke old authority before waiting for config serialization. Store
+        // remains fail-closed until the role transition finishes and a
+        // quorum-committed heartbeat installs a lease for the new authority.
+        let _ = self.store.fence_controller_writes();
+        self.escape_policy.fence_controller_role();
         let previous_store_role = self.config.store_snapshot().broker_role;
         let target_store_role = outcome.target_broker_role().unwrap_or(previous_store_role);
+        // Demotion publishes the non-master policy before waiting on Store.
+        // Promotion keeps the old non-master policy until Store accepts the
+        // role, while the write fence prevents premature master writes.
+        let generation = if role == BrokerReplicaRole::Slave {
+            Some(
+                self.commit_controller_role_generation(outcome.local_broker_id, target_store_role)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        #[cfg(test)]
+        let store_role_action = self.store_role_action.lock().clone();
+        #[cfg(test)]
+        let role_applied = match store_role_action {
+            Some(action) => action().await,
+            None => {
+                self.store
+                    .apply_controller_role(
+                        previous_store_role,
+                        role,
+                        outcome.local_broker_id,
+                        outcome.slave_master_address(),
+                        outcome.master_epoch,
+                    )
+                    .await
+            }
+        }
+        .map_err(|error| rocketmq_error::RocketMQError::internal("apply controller role to message store", error))?;
+        #[cfg(not(test))]
         let role_applied = self
             .store
             .apply_controller_role(
@@ -269,10 +325,14 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             return Ok(false);
         }
 
-        let generation = self
-            .config
-            .apply_role(outcome.local_broker_id, target_store_role)
-            .map_err(crate::runtime_to_rocketmq_error)?;
+        let generation = match generation {
+            Some(generation) => generation,
+            None => {
+                self.commit_controller_role_generation(outcome.local_broker_id, target_store_role)
+                    .await?
+            }
+        };
+
         self.role_state.set_local_broker_id(outcome.local_broker_id);
         self.send_policy.update_broker_config(generation.broker());
         self.send_policy.update_message_store_config(generation.store());
@@ -312,6 +372,22 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             tracing::warn!("failed to register broker after controller role transition");
         }
         Ok(true)
+    }
+
+    async fn commit_controller_role_generation(
+        &self,
+        local_broker_id: u64,
+        target_store_role: rocketmq_model::common::broker::broker_role::BrokerRole,
+    ) -> rocketmq_error::RocketMQResult<Arc<crate::broker::broker_runtime_config_state::BrokerRuntimeConfigGeneration>>
+    {
+        let config_mutation = self.config.lock_mutation().await;
+        let role_update = self
+            .config
+            .prepare_role_update(&config_mutation, local_broker_id, target_store_role)
+            .map_err(crate::runtime_to_rocketmq_error)?;
+        self.config
+            .commit_under_mutation(&config_mutation, role_update)
+            .map_err(crate::runtime_to_rocketmq_error)
     }
 
     pub(crate) async fn update_min_broker(&self, min_broker_id: u64, min_broker_addr: Option<CheetahString>) {

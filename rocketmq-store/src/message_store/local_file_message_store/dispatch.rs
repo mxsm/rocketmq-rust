@@ -441,6 +441,13 @@ impl CommitLogDispatcher for CommitLogDispatchHandle {
         }
     }
 
+    fn dispatch_commit_log_blank(&self, blank_start_offset: i64, next_file_offset: i64) {
+        let dispatchers = self.published.load();
+        for dispatcher in dispatchers.iter() {
+            dispatcher.dispatch_commit_log_blank(blank_start_offset, next_file_offset);
+        }
+    }
+
     fn dispatch_async<'a>(
         &'a self,
         dispatch_request: &'a mut DispatchRequest,
@@ -461,6 +468,21 @@ impl CommitLogDispatcher for CommitLogDispatchHandle {
         Box::pin(async move {
             for dispatcher in dispatchers.iter() {
                 dispatcher.dispatch_batch_async(dispatch_requests).await;
+            }
+        })
+    }
+
+    fn dispatch_commit_log_blank_async<'a>(
+        &'a self,
+        blank_start_offset: i64,
+        next_file_offset: i64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        let dispatchers = self.published.load_full();
+        Box::pin(async move {
+            for dispatcher in dispatchers.iter() {
+                dispatcher
+                    .dispatch_commit_log_blank_async(blank_start_offset, next_file_offset)
+                    .await;
             }
         })
     }
@@ -479,6 +501,12 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
         }
     }
 
+    fn dispatch_commit_log_blank(&self, blank_start_offset: i64, next_file_offset: i64) {
+        for dispatcher in &self.dispatcher_vec {
+            dispatcher.dispatch_commit_log_blank(blank_start_offset, next_file_offset);
+        }
+    }
+
     fn dispatch_async<'a>(
         &'a self,
         dispatch_request: &'a mut DispatchRequest,
@@ -497,6 +525,20 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
         Box::pin(async move {
             for dispatcher in &self.dispatcher_vec {
                 dispatcher.dispatch_batch_async(dispatch_requests).await;
+            }
+        })
+    }
+
+    fn dispatch_commit_log_blank_async<'a>(
+        &'a self,
+        blank_start_offset: i64,
+        next_file_offset: i64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            for dispatcher in &self.dispatcher_vec {
+                dispatcher
+                    .dispatch_commit_log_blank_async(blank_start_offset, next_file_offset)
+                    .await;
             }
         })
     }
@@ -522,9 +564,17 @@ pub(super) struct ReputMessageService {
     pub(super) pending_messages: Arc<AtomicI64>,
     pub(super) inflight_dispatch_batches: Arc<AtomicU64>,
     pub(super) reput_from_offset: Option<Arc<AtomicI64>>,
-    pub(super) dispatch_tx: Option<tokio::sync::mpsc::Sender<Vec<DispatchRequest>>>,
+    pub(super) dispatch_tx: Option<tokio::sync::mpsc::Sender<ReputDispatchEvent>>,
     pub(super) inner: Option<ReputMessageServiceInner>,
     pub(super) task_group: Option<rocketmq_runtime::TaskGroup>,
+}
+
+pub(super) enum ReputDispatchEvent {
+    Batch(Vec<DispatchRequest>),
+    VerifiedBlank {
+        blank_start_offset: i64,
+        next_file_offset: i64,
+    },
 }
 
 impl ReputMessageService {
@@ -568,7 +618,7 @@ impl ReputMessageService {
         let task_group = crate::runtime::task_group(runtime_scope, "rocketmq-store.local-file.reput");
 
         // Create channel for decoupling read and dispatch
-        let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel::<Vec<DispatchRequest>>(128);
+        let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel::<ReputDispatchEvent>(128);
         self.dispatch_tx = Some(dispatch_tx.clone());
         self.shutdown_token = CancellationToken::new();
         let reput_from_offset = self
@@ -620,15 +670,21 @@ impl ReputMessageService {
                             }
 
                             // Read and parse messages, send to dispatch channel
-                            inflight_dispatch_batches.fetch_add(1, Ordering::AcqRel);
-                            match inner.read_and_parse_batch().await {
-                                Some(batch) => {
-                                    // Successfully read a batch, try to send
-                                    if dispatch_tx.send(batch).await.is_err() {
+                            let events = inner.read_and_parse_events().await;
+                            if !events.is_empty() {
+                                let mut channel_closed = false;
+                                for event in events {
+                                    inflight_dispatch_batches.fetch_add(1, Ordering::AcqRel);
+                                    if dispatch_tx.send(event).await.is_err() {
                                         inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
-                                        error!("Failed to send dispatch batch to channel, channel closed");
+                                        error!("Failed to send Reput dispatch event to channel, channel closed");
+                                        channel_closed = true;
                                         break;
                                     }
+                                }
+                                if channel_closed {
+                                    break;
+                                }
 
                                     // Decrement pending counter after successful send
                                     // Use saturating_sub to prevent underflow
@@ -638,9 +694,7 @@ impl ReputMessageService {
                                         })
                                         .ok();
                                     dispatch_progress_notify.notify_waiters();
-                                }
-                                None => {
-                                    inflight_dispatch_batches.fetch_sub(1, Ordering::AcqRel);
+                            } else {
                                     // No more messages available at this offset
                                     dispatch_progress_notify.notify_waiters();
                                     if inner.has_unconfirmed_commit_log() {
@@ -651,7 +705,6 @@ impl ReputMessageService {
                                         continue;
                                     }
                                     break;
-                                }
                             }
 
                             // Check if there are still pending messages
@@ -682,27 +735,25 @@ impl ReputMessageService {
         if let Err(error) = task_group.spawn_service("reput-dispatcher", async move {
             loop {
                 tokio::select! {
-                    Some(mut batch) = dispatch_rx.recv() => {
-                        dispatch_reput_batch(
+                    Some(event) = dispatch_rx.recv() => {
+                        dispatch_reput_event(
                             &dispatch_pipeline,
                             &runtime_context,
                             notify_message_arrive_in_batch,
-                            &mut batch,
-                        )
-                        .await;
+                            event,
+                        ).await;
                         dispatcher_inflight_batches.fetch_sub(1, Ordering::AcqRel);
                         dispatcher_progress_notify.notify_waiters();
                     }
                     _ = shutdown_dispatcher.cancelled() => {
                         // Process remaining messages in channel before shutdown
-                        while let Ok(mut batch) = dispatch_rx.try_recv() {
-                            dispatch_reput_batch(
+                        while let Ok(event) = dispatch_rx.try_recv() {
+                            dispatch_reput_event(
                                 &dispatch_pipeline,
                                 &runtime_context,
                                 notify_message_arrive_in_batch,
-                                &mut batch,
-                            )
-                            .await;
+                                event,
+                            ).await;
                             dispatcher_inflight_batches.fetch_sub(1, Ordering::AcqRel);
                             dispatcher_progress_notify.notify_waiters();
                         }
@@ -925,6 +976,33 @@ async fn dispatch_reput_batch(
     }
 }
 
+async fn dispatch_reput_event(
+    dispatch_pipeline: &super::reput_pipeline::ReputDispatchPipeline,
+    runtime_context: &ReputRuntimeContext,
+    notify_message_arrive_in_batch: bool,
+    event: ReputDispatchEvent,
+) {
+    match event {
+        ReputDispatchEvent::Batch(mut batch) => {
+            dispatch_reput_batch(
+                dispatch_pipeline,
+                runtime_context,
+                notify_message_arrive_in_batch,
+                &mut batch,
+            )
+            .await;
+        }
+        ReputDispatchEvent::VerifiedBlank {
+            blank_start_offset,
+            next_file_offset,
+        } => {
+            dispatch_pipeline
+                .dispatch_commit_log_blank(blank_start_offset, next_file_offset)
+                .await;
+        }
+    }
+}
+
 impl ReputMessageServiceInner {
     pub async fn do_reput(&mut self) {
         let reput_from_offset = self.reput_from_offset.load(Ordering::Relaxed);
@@ -1020,11 +1098,22 @@ impl ReputMessageServiceInner {
                             read_size += size;
                         }
                         std::cmp::Ordering::Equal => {
-                            self.reput_from_offset.store(
-                                self.commit_log
-                                    .roll_next_file(self.reput_from_offset.load(Ordering::Relaxed)),
-                                Ordering::SeqCst,
-                            );
+                            if !dispatch_batch.is_empty() {
+                                dispatch_reput_batch(
+                                    &self.dispatch_pipeline,
+                                    &self.runtime_context,
+                                    self.notify_message_arrive_in_batch,
+                                    &mut dispatch_batch,
+                                )
+                                .await;
+                                dispatch_batch.clear();
+                            }
+                            let blank_start_offset = self.reput_from_offset.load(Ordering::Relaxed);
+                            let next_file_offset = self.commit_log.roll_next_file(blank_start_offset);
+                            self.dispatch_pipeline
+                                .dispatch_commit_log_blank(blank_start_offset, next_file_offset)
+                                .await;
+                            self.reput_from_offset.store(next_file_offset, Ordering::SeqCst);
                             read_size = result.size();
                         }
                         std::cmp::Ordering::Less => {}
@@ -1099,8 +1188,8 @@ impl ReputMessageServiceInner {
         self.reput_from_offset.store(reput_from_offset, Ordering::SeqCst);
     }
 
-    /// Read and parse a batch of messages from CommitLog (for channel-based dispatch)
-    pub async fn read_and_parse_batch(&mut self) -> Option<Vec<DispatchRequest>> {
+    /// Reads one ordered group of messages and verified CommitLog boundaries.
+    async fn read_and_parse_events(&mut self) -> Vec<ReputDispatchEvent> {
         let reput_from_offset = self.reput_from_offset.load(Ordering::Relaxed);
         if reput_from_offset < self.commit_log.get_min_offset() {
             warn!(
@@ -1115,15 +1204,18 @@ impl ReputMessageServiceInner {
 
         if !self.is_commit_log_available() {
             self.record_dispatch_behind_bytes();
-            return None;
+            return Vec::new();
         }
 
         let mut dispatch_batch: Vec<DispatchRequest> = Vec::with_capacity(64);
+        let mut events = Vec::with_capacity(2);
 
-        let mut result = self.commit_log.get_data_bounded(
+        let Some(mut result) = self.commit_log.get_data_bounded(
             self.reput_from_offset.load(Ordering::Acquire),
             reput_read_max_bytes(self.runtime_context.message_store_config.as_ref()),
-        )?;
+        ) else {
+            return Vec::new();
+        };
         self.reput_from_offset
             .store(result.start_offset() as i64, Ordering::Release);
         let mut read_size = 0i32;
@@ -1185,11 +1277,16 @@ impl ReputMessageServiceInner {
                         read_size += size;
                     }
                     std::cmp::Ordering::Equal => {
-                        self.reput_from_offset.store(
-                            self.commit_log
-                                .roll_next_file(self.reput_from_offset.load(Ordering::Relaxed)),
-                            Ordering::SeqCst,
-                        );
+                        if !dispatch_batch.is_empty() {
+                            events.push(ReputDispatchEvent::Batch(std::mem::take(&mut dispatch_batch)));
+                        }
+                        let blank_start_offset = self.reput_from_offset.load(Ordering::Relaxed);
+                        let next_file_offset = self.commit_log.roll_next_file(blank_start_offset);
+                        events.push(ReputDispatchEvent::VerifiedBlank {
+                            blank_start_offset,
+                            next_file_offset,
+                        });
+                        self.reput_from_offset.store(next_file_offset, Ordering::SeqCst);
                         read_size = result.size();
                     }
                     std::cmp::Ordering::Less => {}
@@ -1215,11 +1312,10 @@ impl ReputMessageServiceInner {
 
         self.record_dispatch_behind_bytes();
 
-        if dispatch_batch.is_empty() {
-            None
-        } else {
-            Some(dispatch_batch)
+        if !dispatch_batch.is_empty() {
+            events.push(ReputDispatchEvent::Batch(dispatch_batch));
         }
+        events
     }
 }
 

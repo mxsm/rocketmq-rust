@@ -21,6 +21,9 @@ use tracing::warn;
 
 use crate::base::commit_log_dispatcher::CommitLogDispatchExecution;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeHandle;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeSnapshot;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeSource;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::config::message_store_config::MessageStoreConfig;
 
@@ -67,14 +70,24 @@ impl RocksDbIndexDispatch for DispatchRequest {
 
 pub struct CommitLogDispatcherBuildRocksDbIndex {
     index_service: Weak<RocksDbIndexBuildService>,
-    message_store_config: Arc<MessageStoreConfig>,
+    index_runtime: MessageIndexRuntimeHandle,
 }
 
 impl CommitLogDispatcherBuildRocksDbIndex {
     pub fn new(index_service: Arc<RocksDbIndexBuildService>, message_store_config: Arc<MessageStoreConfig>) -> Self {
+        Self::new_with_runtime(
+            index_service,
+            MessageIndexRuntimeHandle::new(message_store_config.message_index_enable),
+        )
+    }
+
+    pub(crate) fn new_with_runtime(
+        index_service: Arc<RocksDbIndexBuildService>,
+        index_runtime: MessageIndexRuntimeHandle,
+    ) -> Self {
         Self {
             index_service: Arc::downgrade(&index_service),
-            message_store_config,
+            index_runtime,
         }
     }
 
@@ -93,42 +106,88 @@ impl CommitLogDispatcher for CommitLogDispatcherBuildRocksDbIndex {
     }
 
     fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
-        if !self.message_store_config.message_index_enable {
-            return;
-        }
-        let Some(index_service) = self.index_service.upgrade() else {
-            warn!("skip RocksDB index dispatch because index service has been dropped");
-            return;
-        };
-        if let Err(error) = index_service.build_index(dispatch_request) {
-            warn!(error = %error, "failed to enqueue RocksDB index record");
-        }
+        self.index_runtime.with_dispatch_admission(&mut |enabled| {
+            if !enabled {
+                return;
+            }
+            let Some(index_service) = self.index_service.upgrade() else {
+                warn!("skip RocksDB index dispatch because index service has been dropped");
+                return;
+            };
+            if let Err(error) = index_service.build_index(dispatch_request) {
+                warn!(error = %error, "failed to enqueue RocksDB index record");
+                return;
+            }
+            if let Err(error) = index_service.flush_pending() {
+                warn!(error = %error, "failed to flush RocksDB index record");
+            }
+        });
     }
 
     fn dispatch_batch(&self, dispatch_requests: &mut [DispatchRequest]) {
-        for request in dispatch_requests {
-            self.dispatch(request);
-        }
+        self.index_runtime.with_dispatch_admission(&mut |enabled| {
+            if !enabled {
+                return;
+            }
+            let Some(index_service) = self.index_service.upgrade() else {
+                warn!("skip RocksDB index batch because index service has been dropped");
+                return;
+            };
+            for request in dispatch_requests.iter() {
+                if let Err(error) = index_service.build_index(request) {
+                    warn!(error = %error, "failed to enqueue RocksDB index record");
+                }
+            }
+            if let Err(error) = index_service.flush_pending() {
+                warn!(error = %error, "failed to flush RocksDB index batch");
+            }
+        });
+    }
+
+    fn dispatch_commit_log_blank(&self, blank_start_offset: i64, next_file_offset: i64) {
         let Some(index_service) = self.index_service.upgrade() else {
-            warn!("skip RocksDB index batch flush because index service has been dropped");
+            warn!("skip RocksDB index BLANK dispatch because index service has been dropped");
             return;
         };
-        if let Err(error) = index_service.flush_pending() {
-            warn!(error = %error, "failed to flush RocksDB index batch");
+        if let Err(error) = index_service.advance_safe_frontier_over_blank(blank_start_offset, next_file_offset) {
+            warn!(
+                %error,
+                blank_start_offset,
+                next_file_offset,
+                "failed to advance RocksDB index across a verified CommitLog BLANK"
+            );
         }
     }
 
-    fn dispatch_progress_offset(&self, _commit_log_min_offset: i64) -> Option<i64> {
-        if !self.message_store_config.message_index_enable {
+    fn dispatch_progress_offset(&self, commit_log_min_offset: i64) -> Option<i64> {
+        if !self.index_runtime.snapshot().enabled {
             return None;
         }
         let Some(index_service) = self.index_service.upgrade() else {
             warn!("skip RocksDB index progress because index service has been dropped");
             return None;
         };
-        index_service.get_dispatch_from_phy_offset().unwrap_or_else(|error| {
-            warn!(error = %error, "failed to read RocksDB index dispatch progress");
-            None
-        })
+        index_service
+            .initialize_dispatch_frontier(commit_log_min_offset)
+            .map(Some)
+            .unwrap_or_else(|error| {
+                warn!(error = %error, "failed to read RocksDB index dispatch progress");
+                None
+            })
+    }
+
+    fn install_message_index_runtime(&self, source: Arc<dyn MessageIndexRuntimeSource>) -> bool {
+        self.index_runtime.install(source);
+        true
+    }
+
+    fn message_index_runtime_snapshot(&self) -> Option<MessageIndexRuntimeSnapshot> {
+        Some(self.index_runtime.snapshot())
+    }
+
+    fn message_index_safe_offset(&self) -> Option<i64> {
+        self.index_service
+            .upgrade()
+            .and_then(|service| service.get_safe_dispatch_offset().ok())
     }
 }

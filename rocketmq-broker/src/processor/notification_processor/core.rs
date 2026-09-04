@@ -56,7 +56,7 @@ where
             .create_java_default_error_response_command();
         response.set_opaque_mut(opaque);
 
-        if !PermName::is_readable(self.context.policy.broker_permission) {
+        if !PermName::is_readable(self.context.policy.broker_permission.get()) {
             response.set_code_ref(ResponseCode::NoPermission);
             response.set_remark_mut(format!(
                 "the broker[{}] peeking message is forbidden",

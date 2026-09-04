@@ -39,6 +39,7 @@ use super::super::NotificationPopOffsetCapability;
 use super::super::NotificationProcessor;
 use super::super::NotificationProcessorContext;
 use super::super::NotificationStoreCapability;
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
 use crate::failover::escape_bridge::EscapeBridge;
@@ -99,7 +100,7 @@ fn processor(
     Arc<EscapeBridge<BrokerMessageStore>>,
 ) {
     let inner = runtime.runtime_state_mut();
-    let policy = NotificationPolicy::from_config(&inner.broker_config());
+    let policy = NotificationPolicy::from_config(&inner.broker_config(), inner.broker_permission_state());
     processor_with_policy(inner, policy)
 }
 
@@ -275,8 +276,8 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
     let (mut runtime, root) = runtime("core-characterization").await;
     let peer = "127.0.0.1:19002".parse().expect("Notification core peer");
 
-    let mut denied_policy = NotificationPolicy::from_config(&runtime.runtime_state_mut().broker_config());
-    denied_policy.broker_permission = 0;
+    let denied_broker_config = runtime.runtime_state_mut().broker_config();
+    let mut denied_policy = NotificationPolicy::from_config(&denied_broker_config, BrokerPermissionState::new(0));
     denied_policy.broker_ip1 = CheetahString::from_static_str("127.0.0.1");
     let (denied, denied_bridge) = processor_with_policy(runtime.runtime_state_mut(), denied_policy);
     let denied_response = match denied
@@ -434,7 +435,11 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
     assert!(!blocked_attempt.has_msg, "a competing order attempt is blocked");
 
     drop((processor, escape_bridge));
-    let mut filter_policy = NotificationPolicy::from_config(&runtime.runtime_state_mut().broker_config());
+    let filter_broker_config = runtime.runtime_state_mut().broker_config();
+    let mut filter_policy = NotificationPolicy::from_config(
+        &filter_broker_config,
+        BrokerPermissionState::new(filter_broker_config.broker_permission),
+    );
     filter_policy.use_message_filter_for_notification = true;
     let (filtered, filtered_bridge) = processor_with_policy(runtime.runtime_state_mut(), filter_policy);
     let mut invalid_filter = core_header("topic-a", "group-a", 0);

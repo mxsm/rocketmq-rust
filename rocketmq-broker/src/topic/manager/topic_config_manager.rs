@@ -104,6 +104,72 @@ impl TopicConfigManager {
 
     const SCHEDULE_TOPIC_QUEUE_NUM: u32 = 18;
 
+    /// Reconciles topic metadata after the runtime policy generation is committed.
+    ///
+    /// This operation intentionally runs after the atomic policy publication: topic
+    /// persistence and NameServer registration are distributed side effects and are
+    /// not presented as part of the configuration CAS. Disabling automatic or trace
+    /// topic creation remains non-destructive.
+    pub(crate) fn apply_committed_runtime_broker_config(
+        &self,
+        current: &BrokerConfig,
+        candidate: &BrokerConfig,
+        state_machine_version: i64,
+    ) -> bool {
+        let registration_changed = current.auto_create_topic_enable != candidate.auto_create_topic_enable
+            || current.broker_permission != candidate.broker_permission
+            || current.topic_queue_config.default_topic_queue_nums
+                != candidate.topic_queue_config.default_topic_queue_nums
+            || current.trace_topic_enable != candidate.trace_topic_enable;
+        if !registration_changed {
+            return false;
+        }
+
+        let mut data_version = self.metadata_transition.lock();
+
+        let auto_create_topic = CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC);
+        if candidate.auto_create_topic_enable {
+            let queue_nums = candidate.topic_queue_config.default_topic_queue_nums;
+            let current_topic = self
+                .topic_config_table
+                .get(&auto_create_topic)
+                .map(|entry| entry.value().clone());
+            let replacement = match current_topic.as_ref() {
+                Some(current_topic)
+                    if current_topic.read_queue_nums != queue_nums || current_topic.write_queue_nums != queue_nums =>
+                {
+                    let mut replacement = current_topic.as_ref().clone();
+                    replacement.read_queue_nums = queue_nums;
+                    replacement.write_queue_nums = queue_nums;
+                    Some(Arc::new(replacement))
+                }
+                None => Some(Arc::new(TopicConfig::with_perm(
+                    TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+                    queue_nums,
+                    queue_nums,
+                    PermName::PERM_INHERIT | PermName::PERM_READ | PermName::PERM_WRITE,
+                ))),
+                _ => None,
+            };
+            if let Some(replacement) = replacement {
+                self.topic_config_table.insert(auto_create_topic, replacement);
+            }
+        }
+
+        if candidate.trace_topic_enable {
+            let trace_topic = candidate.msg_trace_topic_name.clone();
+            if !self.topic_config_table.contains_key(&trace_topic) {
+                let replacement = Arc::new(TopicConfig::with_queues(trace_topic.clone(), 1, 1));
+                self.topic_config_table.insert(trace_topic.clone(), replacement);
+            }
+            TopicValidator::add_system_topic(trace_topic);
+        }
+
+        data_version.next_version_with(state_machine_version);
+        self.rebuild_topic_config_snapshot_locked();
+        true
+    }
+
     pub fn new(
         broker_config: &BrokerConfig,
         message_store_config: &MessageStoreConfig,
@@ -429,6 +495,7 @@ impl TopicConfigManager {
         topic_sys_flag: u32,
         state_machine_version: i64,
         auto_create_topic_enable: bool,
+        broker_default_topic_queue_nums: u32,
     ) -> Option<TopicConfigCreation> {
         if let Some(config) = self.get_topic_config(topic.as_str()) {
             return Some(TopicConfigCreation {
@@ -468,6 +535,10 @@ impl TopicConfigManager {
 
             if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC && !auto_create_topic_enable {
                 default_topic_config.perm = PermName::PERM_READ | PermName::PERM_WRITE;
+            }
+            if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC {
+                default_topic_config.read_queue_nums = broker_default_topic_queue_nums;
+                default_topic_config.write_queue_nums = broker_default_topic_queue_nums;
             }
 
             if !PermName::is_inherited(default_topic_config.perm) {
@@ -1416,6 +1487,8 @@ mod tests {
     use crate::config::config_manager::ConfigManager;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::constant::PermName;
+    use rocketmq_model::common::topic::TopicValidator;
     use rocketmq_protocol::protocol::body::supervised_mutation::ExpectedState;
     use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
     use rocketmq_protocol::protocol::DataVersion;
@@ -1438,6 +1511,123 @@ mod tests {
         };
         let manager = TopicConfigManager::new(&broker_config, &message_store_config, false, None);
         (temp_dir, manager)
+    }
+
+    #[test]
+    fn committed_runtime_topic_metadata_updates_defaults_and_preserves_existing_topics() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let mut broker = BrokerConfig {
+            auto_create_topic_enable: false,
+            trace_topic_enable: false,
+            ..BrokerConfig::default()
+        };
+        let auto_topic = CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC);
+        let trace_topic = broker.msg_trace_topic_name.clone();
+
+        assert!(manager.select_topic_config(&auto_topic).is_none());
+        assert!(manager.select_topic_config(&trace_topic).is_none());
+
+        let disabled = broker.clone();
+        broker.auto_create_topic_enable = true;
+        broker.topic_queue_config.default_topic_queue_nums = 16;
+        broker.trace_topic_enable = true;
+        assert!(manager.apply_committed_runtime_broker_config(&disabled, &broker, 0));
+        let auto_config = manager.select_topic_config(&auto_topic).expect("auto-create topic");
+        assert_eq!((auto_config.read_queue_nums, auto_config.write_queue_nums), (16, 16));
+        assert!(manager.select_topic_config(&trace_topic).is_some());
+        let created_topic = CheetahString::from_static_str("RUNTIME_DEFAULT_QUEUE_TOPIC");
+        let created = manager
+            .create_topic_in_send_message_method(
+                &created_topic,
+                &auto_topic,
+                "127.0.0.1:10911".parse().expect("test peer"),
+                32,
+                0,
+                0,
+                true,
+                16,
+            )
+            .expect("runtime auto-create should use the projected default");
+        assert_eq!(
+            (
+                created.topic_config.read_queue_nums,
+                created.topic_config.write_queue_nums
+            ),
+            (16, 16)
+        );
+
+        let enabled = broker.clone();
+        broker.auto_create_topic_enable = false;
+        broker.trace_topic_enable = false;
+        assert!(manager.apply_committed_runtime_broker_config(&enabled, &broker, 0));
+        assert!(manager.select_topic_config(&auto_topic).is_some());
+        assert!(manager.select_topic_config(&trace_topic).is_some());
+
+        manager.delete_topic_config(&auto_topic, 0);
+        manager.delete_topic_config(&trace_topic, 0);
+        assert!(manager.select_topic_config(&auto_topic).is_none());
+        assert!(manager.select_topic_config(&trace_topic).is_none());
+    }
+
+    #[test]
+    fn committed_runtime_topic_metadata_is_durable_and_disable_is_non_destructive() {
+        let (temp_dir, manager) = test_topic_config_manager();
+        let current = BrokerConfig {
+            store_path_root_dir: temp_dir.path().to_string_lossy().into_owned().into(),
+            auto_create_topic_enable: false,
+            trace_topic_enable: false,
+            ..BrokerConfig::default()
+        };
+        let trace_topic = CheetahString::from_string(format!(
+            "RuntimeTraceCommitted{}",
+            rocketmq_model::time::current_millis()
+        ));
+        assert!(!TopicValidator::is_system_topic(trace_topic.as_str()));
+        let mut candidate = current.clone();
+        candidate.auto_create_topic_enable = true;
+        candidate.topic_queue_config.default_topic_queue_nums = 16;
+        candidate.trace_topic_enable = true;
+        candidate.msg_trace_topic_name = trace_topic.clone();
+
+        assert!(manager.apply_committed_runtime_broker_config(&current, &candidate, 0));
+        manager
+            .persist_latest_snapshot()
+            .expect("committed route metadata should persist");
+
+        let restarted = TopicConfigManager::new(&current, &MessageStoreConfig::default(), false, None);
+        assert!(restarted.load());
+        let auto_topic = CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC);
+        assert_eq!(
+            restarted
+                .select_topic_config(&auto_topic)
+                .map(|topic| (topic.read_queue_nums, topic.write_queue_nums)),
+            Some((16, 16))
+        );
+        assert!(restarted.select_topic_config(&trace_topic).is_some());
+
+        assert!(manager.apply_committed_runtime_broker_config(&candidate, &current, 0));
+        manager
+            .persist_latest_snapshot()
+            .expect("disabled runtime metadata should persist");
+        assert!(manager.select_topic_config(&auto_topic).is_some());
+        assert!(manager.select_topic_config(&trace_topic).is_some());
+        assert!(TopicValidator::is_system_topic(trace_topic.as_str()));
+    }
+
+    #[test]
+    fn broker_permission_change_advances_registration_data_version() {
+        let (_temp_dir, manager) = test_topic_config_manager();
+        let current = BrokerConfig::default();
+        let mut candidate = current.clone();
+        candidate.broker_permission = PermName::PERM_READ;
+        let before = manager.data_version();
+
+        assert!(manager.apply_committed_runtime_broker_config(&current, &candidate, 0));
+        assert_ne!(manager.data_version(), before);
+
+        let changed = manager.data_version();
+        assert!(manager.apply_committed_runtime_broker_config(&candidate, &current, 0));
+        assert_ne!(manager.data_version(), changed);
     }
 
     #[test]

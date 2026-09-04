@@ -32,6 +32,7 @@ use std::time::Instant;
 
 use crate::config::broker_config::BrokerConfig;
 use crate::config::config_manager::ConfigManager;
+#[cfg(test)]
 use crate::config::error::BrokerConfigError;
 use crate::config::validated::ValidatedBrokerConfig;
 use cheetah_string::CheetahString;
@@ -105,6 +106,7 @@ use crate::broker::broker_pre_online_service::BrokerPreOnlineService;
 use crate::broker::broker_registration_runtime::BrokerRegistrationError;
 use crate::broker::broker_registration_runtime::BrokerRegistrationRuntime;
 use crate::broker::broker_registration_runtime::BrokerRegistrationStatus;
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::broker::broker_runtime_config_state::BrokerRuntimeConfigState;
 use crate::broker::broker_state_observer::ConsumerStateGetter;
 use crate::broker::broker_state_observer::ProducerStateGetter;
@@ -722,6 +724,7 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     store_host: SocketAddr,
     broker_addr: CheetahString,
     config_state: BrokerRuntimeConfigState,
+    broker_permission_state: BrokerPermissionState,
     command_factory: RemotingCommandFactory,
     resource_budget: ResourceBudget,
     send_message_policy_state: SendMessagePolicyState,

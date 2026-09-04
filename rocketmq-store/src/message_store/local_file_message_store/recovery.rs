@@ -157,6 +157,9 @@ impl LocalFileMessageStore {
             return 0;
         };
         let checkpoint_safe_offset = store_checkpoint.index_safe_phy_offset();
+        if checkpoint_safe_offset == u64::MAX {
+            return -1;
+        }
         let confirm_offset = self.get_confirm_offset().max(0) as u64;
         checkpoint_safe_offset.min(confirm_offset) as i64
     }

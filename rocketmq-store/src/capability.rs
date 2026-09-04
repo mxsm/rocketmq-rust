@@ -57,6 +57,8 @@ use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeSnapshot;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeSource;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
@@ -76,6 +78,18 @@ use crate::queue::ArcConsumeQueue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
 use crate::timer::timer_message_store::TimerMessageStore;
+
+fn aggregate_message_index_safe_offset(dispatchers: &[Arc<dyn CommitLogDispatcher>]) -> Option<i64> {
+    let mut observed = None;
+    for dispatcher in dispatchers
+        .iter()
+        .filter(|dispatcher| dispatcher.message_index_runtime_snapshot().is_some())
+    {
+        let safe_offset = dispatcher.message_index_safe_offset()?;
+        observed = Some(observed.map_or(safe_offset, |current: i64| current.min(safe_offset)));
+    }
+    observed
+}
 
 /// Supported CommitLog access patterns exposed through the Store administration capability.
 ///
@@ -610,6 +624,35 @@ pub trait BrokerAdminStore: BrokerReplicationStore {
 
     fn get_dispatcher_list(&self) -> &[Arc<dyn CommitLogDispatcher>] {
         BackendOps::get_dispatcher_list(self.backend())
+    }
+
+    fn install_message_index_runtime(&self, source: Arc<dyn MessageIndexRuntimeSource>) -> bool {
+        let mut found = false;
+        for dispatcher in self.get_dispatcher_list() {
+            if dispatcher.install_message_index_runtime(Arc::clone(&source)) {
+                found = true;
+            }
+        }
+        found
+    }
+
+    fn message_index_runtime_snapshot(&self) -> Option<MessageIndexRuntimeSnapshot> {
+        let mut observed = None;
+        for snapshot in self
+            .get_dispatcher_list()
+            .iter()
+            .filter_map(|dispatcher| dispatcher.message_index_runtime_snapshot())
+        {
+            if observed.is_some_and(|current| current != snapshot) {
+                return None;
+            }
+            observed = Some(snapshot);
+        }
+        observed
+    }
+
+    fn message_index_safe_offset(&self) -> Option<i64> {
+        aggregate_message_index_safe_offset(self.get_dispatcher_list())
     }
 
     fn truncate_dirty_logic_files(&self, phy_offset: i64) {

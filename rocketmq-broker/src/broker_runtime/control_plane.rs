@@ -49,11 +49,10 @@ impl BrokerRuntime {
 
         #[cfg(feature = "otel-metrics")]
         if !self.composition.state.observability_metrics_initialized {
-            let broker_config = self.composition.state.broker_config();
             self.composition.state.observability_metrics_initialized = true;
             let broker_metrics_manager = self.composition.state.broker_metrics_manager.clone();
             if let Some(metrics_manager) = broker_metrics_manager {
-                let broker_permission = i64::from(broker_config.broker_permission);
+                let broker_permission = self.composition.state.broker_permission_state();
                 let topic_config_manager = self.composition.state.topic_config_manager_handle();
                 let subscription_group_manager = self.composition.state.subscription_group_manager().clone();
                 let producer_manager = self.composition.state.producer_manager.clone_shared_state();
@@ -61,7 +60,7 @@ impl BrokerRuntime {
                 let broker_fast_failure = self.composition.state.broker_fast_failure.clone();
                 metrics_manager.register_observables(
                     Some(move || broker_fast_failure.pending_count_snapshot()),
-                    move || broker_permission,
+                    move || i64::from(broker_permission.get()),
                     move || i64::try_from(topic_config_manager.topic_count()).unwrap_or(i64::MAX),
                     move || i64::try_from(subscription_group_manager.group_count()).unwrap_or(i64::MAX),
                     move || {
