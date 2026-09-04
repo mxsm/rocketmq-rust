@@ -120,6 +120,7 @@ use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
 use crate::base::backend_ops::StoreHealthRecorder;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeHandle;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_arriving_listener::MessageArrivingListener;
@@ -606,6 +607,7 @@ pub struct LocalFileMessageStore {
     consume_queue_store: ConsumeQueueStore,
     lmq_quota_controller: Arc<LmqQuotaController>,
     dispatcher: CommitLogDispatcherDefault,
+    message_index_runtime: MessageIndexRuntimeHandle,
     #[cfg(feature = "tieredstore")]
     tiered_store: Option<Arc<TieredStoreDecorator>>,
     broker_init_max_offset: Arc<AtomicI64>,

@@ -243,10 +243,10 @@ pub fn restore_index_safe_offset<F: IndexServiceFile>(
         .find(|file| file.has_entries())
         .map(|file| file.end_phy_offset().max(0) as u64)
         .unwrap_or(0);
-    if removed_unsafe_file || loaded_safe_offset == 0 {
+    if removed_unsafe_file || loaded_safe_offset == 0 || persisted_safe_offset == 0 {
         loaded_safe_offset
     } else {
-        persisted_safe_offset.max(loaded_safe_offset)
+        persisted_safe_offset.min(loaded_safe_offset)
     }
 }
 

@@ -53,6 +53,7 @@ use rocketmq_transport::api::RequestProcessor;
 use tracing::info;
 use tracing::warn;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -68,7 +69,7 @@ pub(crate) struct RecallMessagePolicy {
     region_id: CheetahString,
     recall_message_enable: bool,
     start_accept_send_request_time_stamp: i64,
-    broker_permission: u32,
+    broker_permission: BrokerPermissionState,
     allow_recall_when_broker_not_writeable: bool,
     broker_name: CheetahString,
     timer_max_delay_sec: u64,
@@ -84,12 +85,13 @@ impl RecallMessagePolicy {
         broker_config: &BrokerConfig,
         message_store_config: &MessageStoreConfig,
         store_host: SocketAddr,
+        broker_permission: BrokerPermissionState,
     ) -> Self {
         Self {
             region_id: broker_config.region_id.clone(),
             recall_message_enable: broker_config.recall_message_enable,
             start_accept_send_request_time_stamp: broker_config.start_accept_send_request_time_stamp,
-            broker_permission: broker_config.broker_permission,
+            broker_permission,
             allow_recall_when_broker_not_writeable: broker_config.allow_recall_when_broker_not_writeable,
             broker_name: broker_config.broker_name().clone(),
             timer_max_delay_sec: message_store_config.timer_max_delay_sec,
@@ -321,7 +323,7 @@ where
             ));
         }
 
-        let broker_permission = self.context.policy.broker_permission;
+        let broker_permission = self.context.policy.broker_permission.get();
         let allow_recall_when_not_writeable = self.context.policy.allow_recall_when_broker_not_writeable;
 
         if !PermName::is_writeable(broker_permission) && !allow_recall_when_not_writeable {
@@ -691,6 +693,7 @@ mod tests {
                 &broker_config,
                 &message_store_config,
                 "127.0.0.1:10911".parse().expect("valid store host"),
+                BrokerPermissionState::new(broker_config.broker_permission),
             ),
             topic_config_manager,
             RecallMessageStoreCapability {
@@ -750,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn recall_policy_captures_only_required_startup_values() {
+    fn recall_policy_observes_live_permission_and_keeps_other_startup_values() {
         let broker_config = BrokerConfig {
             region_id: CheetahString::from_static_str("region-a"),
             recall_message_enable: false,
@@ -765,16 +768,26 @@ mod tests {
         };
         let store_host = "127.0.0.1:10911".parse().expect("valid store host");
 
-        let policy = RecallMessagePolicy::from_configs(&broker_config, &message_store_config, store_host);
+        let broker_permission = BrokerPermissionState::new(broker_config.broker_permission);
+        let policy = RecallMessagePolicy::from_configs(
+            &broker_config,
+            &message_store_config,
+            store_host,
+            broker_permission.clone(),
+        );
 
         assert_eq!(policy.region_id, "region-a");
         assert!(!policy.recall_message_enable);
         assert_eq!(policy.start_accept_send_request_time_stamp, 42);
-        assert_eq!(policy.broker_permission, 3);
+        assert_eq!(policy.broker_permission.get(), 3);
         assert!(policy.allow_recall_when_broker_not_writeable);
         assert_eq!(policy.broker_name, broker_config.broker_name().clone());
         assert_eq!(policy.timer_max_delay_sec, 99);
         assert_eq!(policy.store_host, store_host);
+        broker_permission.update(4);
+        assert_eq!(policy.broker_permission.get(), 4);
+        broker_permission.update(3);
+        assert_eq!(policy.broker_permission.get(), 3);
     }
 
     #[tokio::test]

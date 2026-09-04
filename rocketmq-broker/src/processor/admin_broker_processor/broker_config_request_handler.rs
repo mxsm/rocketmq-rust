@@ -42,6 +42,7 @@ use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::CommitLogReadMode;
 use rocketmq_transport::api::request_code_not_supported_with_remark;
 use sysinfo::Disks;
+use tracing::warn;
 
 use crate::auth::auth_admin_service::AuthAdminService;
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -192,10 +193,12 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         }
 
         let commit_result = match expected_generation {
-            Some(expected_generation) => self
-                .broker_runtime_inner
-                .commit_broker_config_patch_if_generation(expected_generation, &properties),
-            None => self.broker_runtime_inner.commit_broker_config_patch(&properties),
+            Some(expected_generation) => {
+                self.broker_runtime_inner
+                    .commit_broker_config_patch_if_generation(expected_generation, &properties)
+                    .await
+            }
+            None => self.broker_runtime_inner.commit_broker_config_patch(&properties).await,
         };
         let generation = match commit_result {
             Ok(generation) => generation,
@@ -219,11 +222,21 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
                         .set_remark(error.to_string()),
                 ));
             }
-            Err(error @ BrokerConfigError::Load { .. }) | Err(error @ BrokerConfigError::GenerationExhausted) => {
+            Err(error @ BrokerConfigError::Load { .. })
+            | Err(error @ BrokerConfigError::GenerationExhausted)
+            | Err(error @ BrokerConfigError::RuntimeProjectionUnavailable { .. }) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
                         .set_remark(error.to_string()),
+                ));
+            }
+            Err(error @ BrokerConfigError::RuntimeCoordination { .. }) => {
+                warn!(%error, "runtime broker configuration coordination failed");
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("runtime configuration coordination failed"),
                 ));
             }
         };
@@ -374,7 +387,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let snapshot = self.broker_runtime_inner.runtime_config_snapshot();
+        let (snapshot, live_message_index_enabled) = self.broker_runtime_inner.runtime_config_and_live_index_snapshot();
         let broker = snapshot.broker();
         let store = snapshot.store();
         let state = BrokerMutationConfigState {
@@ -383,7 +396,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             auto_create_subscription_group: broker.auto_create_subscription_group,
             broker_permission: broker.broker_permission,
             default_topic_queue_nums: broker.topic_queue_config.default_topic_queue_nums,
-            message_index_enable: store.message_index_enable,
+            message_index_enable: live_message_index_enabled.unwrap_or(store.message_index_enable),
             trace_topic_enable: broker.trace_topic_enable,
         };
         Ok(Some(
@@ -443,7 +456,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             ));
         };
 
-        match self.broker_runtime_inner.set_commitlog_read_mode(read_mode) {
+        match self.broker_runtime_inner.set_commitlog_read_mode(read_mode).await {
             Ok(()) => Ok(Some(
                 RemotingCommand::create_success_response_command()
                     .set_remark(format!("set commitlog readahead mode success, mode: {mode}")),
@@ -1076,13 +1089,14 @@ mod tests {
     use crate::config::validated::ConfigGeneration;
     use crate::config::validated::ValidatedBrokerConfig;
     use cheetah_string::CheetahString;
-    #[cfg(feature = "rocksdb_store")]
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::constant::file_readahead_mode::READ_AHEAD_MODE;
+    use rocketmq_model::common::constant::PermName;
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
+    use rocketmq_protocol::protocol::body::supervised_mutation::BrokerMutationConfigState;
     use rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader;
     use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetBrokerConfigResponseHeader;
     use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
@@ -1090,9 +1104,12 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
     use rocketmq_runtime::common::time_utils::current_millis;
+    use rocketmq_store::BrokerAdminStore;
     use rocketmq_store::BrokerReadStore;
     use rocketmq_store::CommitLogReadMode;
+    use rocketmq_store::DispatchRequest;
     use rocketmq_store::MessageStoreConfig;
     #[cfg(feature = "rocksdb_store")]
     use rocketmq_store::StoreType;
@@ -1100,6 +1117,7 @@ mod tests {
     use rocketmq_store::TimerMessageStore;
     use rocketmq_store::TimerMetricsSerializeWrapper;
 
+    use crate::broker::broker_pre_online_capability::BrokerPreOnlinePolicy;
     use crate::broker_runtime::BrokerRuntime;
 
     use super::AdminRequestMetadata;
@@ -1373,34 +1391,194 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_broker_config_applies_supported_runtime_properties() {
-        let runtime = new_test_runtime("update-broker-config", false).await;
+    async fn update_broker_config_applies_and_restores_each_reviewed_runtime_property() {
+        let mut runtime = new_test_runtime("update-broker-config", false).await;
+        let live_broker_permission = runtime.runtime_state_mut().broker_permission_state();
+        let pre_online_policy = BrokerPreOnlinePolicy::from_configs(
+            runtime.broker_config().as_ref(),
+            runtime.message_store_config().as_ref(),
+            CheetahString::from_static_str("127.0.0.1:10911"),
+            CheetahString::new(),
+            live_broker_permission.clone(),
+        );
+        let topic_config_manager = runtime.runtime_state_mut().topic_config_manager_handle();
+        let registration = runtime.runtime_state_mut().build_registration_runtime();
+        let escape_bridge = runtime.runtime_state_mut().escape_bridge();
+        let transaction_registration = runtime.runtime_state_mut().build_transaction_topic_registration(
+            crate::transaction::queue::transaction_message_store::TransactionMessageStore::new(&escape_bridge),
+        );
+        let admin = runtime.admin_runtime_for_test();
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
+        let cases = [
+            ("autoCreateTopicEnable", "false", "true"),
+            ("autoCreateSubscriptionGroup", "false", "true"),
+            ("brokerPermission", "4", "6"),
+            ("defaultTopicQueueNums", "16", "8"),
+            ("messageIndexEnable", "false", "true"),
+            ("traceTopicEnable", "true", "false"),
+        ];
+
+        for (key, replacement, original) in cases {
+            for value in [replacement, original] {
+                let expected_generation = admin.runtime_config_snapshot().id().value();
+                let topic_data_version_before = topic_config_manager.data_version();
+                let mut request = RemotingCommand::create_request_command(
+                    RequestCode::UpdateBrokerConfigCas,
+                    UpdateBrokerConfigRequestHeader { expected_generation },
+                )
+                .set_body(format!("{key}={value}"));
+                request.make_custom_header_to_net();
+                let response = handler
+                    .update_broker_config(
+                        &AdminRequestMetadata::network_for_test(peer),
+                        RequestCode::UpdateBrokerConfigCas,
+                        &mut request,
+                    )
+                    .await
+                    .expect("runtime update should return broker response")
+                    .expect("runtime update should return a response");
+                assert_eq!(
+                    ResponseCode::from(response.code()),
+                    ResponseCode::Success,
+                    "{key}={value}"
+                );
+                assert_eq!(
+                    response
+                        .read_custom_header_ref::<UpdateBrokerConfigResponseHeader>()
+                        .map(|header| header.config_generation),
+                    Some(expected_generation + 1),
+                    "{key}={value}"
+                );
+
+                let mut get = RemotingCommand::create_remoting_command(RequestCode::GetBrokerMutationConfig);
+                let response = handler
+                    .get_broker_mutation_config(RequestCode::GetBrokerMutationConfig, &mut get)
+                    .await
+                    .expect("post-read should return broker response")
+                    .expect("post-read should return a response");
+                let state = BrokerMutationConfigState::decode(
+                    response.get_body().expect("post-read should contain state").as_ref(),
+                )
+                .expect("post-read state should decode");
+                assert_eq!(state.generation, expected_generation + 1);
+                match key {
+                    "autoCreateTopicEnable" => assert_eq!(state.auto_create_topic_enable.to_string(), value),
+                    "autoCreateSubscriptionGroup" => {
+                        assert_eq!(state.auto_create_subscription_group.to_string(), value);
+                    }
+                    "brokerPermission" => {
+                        assert_eq!(state.broker_permission.to_string(), value);
+                        assert_ne!(topic_config_manager.data_version(), topic_data_version_before);
+                        assert_eq!(live_broker_permission.get().to_string(), value);
+                        let expected = value.parse::<u32>().expect("permission should parse");
+                        let topic = TopicConfig::with_perm(
+                            "RuntimePermissionTopic",
+                            1,
+                            1,
+                            PermName::PERM_READ | PermName::PERM_WRITE,
+                        );
+                        assert_eq!(registration.topic_config_for_registration(&topic).perm, expected);
+                        assert_eq!(
+                            pre_online_policy.topic_config_for_registration_for_test(&topic).perm,
+                            expected
+                        );
+                        assert_eq!(
+                            transaction_registration
+                                .topic_config_for_registration_for_test(&topic)
+                                .perm,
+                            expected
+                        );
+                    }
+                    "defaultTopicQueueNums" => assert_eq!(state.default_topic_queue_nums.to_string(), value),
+                    "messageIndexEnable" => {
+                        assert_eq!(state.message_index_enable.to_string(), value);
+                        let store = admin.message_store().expect("message store should remain available");
+                        let snapshot = store
+                            .message_index_runtime_snapshot()
+                            .expect("initialized Store should expose one coherent index runtime");
+                        assert_eq!(snapshot.enabled.to_string(), value);
+                        if value == "true" {
+                            assert!(!snapshot.incomplete, "a no-message disabled interval remains complete");
+                        }
+                    }
+                    "traceTopicEnable" => assert_eq!(state.trace_topic_enable.to_string(), value),
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn update_broker_config_rejects_index_enable_after_disabled_dispatch() {
+        let runtime = new_test_runtime("update-broker-config-index-gap", false).await;
         let admin = runtime.admin_runtime_for_test();
         let handler = BrokerConfigRequestHandler::new(admin.clone());
         let peer = "127.0.0.1:10911".parse().expect("test peer");
 
-        let mut request = RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(concat!(
-            "enableLiteEventMode=false\n",
-            "maxLiteSubscriptionCount=5\n",
-            "maxClientEventCount=7\n",
-            "liteEventFullDispatchDelayTime=1234",
-        ));
-
-        let response = handler
+        let mut disable = RemotingCommand::create_request_command(
+            RequestCode::UpdateBrokerConfigCas,
+            UpdateBrokerConfigRequestHeader {
+                expected_generation: admin.runtime_config_snapshot().id().value(),
+            },
+        )
+        .set_body("messageIndexEnable=false");
+        disable.make_custom_header_to_net();
+        let disabled = handler
             .update_broker_config(
                 &AdminRequestMetadata::network_for_test(peer),
-                RequestCode::UpdateBrokerConfig,
-                &mut request,
+                RequestCode::UpdateBrokerConfigCas,
+                &mut disable,
             )
             .await
-            .expect("update broker config should return broker response")
-            .expect("update broker config should return a response");
+            .expect("disable should return a response")
+            .expect("disable response");
+        assert_eq!(ResponseCode::from(disabled.code()), ResponseCode::Success);
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
-        assert!(!admin.broker_config().enable_lite_event_mode);
-        assert_eq!(admin.broker_config().max_lite_subscription_count, 5);
-        assert_eq!(admin.broker_config().max_client_event_count, 7);
-        assert_eq!(admin.broker_config().lite_event_full_dispatch_delay_time, 1234);
+        let store = admin.message_store().expect("message store should remain available");
+        let mut observed_index_dispatcher = false;
+        for dispatcher in store.get_dispatcher_list() {
+            if dispatcher.message_index_runtime_snapshot().is_some() {
+                observed_index_dispatcher = true;
+                dispatcher.dispatch(&mut DispatchRequest::default());
+            }
+        }
+        assert!(observed_index_dispatcher);
+        drop(store);
+
+        let disabled_generation = admin.runtime_config_snapshot().id().value();
+        let mut enable = RemotingCommand::create_request_command(
+            RequestCode::UpdateBrokerConfigCas,
+            UpdateBrokerConfigRequestHeader {
+                expected_generation: disabled_generation,
+            },
+        )
+        .set_body("messageIndexEnable=true");
+        enable.make_custom_header_to_net();
+        let rejected = handler
+            .update_broker_config(
+                &AdminRequestMetadata::network_for_test(peer),
+                RequestCode::UpdateBrokerConfigCas,
+                &mut enable,
+            )
+            .await
+            .expect("unsafe enable should return a response")
+            .expect("unsafe enable response");
+
+        assert_eq!(ResponseCode::from(rejected.code()), ResponseCode::SystemError);
+        assert_eq!(
+            rejected.remark().map(CheetahString::as_str),
+            Some("runtime configuration coordination failed")
+        );
+        assert_eq!(admin.runtime_config_snapshot().id().value(), disabled_generation);
+        let snapshot = admin
+            .message_store()
+            .and_then(|store| store.message_index_runtime_snapshot())
+            .expect("Store should retain index runtime state");
+        assert!(!snapshot.enabled);
+        assert!(snapshot.incomplete);
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
@@ -1416,7 +1594,7 @@ mod tests {
             RequestCode::UpdateBrokerConfigCas,
             UpdateBrokerConfigRequestHeader { expected_generation: 1 },
         )
-        .set_body("maxClientEventCount=7");
+        .set_body("defaultTopicQueueNums=16");
         request.make_custom_header_to_net();
         let request_opaque = request.opaque();
 
@@ -1442,13 +1620,13 @@ mod tests {
             response.remark().map(CheetahString::as_str),
             Some("update broker config success, generation=2")
         );
-        assert_eq!(admin.broker_config().max_client_event_count, 7);
+        assert_eq!(admin.broker_config().topic_queue_config.default_topic_queue_nums, 16);
 
         let mut stale_request = RemotingCommand::create_request_command(
             RequestCode::UpdateBrokerConfigCas,
             UpdateBrokerConfigRequestHeader { expected_generation: 1 },
         )
-        .set_body("maxClientEventCount=9");
+        .set_body("defaultTopicQueueNums=32");
         stale_request.make_custom_header_to_net();
 
         let stale_response = handler
@@ -1474,9 +1652,170 @@ mod tests {
         assert!(stale_response
             .remark()
             .is_some_and(|remark| remark.contains("expected 1, actual 2")));
-        assert_eq!(admin.broker_config().max_client_event_count, 7);
+        assert_eq!(admin.broker_config().topic_queue_config.default_topic_queue_nums, 16);
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn concurrent_broker_config_cas_has_exactly_one_winner() {
+        let runtime = new_test_runtime("update-broker-config-cas-race", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let first_handler = BrokerConfigRequestHandler::new(admin.clone());
+        let second_handler = BrokerConfigRequestHandler::new(admin.clone());
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
+        let first = async move {
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::UpdateBrokerConfigCas,
+                UpdateBrokerConfigRequestHeader { expected_generation: 1 },
+            )
+            .set_body("defaultTopicQueueNums=16");
+            request.make_custom_header_to_net();
+            first_handler
+                .update_broker_config(
+                    &AdminRequestMetadata::network_for_test(peer),
+                    RequestCode::UpdateBrokerConfigCas,
+                    &mut request,
+                )
+                .await
+                .expect("first CAS should return broker response")
+                .expect("first CAS should return a response")
+        };
+        let second = async move {
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::UpdateBrokerConfigCas,
+                UpdateBrokerConfigRequestHeader { expected_generation: 1 },
+            )
+            .set_body("defaultTopicQueueNums=32");
+            request.make_custom_header_to_net();
+            second_handler
+                .update_broker_config(
+                    &AdminRequestMetadata::network_for_test(peer),
+                    RequestCode::UpdateBrokerConfigCas,
+                    &mut request,
+                )
+                .await
+                .expect("second CAS should return broker response")
+                .expect("second CAS should return a response")
+        };
+
+        let (first, second) = tokio::join!(first, second);
+        let codes = [ResponseCode::from(first.code()), ResponseCode::from(second.code())];
+        assert_eq!(codes.iter().filter(|code| **code == ResponseCode::Success).count(), 1);
+        assert_eq!(
+            codes
+                .iter()
+                .filter(|code| **code == ResponseCode::InvalidParameter)
+                .count(),
+            1
+        );
+        let snapshot = admin.runtime_config_snapshot();
+        assert_eq!(snapshot.id().value(), 2);
+        assert!([16, 32].contains(&snapshot.broker().topic_queue_config.default_topic_queue_nums));
+
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn mixed_invalid_broker_patch_preserves_generation_configs_and_live_projections() {
+        let runtime = new_test_runtime("update-broker-config-rollback", false).await;
+        let admin = runtime.admin_runtime_for_test();
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
+        let peer = "127.0.0.1:10911".parse().expect("test peer");
+        let before_generation = admin.runtime_config_snapshot();
+        let before_projection = admin.runtime_mutation_projection_snapshot();
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateBrokerConfigCas,
+            UpdateBrokerConfigRequestHeader { expected_generation: 1 },
+        )
+        .set_body(concat!(
+            "autoCreateTopicEnable=false\n",
+            "autoCreateSubscriptionGroup=false\n",
+            "brokerPermission=4\n",
+            "defaultTopicQueueNums=129\n",
+            "messageIndexEnable=false\n",
+            "traceTopicEnable=true",
+        ));
+        request.make_custom_header_to_net();
+
+        let response = handler
+            .update_broker_config(
+                &AdminRequestMetadata::network_for_test(peer),
+                RequestCode::UpdateBrokerConfigCas,
+                &mut request,
+            )
+            .await
+            .expect("invalid patch should return broker response")
+            .expect("invalid patch should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
+        let after_generation = admin.runtime_config_snapshot();
+        assert!(Arc::ptr_eq(&before_generation, &after_generation));
+        assert_eq!(before_generation.id(), after_generation.id());
+        assert_eq!(
+            before_generation.broker().get_properties(),
+            after_generation.broker().get_properties()
+        );
+        assert_eq!(
+            before_generation.store().get_properties(),
+            after_generation.store().get_properties()
+        );
+        assert_eq!(before_projection, admin.runtime_mutation_projection_snapshot());
+
+        let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn unavailable_index_projection_preserves_generation_configs_and_live_projections() {
+        let temp_root = temp_test_root("update-broker-config-index-unavailable");
+        let broker_config = Arc::new(BrokerConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            auth_config_path: temp_root.join("auth.json").to_string_lossy().into_owned().into(),
+            ..BrokerConfig::default()
+        });
+        let message_store_config = Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+            ..MessageStoreConfig::default()
+        });
+        let runtime = BrokerRuntime::new(broker_config, message_store_config);
+        let admin = runtime.admin_runtime_for_test();
+        let handler = BrokerConfigRequestHandler::new(admin.clone());
+        let before_generation = admin.runtime_config_snapshot();
+        let before_projection = admin.runtime_mutation_projection_snapshot();
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::UpdateBrokerConfigCas,
+            UpdateBrokerConfigRequestHeader { expected_generation: 1 },
+        )
+        .set_body("messageIndexEnable=false");
+        request.make_custom_header_to_net();
+
+        let response = handler
+            .update_broker_config(
+                &AdminRequestMetadata::network_for_test("127.0.0.1:10911".parse().expect("test peer")),
+                RequestCode::UpdateBrokerConfigCas,
+                &mut request,
+            )
+            .await
+            .expect("unavailable projection should return broker response")
+            .expect("unavailable projection should return a response");
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert!(response
+            .remark()
+            .is_some_and(|remark| remark.contains("message-index dispatcher")));
+        let after_generation = admin.runtime_config_snapshot();
+        assert!(Arc::ptr_eq(&before_generation, &after_generation));
+        assert_eq!(
+            before_generation.broker().get_properties(),
+            after_generation.broker().get_properties()
+        );
+        assert_eq!(
+            before_generation.store().get_properties(),
+            after_generation.store().get_properties()
+        );
+        assert_eq!(before_projection, admin.runtime_mutation_projection_snapshot());
+
+        let _ = fs::remove_dir_all(temp_root);
     }
 
     #[tokio::test]

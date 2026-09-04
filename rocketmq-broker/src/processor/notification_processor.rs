@@ -38,6 +38,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadWriteStore;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
@@ -52,16 +53,16 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 #[derive(Clone)]
 pub(crate) struct NotificationPolicy {
-    broker_permission: u32,
+    broker_permission: BrokerPermissionState,
     broker_ip1: CheetahString,
     use_message_filter_for_notification: bool,
     max_message_filter_num_for_notification: i32,
 }
 
 impl NotificationPolicy {
-    pub(crate) fn from_config(broker_config: &BrokerConfig) -> Self {
+    pub(crate) fn from_config(broker_config: &BrokerConfig, broker_permission: BrokerPermissionState) -> Self {
         Self {
-            broker_permission: broker_config.broker_permission,
+            broker_permission,
             broker_ip1: broker_config.broker_ip1().clone(),
             use_message_filter_for_notification: broker_config.use_message_filter_for_notification,
             max_message_filter_num_for_notification: broker_config.max_message_filter_num_for_notification,
@@ -484,7 +485,7 @@ mod tests {
         runtime: &mut BrokerRuntime,
     ) -> Arc<NotificationProcessor<BrokerMessageStore>> {
         let inner = runtime.runtime_state_mut();
-        let policy = NotificationPolicy::from_config(&inner.broker_config());
+        let policy = NotificationPolicy::from_config(&inner.broker_config(), inner.broker_permission_state());
         let topic_config_manager = inner.topic_config_manager_handle();
         let subscription_group_lookup = inner.subscription_group_manager().config_lookup();
         let consumer_filter_manager = Arc::new(inner.consumer_filter_manager().clone());
@@ -506,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn notification_policy_captures_only_required_startup_values() {
+    fn notification_policy_observes_live_permission_and_keeps_other_startup_values() {
         let broker_config = BrokerConfig {
             broker_permission: 3,
             broker_ip1: CheetahString::from_static_str("192.0.2.11"),
@@ -515,12 +516,17 @@ mod tests {
             ..Default::default()
         };
 
-        let policy = NotificationPolicy::from_config(&broker_config);
+        let broker_permission = BrokerPermissionState::new(broker_config.broker_permission);
+        let policy = NotificationPolicy::from_config(&broker_config, broker_permission.clone());
 
-        assert_eq!(policy.broker_permission, 3);
+        assert_eq!(policy.broker_permission.get(), 3);
         assert_eq!(policy.broker_ip1, "192.0.2.11");
         assert!(!policy.use_message_filter_for_notification);
         assert_eq!(policy.max_message_filter_num_for_notification, 17);
+        broker_permission.update(4);
+        assert_eq!(policy.broker_permission.get(), 4);
+        broker_permission.update(3);
+        assert_eq!(policy.broker_permission.get(), 3);
     }
 
     #[tokio::test]

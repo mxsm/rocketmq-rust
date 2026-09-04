@@ -136,6 +136,7 @@ use rocketmq_security_api::MaintenanceResourceBudget;
 use rocketmq_security_api::MaintenanceRole;
 use rocketmq_security_api::MaintenanceRoleGrant;
 use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::BrokerStorePort;
@@ -3056,7 +3057,7 @@ async fn admin_runtime_does_not_retain_message_store_root() {
         store_owner_count,
         "Admin runtime instances must retain only a weak Store provider"
     );
-    assert!(admin.set_commitlog_read_mode(CommitLogReadMode::Normal).is_ok());
+    assert!(admin.set_commitlog_read_mode(CommitLogReadMode::Normal).await.is_ok());
     assert_eq!(admin.delete_topics(Vec::new()).expect("empty topic deletion"), 0);
     assert_eq!(
         runtime
@@ -3086,7 +3087,7 @@ async fn admin_runtime_does_not_retain_message_store_root() {
     assert!(admin.message_store().is_none());
     assert!(admin.put_message(MessageExtBrokerInner::default()).await.is_err());
     assert!(matches!(
-        admin.set_commitlog_read_mode(CommitLogReadMode::Normal),
+        admin.set_commitlog_read_mode(CommitLogReadMode::Normal).await,
         Err(crate::broker::broker_admin_runtime::CommitLogReadModeUpdateError::Store(error))
             if error.descriptor() == &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED
     ));
@@ -3095,6 +3096,390 @@ async fn admin_runtime_does_not_retain_message_store_root() {
     drop(admin_clone);
     drop(admin);
     let _ = std::fs::remove_dir_all(temp_root);
+}
+
+#[tokio::test]
+async fn message_index_gap_rejects_reenable_and_remains_unsafe_after_store_restart() {
+    let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-broker-index-gap-restart-{}", current_millis()));
+    let broker_config = Arc::new(BrokerConfig {
+        store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        ..BrokerConfig::default()
+    });
+    let message_store_config = Arc::new(MessageStoreConfig {
+        store_path_root_dir: temp_root.to_string_lossy().into_owned().into(),
+        message_index_enable: true,
+        ha_listen_port: allocate_broker_runtime_test_port() as usize,
+        ..MessageStoreConfig::default()
+    });
+    let mut runtime = BrokerRuntime::new(Arc::clone(&broker_config), Arc::clone(&message_store_config));
+    assert!(runtime.initialize_metadata().await.is_ok());
+    assert!(runtime.initialize_message_store().await);
+    assert!(runtime.load_message_store_for_test().await);
+    runtime
+        .start_message_store_for_test()
+        .await
+        .expect("message store should start");
+
+    let admin = runtime.admin_runtime_for_test();
+    admin
+        .commit_broker_config_patch(&HashMap::from([(
+            CheetahString::from_static_str("messageIndexEnable"),
+            CheetahString::from_static_str("false"),
+        )]))
+        .await
+        .expect("disable should persist the gap marker before publication");
+    let topic = CheetahString::from_static_str("IndexGapRestartTopic");
+    let key = CheetahString::from_static_str("IndexGapRestartKey");
+    let mut skipped = shared_append_test_message(&topic, Bytes::from_static(b"skipped"));
+    skipped.set_keys(key.clone());
+    assert!(admin
+        .put_message(skipped)
+        .await
+        .expect("disabled append should reach Store")
+        .is_ok());
+    admin
+        .commit_broker_config_patch(&HashMap::from([(
+            CheetahString::from_static_str("messageIndexEnable"),
+            CheetahString::from_static_str("false"),
+        )]))
+        .await
+        .expect("an idempotent disable must preserve the original marker baseline");
+    drop(admin);
+    runtime.reput_message_store_once_for_test().await;
+
+    let admin = runtime.admin_runtime_for_test();
+    let error = admin
+        .commit_broker_config_patch(&HashMap::from([(
+            CheetahString::from_static_str("messageIndexEnable"),
+            CheetahString::from_static_str("true"),
+        )]))
+        .await
+        .expect_err("a disabled-period gap must reject enable before publication");
+    assert!(matches!(error, BrokerConfigError::RuntimeCoordination { .. }));
+    assert!(!admin.message_store_config().message_index_enable);
+    drop(admin);
+    assert!(runtime
+        .admin_runtime_for_test()
+        .message_store()
+        .and_then(|store| store.message_index_runtime_snapshot())
+        .is_some_and(|snapshot| !snapshot.enabled && snapshot.incomplete));
+
+    runtime.shutdown_message_store_for_test().await;
+    drop(runtime);
+
+    let mut restarted = BrokerRuntime::new(broker_config, message_store_config);
+    assert!(restarted.initialize_metadata().await.is_ok());
+    assert!(restarted.initialize_message_store().await);
+    assert!(restarted.load_message_store_for_test().await);
+    restarted
+        .start_message_store_for_test()
+        .await
+        .expect("restarted message store should start");
+    let store = restarted
+        .admin_runtime_for_test()
+        .message_store()
+        .expect("restarted Store should be available");
+    let snapshot = store
+        .message_index_runtime_snapshot()
+        .expect("restarted Store should expose index state");
+    assert!(snapshot.enabled);
+    assert!(
+        snapshot.incomplete,
+        "the persisted disabled-period gap must survive restart"
+    );
+    let result = store
+        .query_message(&topic, &key, 10, 0, i64::MAX)
+        .await
+        .expect("query should expose the persisted disabled-period degradation");
+    assert!(!result.index_query_safe);
+    drop(store);
+
+    restarted.shutdown_message_store_for_test().await;
+    let _ = std::fs::remove_dir_all(temp_root);
+}
+
+#[tokio::test]
+async fn blocked_runtime_topic_registration_does_not_delay_controller_fencing() {
+    let store_root = std::env::temp_dir().join(format!(
+        "rocketmq-rust-runtime-topic-registration-controller-fence-{}",
+        current_millis()
+    ));
+    let broker_config = Arc::new(BrokerConfig {
+        enable_controller_mode: true,
+        controller_addr: CheetahString::from_static_str("127.0.0.1:19876"),
+        store_path_root_dir: store_root.to_string_lossy().into_owned().into(),
+        auth_config_path: store_root.join("auth.json").to_string_lossy().into_owned().into(),
+        ..BrokerConfig::default()
+    });
+    let message_store_config = Arc::new(MessageStoreConfig {
+        enable_controller_mode: true,
+        broker_role: BrokerRole::SyncMaster,
+        store_path_root_dir: store_root.to_string_lossy().into_owned().into(),
+        timer_wheel_enable: false,
+        ..MessageStoreConfig::default()
+    });
+    let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+    assert!(runtime.initialize_message_store().await, "initialize message store");
+    runtime.composition.state.initialize_controller_mode();
+    let admin = runtime.admin_runtime_for_test();
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let registration: crate::topic::manager::topic_config_coordinator::TopicRegistrationAction = Box::new(move || {
+        Box::pin(async move {
+            let _ = entered_tx.send(());
+            let _ = release_rx.await;
+            Ok(())
+        })
+    });
+    let admin_for_commit = admin.clone();
+    let commit = tokio::spawn(async move {
+        admin_for_commit
+            .commit_broker_config_patch_with_registration_for_test(
+                &HashMap::from([(
+                    CheetahString::from_static_str("defaultTopicQueueNums"),
+                    CheetahString::from_static_str("9"),
+                )]),
+                registration,
+            )
+            .await
+    });
+    entered_rx.await.expect("runtime topic registration should block");
+
+    let controller = Arc::new(runtime.composition.state.build_controller_runtime());
+    let controller_for_change = Arc::clone(&controller);
+    let role_change = tokio::spawn(async move {
+        controller_for_change
+            .apply_controller_role_change(
+                None,
+                Some(MASTER_ID + 1),
+                Some(CheetahString::from_static_str("127.0.0.1:10911")),
+                Some(1),
+                None,
+                HashSet::new(),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_millis(250), async {
+        loop {
+            if !runtime
+                .composition
+                .state
+                .message_store()
+                .expect("message store")
+                .put_message_preflight()
+                .is_writeable()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the real Store write fence must not wait for NameServer registration");
+    let _ = release_tx.send(());
+    commit
+        .await
+        .expect("runtime patch task should join")
+        .expect("runtime patch should stay committed");
+    let role_applied = role_change
+        .await
+        .expect("controller role task should join")
+        .expect("complete controller metadata should apply a real role transition");
+    assert!(role_applied, "the valid demotion must reach the real Store role path");
+
+    runtime.shutdown_message_store_for_test().await;
+    let _ = std::fs::remove_dir_all(store_root);
+}
+
+#[tokio::test]
+async fn blocked_store_role_apply_holds_fence_but_not_runtime_config_permit() {
+    let store_root = std::env::temp_dir().join(format!(
+        "rocketmq-rust-controller-store-await-config-permit-{}",
+        current_millis()
+    ));
+    let broker_config = Arc::new(BrokerConfig {
+        enable_controller_mode: true,
+        controller_addr: CheetahString::from_static_str("127.0.0.1:19876"),
+        ..BrokerConfig::default()
+    });
+    let message_store_config = Arc::new(MessageStoreConfig {
+        enable_controller_mode: true,
+        broker_role: BrokerRole::Slave,
+        store_path_root_dir: store_root.to_string_lossy().into_owned().into(),
+        timer_wheel_enable: false,
+        ..MessageStoreConfig::default()
+    });
+    let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
+    assert!(runtime.initialize_message_store().await, "initialize message store");
+    runtime.composition.state.initialize_controller_mode();
+    let controller = Arc::new(runtime.composition.state.build_controller_runtime());
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let entered_tx = Arc::new(parking_lot::Mutex::new(Some(entered_tx)));
+    let (release_tx, release_rx) = oneshot::channel();
+    let release_rx = Arc::new(parking_lot::Mutex::new(Some(release_rx)));
+    controller.set_store_role_action_for_test(Arc::new(move || {
+        let entered_tx = entered_tx.lock().take();
+        let release_rx = release_rx.lock().take();
+        Box::pin(async move {
+            if let Some(entered_tx) = entered_tx {
+                let _ = entered_tx.send(());
+            }
+            if let Some(release_rx) = release_rx {
+                let _ = release_rx.await;
+            }
+            Ok(false)
+        })
+    }));
+    let applying_controller = Arc::clone(&controller);
+    let apply = tokio::spawn(async move {
+        applying_controller
+            .apply_controller_role_change(None, Some(MASTER_ID), None, Some(1), None, HashSet::new())
+            .await
+    });
+
+    entered_rx
+        .await
+        .expect("Store role action should block outside config serialization");
+    tokio::time::timeout(
+        Duration::from_millis(250),
+        controller.await_runtime_config_permit_for_test(),
+    )
+    .await
+    .expect("Store await must not retain the runtime config permit");
+    assert!(
+        !runtime
+            .composition
+            .state
+            .message_store()
+            .expect("message store")
+            .put_message_preflight()
+            .is_writeable(),
+        "controller writes must remain fenced while Store role application is blocked"
+    );
+
+    let _ = release_tx.send(());
+    assert!(!apply
+        .await
+        .expect("role-change task should join")
+        .expect("role change result"));
+    runtime.shutdown_message_store_for_test().await;
+    let _ = std::fs::remove_dir_all(store_root);
+}
+
+#[tokio::test]
+async fn successive_runtime_policy_reconciliation_converges_on_latest_generation() {
+    let mut runtime = new_phase3_test_runtime("runtime-topic-registration-latest-generation").await;
+    let store_root = runtime.message_store_config().store_path_root_dir.clone();
+    let admin = runtime.admin_runtime_for_test();
+    let registration = runtime.composition.state.build_registration_runtime();
+    let attempted_permissions = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let published_permission = Arc::new(AtomicU64::new(0));
+    let attempt = Arc::new(AtomicU64::new(0));
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let first_entered = Arc::new(parking_lot::Mutex::new(Some(entered_tx)));
+    let release = Arc::new(tokio::sync::Notify::new());
+
+    let first_registration = registration.clone();
+    let first_attempted_permissions = Arc::clone(&attempted_permissions);
+    let first_published_permission = Arc::clone(&published_permission);
+    let first_attempt = Arc::clone(&attempt);
+    let first_entered_signal = Arc::clone(&first_entered);
+    let first_release = Arc::clone(&release);
+    let first_action: crate::topic::manager::topic_config_coordinator::TopicRegistrationAction = Box::new(move || {
+        Box::pin(async move {
+            first_registration
+                .register_runtime_config_snapshot_with_test_hook(move |broker_config| {
+                    let attempted_permissions = Arc::clone(&first_attempted_permissions);
+                    let published_permission = Arc::clone(&first_published_permission);
+                    let attempt = Arc::clone(&first_attempt);
+                    let entered = Arc::clone(&first_entered_signal);
+                    let release = Arc::clone(&first_release);
+                    async move {
+                        let permission = u64::from(broker_config.broker_permission);
+                        attempted_permissions.lock().push(permission);
+                        if attempt.fetch_add(1, Ordering::AcqRel) == 0 {
+                            if let Some(entered) = entered.lock().take() {
+                                let _ = entered.send(());
+                            }
+                            release.notified().await;
+                        }
+                        published_permission.store(permission, Ordering::Release);
+                        Ok(crate::broker::broker_registration_runtime::BrokerRegistrationStatus::Unchanged)
+                    }
+                })
+                .await
+                .map(|_| ())
+                .map_err(|error| {
+                    rocketmq_error::RocketMQError::network_connection_failed(
+                        "runtime-registration-generation-test",
+                        error.to_string(),
+                    )
+                })
+        })
+    });
+    let first_admin = admin.clone();
+    let first_patch = tokio::spawn(async move {
+        first_admin
+            .commit_broker_config_patch_with_registration_for_test(
+                &HashMap::from([(
+                    CheetahString::from_static_str("brokerPermission"),
+                    CheetahString::from_static_str("4"),
+                )]),
+                first_action,
+            )
+            .await
+    });
+    entered_rx.await.expect("first registration attempt should block");
+
+    let second_observed_permission = Arc::new(AtomicU64::new(0));
+    let second_observed = Arc::clone(&second_observed_permission);
+    let second_admin_observer = admin.clone();
+    let second_action: crate::topic::manager::topic_config_coordinator::TopicRegistrationAction = Box::new(move || {
+        Box::pin(async move {
+            second_observed.store(
+                u64::from(second_admin_observer.broker_config().broker_permission),
+                Ordering::Release,
+            );
+            Ok(())
+        })
+    });
+    let second_admin = admin.clone();
+    let second_patch = tokio::spawn(async move {
+        second_admin
+            .commit_broker_config_patch_with_registration_for_test(
+                &HashMap::from([(
+                    CheetahString::from_static_str("brokerPermission"),
+                    CheetahString::from_static_str("2"),
+                )]),
+                second_action,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while admin.broker_config().broker_permission != PermName::PERM_WRITE {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("second policy patch should publish while the first registration is blocked");
+
+    release.notify_one();
+    first_patch
+        .await
+        .expect("first patch task should join")
+        .expect("first patch should remain committed");
+    second_patch
+        .await
+        .expect("second patch task should join")
+        .expect("second patch should remain committed");
+
+    assert_eq!(&*attempted_permissions.lock(), &[4, 2]);
+    assert_eq!(published_permission.load(Ordering::Acquire), 2);
+    assert_eq!(second_observed_permission.load(Ordering::Acquire), 2);
+    assert_eq!(admin.broker_config().broker_permission, PermName::PERM_WRITE);
+
+    runtime.shutdown_message_store_for_test().await;
+    let _ = std::fs::remove_dir_all(store_root.as_str());
 }
 
 #[cfg(feature = "rocksdb_store")]
@@ -6110,7 +6495,7 @@ async fn rejected_controller_promotion_does_not_publish_role_or_start_special_se
 
 #[cfg(feature = "extended_timeline")]
 #[tokio::test]
-async fn rejected_controller_demotion_does_not_publish_role_or_start_special_services() {
+async fn rejected_controller_demotion_publishes_fenced_policy_without_starting_services() {
     let temp_root = std::env::temp_dir().join(format!(
         "rocketmq-rust-broker-runtime-rejected-demotion-{}",
         current_millis()
@@ -6150,7 +6535,8 @@ async fn rejected_controller_demotion_does_not_publish_role_or_start_special_ser
     assert!(!applied, "demotion with an empty master endpoint must fail closed");
     assert_eq!(
         runtime.composition.state.message_store_config().broker_role,
-        BrokerRole::SyncMaster
+        BrokerRole::Slave,
+        "demotion policy must publish before the fallible Store transition"
     );
     assert!(!runtime
         .composition
@@ -6164,8 +6550,16 @@ async fn rejected_controller_demotion_does_not_publish_role_or_start_special_ser
             .message_store()
             .expect("message store")
             .current_broker_role(),
-        BrokerRole::SyncMaster
+        BrokerRole::SyncMaster,
+        "a rejected Store transition remains physically master but write-fenced"
     );
+    assert!(!runtime
+        .composition
+        .state
+        .message_store()
+        .expect("message store")
+        .put_message_preflight()
+        .is_writeable());
 
     drop(runtime);
     let _ = std::fs::remove_dir_all(temp_root);

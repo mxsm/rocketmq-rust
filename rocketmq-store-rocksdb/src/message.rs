@@ -42,6 +42,7 @@ pub const TIMER_SYS_TOPIC_SCAN_OFFSET_CHECKPOINT: &[u8] = b"sys_topic_scan_offse
 pub const TIMER_TIMELINE_CHECKPOINT: &[u8] = b"timeline_checkpoint";
 
 const LAST_OFFSET_PY: &[u8] = b"lastOffsetPy";
+const LAST_SAFE_OFFSET_PY: &[u8] = b"lastSafeOffsetPy";
 const LAST_STORE_TIMESTAMP: &[u8] = b"lastStoreTimeStamp";
 const TIMER_DELETE_CACHE_CAPACITY: usize = 10_000;
 const END_SUFFIX_BYTES: [u8; 512] = [0xFF; 512];
@@ -139,6 +140,22 @@ impl MessageRocksDbStorage {
     }
 
     pub fn write_records_for_index(&self, records: &[IndexRocksDbRecord]) -> Result<(), StoreError> {
+        self.write_records_for_index_inner(records, None)
+    }
+
+    pub(crate) fn write_records_for_index_with_safe_offset(
+        &self,
+        records: &[IndexRocksDbRecord],
+        safe_offset_py: i64,
+    ) -> Result<(), StoreError> {
+        self.write_records_for_index_inner(records, Some(safe_offset_py))
+    }
+
+    fn write_records_for_index_inner(
+        &self,
+        records: &[IndexRocksDbRecord],
+        safe_offset_py: Option<i64>,
+    ) -> Result<(), StoreError> {
         if records.is_empty() {
             return Ok(());
         }
@@ -165,6 +182,13 @@ impl MessageRocksDbStorage {
                 batch.put_cf(cf, LAST_OFFSET_PY.to_vec(), encode_i64(last_record.offset_py));
             }
 
+            let last_safe_offset_py = self.get_last_safe_offset_py(StoreOperation::AppendDerived, cf)?;
+            if let Some(safe_offset_py) = safe_offset_py
+                .filter(|safe_offset_py| last_safe_offset_py >= 0 && *safe_offset_py > last_safe_offset_py)
+            {
+                batch.put_cf(cf, LAST_SAFE_OFFSET_PY.to_vec(), encode_i64(safe_offset_py));
+            }
+
             let last_store_timestamp = self.get_last_store_timestamp_for_index(StoreOperation::AppendDerived)?;
             if last_record.store_time > last_store_timestamp {
                 batch.put_cf(cf, LAST_STORE_TIMESTAMP.to_vec(), encode_i64(last_record.store_time));
@@ -173,6 +197,32 @@ impl MessageRocksDbStorage {
 
         self.store
             .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)
+    }
+
+    pub fn write_index_safe_offset(&self, safe_offset_py: i64) -> Result<(), StoreError> {
+        if safe_offset_py <= 0 {
+            return Ok(());
+        }
+        let cf = RocksDbColumnFamily::Default.name();
+        let current = self.get_last_safe_offset_py(StoreOperation::AppendDerived, cf)?;
+        if current < 0 || safe_offset_py <= current {
+            return Ok(());
+        }
+        self.store.put_cf(
+            StoreOperation::AppendDerived,
+            cf,
+            LAST_SAFE_OFFSET_PY,
+            &encode_i64(safe_offset_py),
+        )
+    }
+
+    pub(crate) fn invalidate_index_safe_offset(&self) -> Result<(), StoreError> {
+        self.store.put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            LAST_SAFE_OFFSET_PY,
+            &encode_i64(-1),
+        )
     }
 
     pub fn get_index_store_time(
@@ -527,6 +577,10 @@ impl MessageRocksDbStorage {
 
     pub fn get_last_offset_py(&self, operation: StoreOperation, cf: &str) -> Result<i64, StoreError> {
         self.get_i64_special_key(operation, cf, LAST_OFFSET_PY)
+    }
+
+    pub fn get_last_safe_offset_py(&self, operation: StoreOperation, cf: &str) -> Result<i64, StoreError> {
+        self.get_i64_special_key(operation, cf, LAST_SAFE_OFFSET_PY)
     }
 
     fn get_i64_special_key(&self, operation: StoreOperation, cf: &str, key: &[u8]) -> Result<i64, StoreError> {

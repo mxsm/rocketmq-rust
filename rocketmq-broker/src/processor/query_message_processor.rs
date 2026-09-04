@@ -120,8 +120,8 @@ fn query_index_type(request_header: &QueryMessageRequestHeader, is_unique_key: b
 fn unsafe_index_query_remark(query_message_result: &QueryMessageResult) -> Option<String> {
     (!query_message_result.index_query_safe).then(|| {
         format!(
-            "index query is unsafe because index safe offset {} is behind confirm offset {}; background Index rebuild \
-             may still be in progress",
+            "index query is unsafe because index history is incomplete or index safe offset {} is behind confirm \
+             offset {}; background Index rebuild may still be in progress",
             query_message_result.index_safe_phyoffset, query_message_result.index_confirm_phyoffset
         )
     })
@@ -331,16 +331,16 @@ where
         response_header.index_last_update_phyoffset = query_message_result.index_last_update_phyoffset;
         response_header.index_last_update_timestamp = query_message_result.index_last_update_timestamp;
 
+        if let Some(remark) = unsafe_index_query_remark(&query_message_result) {
+            return Ok(QueryResponseParts::command(
+                response.set_code(ResponseCode::SystemError).set_remark(remark),
+            ));
+        }
         if query_message_result.buffer_total_size > 0 {
             if let Some(body) = query_message_result.get_message_data() {
                 return Ok(QueryResponseParts::bytes(response, body));
             }
             return Ok(QueryResponseParts::command(response));
-        }
-        if let Some(remark) = unsafe_index_query_remark(&query_message_result) {
-            return Ok(QueryResponseParts::command(
-                response.set_code(ResponseCode::SystemError).set_remark(remark),
-            ));
         }
         Ok(QueryResponseParts::command(
             response
@@ -527,6 +527,45 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    struct UnsafePartialQueryStore;
+
+    impl QueryMessageStore for UnsafePartialQueryStore {
+        async fn query_message(
+            &self,
+            _request: &QueryMessageRequest,
+        ) -> Result<Option<QueryMessageResult>, StoreError> {
+            let selected = SelectMappedBufferResult::from_bytes(0, Bytes::from_static(b"partial"))
+                .expect("test body length is representable");
+            let mut result = QueryMessageResult::default();
+            result.add_message(selected);
+            result.set_index_query_safety(false, 128, 256);
+            Ok(Some(result))
+        }
+
+        fn select_message_by_offset(&self, _offset: i64) -> Result<Option<SelectMappedBufferResult>, StoreError> {
+            Ok(None)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct UnsafeEmptyQueryStore;
+
+    impl QueryMessageStore for UnsafeEmptyQueryStore {
+        async fn query_message(
+            &self,
+            _request: &QueryMessageRequest,
+        ) -> Result<Option<QueryMessageResult>, StoreError> {
+            let mut result = QueryMessageResult::default();
+            result.set_index_query_safety(false, 0, 256);
+            Ok(Some(result))
+        }
+
+        fn select_message_by_offset(&self, _offset: i64) -> Result<Option<SelectMappedBufferResult>, StoreError> {
+            Ok(None)
+        }
+    }
+
     fn header(index_type: Option<&'static str>) -> QueryMessageRequestHeader {
         QueryMessageRequestHeader {
             topic: CheetahString::from_static_str("TopicA"),
@@ -597,6 +636,43 @@ mod tests {
         assert!(remark.contains("index safe offset 128"));
         assert!(remark.contains("confirm offset 256"));
         assert!(remark.contains("background Index rebuild"));
+    }
+
+    #[tokio::test]
+    async fn unsafe_partial_index_hit_is_not_returned_as_success() {
+        let factory = application_remoting_command_factory();
+        let processor = QueryMessageProcessor::new_with_factory(64, UnsafePartialQueryStore, factory);
+        let mut request = factory.create_request_command(RequestCode::QueryMessage, header(None));
+        request.make_custom_header_to_net();
+
+        let response = processor
+            .query_message_parts(&mut request)
+            .await
+            .expect("unsafe query should produce an explicit response");
+
+        assert_eq!(ResponseCode::from(response.head.code()), ResponseCode::SystemError);
+        assert!(response.body.is_none());
+        assert!(response
+            .head
+            .remark()
+            .is_some_and(|remark| remark.contains("index history is incomplete")));
+    }
+
+    #[tokio::test]
+    async fn unsafe_empty_index_result_is_not_returned_as_not_found() {
+        let factory = application_remoting_command_factory();
+        let processor = QueryMessageProcessor::new_with_factory(64, UnsafeEmptyQueryStore, factory);
+        let mut request = factory.create_request_command(RequestCode::QueryMessage, header(None));
+        request.make_custom_header_to_net();
+
+        let response = processor
+            .query_message_parts(&mut request)
+            .await
+            .expect("unsafe empty query should produce an explicit response");
+
+        assert_eq!(ResponseCode::from(response.head.code()), ResponseCode::SystemError);
+        assert!(response.body.is_none());
+        assert_ne!(ResponseCode::from(response.head.code()), ResponseCode::QueryNotFound);
     }
 
     #[test]

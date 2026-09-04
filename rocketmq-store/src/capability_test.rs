@@ -21,6 +21,9 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::base::commit_log_dispatcher::CommitLogDispatcher;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeSnapshot;
+use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_status_enum::GetMessageStatus;
 use crate::base::query_message_result::QueryMessageResult;
@@ -34,6 +37,7 @@ use rocketmq_store_api::MessageReader;
 use rocketmq_store_api::ReadCacheState;
 use tempfile::TempDir;
 
+use super::aggregate_message_index_safe_offset;
 use super::get_result;
 use super::query_result;
 use super::selected_result;
@@ -45,6 +49,38 @@ use super::MessageStoreReadPort;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::log_file::mapped_file::MappedFile;
 use rocketmq_store_local::mapped_file::kernel::ReferenceResource;
+
+struct IndexProgressDispatcher(Option<i64>);
+
+impl CommitLogDispatcher for IndexProgressDispatcher {
+    fn dispatch(&self, _dispatch_request: &mut DispatchRequest) {}
+
+    fn message_index_runtime_snapshot(&self) -> Option<MessageIndexRuntimeSnapshot> {
+        Some(MessageIndexRuntimeSnapshot {
+            enabled: false,
+            incomplete: false,
+        })
+    }
+
+    fn message_index_safe_offset(&self) -> Option<i64> {
+        self.0
+    }
+}
+
+#[test]
+fn index_safe_offset_requires_progress_from_every_index_dispatcher() {
+    let empty: Vec<Arc<dyn CommitLogDispatcher>> = Vec::new();
+    assert_eq!(aggregate_message_index_safe_offset(&empty), None);
+
+    let valid_zero: Vec<Arc<dyn CommitLogDispatcher>> = vec![Arc::new(IndexProgressDispatcher(Some(0)))];
+    assert_eq!(aggregate_message_index_safe_offset(&valid_zero), Some(0));
+
+    let missing: Vec<Arc<dyn CommitLogDispatcher>> = vec![
+        Arc::new(IndexProgressDispatcher(Some(100))),
+        Arc::new(IndexProgressDispatcher(None)),
+    ];
+    assert_eq!(aggregate_message_index_safe_offset(&missing), None);
+}
 
 #[test]
 fn commitlog_read_mode_accepts_only_protocol_compatible_values() {

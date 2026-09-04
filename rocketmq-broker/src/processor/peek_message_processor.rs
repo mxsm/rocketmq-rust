@@ -43,6 +43,7 @@ use rocketmq_transport::api::RequestProcessor;
 use tracing::error;
 use tracing::warn;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetQueryCapability;
@@ -53,16 +54,16 @@ use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
 #[derive(Clone)]
 pub(crate) struct PeekMessagePolicy {
-    broker_permission: u32,
+    broker_permission: BrokerPermissionState,
     broker_ip1: CheetahString,
     revive_queue_num: u32,
     transfer_msg_by_heap: bool,
 }
 
 impl PeekMessagePolicy {
-    pub(crate) fn from_config(broker_config: &BrokerConfig) -> Self {
+    pub(crate) fn from_config(broker_config: &BrokerConfig, broker_permission: BrokerPermissionState) -> Self {
         Self {
-            broker_permission: broker_config.broker_permission,
+            broker_permission,
             broker_ip1: broker_config.broker_ip1().clone(),
             revive_queue_num: broker_config.revive_queue_num,
             transfer_msg_by_heap: broker_config.transfer_msg_by_heap,
@@ -265,7 +266,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
             }
         };
 
-        if !PermName::is_readable(self.context.policy.broker_permission) {
+        if !PermName::is_readable(self.context.policy.broker_permission.get()) {
             let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
                 "the broker[{}] peeking message is forbidden",
                 self.context.policy.broker_ip1
@@ -758,12 +759,14 @@ mod tests {
             Arc::new(StoreRuntimeConfig::default()),
             stats_context.task_group().clone(),
         ));
+        let broker_permission = BrokerPermissionState::new(broker_config.broker_permission);
         let context = PeekMessageProcessorContext::new(
-            PeekMessagePolicy::from_config(broker_config.as_ref()),
+            PeekMessagePolicy::from_config(broker_config.as_ref(), broker_permission.clone()),
             PopPolicyState::from_configs(
                 broker_config.as_ref(),
                 message_store_config.as_ref(),
                 "127.0.0.1:10911".parse().expect("valid store host"),
+                broker_permission,
             ),
             topic_config_manager,
             subscription_group_manager.config_lookup(),
@@ -780,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn peek_policy_captures_only_required_startup_values() {
+    fn peek_policy_observes_live_permission_and_keeps_other_startup_values() {
         let broker_config = BrokerConfig {
             broker_permission: 3,
             broker_ip1: CheetahString::from_static_str("192.0.2.10"),
@@ -789,12 +792,17 @@ mod tests {
             ..Default::default()
         };
 
-        let policy = PeekMessagePolicy::from_config(&broker_config);
+        let broker_permission = BrokerPermissionState::new(broker_config.broker_permission);
+        let policy = PeekMessagePolicy::from_config(&broker_config, broker_permission.clone());
 
-        assert_eq!(policy.broker_permission, 3);
+        assert_eq!(policy.broker_permission.get(), 3);
         assert_eq!(policy.broker_ip1, "192.0.2.10");
         assert_eq!(policy.revive_queue_num, 12);
         assert!(!policy.transfer_msg_by_heap);
+        broker_permission.update(4);
+        assert_eq!(policy.broker_permission.get(), 4);
+        broker_permission.update(3);
+        assert_eq!(policy.broker_permission.get(), 3);
     }
 
     #[tokio::test]

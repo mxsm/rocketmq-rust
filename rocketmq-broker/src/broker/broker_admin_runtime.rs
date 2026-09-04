@@ -73,6 +73,20 @@ use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
+#[cfg(test)]
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeMutationProjectionSnapshot {
+    pub(crate) send_permission: u32,
+    pub(crate) pull_permission: u32,
+    pub(crate) pop_permission: u32,
+    pub(crate) send_auto_create_topic: bool,
+    pub(crate) send_default_topic_queues: u32,
+    pub(crate) auto_create_subscription_group: bool,
+    pub(crate) live_message_index_enabled: Option<bool>,
+    pub(crate) auto_create_topic_queues: Option<(u32, u32)>,
+    pub(crate) trace_topic_present: bool,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CommitLogReadModeUpdateError {
     #[error(transparent)]
@@ -122,7 +136,6 @@ pub(crate) struct BrokerAdminRuntime<MS: BrokerAdminStore> {
     pop_policy: PopPolicyState,
     escape_policy: EscapeBridgePolicyState,
     log_filter_control: Option<Arc<BrokerLogFilterControl>>,
-    config_update_lock: Arc<parking_lot::Mutex<()>>,
 }
 
 impl<MS: BrokerAdminStore> Clone for BrokerAdminRuntime<MS> {
@@ -162,7 +175,6 @@ impl<MS: BrokerAdminStore> Clone for BrokerAdminRuntime<MS> {
             pop_policy: self.pop_policy.clone(),
             escape_policy: self.escape_policy.clone(),
             log_filter_control: self.log_filter_control.clone(),
-            config_update_lock: Arc::clone(&self.config_update_lock),
         }
     }
 }
@@ -243,7 +255,6 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
             pop_policy,
             escape_policy,
             log_filter_control,
-            config_update_lock: Arc::new(parking_lot::Mutex::new(())),
         }
     }
 
@@ -283,10 +294,14 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
         message_store.put_message_to_local_store(message).await
     }
 
-    pub(crate) fn set_commitlog_read_mode(
+    pub(crate) async fn set_commitlog_read_mode(
         &self,
         read_ahead_mode: CommitLogReadMode,
     ) -> Result<(), CommitLogReadModeUpdateError> {
+        let _mutation = self.config.lock_mutation().await;
+        let update = self
+            .config
+            .prepare_data_read_ahead_update(&_mutation, read_ahead_mode == CommitLogReadMode::Normal)?;
         self.message_store_provider
             .upgrade()
             .ok_or(StoreError::new(
@@ -294,8 +309,7 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
                 StoreOperation::Admin,
             ))?
             .set_commitlog_read_mode(read_ahead_mode)?;
-        self.config
-            .apply_data_read_ahead(read_ahead_mode == CommitLogReadMode::Normal)?;
+        self.config.commit_under_mutation(&_mutation, update)?;
         Ok(())
     }
 
@@ -470,45 +484,63 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
             .await
     }
 
+    #[cfg(test)]
     pub(crate) fn set_broker_config(&self, broker_config: BrokerConfig) -> Result<(), BrokerConfigError> {
-        let update_lock = Arc::clone(&self.config_update_lock);
-        let _update_guard = update_lock.lock();
+        let mut broker_config = broker_config;
+        broker_config.broker_identity.broker_id = self.config.broker_snapshot().broker_identity.broker_id;
         let generation = self.config.replace_broker(broker_config)?;
-        self.apply_broker_config_generation(&generation);
+        self.apply_replacement_generation(&generation);
         Ok(())
     }
 
-    pub(crate) fn commit_broker_config_patch(
+    pub(crate) async fn commit_broker_config_patch(
         &self,
         properties: &HashMap<CheetahString, CheetahString>,
     ) -> Result<ConfigGeneration, BrokerConfigError> {
-        self.commit_broker_config_patch_inner(None, properties)
+        self.commit_broker_config_patch_inner(None, properties).await
     }
 
     /// Commits a broker configuration patch only when the caller's generation
     /// still matches the current configuration.
     ///
-    /// The generation comparison, candidate validation, atomic publication,
-    /// and legacy capability projection are serialized by one lock. A stale
-    /// supervised operation therefore cannot overwrite a newer configuration.
-    pub(crate) fn commit_broker_config_patch_if_generation(
+    /// Message-index transitions additionally take the index transition write
+    /// side so the durable gap marker, actual index progress proof, and policy
+    /// publication are one local critical section. Dispatch holds only the
+    /// corresponding read side around its complete index write.
+    ///
+    /// Success means the runtime policy generation is committed. Topic metadata
+    /// is derived under that same lock, then reconciled through the canonical
+    /// persistence and registration coordinator after the lock is released. A
+    /// slow NameServer therefore cannot delay controller write fencing. A
+    /// reconciliation failure retains the advanced DataVersion so the periodic
+    /// registration path can retry; it does not roll back policy.
+    pub(crate) async fn commit_broker_config_patch_if_generation(
         &self,
         expected_generation: u64,
         properties: &HashMap<CheetahString, CheetahString>,
     ) -> Result<ConfigGeneration, BrokerConfigError> {
         self.commit_broker_config_patch_inner(Some(expected_generation), properties)
+            .await
     }
 
-    fn commit_broker_config_patch_inner(
+    async fn commit_broker_config_patch_inner(
         &self,
         expected_generation: Option<u64>,
         properties: &HashMap<CheetahString, CheetahString>,
     ) -> Result<ConfigGeneration, BrokerConfigError> {
-        // Request handlers own cloned capability carriers. Serialize the
-        // publish-and-project sequence so a slower request cannot overwrite
-        // policy views with an older, though valid, generation.
-        let update_lock = Arc::clone(&self.config_update_lock);
-        let _update_guard = update_lock.lock();
+        let (generation, reconcile_topics) = self
+            .commit_broker_config_patch_linearized(expected_generation, properties)
+            .await?;
+        self.reconcile_committed_runtime_topics(generation, reconcile_topics, None)
+            .await;
+        Ok(generation)
+    }
+
+    async fn commit_broker_config_patch_linearized(
+        &self,
+        expected_generation: Option<u64>,
+        properties: &HashMap<CheetahString, CheetahString>,
+    ) -> Result<(ConfigGeneration, bool), BrokerConfigError> {
         let current = self.config.snapshot();
         if let Some(expected) = expected_generation {
             let actual = current.id().value();
@@ -516,23 +548,181 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
                 return Err(BrokerConfigError::GenerationConflict { expected, actual });
             }
         }
-        let transaction = ConfigUpdateTransaction::from_broker_patch(current.id(), current.validated(), properties)?;
-        let generation = self.config.commit(transaction)?;
-        self.apply_broker_config_generation(&generation);
-        Ok(generation.id())
+        let mut transaction =
+            ConfigUpdateTransaction::from_broker_patch(current.id(), current.validated(), properties)?;
+        current
+            .id()
+            .checked_next()
+            .ok_or(BrokerConfigError::GenerationExhausted)?;
+        let message_store = if transaction
+            .patch()
+            .is_some_and(|patch| patch.message_index_enable.is_some())
+        {
+            let store = self
+                .message_store()
+                .ok_or(BrokerConfigError::RuntimeProjectionUnavailable {
+                    component: "message-index dispatcher",
+                })?;
+            if store.message_index_runtime_snapshot().is_none() {
+                return Err(BrokerConfigError::RuntimeProjectionUnavailable {
+                    component: "message-index dispatcher",
+                });
+            }
+            Some(store)
+        } else {
+            None
+        };
+
+        let mutation = self.config.lock_mutation().await;
+        let locked_current = self.config.snapshot();
+        if locked_current.id() != current.id() {
+            if let Some(expected) = expected_generation {
+                let actual = locked_current.id().value();
+                return Err(BrokerConfigError::GenerationConflict { expected, actual });
+            }
+            transaction = match ConfigUpdateTransaction::from_broker_patch(
+                locked_current.id(),
+                locked_current.validated(),
+                properties,
+            ) {
+                Ok(transaction) => transaction,
+                Err(error) => return Err(error),
+            };
+            if locked_current.id().checked_next().is_none() {
+                return Err(BrokerConfigError::GenerationExhausted);
+            }
+        }
+
+        let reconcile_topics = transaction
+            .patch()
+            .is_some_and(|patch| patch.affects_topic_registration());
+        let message_index_enable = transaction.patch().and_then(|patch| patch.message_index_enable);
+        let generation = match message_index_enable {
+            Some(false) if locked_current.store().message_index_enable => {
+                let store = message_store
+                    .as_ref()
+                    .ok_or(BrokerConfigError::RuntimeProjectionUnavailable {
+                        component: "message-index dispatcher",
+                    })?;
+                self.config
+                    .commit_message_index_disable_under_mutation(&mutation, transaction, || {
+                        store.get_max_phy_offset()
+                    })?
+            }
+            Some(true) if !locked_current.store().message_index_enable => {
+                let store = message_store
+                    .as_ref()
+                    .ok_or(BrokerConfigError::RuntimeProjectionUnavailable {
+                        component: "message-index dispatcher",
+                    })?;
+                self.config
+                    .commit_message_index_enable_under_mutation(&mutation, transaction, || {
+                        (store.get_max_phy_offset(), store.message_index_safe_offset())
+                    })?
+            }
+            _ => self.config.commit_under_mutation(&mutation, transaction)?,
+        };
+        let reconcile_topics = reconcile_topics
+            && self.topic_config_manager.apply_committed_runtime_broker_config(
+                locked_current.broker(),
+                generation.broker(),
+                self.topic_config_state_machine_version(),
+            );
+        Ok((generation.id(), reconcile_topics))
     }
 
-    fn apply_broker_config_generation(
+    async fn reconcile_committed_runtime_topics(
+        &self,
+        generation: ConfigGeneration,
+        reconcile_topics: bool,
+        registration_override: Option<crate::topic::manager::topic_config_coordinator::TopicRegistrationAction>,
+    ) {
+        if reconcile_topics {
+            let action = registration_override.unwrap_or_else(|| {
+                let registration = self.registration.clone();
+                Box::new(move || {
+                    Box::pin(async move {
+                        registration
+                            .register_runtime_config_snapshot()
+                            .await
+                            .map(|_| ())
+                            .map_err(|error| {
+                                rocketmq_error::RocketMQError::network_connection_failed(
+                                    "broker-runtime-config-registration",
+                                    error.to_string(),
+                                )
+                            })
+                    })
+                })
+            });
+            if let Err(error) = self.topic_config_coordinator.persist_and_register_wait(action).await {
+                warn!(%error, generation = generation.value(), "runtime topic metadata refresh will be retried by periodic registration");
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn commit_broker_config_patch_with_registration_for_test(
+        &self,
+        properties: &HashMap<CheetahString, CheetahString>,
+        registration: crate::topic::manager::topic_config_coordinator::TopicRegistrationAction,
+    ) -> Result<ConfigGeneration, BrokerConfigError> {
+        let (generation, reconcile_topics) = self.commit_broker_config_patch_linearized(None, properties).await?;
+        self.reconcile_committed_runtime_topics(generation, reconcile_topics, Some(registration))
+            .await;
+        Ok(generation)
+    }
+
+    #[cfg(test)]
+    fn apply_replacement_generation(
         &self,
         generation: &crate::broker::broker_runtime_config_state::BrokerRuntimeConfigGeneration,
     ) {
-        self.role_state
-            .set_local_broker_id(generation.broker().broker_identity.broker_id);
         self.send_policy.update_broker_config(generation.broker());
         self.pull_policy.update_broker_config(generation.broker());
         self.pop_policy.update_broker_config(generation.broker());
         self.escape_policy.update_broker_config(generation.broker());
         self.producer_manager.set_broker_config(Arc::clone(generation.broker()));
+    }
+
+    pub(crate) fn live_message_index_enabled(&self) -> Option<bool> {
+        self.message_store()
+            .and_then(|store| store.message_index_runtime_snapshot())
+            .map(|snapshot| snapshot.enabled)
+    }
+
+    pub(crate) fn runtime_config_and_live_index_snapshot(&self) -> (Arc<BrokerRuntimeConfigGeneration>, Option<bool>) {
+        let snapshot = self.runtime_config_snapshot();
+        let live_message_index_enabled = self
+            .message_store()
+            .and_then(|store| store.message_index_runtime_snapshot())
+            .map(|_| snapshot.store().message_index_enable);
+        (snapshot, live_message_index_enabled)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_mutation_projection_snapshot(&self) -> RuntimeMutationProjectionSnapshot {
+        let broker = self.broker_config();
+        let auto_create_topic = self
+            .topic_config_manager
+            .select_topic_config(&CheetahString::from_static_str(
+                rocketmq_model::common::topic::TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+            ))
+            .map(|config| (config.read_queue_nums, config.write_queue_nums));
+        RuntimeMutationProjectionSnapshot {
+            send_permission: self.send_policy.snapshot().broker_permission.get(),
+            pull_permission: self.pull_policy.snapshot().broker_permission.get(),
+            pop_permission: self.pop_policy.snapshot().broker_permission.get(),
+            send_auto_create_topic: broker.auto_create_topic_enable,
+            send_default_topic_queues: broker.topic_queue_config.default_topic_queue_nums,
+            auto_create_subscription_group: self.subscription_group_manager.auto_create_subscription_group_enabled(),
+            live_message_index_enabled: self.live_message_index_enabled(),
+            auto_create_topic_queues: auto_create_topic,
+            trace_topic_present: self
+                .topic_config_manager
+                .select_topic_config(&broker.msg_trace_topic_name)
+                .is_some(),
+        }
     }
 
     pub(crate) async fn register_increment_broker_data(

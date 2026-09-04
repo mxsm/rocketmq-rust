@@ -242,7 +242,6 @@ impl RocksDBMessageStore {
         service_context: ChildServiceContext,
         telemetry: crate::telemetry::StoreTelemetry,
     ) -> Result<Self, StoreError> {
-        let message_store_config_for_index = Arc::clone(&message_store_config);
         let message_store_config_for_timer = Arc::clone(&message_store_config);
         let message_store_config_for_trans = Arc::clone(&message_store_config);
         let derived = RocksDbDerivedStore::open_planned_with_metrics(
@@ -280,9 +279,9 @@ impl RocksDBMessageStore {
                 local_queue_offsets,
             ),
         ));
-        local_file_store.add_dispatcher(Arc::new(CommitLogDispatcherBuildRocksDbIndex::new(
+        local_file_store.add_dispatcher(Arc::new(CommitLogDispatcherBuildRocksDbIndex::new_with_runtime(
             Arc::clone(&rocksdb_index_service),
-            message_store_config_for_index,
+            local_file_store.message_index_runtime_handle(),
         )));
         if let Some(rocksdb_timer_service) = rocksdb_timer_service.as_ref() {
             local_file_store.add_dispatcher(Arc::new(CommitLogDispatcherBuildRocksDbTimer::new(
@@ -555,6 +554,17 @@ impl RocksDBMessageStore {
             result.add_message(record);
         }
         Ok(result)
+    }
+
+    fn apply_rocksdb_runtime_index_safety(&self, result: &mut QueryMessageResult) {
+        let safe_offset = self
+            .rocksdb_index_service()
+            .get_safe_dispatch_offset()
+            .unwrap_or_else(|error| {
+                warn!(error = %error, "failed to read RocksDB index safe offset");
+                0
+            });
+        self.local_file_store.apply_runtime_index_safety_at(result, safe_offset);
     }
 
     fn rocksdb_cq_value(
@@ -894,7 +904,10 @@ impl BackendOps for RocksDBMessageStore {
         end: i64,
     ) -> Option<QueryMessageResult> {
         match self.query_message_by_rocksdb_index(topic, key, None, max_num, begin, end, None) {
-            Ok(result) if result.buffer_total_size > 0 => Some(result),
+            Ok(mut result) if result.buffer_total_size > 0 => {
+                self.apply_rocksdb_runtime_index_safety(&mut result);
+                Some(result)
+            }
             Ok(_) => {
                 self.local_file_store
                     .query_message(topic, key, max_num, begin, end)
@@ -919,8 +932,14 @@ impl BackendOps for RocksDBMessageStore {
             request.end,
             request.last_key.as_deref(),
         ) {
-            Ok(result) if result.buffer_total_size > 0 => Some(result),
-            Ok(result) if request.last_key.is_some() => Some(result),
+            Ok(mut result) if result.buffer_total_size > 0 => {
+                self.apply_rocksdb_runtime_index_safety(&mut result);
+                Some(result)
+            }
+            Ok(mut result) if request.last_key.is_some() => {
+                self.apply_rocksdb_runtime_index_safety(&mut result);
+                Some(result)
+            }
             Ok(_) => {
                 let key = request.legacy_backend_key();
                 self.local_file_store
@@ -929,7 +948,9 @@ impl BackendOps for RocksDBMessageStore {
             }
             Err(error) if request.last_key.is_some() => {
                 warn!(topic = %request.topic, key = %request.key, error = %error, "rejected invalid RocksDB index cursor");
-                Some(QueryMessageResult::default())
+                let mut result = QueryMessageResult::default();
+                self.apply_rocksdb_runtime_index_safety(&mut result);
+                Some(result)
             }
             Err(error) => {
                 warn!(topic = %request.topic, key = %request.key, error = %error, "failed to query message by RocksDB index");

@@ -62,6 +62,21 @@ pub(super) fn is_the_batch_full(
 }
 
 impl LocalFileMessageStore {
+    pub(crate) fn apply_runtime_index_safety(&self, result: &mut QueryMessageResult) {
+        self.apply_runtime_index_safety_at(result, self.current_index_safe_offset());
+    }
+
+    pub(crate) fn apply_runtime_index_safety_at(&self, result: &mut QueryMessageResult, index_safe_offset: i64) {
+        let index_runtime = self.message_index_runtime.snapshot();
+        let safety = self.composition.query().index_safety_with_runtime(
+            index_runtime.enabled,
+            index_runtime.incomplete,
+            index_safe_offset,
+            self.get_confirm_offset(),
+        );
+        result.set_index_query_safety(safety.safe, safety.safe_offset, safety.confirm_offset);
+    }
+
     pub(super) async fn read_messages(
         &self,
         group: &CheetahString,
@@ -407,16 +422,12 @@ impl LocalFileMessageStore {
         end_timestamp: i64,
     ) -> Option<QueryMessageResult> {
         let mut query_message_result = QueryMessageResult::default();
-        let index_safe_phyoffset = self.current_index_safe_offset();
-        let index_safety = self
-            .composition
-            .query()
-            .index_safety(index_safe_phyoffset, self.get_confirm_offset());
-        query_message_result.set_index_query_safety(
-            index_safety.safe,
-            index_safety.safe_offset,
-            index_safety.confirm_offset,
-        );
+        self.apply_runtime_index_safety(&mut query_message_result);
+        let index_safety = rocketmq_store_local::message_store::query::IndexQuerySafety {
+            safe: query_message_result.index_query_safe,
+            safe_offset: query_message_result.index_safe_phyoffset,
+            confirm_offset: query_message_result.index_confirm_phyoffset,
+        };
         let mut last_query_msg_time = end_timestamp;
         for i in 1..3 {
             let mut query_offset_result =
@@ -470,7 +481,10 @@ impl LocalFileMessageStore {
                     )
                     .await
                 {
-                    Ok(Some(tiered_result)) => return Some(tiered_result),
+                    Ok(Some(mut tiered_result)) => {
+                        self.apply_runtime_index_safety(&mut tiered_result);
+                        return Some(tiered_result);
+                    }
                     Ok(None) => {}
                     Err(error) => {
                         warn!(topic = %topic, key = %key, error = %error, "fatal tiered query failure");

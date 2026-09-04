@@ -159,7 +159,7 @@ where
                 format!("the broker[{}] pop message is timeout too much", policy.broker_ip),
             );
         }
-        if !PermName::is_readable(policy.broker_permission) {
+        if !PermName::is_readable(policy.broker_permission.get()) {
             return self.initial_permission_denied(
                 opaque,
                 format!("the broker[{}] pop message is forbidden", policy.broker_ip),

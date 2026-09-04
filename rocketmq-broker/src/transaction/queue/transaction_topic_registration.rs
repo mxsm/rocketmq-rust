@@ -18,7 +18,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::constant::PermName;
@@ -30,6 +29,7 @@ use rocketmq_store::BrokerWriteStore;
 use tracing::debug;
 use tracing::info;
 
+use crate::broker::broker_runtime_config_state::BrokerRuntimeConfigState;
 use crate::broker_runtime::complete_topic_config_creation;
 use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::slave::slave_synchronize::SlaveMasterAddress;
@@ -43,7 +43,7 @@ use crate::transaction::queue::transaction_message_store::TransactionMessageStor
 const TCMT_QUEUE_NUMS: i32 = 1;
 
 pub(crate) struct TransactionTopicRegistration<MS: BrokerWriteStore> {
-    broker_config: Arc<BrokerConfig>,
+    config: BrokerRuntimeConfigState,
     topic_config_manager: Arc<TopicConfigManager>,
     topic_config_coordinator: Arc<TopicConfigCoordinator>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -56,7 +56,7 @@ pub(crate) struct TransactionTopicRegistration<MS: BrokerWriteStore> {
 }
 
 pub(crate) struct TransactionTopicRegistrationContext<MS: BrokerWriteStore> {
-    pub(crate) broker_config: Arc<BrokerConfig>,
+    pub(crate) config: BrokerRuntimeConfigState,
     pub(crate) topic_config_manager: Arc<TopicConfigManager>,
     pub(crate) topic_config_coordinator: Arc<TopicConfigCoordinator>,
     pub(crate) topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -74,7 +74,7 @@ where
 {
     pub(crate) fn new(context: TransactionTopicRegistrationContext<MS>) -> Self {
         Self {
-            broker_config: context.broker_config,
+            config: context.config,
             topic_config_manager: context.topic_config_manager,
             topic_config_coordinator: context.topic_config_coordinator,
             topic_queue_mapping_manager: context.topic_queue_mapping_manager,
@@ -142,11 +142,12 @@ where
         MS: BrokerMasterAddressStore,
     {
         let registration = Arc::clone(self);
+        let broker_config = self.config.broker_snapshot();
         complete_topic_config_creation(
             Arc::clone(&self.topic_config_coordinator),
             creation,
             start_time,
-            self.broker_config.async_topic_create_persist_enable,
+            broker_config.async_topic_create_persist_enable,
             move |update| {
                 let registration = Arc::clone(&registration);
                 async move { registration.register_update(update).await }
@@ -159,7 +160,7 @@ where
     where
         MS: BrokerMasterAddressStore,
     {
-        if self.broker_config.enable_single_topic_register {
+        if self.config.broker_snapshot().enable_single_topic_register {
             self.register_single_topic(update.topic_config).await;
         } else {
             self.register_incremental_topic(update).await;
@@ -168,12 +169,16 @@ where
 
     fn topic_config_for_registration(&self, topic_config: &TopicConfig) -> TopicConfig {
         let mut topic_config = topic_config.clone();
-        if !PermName::is_writeable(self.broker_config.broker_permission)
-            || !PermName::is_readable(self.broker_config.broker_permission)
-        {
-            topic_config.perm &= self.broker_config.broker_permission;
+        let broker_permission = self.config.broker_snapshot().broker_permission;
+        if !PermName::is_writeable(broker_permission) || !PermName::is_readable(broker_permission) {
+            topic_config.perm &= broker_permission;
         }
         topic_config
+    }
+
+    #[cfg(test)]
+    pub(crate) fn topic_config_for_registration_for_test(&self, topic_config: &TopicConfig) -> TopicConfig {
+        self.topic_config_for_registration(topic_config)
     }
 
     async fn register_single_topic(&self, topic_config: Arc<TopicConfig>) {
@@ -187,9 +192,10 @@ where
             info!(topic = %topic_name, "Skip stale transaction topic registration after topic removal");
             return;
         };
+        let broker_config = self.config.broker_snapshot();
         self.broker_outer_api
             .register_single_topic_all(
-                self.broker_config.broker_identity.broker_name.clone(),
+                broker_config.broker_identity.broker_name.clone(),
                 self.topic_config_for_registration(current.as_ref()),
                 3000,
             )
@@ -242,24 +248,25 @@ where
             topic_queue_mapping_info_map,
             ..Default::default()
         };
-        let broker_addr = CheetahString::from_string(self.broker_config.get_broker_addr());
+        let broker_config = self.config.broker_snapshot();
+        let broker_addr = CheetahString::from_string(broker_config.get_broker_addr());
         let results = self
             .broker_outer_api
             .register_broker_all(
-                self.broker_config.broker_identity.broker_cluster_name.clone(),
+                broker_config.broker_identity.broker_cluster_name.clone(),
                 broker_addr.clone(),
-                self.broker_config.broker_identity.broker_name.clone(),
-                self.broker_config.broker_identity.broker_id,
+                broker_config.broker_identity.broker_name.clone(),
+                broker_config.broker_identity.broker_id,
                 self.ha_server_addr.clone(),
                 wrapper,
                 vec![],
                 false,
-                self.broker_config.register_broker_timeout_mills as u64,
-                self.broker_config.enable_slave_acting_master,
-                self.broker_config.compressed_register,
-                self.broker_config
+                broker_config.register_broker_timeout_mills as u64,
+                broker_config.enable_slave_acting_master,
+                broker_config.compressed_register,
+                broker_config
                     .enable_slave_acting_master
-                    .then_some(self.broker_config.broker_not_active_timeout_millis),
+                    .then_some(broker_config.broker_not_active_timeout_millis),
                 Default::default(),
             )
             .await;

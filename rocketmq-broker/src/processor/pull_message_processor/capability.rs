@@ -44,6 +44,7 @@ use rocketmq_store::StorePorts;
 use rocketmq_transport::api::RpcClientImpl;
 
 use crate::broker::broker_pre_online_capability::BrokerOnlineRoleState;
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use crate::failover::escape_bridge::EscapeBridge;
@@ -55,13 +56,14 @@ use crate::subscription::manager::subscription_group_manager::SubscriptionGroupC
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 
-/// Immutable request-path projection of the Broker and Store configuration used by pull.
+/// Request-path projection of the Broker and Store configuration used by pull.
+/// Broker permission is read through the one shared runtime permission view.
 #[derive(Clone, Debug)]
 pub(crate) struct PullMessagePolicy {
     pub(crate) broker_name: CheetahString,
     pub(crate) broker_id: u64,
     pub(crate) broker_ip: CheetahString,
-    pub(crate) broker_permission: u32,
+    pub(crate) broker_permission: BrokerPermissionState,
     pub(crate) is_in_broker_container: bool,
     pub(crate) slave_read_enable: bool,
     pub(crate) forward_timeout: u64,
@@ -79,12 +81,16 @@ pub(crate) struct PullMessagePolicy {
 }
 
 impl PullMessagePolicy {
-    pub(crate) fn from_configs(broker_config: &BrokerConfig, store_config: &MessageStoreConfig) -> Self {
+    pub(crate) fn from_configs(
+        broker_config: &BrokerConfig,
+        store_config: &MessageStoreConfig,
+        broker_permission: BrokerPermissionState,
+    ) -> Self {
         let mut policy = Self {
             broker_name: CheetahString::new(),
             broker_id: 0,
             broker_ip: CheetahString::new(),
-            broker_permission: 0,
+            broker_permission,
             is_in_broker_container: false,
             slave_read_enable: false,
             forward_timeout: 0,
@@ -108,7 +114,6 @@ impl PullMessagePolicy {
         self.broker_name = config.broker_name().clone();
         self.broker_id = config.broker_identity.broker_id;
         self.broker_ip = config.broker_ip1.clone();
-        self.broker_permission = config.broker_permission;
         self.is_in_broker_container = config.broker_identity.is_in_broker_container;
         self.slave_read_enable = config.slave_read_enable;
         self.forward_timeout = config.forward_timeout;
@@ -136,11 +141,16 @@ pub(crate) struct PullMessagePolicyState {
 }
 
 impl PullMessagePolicyState {
-    pub(crate) fn from_configs(broker_config: &BrokerConfig, store_config: &MessageStoreConfig) -> Self {
+    pub(crate) fn from_configs(
+        broker_config: &BrokerConfig,
+        store_config: &MessageStoreConfig,
+        broker_permission: BrokerPermissionState,
+    ) -> Self {
         Self {
             current: Arc::new(ArcSwap::from_pointee(PullMessagePolicy::from_configs(
                 broker_config,
                 store_config,
+                broker_permission,
             ))),
         }
     }
@@ -536,6 +546,7 @@ impl<MS: BrokerReadStore> PullMessageProcessorContext<MS> {
 mod tests {
     use std::sync::Weak;
 
+    use crate::broker::broker_runtime_config_state::BrokerPermissionState;
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
@@ -551,10 +562,12 @@ mod tests {
     fn pull_policy_state_publishes_complete_updated_generations() {
         let mut broker_config = BrokerConfig::default();
         let mut store_config = MessageStoreConfig::default();
-        let state = PullMessagePolicyState::from_configs(&broker_config, &store_config);
+        let broker_permission = BrokerPermissionState::new(broker_config.broker_permission);
+        let state = PullMessagePolicyState::from_configs(&broker_config, &store_config, broker_permission.clone());
 
         broker_config.enable_property_filter = true;
         broker_config.broker_identity.broker_id = 7;
+        broker_permission.update(4);
         state.update_broker_config(&broker_config);
         store_config.broker_role = BrokerRole::Slave;
         store_config.offset_check_in_slave = true;
@@ -563,8 +576,11 @@ mod tests {
         let policy = state.snapshot();
         assert!(policy.enable_property_filter);
         assert_eq!(policy.broker_id, 7);
+        assert_eq!(policy.broker_permission.get(), 4);
         assert_eq!(policy.broker_role, BrokerRole::Slave);
         assert!(policy.offset_check_in_slave);
+        broker_permission.update(6);
+        assert_eq!(state.snapshot().broker_permission.get(), 6);
     }
 
     #[test]

@@ -52,6 +52,7 @@ use rocketmq_store_api::TimerStoreMode;
 use tracing::debug;
 use tracing::info;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::broker_runtime::complete_topic_config_creation;
 use crate::client::manager::producer_manager::ProducerReplySessionRegistry;
 use crate::client::rebalance::rebalance_lock_manager::RebalanceLockManager;
@@ -71,7 +72,8 @@ use crate::transaction::queue::transaction_message_store::TransactionMessageStor
 /// Request-path configuration projected from the Broker and Store configurations.
 ///
 /// Keeping the projection explicit prevents request processors from becoming implicit
-/// configuration or lifecycle owners. A generation is immutable after publication.
+/// configuration or lifecycle owners. A generation is immutable after publication;
+/// Broker permission is read through the one shared runtime permission view.
 #[derive(Clone, Debug)]
 pub(crate) struct SendMessagePolicy {
     pub(crate) broker_name: CheetahString,
@@ -80,7 +82,7 @@ pub(crate) struct SendMessagePolicy {
     pub(crate) broker_ip: CheetahString,
     pub(crate) broker_addr: CheetahString,
     pub(crate) store_host: SocketAddr,
-    pub(crate) broker_permission: u32,
+    pub(crate) broker_permission: BrokerPermissionState,
     pub(crate) is_in_broker_container: bool,
     pub(crate) region_id: CheetahString,
     pub(crate) trace_on: bool,
@@ -104,6 +106,7 @@ pub(crate) struct SendMessagePolicy {
     pub(crate) timer_extended_capability_version: u16,
     pub(crate) timer_extended_admission_enable: bool,
     pub(crate) auto_create_topic_enable: bool,
+    pub(crate) default_topic_queue_nums: u32,
     pub(crate) async_topic_create_persist_enable: bool,
     pub(crate) enable_single_topic_register: bool,
     pub(crate) register_broker_timeout_millis: u64,
@@ -116,6 +119,7 @@ impl SendMessagePolicy {
         broker_config: &BrokerConfig,
         message_store_config: &MessageStoreConfig,
         store_host: SocketAddr,
+        broker_permission: BrokerPermissionState,
     ) -> Self {
         let mut policy = Self {
             broker_name: CheetahString::new(),
@@ -124,7 +128,7 @@ impl SendMessagePolicy {
             broker_ip: CheetahString::new(),
             broker_addr: CheetahString::new(),
             store_host,
-            broker_permission: 0,
+            broker_permission,
             is_in_broker_container: false,
             region_id: CheetahString::new(),
             trace_on: false,
@@ -148,6 +152,7 @@ impl SendMessagePolicy {
             timer_extended_capability_version: u16::from(cfg!(feature = "extended_timeline")),
             timer_extended_admission_enable: message_store_config.timer_extended_admission_enable,
             auto_create_topic_enable: false,
+            default_topic_queue_nums: 0,
             async_topic_create_persist_enable: false,
             enable_single_topic_register: false,
             register_broker_timeout_millis: 0,
@@ -164,7 +169,6 @@ impl SendMessagePolicy {
         self.broker_id = config.broker_identity.broker_id;
         self.broker_ip = config.broker_ip1.clone();
         self.broker_addr = CheetahString::from_string(config.get_broker_addr());
-        self.broker_permission = config.broker_permission;
         self.is_in_broker_container = config.broker_identity.is_in_broker_container;
         self.region_id = config.region_id.clone();
         self.trace_on = config.trace_on;
@@ -180,6 +184,7 @@ impl SendMessagePolicy {
         self.ha_pending_reject_wait_millis = config.ha_pending_reject_wait_millis;
         self.reput_lag_reject_bytes = config.reput_lag_reject_bytes;
         self.auto_create_topic_enable = config.auto_create_topic_enable;
+        self.default_topic_queue_nums = config.topic_queue_config.default_topic_queue_nums;
         self.async_topic_create_persist_enable = config.async_topic_create_persist_enable;
         self.enable_single_topic_register = config.enable_single_topic_register;
         self.register_broker_timeout_millis = config.register_broker_timeout_mills.max(0) as u64;
@@ -210,12 +215,14 @@ impl SendMessagePolicyState {
         broker_config: &BrokerConfig,
         message_store_config: &MessageStoreConfig,
         store_host: SocketAddr,
+        broker_permission: BrokerPermissionState,
     ) -> Self {
         Self {
             current: Arc::new(ArcSwap::from_pointee(SendMessagePolicy::from_configs(
                 broker_config,
                 message_store_config,
                 store_host,
+                broker_permission,
             ))),
         }
     }
@@ -478,6 +485,13 @@ where
     {
         let start_time = Instant::now();
         let policy = self.policy.snapshot();
+        let runtime_config = policy.broker_permission.runtime_snapshot();
+        let auto_create_topic_enable = runtime_config
+            .map(|snapshot| snapshot.auto_create_topic_enable)
+            .unwrap_or(policy.auto_create_topic_enable);
+        let default_topic_queue_nums = runtime_config
+            .map(|snapshot| snapshot.default_topic_queue_nums)
+            .unwrap_or(policy.default_topic_queue_nums);
         let state_machine_version = self.message_store.state_machine_version()?;
         let creation = self.topic_config_manager.create_topic_in_send_message_method(
             topic,
@@ -486,7 +500,8 @@ where
             queue_nums,
             topic_sys_flag,
             state_machine_version,
-            policy.auto_create_topic_enable,
+            auto_create_topic_enable,
+            default_topic_queue_nums,
         )?;
         Some(self.complete_creation(creation, start_time, policy).await)
     }
@@ -553,8 +568,9 @@ where
 
     fn topic_config_for_registration(policy: &SendMessagePolicy, topic_config: &TopicConfig) -> TopicConfig {
         let mut topic_config = topic_config.clone();
-        if !PermName::is_writeable(policy.broker_permission) || !PermName::is_readable(policy.broker_permission) {
-            topic_config.perm &= policy.broker_permission;
+        let broker_permission = policy.broker_permission.get();
+        if !PermName::is_writeable(broker_permission) || !PermName::is_readable(broker_permission) {
+            topic_config.perm &= broker_permission;
         }
         topic_config
     }
@@ -745,6 +761,7 @@ mod tests {
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
 
+    use crate::broker::broker_runtime_config_state::BrokerPermissionState;
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
@@ -758,10 +775,20 @@ mod tests {
         let mut broker_config = BrokerConfig::default();
         let mut store_config = MessageStoreConfig::default();
         let initial_store_host = SocketAddr::from((Ipv4Addr::LOCALHOST, 10911));
-        let state = SendMessagePolicyState::from_configs(&broker_config, &store_config, initial_store_host);
+        let broker_permission = BrokerPermissionState::new(broker_config.broker_permission);
+        let state = SendMessagePolicyState::from_configs(
+            &broker_config,
+            &store_config,
+            initial_store_host,
+            broker_permission.clone(),
+        );
 
         broker_config.region_id = CheetahString::from_static_str("updated-region");
         broker_config.broker_identity.broker_id = 7;
+        broker_config.broker_permission = 4;
+        broker_config.auto_create_topic_enable = false;
+        broker_config.topic_queue_config.default_topic_queue_nums = 16;
+        broker_permission.update(broker_config.broker_permission);
         state.update_broker_config(&broker_config);
         store_config.broker_role = BrokerRole::Slave;
         store_config.max_message_size = 1024;
@@ -772,9 +799,14 @@ mod tests {
         let snapshot = state.snapshot();
         assert_eq!(snapshot.region_id, "updated-region");
         assert_eq!(snapshot.broker_id, 7);
+        assert_eq!(snapshot.broker_permission.get(), 4);
+        assert!(!snapshot.auto_create_topic_enable);
+        assert_eq!(snapshot.default_topic_queue_nums, 16);
         assert_eq!(snapshot.broker_role, BrokerRole::Slave);
         assert_eq!(snapshot.max_message_size, 1024);
         assert_eq!(snapshot.store_host, updated_store_host);
+        broker_permission.update(6);
+        assert_eq!(state.snapshot().broker_permission.get(), 6);
     }
 
     #[test]
@@ -789,6 +821,7 @@ mod tests {
             &BrokerConfig::default(),
             &store_config,
             SocketAddr::from((Ipv4Addr::LOCALHOST, 10911)),
+            BrokerPermissionState::new(BrokerConfig::default().broker_permission),
         );
 
         let snapshot = state.snapshot();

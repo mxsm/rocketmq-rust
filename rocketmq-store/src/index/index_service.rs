@@ -16,11 +16,15 @@ use std::fs;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use parking_lot::Mutex;
 use parking_lot::RwLock;
 use parking_lot::RwLockReadGuard;
 use rocketmq_model::common::message::MessageConst;
@@ -69,6 +73,8 @@ use crate::runtime::StoreRuntimeScope;
 use crate::store::running_flags::RunningFlags;
 use crate::store_path_config_helper::get_store_path_index;
 
+const INVALID_INDEX_SAFE_OFFSET: u64 = u64::MAX;
+
 #[derive(Clone)]
 pub struct IndexService {
     root: IndexServiceRoot<IndexServiceAdapter>,
@@ -85,6 +91,10 @@ pub struct IndexServiceAdapter {
     message_store_config: Arc<MessageStoreConfig>,
     store_checkpoint: Arc<StoreCheckpoint>,
     running_flags: Arc<RunningFlags>,
+    safe_progress_failed: Arc<AtomicBool>,
+    accepted_safe_offset: Arc<AtomicI64>,
+    safe_frontier_initialized: Arc<AtomicBool>,
+    safe_progress_lock: Arc<Mutex<()>>,
 }
 
 impl IndexService {
@@ -136,6 +146,10 @@ impl IndexServiceAdapter {
             message_store_config,
             store_checkpoint,
             running_flags,
+            safe_progress_failed: Arc::new(AtomicBool::new(false)),
+            accepted_safe_offset: Arc::new(AtomicI64::new(0)),
+            safe_frontier_initialized: Arc::new(AtomicBool::new(false)),
+            safe_progress_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -199,11 +213,21 @@ impl IndexServiceAdapter {
         }
 
         let restored_index_safe_offset = self.store_checkpoint.index_safe_phy_offset();
+        if restored_index_safe_offset == INVALID_INDEX_SAFE_OFFSET {
+            self.safe_progress_failed.store(true, Ordering::Release);
+            self.accepted_safe_offset.store(-1, Ordering::Release);
+            info!("index safe offset restored as invalid after an earlier build failure");
+            return true;
+        }
         let effective_index_safe_offset =
             restore_index_safe_offset(&write_list, restored_index_safe_offset, removed_unsafe_index_file);
         let loaded_index_safe_offset = restore_index_safe_offset(&write_list, 0, true);
         self.store_checkpoint
             .set_index_safe_phy_offset(effective_index_safe_offset);
+        self.accepted_safe_offset.store(
+            effective_index_safe_offset.min(i64::MAX as u64) as i64,
+            Ordering::Release,
+        );
         info!(
             "index safe offset restored, persisted: {}, loaded: {}, effective: {}, removedUnsafeIndexFile: {}",
             restored_index_safe_offset,
@@ -228,16 +252,70 @@ impl IndexServiceAdapter {
 
     #[inline]
     pub fn index_safe_phy_offset(&self) -> u64 {
-        self.store_checkpoint.index_safe_phy_offset()
+        let safe_offset = self.store_checkpoint.index_safe_phy_offset();
+        if safe_offset == INVALID_INDEX_SAFE_OFFSET {
+            0
+        } else {
+            safe_offset
+        }
+    }
+
+    pub fn available_index_safe_phy_offset(&self) -> Option<u64> {
+        (!self.safe_progress_failed.load(Ordering::Acquire)).then(|| self.index_safe_phy_offset())
+    }
+
+    /// Seeds the contiguous index frontier at the first retained CommitLog byte.
+    pub fn initialize_dispatch_frontier(&self, commit_log_min_offset: i64) -> Option<i64> {
+        let _guard = self.safe_progress_lock.lock();
+        if self.safe_progress_failed.load(Ordering::Acquire) {
+            return None;
+        }
+        let persisted = self.store_checkpoint.index_safe_phy_offset().min(i64::MAX as u64) as i64;
+        let frontier = persisted.max(commit_log_min_offset.max(0));
+        self.accepted_safe_offset.store(frontier, Ordering::Release);
+        self.safe_frontier_initialized.store(true, Ordering::Release);
+        Some(frontier)
+    }
+
+    /// Persists a scanner-verified CommitLog BLANK transition.
+    pub fn advance_safe_frontier_over_blank(&self, blank_start_offset: i64, next_file_offset: i64) -> bool {
+        let _guard = self.safe_progress_lock.lock();
+        if self.safe_progress_failed.load(Ordering::Acquire)
+            || blank_start_offset < 0
+            || next_file_offset <= blank_start_offset
+        {
+            return false;
+        }
+        if !self.safe_frontier_initialized.load(Ordering::Acquire) {
+            let persisted = self.store_checkpoint.index_safe_phy_offset().min(i64::MAX as u64) as i64;
+            self.accepted_safe_offset.store(persisted, Ordering::Release);
+            self.safe_frontier_initialized.store(true, Ordering::Release);
+        }
+        if self.accepted_safe_offset.load(Ordering::Acquire) != blank_start_offset {
+            self.mark_index_safe_progress_failed();
+            return false;
+        }
+        for index_file in self.index_file_list.read().iter() {
+            index_file.flush();
+        }
+        self.store_checkpoint.set_index_safe_phy_offset(next_file_offset as u64);
+        if let Err(error) = self.store_checkpoint.flush() {
+            error!(%error, "failed to persist local index BLANK frontier");
+            self.mark_index_safe_progress_failed();
+            return false;
+        }
+        self.accepted_safe_offset.store(next_file_offset, Ordering::Release);
+        true
     }
 
     #[inline]
     pub fn advance_index_safe_offset_to(&self, index_safe_offset: i64) {
-        if index_safe_offset <= 0 {
+        if index_safe_offset <= 0 || self.safe_progress_failed.load(Ordering::Acquire) {
             return;
         }
         self.store_checkpoint
             .advance_index_safe_phy_offset(index_safe_offset as u64);
+        self.accepted_safe_offset.store(index_safe_offset, Ordering::Release);
     }
 
     #[inline]
@@ -383,6 +461,26 @@ impl IndexServiceAdapter {
     }
 
     fn build_index_admitted(&self, dispatch_request: &DispatchRequest) {
+        let _frontier_guard = self.safe_progress_lock.lock();
+        if self.safe_progress_failed.load(Ordering::Acquire) || self.running_flags.is_index_file_error() {
+            if !self.safe_progress_failed.load(Ordering::Acquire) {
+                self.mark_index_safe_progress_failed();
+            }
+            return;
+        }
+        let request_safe_offset = index_safe_offset(dispatch_request.commit_log_offset, dispatch_request.msg_size);
+        if self.safe_frontier_initialized.load(Ordering::Acquire) {
+            let accepted_safe_offset = self.accepted_safe_offset.load(Ordering::Acquire);
+            if let Some(request_safe_offset) = request_safe_offset {
+                if request_safe_offset <= accepted_safe_offset {
+                    return;
+                }
+                if dispatch_request.commit_log_offset != accepted_safe_offset {
+                    self.mark_index_safe_progress_failed();
+                    return;
+                }
+            }
+        }
         let tran_type = MessageSysFlag::get_transaction_value(dispatch_request.sys_flag);
         let topic = dispatch_request.topic.as_str();
         let keys = dispatch_request.keys.as_str();
@@ -467,9 +565,13 @@ impl IndexServiceAdapter {
                 );
                 if key_outcome.advances_safe_offset() {
                     self.advance_index_safe_offset_for_request(dispatch_request);
+                } else {
+                    self.running_flags.make_index_file_error();
+                    self.mark_index_safe_progress_failed();
                 }
             }
             None => {
+                self.mark_index_safe_progress_failed();
                 error!("build index error, stop building index");
             }
         }
@@ -478,6 +580,16 @@ impl IndexServiceAdapter {
     fn advance_index_safe_offset_for_request(&self, dispatch_request: &DispatchRequest) {
         if let Some(safe_offset) = index_safe_offset(dispatch_request.commit_log_offset, dispatch_request.msg_size) {
             self.advance_index_safe_offset_to(safe_offset);
+        }
+    }
+
+    fn mark_index_safe_progress_failed(&self) {
+        self.safe_progress_failed.store(true, Ordering::Release);
+        self.accepted_safe_offset.store(-1, Ordering::Release);
+        self.store_checkpoint
+            .set_index_safe_phy_offset(INVALID_INDEX_SAFE_OFFSET);
+        if let Err(error) = self.store_checkpoint.flush() {
+            error!(%error, "failed to persist invalid local index safe progress");
         }
     }
 
@@ -609,10 +721,12 @@ impl IndexServiceAdapter {
         for index_file in &files {
             index_file.flush();
         }
-        let safe_offset = max_index_dispatch_offset(&files).unwrap_or_default().max(0);
-        self.store_checkpoint.advance_index_safe_phy_offset(safe_offset as u64);
+        if !self.safe_progress_failed.load(Ordering::Acquire) {
+            let safe_offset = max_index_dispatch_offset(&files).unwrap_or_default().max(0);
+            self.store_checkpoint.advance_index_safe_phy_offset(safe_offset as u64);
+        }
         self.store_checkpoint.flush()?;
-        Ok(safe_offset)
+        Ok(self.index_safe_phy_offset().min(i64::MAX as u64) as i64)
     }
 }
 
@@ -872,6 +986,103 @@ mod tests {
         });
 
         assert_eq!(index_service.index_safe_phy_offset(), 1100);
+    }
+
+    #[test]
+    fn failed_index_progress_prevents_a_later_success_from_leaping_the_safe_offset() {
+        let temp_dir = tempdir().unwrap();
+        let index_service = new_index_service_for_test(&temp_dir, "store_checkpoint_test_index_failure_latch");
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            msg_size: 100,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("first-key"),
+            ..DispatchRequest::default()
+        });
+        assert_eq!(index_service.index_safe_phy_offset(), 1100);
+
+        index_service.running_flags.make_index_file_error();
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 2000,
+            msg_size: 100,
+            store_timestamp: 1000000001000,
+            keys: CheetahString::from_slice("failed-key"),
+            ..DispatchRequest::default()
+        });
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 3000,
+            msg_size: 100,
+            store_timestamp: 1000000002000,
+            keys: CheetahString::from_slice("later-key"),
+            ..DispatchRequest::default()
+        });
+
+        assert_eq!(index_service.index_safe_phy_offset(), 0);
+        assert!(
+            index_service
+                .query_offset("TestTopic", "later-key", 10, 0, i64::MAX)
+                .get_phy_offsets()
+                .is_empty(),
+            "the failure latch must stop later index writes as well as safe-watermark advancement"
+        );
+        index_service.shutdown();
+        drop(index_service);
+
+        let mut restarted = new_index_service_for_test(&temp_dir, "store_checkpoint_test_index_failure_latch");
+        assert!(restarted.load(true));
+        assert_eq!(restarted.index_safe_phy_offset(), 0);
+        restarted.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 4000,
+            msg_size: 100,
+            store_timestamp: 1000000003000,
+            keys: CheetahString::from_slice("restart-later-key"),
+            ..DispatchRequest::default()
+        });
+        assert_eq!(restarted.index_safe_phy_offset(), 0);
+        assert!(restarted
+            .query_offset("TestTopic", "restart-later-key", 10, 0, i64::MAX)
+            .get_phy_offsets()
+            .is_empty());
+    }
+
+    #[test]
+    fn ordinary_dispatch_gap_is_not_mistaken_for_commitlog_blank_padding() {
+        let temp_dir = tempdir().unwrap();
+        let checkpoint_name = "store_checkpoint_test_index_unverified_gap";
+        let index_service = new_index_service_for_test(&temp_dir, checkpoint_name);
+        assert_eq!(index_service.initialize_dispatch_frontier(1000), Some(1000));
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1000,
+            msg_size: 80,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_slice("tail-key"),
+            ..DispatchRequest::default()
+        });
+        assert_eq!(index_service.index_safe_phy_offset(), 1080);
+
+        index_service.build_index(&DispatchRequest {
+            topic: CheetahString::from_slice("TestTopic"),
+            commit_log_offset: 1100,
+            msg_size: 50,
+            store_timestamp: 1000000001000,
+            keys: CheetahString::from_slice("after-unverified-gap"),
+            ..DispatchRequest::default()
+        });
+        assert_eq!(index_service.index_safe_phy_offset(), 0);
+        assert!(index_service
+            .query_offset("TestTopic", "after-unverified-gap", 10, 0, i64::MAX)
+            .get_phy_offsets()
+            .is_empty());
+        index_service.shutdown();
+
+        let mut restarted = new_index_service_for_test(&temp_dir, checkpoint_name);
+        assert!(restarted.load(true));
+        assert_eq!(restarted.available_index_safe_phy_offset(), None);
     }
 
     #[test]

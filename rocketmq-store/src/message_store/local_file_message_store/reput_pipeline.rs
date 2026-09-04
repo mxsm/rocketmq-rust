@@ -118,6 +118,20 @@ impl ReputDispatchPipeline {
         }
     }
 
+    /// Publishes a scanner-verified mapped-file BLANK boundary in lane order.
+    pub(super) async fn dispatch_commit_log_blank(&self, blank_start_offset: i64, next_file_offset: i64) {
+        for dispatcher in self.dispatcher.snapshot().iter().cloned() {
+            execute_blank_lane(
+                dispatcher,
+                blank_start_offset,
+                next_file_offset,
+                self.runtime_scope.clone(),
+            )
+            .await;
+        }
+        self.dispatcher.publish_frontier(next_file_offset);
+    }
+
     async fn dispatch_serial(&self, dispatch_batch: &mut [DispatchRequest], frontier: Option<i64>) {
         self.dispatcher.dispatch_batch_async(dispatch_batch).await;
         if let Some(frontier) = frontier {
@@ -158,6 +172,39 @@ async fn execute_lane(
                 Ok(()) => break,
                 Err(error) => {
                     warn!(%error, "managed Reput blocking lane rejected work; retrying without publishing");
+                    tokio::task::yield_now().await;
+                }
+            }
+        },
+    }
+}
+
+async fn execute_blank_lane(
+    dispatcher: Arc<dyn CommitLogDispatcher>,
+    blank_start_offset: i64,
+    next_file_offset: i64,
+    runtime_scope: StoreRuntimeScope,
+) {
+    match dispatcher.dispatch_execution() {
+        CommitLogDispatchExecution::Inline => {
+            dispatcher.dispatch_commit_log_blank(blank_start_offset, next_file_offset);
+        }
+        CommitLogDispatchExecution::Async => {
+            dispatcher
+                .dispatch_commit_log_blank_async(blank_start_offset, next_file_offset)
+                .await;
+        }
+        CommitLogDispatchExecution::Blocking => loop {
+            let owned_dispatcher = Arc::clone(&dispatcher);
+            match runtime_scope
+                .spawn_io("reput-blank-required-lane", move || {
+                    owned_dispatcher.dispatch_commit_log_blank(blank_start_offset, next_file_offset);
+                })
+                .await
+            {
+                Ok(()) => break,
+                Err(error) => {
+                    warn!(%error, "managed Reput BLANK lane rejected work; retrying without publishing");
                     tokio::task::yield_now().await;
                 }
             }

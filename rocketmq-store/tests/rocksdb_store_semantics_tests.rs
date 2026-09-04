@@ -30,6 +30,7 @@ use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStorePort;
@@ -37,15 +38,65 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::DispatchRequest;
 use rocketmq_store::FlushDiskType;
 use rocketmq_store::GetMessageStatus;
+use rocketmq_store::MessageIndexRuntimeSnapshot;
+use rocketmq_store::MessageIndexRuntimeSource;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageStatus;
+use rocketmq_store::QueryMessageRequest;
 use rocketmq_store::RocksDBMessageStore;
+use rocketmq_store::RocksDbIndexBuildConfig;
+use rocketmq_store::RocksDbIndexBuildService;
 use rocketmq_store::StoreComponent;
 use rocketmq_store::StoreOperation;
 use rocketmq_store::StorePorts;
 use rocketmq_store::StoreRuntimeConfig;
 use rocketmq_store::StoreType;
 use tempfile::TempDir;
+
+struct ReenabledIncompleteIndex;
+
+impl MessageIndexRuntimeSource for ReenabledIncompleteIndex {
+    fn snapshot(&self) -> MessageIndexRuntimeSnapshot {
+        MessageIndexRuntimeSnapshot {
+            enabled: true,
+            incomplete: true,
+        }
+    }
+
+    fn with_dispatch_admission(&self, dispatch: &mut dyn FnMut(bool)) {
+        dispatch(true);
+    }
+}
+
+struct DisabledCompleteIndex;
+
+impl MessageIndexRuntimeSource for DisabledCompleteIndex {
+    fn snapshot(&self) -> MessageIndexRuntimeSnapshot {
+        MessageIndexRuntimeSnapshot {
+            enabled: false,
+            incomplete: false,
+        }
+    }
+
+    fn with_dispatch_admission(&self, dispatch: &mut dyn FnMut(bool)) {
+        dispatch(false);
+    }
+}
+
+struct EnabledCompleteIndex;
+
+impl MessageIndexRuntimeSource for EnabledCompleteIndex {
+    fn snapshot(&self) -> MessageIndexRuntimeSnapshot {
+        MessageIndexRuntimeSnapshot {
+            enabled: true,
+            incomplete: false,
+        }
+    }
+
+    fn with_dispatch_admission(&self, dispatch: &mut dyn FnMut(bool)) {
+        dispatch(true);
+    }
+}
 
 fn rocksdb_service_context(name: &'static str) -> rocketmq_runtime::ChildServiceContext {
     static OWNER: OnceLock<rocketmq_runtime::RuntimeOwner> = OnceLock::new();
@@ -282,7 +333,6 @@ async fn rocksdb_query_message_after_dispatch() {
     store.init().await.expect("init store");
     assert!(store.load().await, "load store");
     store.start().await.expect("start store");
-
     let mut msg = build_test_message(&topic, 0, b"rocksdb-query-body");
     msg.set_keys(key.clone());
 
@@ -332,6 +382,11 @@ async fn rocksdb_query_message_uses_rocksdb_index_without_local_file_index_dispa
     store.init().await.expect("init store");
     assert!(store.load().await, "load store");
     store.start().await.expect("start store");
+    assert_eq!(
+        store.message_index_safe_offset(),
+        Some(0),
+        "an available empty RocksDB index has a legitimate zero safe offset"
+    );
 
     let mut msg = build_test_message(&topic, 0, b"rocksdb-query-rocks-index-only-body");
     msg.set_keys(key.clone());
@@ -348,7 +403,7 @@ async fn rocksdb_query_message_uses_rocksdb_index_without_local_file_index_dispa
             msg_size: append_result.wrote_bytes,
             store_timestamp: append_result.store_timestamp,
             keys: key.clone(),
-            uniq_key: Some(uniq_key),
+            uniq_key: Some(uniq_key.clone()),
             success: true,
             ..DispatchRequest::default()
         })
@@ -357,6 +412,13 @@ async fn rocksdb_query_message_uses_rocksdb_index_without_local_file_index_dispa
         .rocksdb_index_service()
         .flush_pending()
         .expect("manual rocksdb index build should flush");
+    assert_eq!(
+        store.message_index_safe_offset(),
+        Some(append_result.wrote_offset + i64::from(append_result.wrote_bytes)),
+        "RocksDB must durably expose the exclusive indexed CommitLog offset"
+    );
+
+    assert!(store.install_message_index_runtime(Arc::new(ReenabledIncompleteIndex)));
 
     let result = store
         .query_message(
@@ -373,6 +435,345 @@ async fn rocksdb_query_message_uses_rocksdb_index_without_local_file_index_dispa
     assert!(result.buffer_total_size > 0);
     assert_eq!(result.index_last_update_phyoffset, append_result.wrote_offset);
     assert_eq!(result.index_last_update_timestamp, append_result.store_timestamp);
+    assert!(
+        !result.index_query_safe,
+        "a non-empty RocksDB result must retain the disabled-period safety gap"
+    );
+
+    let store_time_hour = append_result.store_timestamp - append_result.store_timestamp % 3_600_000;
+    let exhausted_cursor = CheetahString::from_string(format!(
+        "{store_time_hour}@{topic}@K@{key}@{uniq_key}@{}",
+        append_result.wrote_offset
+    ));
+    let cursor_result = store
+        .query_message_with_options(&QueryMessageRequest {
+            topic: topic.clone(),
+            key: key.clone(),
+            index_type: Some(CheetahString::from_static_str("K")),
+            max_num: 10,
+            begin: append_result.store_timestamp,
+            end: append_result.store_timestamp,
+            last_key: Some(exhausted_cursor.clone()),
+        })
+        .await
+        .expect("an exhausted RocksDB cursor should return an empty page");
+    assert_eq!(cursor_result.buffer_total_size, 0);
+    assert!(cursor_result.message_maped_list.is_empty());
+    assert!(
+        !cursor_result.index_query_safe,
+        "an empty cursor page must not become a safe not-found result after an index gap"
+    );
+
+    assert!(store.install_message_index_runtime(Arc::new(DisabledCompleteIndex)));
+    let disabled_hit = store
+        .query_message(
+            &topic,
+            &key,
+            10,
+            append_result.store_timestamp,
+            append_result.store_timestamp,
+        )
+        .await
+        .expect("disabled RocksDB index query result");
+    assert!(disabled_hit.buffer_total_size > 0);
+    assert!(
+        !disabled_hit.index_query_safe,
+        "a disabled index cannot make a partial hit safe"
+    );
+
+    let disabled_cursor = store
+        .query_message_with_options(&QueryMessageRequest {
+            topic: topic.clone(),
+            key: key.clone(),
+            index_type: Some(CheetahString::from_static_str("K")),
+            max_num: 10,
+            begin: append_result.store_timestamp,
+            end: append_result.store_timestamp,
+            last_key: Some(exhausted_cursor),
+        })
+        .await
+        .expect("disabled exhausted RocksDB cursor result");
+    assert_eq!(disabled_cursor.buffer_total_size, 0);
+    assert!(
+        !disabled_cursor.index_query_safe,
+        "a disabled index cannot report a safe empty page"
+    );
+
+    let mut rollback = build_test_message(&topic, 0, b"rocksdb-query-rollback-tail");
+    rollback
+        .message_ext_inner
+        .set_sys_flag(MessageSysFlag::TRANSACTION_ROLLBACK_TYPE);
+    let rollback_result = store.put_message(rollback).await;
+    assert_eq!(rollback_result.put_message_status(), PutMessageStatus::PutOk);
+    let rollback_append = rollback_result.append_message_result().expect("rollback append result");
+    store
+        .rocksdb_index_service()
+        .build_index(&DispatchRequest {
+            topic: topic.clone(),
+            queue_id: 0,
+            commit_log_offset: rollback_append.wrote_offset,
+            msg_size: rollback_append.wrote_bytes,
+            store_timestamp: rollback_append.store_timestamp,
+            sys_flag: MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
+            success: true,
+            ..DispatchRequest::default()
+        })
+        .expect("rollback tail should be accepted without an index record");
+    store
+        .rocksdb_index_service()
+        .flush_pending()
+        .expect("rollback tail safe offset should flush");
+    assert_eq!(
+        store.message_index_safe_offset(),
+        Some(rollback_append.wrote_offset + i64::from(rollback_append.wrote_bytes)),
+        "an intentionally ignored rollback tail must advance the durable safe offset"
+    );
+
+    let exact_backend_root = TempDir::new().expect("create exact-backend temp dir");
+    let mut config = rocksdb_store_config(&exact_backend_root);
+    config.rocksdb_cq_double_write_enable = true;
+    let mut exact_backend_store = new_owned_test_store_with_config(config);
+    exact_backend_store.init().await.expect("init exact-backend store");
+    assert!(exact_backend_store.load().await, "load exact-backend store");
+
+    let mut first = build_test_message(&topic, 0, b"rocksdb-exact-backend-first");
+    first.set_keys(key.clone());
+    let first_result = exact_backend_store.put_message(first).await;
+    let first_append = first_result.append_message_result().expect("first append result");
+    exact_backend_store.reput_once().await;
+    assert!(exact_backend_store.install_message_index_runtime(Arc::new(DisabledCompleteIndex)));
+    let second_result = exact_backend_store
+        .put_message(build_test_message(&topic, 0, b"rocksdb-exact-backend-second"))
+        .await;
+    let second_append = second_result.append_message_result().expect("second append result");
+    assert!(exact_backend_store.install_message_index_runtime(Arc::new(EnabledCompleteIndex)));
+    let mut second_dispatch = DispatchRequest {
+        topic: topic.clone(),
+        queue_id: 0,
+        commit_log_offset: second_append.wrote_offset,
+        msg_size: second_append.wrote_bytes,
+        store_timestamp: second_append.store_timestamp,
+        success: true,
+        ..DispatchRequest::default()
+    };
+    exact_backend_store.get_dispatcher_list()[1].dispatch(&mut second_dispatch);
+
+    let partial = exact_backend_store
+        .query_message(
+            &topic,
+            &key,
+            10,
+            first_append.store_timestamp,
+            first_append.store_timestamp,
+        )
+        .await
+        .expect("partial RocksDB primary-index result");
+    assert!(partial.buffer_total_size > 0);
+    assert!(
+        !partial.index_query_safe,
+        "RocksDB hits must use the lagging primary-index watermark, not the caught-up local mirror"
+    );
+
+    let failure_root = TempDir::new().expect("create failure-latch temp dir");
+    let failure_store = new_owned_test_store(&failure_root);
+    let failure_service = RocksDbIndexBuildService::new(
+        failure_store.message_rocksdb_storage(),
+        RocksDbIndexBuildConfig {
+            queue_capacity: 1,
+            batch_size: 1,
+        },
+    )
+    .expect("create bounded RocksDB index service");
+    let failed = failure_service.build_index(&DispatchRequest {
+        topic: topic.clone(),
+        commit_log_offset: 0,
+        msg_size: 100,
+        store_timestamp: 1000000000000,
+        keys: CheetahString::from_static_str("first-key second-key"),
+        success: true,
+        ..DispatchRequest::default()
+    });
+    assert!(failed.is_err(), "a request larger than the queue must fail");
+    let later = failure_service.build_index(&DispatchRequest {
+        topic,
+        commit_log_offset: 100,
+        msg_size: 100,
+        store_timestamp: 1000000001000,
+        keys: CheetahString::from_static_str("later-key"),
+        success: true,
+        ..DispatchRequest::default()
+    });
+    assert!(later.is_err(), "a later success must not pass a failed progress gap");
+    failure_service
+        .flush_pending()
+        .expect("empty failed queue should flush");
+    assert_eq!(
+        failure_service
+            .get_safe_dispatch_offset()
+            .expect("read failure-latched safe offset"),
+        -1,
+        "a later request cannot mask the failed indexed message"
+    );
+    drop(failure_service);
+    let restarted_failure_service = RocksDbIndexBuildService::new(
+        failure_store.message_rocksdb_storage(),
+        RocksDbIndexBuildConfig {
+            queue_capacity: 1,
+            batch_size: 1,
+        },
+    )
+    .expect("restart failure-latched RocksDB index service");
+    assert_eq!(
+        restarted_failure_service
+            .get_safe_dispatch_offset()
+            .expect("read restarted failure latch"),
+        -1,
+        "the invalid frontier must survive a service restart"
+    );
+    assert!(
+        restarted_failure_service
+            .build_index(&DispatchRequest {
+                topic: CheetahString::from_static_str("restart-later-topic"),
+                commit_log_offset: 0,
+                msg_size: 100,
+                store_timestamp: 1000000002000,
+                keys: CheetahString::from_static_str("restart-later-key"),
+                success: true,
+                ..DispatchRequest::default()
+            })
+            .is_err(),
+        "restart must not let a later request cross the persisted invalid frontier"
+    );
+
+    let legacy_root = TempDir::new().expect("create legacy-index temp dir");
+    let legacy_store = new_owned_test_store(&legacy_root);
+    let legacy_storage = legacy_store.message_rocksdb_storage();
+    legacy_storage
+        .write_records_for_index(&[rocketmq_store::IndexRocksDbRecord::unique_key(
+            "legacy-topic",
+            "legacy-key",
+            1000000000000,
+            1000,
+        )])
+        .expect("seed a legacy index without a safe frontier");
+    let legacy_service = RocksDbIndexBuildService::new(legacy_storage, RocksDbIndexBuildConfig::default())
+        .expect("open legacy index service");
+    assert_eq!(
+        legacy_service.get_safe_dispatch_offset().expect("legacy safe offset"),
+        0
+    );
+    assert!(
+        legacy_service
+            .build_index(&DispatchRequest {
+                topic: CheetahString::from_static_str("legacy-topic"),
+                commit_log_offset: 1100,
+                msg_size: 100,
+                store_timestamp: 1000000001000,
+                keys: CheetahString::from_static_str("post-upgrade-key"),
+                success: true,
+                ..DispatchRequest::default()
+            })
+            .is_err(),
+        "the first post-upgrade dispatch cannot leap across an unproven legacy frontier"
+    );
+    assert_eq!(
+        legacy_service
+            .get_safe_dispatch_offset()
+            .expect("invalid legacy frontier"),
+        -1
+    );
+}
+
+#[tokio::test]
+async fn rocksdb_index_safe_frontier_crosses_only_a_scanner_verified_commitlog_blank() {
+    let temp_dir = TempDir::new().expect("create rollover temp dir");
+    let mut config = rocksdb_store_config(&temp_dir);
+    config.mapped_file_size_commit_log = 512;
+    let mut store = new_owned_test_store_with_config(config);
+    store.init().await.expect("init rollover store");
+    assert!(store.load().await, "load rollover store");
+    store.start().await.expect("start rollover store");
+    let topic = CheetahString::from_static_str("af0s");
+
+    let mut tail = MessageExtBrokerInner::default();
+    tail.set_topic(topic.clone());
+    tail.message_ext_inner.set_queue_id(0);
+    tail.set_body(Bytes::from(vec![1_u8; 245]));
+    tail.set_keys(CheetahString::from_static_str("tail-key"));
+    let tail_result = store.put_message(tail).await;
+    assert_eq!(tail_result.put_message_status(), PutMessageStatus::PutOk);
+    assert_eq!(
+        tail_result.append_message_result().expect("tail append").wrote_offset,
+        0
+    );
+
+    let mut next = MessageExtBrokerInner::default();
+    next.set_topic(topic.clone());
+    next.message_ext_inner.set_queue_id(0);
+    next.set_body(Bytes::from(vec![2_u8; 75]));
+    next.set_keys(CheetahString::from_static_str("next-key"));
+    let next_result = store.put_message(next).await;
+    assert_eq!(next_result.put_message_status(), PutMessageStatus::PutOk);
+    let next_append = next_result.append_message_result().expect("next-file append");
+    assert_eq!(next_append.wrote_offset, 512);
+
+    let expected_safe_offset = next_append.wrote_offset + i64::from(next_append.wrote_bytes);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if store.message_index_safe_offset() == Some(expected_safe_offset) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("background Reput must preserve RocksDB safety across the BLANK event");
+    for key in ["tail-key", "next-key"] {
+        let result = store
+            .query_message(&topic, &CheetahString::from_slice(key), 10, 0, i64::MAX)
+            .await
+            .expect("RocksDB query after mapped-file rollover");
+        assert!(result.buffer_total_size > 0, "missing RocksDB index for {key}");
+        assert!(result.index_query_safe, "verified BLANK must preserve RocksDB safety");
+    }
+    store.shutdown().await;
+
+    let gap_root = TempDir::new().expect("create unverified-gap temp dir");
+    let gap_store = new_owned_test_store(&gap_root);
+    let gap_service =
+        RocksDbIndexBuildService::new(gap_store.message_rocksdb_storage(), RocksDbIndexBuildConfig::default())
+            .expect("create unverified-gap service");
+    assert_eq!(
+        gap_service.initialize_dispatch_frontier(1000).expect("seed frontier"),
+        1000
+    );
+    gap_service
+        .build_index(&DispatchRequest {
+            topic: CheetahString::from_static_str("gap-topic"),
+            commit_log_offset: 1000,
+            msg_size: 80,
+            store_timestamp: 1000000000000,
+            keys: CheetahString::from_static_str("tail-key"),
+            success: true,
+            ..DispatchRequest::default()
+        })
+        .expect("contiguous tail dispatch");
+    gap_service.flush_pending().expect("flush contiguous tail");
+    assert!(gap_service
+        .build_index(&DispatchRequest {
+            topic: CheetahString::from_static_str("gap-topic"),
+            commit_log_offset: 1100,
+            msg_size: 50,
+            store_timestamp: 1000000001000,
+            keys: CheetahString::from_static_str("after-unverified-gap"),
+            success: true,
+            ..DispatchRequest::default()
+        })
+        .is_err());
+    assert_eq!(
+        gap_service.get_safe_dispatch_offset().expect("invalid gap frontier"),
+        -1
+    );
 }
 
 #[tokio::test]

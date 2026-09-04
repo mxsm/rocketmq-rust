@@ -22,6 +22,7 @@ use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLit
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::StorePorts;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
 use crate::processor::pop_message_processor::QueueLockManager;
@@ -42,7 +43,7 @@ pub(super) fn pop_lite_processor_for_test(
     let escape_bridge = inner.escape_bridge();
 
     PopLiteMessageProcessor::new(PopLiteMessageProcessorContext::new(
-        PopLiteMessagePolicy::from_config(&inner.broker_config()),
+        PopLiteMessagePolicy::from_config(&inner.broker_config(), inner.broker_permission_state()),
         topic_config_manager,
         subscription_group_lookup,
         PopLiteOffsetCapability::new(&consumer_offset_manager),
@@ -60,7 +61,7 @@ fn transform_order_count_info_drops_queue_level_suffix_when_offset_entries_exist
 }
 
 #[test]
-fn pop_lite_message_policy_captures_only_required_startup_values() {
+fn pop_lite_message_policy_observes_live_permission_and_keeps_other_startup_values() {
     let broker_config = BrokerConfig {
         broker_ip1: CheetahString::from_static_str("192.0.2.10"),
         broker_permission: 4,
@@ -69,12 +70,17 @@ fn pop_lite_message_policy_captures_only_required_startup_values() {
         ..Default::default()
     };
 
-    let policy = PopLiteMessagePolicy::from_config(&broker_config);
+    let broker_permission = BrokerPermissionState::new(broker_config.broker_permission);
+    let policy = PopLiteMessagePolicy::from_config(&broker_config, broker_permission.clone());
 
     assert_eq!(policy.broker_ip1, "192.0.2.10");
-    assert_eq!(policy.broker_permission, 4);
+    assert_eq!(policy.broker_permission.get(), 4);
     assert_eq!(policy.max_client_event_count, 17);
     assert_eq!(policy.lite_event_full_dispatch_delay_time, 29);
+    broker_permission.update(6);
+    assert_eq!(policy.broker_permission.get(), 6);
+    broker_permission.update(4);
+    assert_eq!(policy.broker_permission.get(), 4);
 }
 
 #[test]

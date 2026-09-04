@@ -73,6 +73,14 @@ pub enum BrokerConfigError {
     },
 
     GenerationExhausted,
+
+    RuntimeProjectionUnavailable {
+        component: &'static str,
+    },
+
+    RuntimeCoordination {
+        detail: String,
+    },
 }
 
 impl fmt::Display for BrokerConfigError {
@@ -99,6 +107,15 @@ impl fmt::Display for BrokerConfigError {
                 )
             }
             Self::GenerationExhausted => formatter.write_str("configuration generation counter is exhausted"),
+            Self::RuntimeProjectionUnavailable { component } => {
+                write!(
+                    formatter,
+                    "runtime configuration projection is unavailable: {component}"
+                )
+            }
+            Self::RuntimeCoordination { detail } => {
+                write!(formatter, "runtime configuration coordination failed: {detail}")
+            }
         }
     }
 }

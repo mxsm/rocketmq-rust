@@ -18,6 +18,9 @@ use rocketmq_store_local::index::dispatch::IndexDispatchRoot;
 
 use crate::base::commit_log_dispatcher::CommitLogDispatchExecution;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeHandle;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeSnapshot;
+use crate::base::commit_log_dispatcher::MessageIndexRuntimeSource;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::index::index_service::IndexService;
@@ -30,15 +33,22 @@ pub struct CommitLogDispatcherBuildIndex {
 #[derive(Clone)]
 pub struct IndexDispatchAdapter {
     index_service: IndexService,
-    message_store_config: Arc<MessageStoreConfig>,
+    index_runtime: MessageIndexRuntimeHandle,
 }
 
 impl CommitLogDispatcherBuildIndex {
     pub fn new(index_service: IndexService, message_store_config: Arc<MessageStoreConfig>) -> Self {
+        Self::new_with_runtime(
+            index_service,
+            MessageIndexRuntimeHandle::new(message_store_config.message_index_enable),
+        )
+    }
+
+    pub(crate) fn new_with_runtime(index_service: IndexService, index_runtime: MessageIndexRuntimeHandle) -> Self {
         Self {
             root: IndexDispatchRoot::new(IndexDispatchAdapter {
                 index_service,
-                message_store_config,
+                index_runtime,
             }),
         }
     }
@@ -54,17 +64,68 @@ impl CommitLogDispatcher for CommitLogDispatcherBuildIndex {
     }
 
     fn dispatch(&self, dispatch_request: &mut DispatchRequest) {
-        let enabled = self.root.adapter().message_store_config.message_index_enable;
-        self.root.dispatch(enabled, dispatch_request, |adapter, request| {
-            adapter.index_service.build_index(request);
-        });
+        self.root
+            .adapter()
+            .index_runtime
+            .with_dispatch_admission(&mut |enabled| {
+                self.root.dispatch(enabled, dispatch_request, |adapter, request| {
+                    adapter.index_service.build_index(request);
+                });
+            });
     }
 
-    fn dispatch_progress_offset(&self, _commit_log_min_offset: i64) -> Option<i64> {
-        let enabled = self.root.adapter().message_store_config.message_index_enable;
+    fn dispatch_batch(&self, dispatch_requests: &mut [DispatchRequest]) {
+        self.root
+            .adapter()
+            .index_runtime
+            .with_dispatch_admission(&mut |enabled| {
+                for request in dispatch_requests.iter_mut() {
+                    self.root.dispatch(enabled, request, |adapter, request| {
+                        adapter.index_service.build_index(request);
+                    });
+                }
+            });
+    }
+
+    fn dispatch_commit_log_blank(&self, blank_start_offset: i64, next_file_offset: i64) {
+        if !self
+            .root
+            .adapter()
+            .index_service
+            .advance_safe_frontier_over_blank(blank_start_offset, next_file_offset)
+        {
+            tracing::warn!(
+                blank_start_offset,
+                next_file_offset,
+                "failed to advance local index across a verified CommitLog BLANK"
+            );
+        }
+    }
+
+    fn dispatch_progress_offset(&self, commit_log_min_offset: i64) -> Option<i64> {
+        let enabled = self.root.adapter().index_runtime.snapshot().enabled;
         self.root.progress(enabled, |adapter| {
-            adapter.index_service.get_max_dispatch_commit_log_offset()
+            adapter
+                .index_service
+                .initialize_dispatch_frontier(commit_log_min_offset)
         })
+    }
+
+    fn message_index_safe_offset(&self) -> Option<i64> {
+        self.root
+            .adapter()
+            .index_service
+            .available_index_safe_phy_offset()
+            .map(|offset| offset.min(i64::MAX as u64) as i64)
+    }
+
+    fn install_message_index_runtime(&self, source: Arc<dyn MessageIndexRuntimeSource>) -> bool {
+        self.root.adapter().index_runtime.install(source);
+        true
+    }
+
+    fn message_index_runtime_snapshot(&self) -> Option<MessageIndexRuntimeSnapshot> {
+        Some(self.root.adapter().index_runtime.snapshot())
     }
 }
 
@@ -100,7 +161,24 @@ mod tests {
         dispatcher.dispatch(&mut request);
 
         assert!(index_service.get_total_size() > 0);
-        assert_eq!(dispatcher.dispatch_progress_offset(0), Some(1000));
+        assert_eq!(dispatcher.dispatch_progress_offset(0), Some(1100));
+    }
+
+    #[test]
+    fn live_index_gate_changes_dispatch_without_rebuilding_the_store() {
+        let temp_dir = tempdir().unwrap();
+        let (index_service, config) = index_service(&temp_dir, false, "runtime-gate-checkpoint");
+        let dispatcher = CommitLogDispatcherBuildIndex::new(index_service.clone(), config);
+
+        assert!(!dispatcher.root.adapter().index_runtime.snapshot().enabled);
+        assert!(dispatcher.root.adapter().index_runtime.set_fallback_enabled(true));
+        assert!(dispatcher.root.adapter().index_runtime.snapshot().enabled);
+        dispatcher.dispatch(&mut indexable_request());
+        assert!(index_service.get_total_size() > 0);
+
+        assert!(dispatcher.root.adapter().index_runtime.set_fallback_enabled(false));
+        assert!(!dispatcher.root.adapter().index_runtime.snapshot().enabled);
+        assert_eq!(dispatcher.dispatch_progress_offset(0), None);
     }
 
     fn index_service(

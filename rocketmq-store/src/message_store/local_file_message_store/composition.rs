@@ -331,9 +331,10 @@ impl LocalFileMessageStore {
             store_checkpoint.clone(),
             running_flags.clone(),
         );
-        let build_index: Arc<dyn CommitLogDispatcher> = Arc::new(CommitLogDispatcherBuildIndex::new(
+        let message_index_runtime = MessageIndexRuntimeHandle::new(message_store_config.message_index_enable);
+        let build_index: Arc<dyn CommitLogDispatcher> = Arc::new(CommitLogDispatcherBuildIndex::new_with_runtime(
             index_service.clone(),
-            message_store_config.clone(),
+            message_index_runtime.clone(),
         ));
         let consume_queue_store = ConsumeQueueStore::new(
             runtime_scope.clone(),
@@ -503,6 +504,7 @@ impl LocalFileMessageStore {
             consume_queue_store: consume_queue_store.clone(),
             lmq_quota_controller: Arc::new(LmqQuotaController::default()),
             dispatcher,
+            message_index_runtime,
             #[cfg(feature = "tieredstore")]
             tiered_store,
             broker_init_max_offset: Arc::new(AtomicI64::new(-1)),
@@ -681,6 +683,10 @@ impl LocalFileMessageStore {
 
     pub fn message_store_config(&self) -> Arc<MessageStoreConfig> {
         self.message_store_config.clone()
+    }
+
+    pub(crate) fn message_index_runtime_handle(&self) -> MessageIndexRuntimeHandle {
+        self.message_index_runtime.clone()
     }
 
     pub(crate) fn ha_replica_store_handle(&self) -> HAReplicaStoreHandle {

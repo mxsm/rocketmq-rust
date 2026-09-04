@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -144,7 +145,7 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
         let registration: TopicRegistrationAction = Box::new(move || {
             Box::pin(async move {
                 let result = runtime
-                    .register_full_snapshot(check_order_config, oneway, force_register)
+                    .register_full_snapshot(None, check_order_config, oneway, force_register)
                     .await;
                 let coordination_result = result.as_ref().map(|_| ()).map_err(|error| {
                     rocketmq_error::RocketMQError::network_connection_failed("broker-registration", error.to_string())
@@ -177,6 +178,7 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
 
     async fn register_full_snapshot(
         &self,
+        broker_config: Option<Arc<BrokerConfig>>,
         check_order_config: bool,
         oneway: bool,
         force_register: bool,
@@ -185,7 +187,7 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
             return Err(BrokerRegistrationError::ShuttingDown);
         }
 
-        let broker_config = self.config.broker_snapshot();
+        let broker_config = broker_config.unwrap_or_else(|| self.config.broker_snapshot());
         let (raw_topic_config_table, split_data_version, final_data_version) =
             self.topic_config_manager.full_registration_snapshot(
                 broker_config.enable_split_registration,
@@ -194,7 +196,8 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
         let mut topic_config_table = raw_topic_config_table
             .into_values()
             .map(|topic_config| {
-                let topic_config = self.topic_config_for_registration(&topic_config);
+                let topic_config =
+                    Self::topic_config_for_registration_with_permission(&topic_config, broker_config.broker_permission);
                 let topic_name = topic_config
                     .topic_name
                     .clone()
@@ -243,6 +246,58 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
         } else {
             Ok(BrokerRegistrationStatus::Unchanged)
         }
+    }
+
+    /// Registers a runtime configuration change without allowing an older
+    /// reconciliation task to finish with a stale policy generation.
+    pub(crate) async fn register_runtime_config_snapshot(
+        &self,
+    ) -> Result<BrokerRegistrationStatus, BrokerRegistrationError> {
+        let runtime = self.clone();
+        self.register_runtime_config_snapshot_with(move |broker_config| {
+            let runtime = runtime.clone();
+            async move {
+                runtime
+                    .register_full_snapshot(Some(broker_config), true, false, true)
+                    .await
+            }
+        })
+        .await
+    }
+
+    async fn register_runtime_config_snapshot_with<F, Fut>(
+        &self,
+        mut register: F,
+    ) -> Result<BrokerRegistrationStatus, BrokerRegistrationError>
+    where
+        F: FnMut(Arc<BrokerConfig>) -> Fut,
+        Fut: Future<Output = Result<BrokerRegistrationStatus, BrokerRegistrationError>>,
+    {
+        loop {
+            let generation = self.config.snapshot();
+            let result = register(Arc::clone(generation.broker())).await;
+            let current_generation = self.config.snapshot().id();
+            if current_generation == generation.id() {
+                return result;
+            }
+            debug!(
+                registered_generation = generation.id().value(),
+                current_generation = current_generation.value(),
+                "retry broker registration after concurrent runtime config publication"
+            );
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn register_runtime_config_snapshot_with_test_hook<F, Fut>(
+        &self,
+        register: F,
+    ) -> Result<BrokerRegistrationStatus, BrokerRegistrationError>
+    where
+        F: FnMut(Arc<BrokerConfig>) -> Fut,
+        Fut: Future<Output = Result<BrokerRegistrationStatus, BrokerRegistrationError>>,
+    {
+        self.register_runtime_config_snapshot_with(register).await
     }
 
     pub(crate) async fn register_increment_broker_data(
@@ -320,12 +375,19 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
     }
 
     pub(crate) fn topic_config_for_registration(&self, topic_config: &TopicConfig) -> TopicConfig {
+        Self::topic_config_for_registration_with_permission(
+            topic_config,
+            self.config.broker_snapshot().broker_permission,
+        )
+    }
+
+    fn topic_config_for_registration_with_permission(
+        topic_config: &TopicConfig,
+        broker_permission: u32,
+    ) -> TopicConfig {
         let mut topic_config = topic_config.clone();
-        let broker_config = self.config.broker_snapshot();
-        if !PermName::is_writeable(broker_config.broker_permission)
-            || !PermName::is_readable(broker_config.broker_permission)
-        {
-            topic_config.perm &= broker_config.broker_permission;
+        if !PermName::is_writeable(broker_permission) || !PermName::is_readable(broker_permission) {
+            topic_config.perm &= broker_permission;
         }
         topic_config
     }

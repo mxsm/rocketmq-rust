@@ -321,7 +321,10 @@ impl BrokerRuntime {
         let pop_lite_escape_bridge = self.composition.state.escape_bridge();
         let pop_lite_message_processor = PopLiteMessageProcessor::new(
             PopLiteMessageProcessorContext::new(
-                PopLiteMessagePolicy::from_config(&self.composition.state.broker_config()),
+                PopLiteMessagePolicy::from_config(
+                    &self.composition.state.broker_config(),
+                    self.composition.state.broker_permission_state(),
+                ),
                 pop_lite_topic_config_manager,
                 pop_lite_subscription_group_lookup,
                 PopLiteOffsetCapability::new(&pop_lite_offset_manager),
@@ -405,7 +408,10 @@ impl BrokerRuntime {
         let notification_consumer_filter_manager = Arc::new(self.composition.state.consumer_filter_manager().clone());
         let notification_processor = NotificationProcessor::new(
             NotificationProcessorContext::new(
-                NotificationPolicy::from_config(&self.composition.state.broker_config()),
+                NotificationPolicy::from_config(
+                    &self.composition.state.broker_config(),
+                    self.composition.state.broker_permission_state(),
+                ),
                 self.composition.state.pop_policy_state(),
                 notification_topic_config_manager,
                 notification_subscription_group_lookup,
@@ -632,7 +638,10 @@ impl BrokerRuntime {
             .query_capability();
         let peek_message_processor = Arc::new(PeekMessageProcessor::new(
             PeekMessageProcessorContext::new(
-                PeekMessagePolicy::from_config(&self.composition.state.broker_config()),
+                PeekMessagePolicy::from_config(
+                    &self.composition.state.broker_config(),
+                    self.composition.state.broker_permission_state(),
+                ),
                 self.composition.state.pop_policy_state(),
                 self.composition.state.topic_config_manager_handle(),
                 self.composition.state.subscription_group_manager().config_lookup(),
@@ -704,6 +713,7 @@ impl BrokerRuntime {
             RequestCode::PollingInfo as i32,
             BrokerProcessorType::PollingInfo(Arc::new(PollingInfoProcessor::new_with_factory(
                 self.composition.state.broker_config_arc(),
+                self.composition.state.broker_permission_state(),
                 self.composition.state.topic_config_manager_handle(),
                 self.composition.state.subscription_group_manager().config_lookup(),
                 polling_count_provider,
@@ -729,6 +739,7 @@ impl BrokerRuntime {
                     &self.composition.state.broker_config(),
                     &self.composition.state.message_store_config(),
                     self.composition.state.store_host(),
+                    self.composition.state.broker_permission_state(),
                 ),
                 self.composition.state.topic_config_manager_handle(),
                 RecallMessageStoreCapability::new(&self.composition.data_plane.escape_bridge_owner),

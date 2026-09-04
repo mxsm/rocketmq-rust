@@ -35,6 +35,7 @@ use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
 use crate::lite::lite_lifecycle_manager::LiteLifecycleManager;
@@ -54,17 +55,17 @@ mod resume;
 #[derive(Clone)]
 pub(crate) struct PopLiteMessagePolicy {
     broker_ip1: CheetahString,
-    broker_permission: u32,
+    broker_permission: BrokerPermissionState,
     max_client_event_count: i32,
     lite_event_full_dispatch_delay_time: u64,
     lite_event_full_dispatch_delay_time_for_wildcard_group: u64,
 }
 
 impl PopLiteMessagePolicy {
-    pub(crate) fn from_config(broker_config: &BrokerConfig) -> Self {
+    pub(crate) fn from_config(broker_config: &BrokerConfig, broker_permission: BrokerPermissionState) -> Self {
         Self {
             broker_ip1: broker_config.broker_ip1.clone(),
-            broker_permission: broker_config.broker_permission,
+            broker_permission,
             max_client_event_count: broker_config.max_client_event_count,
             lite_event_full_dispatch_delay_time: broker_config.lite_event_full_dispatch_delay_time,
             lite_event_full_dispatch_delay_time_for_wildcard_group: broker_config
@@ -412,7 +413,7 @@ impl<MS: BrokerReadWriteStore> PopLiteMessageProcessor<MS> {
                 )),
             ));
         }
-        if !PermName::is_readable(self.context.policy.broker_permission) {
+        if !PermName::is_readable(self.context.policy.broker_permission.get()) {
             return Some((
                 ResponseCode::NoPermission,
                 CheetahString::from_string(format!(

@@ -84,6 +84,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             &self.message_store_config(),
             self.get_broker_addr().clone(),
             self.get_ha_server_addr(),
+            self.broker_permission_state(),
         );
         let special_services = self.build_special_service_capability();
         let registration = BrokerRegistrationCapability::new(
@@ -164,7 +165,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         )
     }
 
-    pub(super) fn build_registration_runtime(&self) -> BrokerRegistrationRuntime<MS> {
+    pub(crate) fn build_registration_runtime(&self) -> BrokerRegistrationRuntime<MS> {
         BrokerRegistrationRuntime::new(
             self.config_state.clone(),
             self.escape_bridge().store_capability(),
@@ -183,6 +184,10 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
 impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
     pub(crate) fn pop_policy_state(&self) -> PopPolicyState {
         self.pop_policy_state.clone()
+    }
+
+    pub(crate) fn broker_permission_state(&self) -> BrokerPermissionState {
+        self.broker_permission_state.clone()
     }
 
     pub(super) fn build_pull_message_context(&self) -> Arc<PullMessageProcessorContext<MS>> {
@@ -282,12 +287,12 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         })
     }
 
-    pub(super) fn build_transaction_topic_registration(
+    pub(crate) fn build_transaction_topic_registration(
         &self,
         message_store: TransactionMessageStore<MS>,
     ) -> Arc<TransactionTopicRegistration<MS>> {
         Arc::new(TransactionTopicRegistration::new(TransactionTopicRegistrationContext {
-            broker_config: self.broker_config_arc(),
+            config: self.config_state.clone(),
             topic_config_manager: self.topic_config_manager_handle(),
             topic_config_coordinator: self.topic_config_coordinator_handle(),
             topic_queue_mapping_manager: self.topic_queue_mapping_manager_handle(),
@@ -309,6 +314,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
             &self.message_store_config(),
             self.get_broker_addr().clone(),
             self.get_ha_server_addr(),
+            self.broker_permission_state(),
         );
         let role_state = Arc::clone(&self.online_role_state);
         let schedule = self.schedule_message_service().clone();
@@ -804,19 +810,22 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         self.pop_policy_state.update_store_host(store_host);
     }
 
+    #[cfg(test)]
     #[inline]
     pub fn set_broker_config(&mut self, broker_config: BrokerConfig) -> Result<(), BrokerConfigError> {
+        let mut broker_config = broker_config;
+        broker_config.broker_identity.broker_id = self.config_state.broker_snapshot().broker_identity.broker_id;
         let generation = self.config_state.replace_broker(broker_config)?;
         let broker_config = generation.broker();
-        self.online_role_state
-            .set_local_broker_id(broker_config.broker_identity.broker_id);
         self.send_message_policy_state.update_broker_config(broker_config);
         self.pull_message_policy_state.update_broker_config(broker_config);
         self.pop_policy_state.update_broker_config(broker_config);
         self.escape_bridge_policy_state.update_broker_config(broker_config);
+        self.producer_manager.set_broker_config(Arc::clone(broker_config));
         Ok(())
     }
 
+    #[cfg(test)]
     #[inline]
     pub fn set_message_store_config(
         &mut self,
@@ -1193,12 +1202,29 @@ impl BrokerRuntime {
             message_store_config.clone(),
         ));
         let online_role_state = Arc::new(BrokerOnlineRoleState::new(broker_config.broker_identity.broker_id));
-        let send_message_policy_state =
-            SendMessagePolicyState::from_configs(&broker_config, &message_store_config, store_host);
-        let pull_message_policy_state = PullMessagePolicyState::from_configs(&broker_config, &message_store_config);
-        let pop_policy_state = PopPolicyState::from_configs(&broker_config, &message_store_config, store_host);
+        let config_state = BrokerRuntimeConfigState::new_with_index_gap_marker(
+            validated_config,
+            service_context.metadata_io().clone(),
+        );
+        let broker_permission_state = BrokerPermissionState::from_runtime(config_state.clone());
+        let send_message_policy_state = SendMessagePolicyState::from_configs(
+            &broker_config,
+            &message_store_config,
+            store_host,
+            broker_permission_state.clone(),
+        );
+        let pull_message_policy_state = PullMessagePolicyState::from_configs(
+            &broker_config,
+            &message_store_config,
+            broker_permission_state.clone(),
+        );
+        let pop_policy_state = PopPolicyState::from_configs(
+            &broker_config,
+            &message_store_config,
+            store_host,
+            broker_permission_state.clone(),
+        );
         let escape_bridge_policy_state = EscapeBridgePolicyState::from_configs(&broker_config, &message_store_config);
-        let config_state = BrokerRuntimeConfigState::new(validated_config);
         let slave_master_addr = Arc::new(SlaveMasterAddress::default());
 
         let mut state = Box::new(BrokerRuntimeState::<BrokerMessageStore> {
@@ -1206,6 +1232,7 @@ impl BrokerRuntime {
             store_host,
             broker_addr: CheetahString::from(broker_address),
             config_state,
+            broker_permission_state,
             command_factory,
             resource_budget,
             send_message_policy_state,
@@ -1389,7 +1416,8 @@ impl BrokerRuntime {
         let subscription_group_manager_config = SubscriptionGroupManagerConfig::from_configs(
             broker_config_snapshot.as_ref(),
             message_store_config_snapshot.as_ref(),
-        );
+        )
+        .with_runtime_config(state.broker_permission_state());
         let state_machine_version = state
             .message_store()
             .map(BrokerReadStore::state_machine_version_view)

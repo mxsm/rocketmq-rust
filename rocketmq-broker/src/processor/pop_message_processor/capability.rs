@@ -40,6 +40,7 @@ use rocketmq_store::GetMessageResult;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 
+use crate::broker::broker_runtime_config_state::BrokerPermissionState;
 use crate::broker_runtime::broker_task_group_or_current;
 use crate::client::manager::consumer_manager::ConsumerManager;
 use crate::failover::escape_bridge::EscapeBridge;
@@ -58,7 +59,7 @@ pub(crate) struct PopPolicy {
     pub(crate) broker_ip: CheetahString,
     pub(crate) broker_name: CheetahString,
     pub(crate) broker_cluster_name: CheetahString,
-    pub(crate) broker_permission: u32,
+    pub(crate) broker_permission: BrokerPermissionState,
     pub(crate) broker_role: BrokerRole,
     pub(crate) default_retry_policy: PopRetryPolicy,
     pub(crate) configured_retry_state: Option<PopRetryMigrationState>,
@@ -95,12 +96,17 @@ pub(crate) struct PopPolicy {
 }
 
 impl PopPolicy {
-    fn from_configs(broker: &BrokerConfig, store: &MessageStoreConfig, store_host: SocketAddr) -> Self {
+    fn from_configs(
+        broker: &BrokerConfig,
+        store: &MessageStoreConfig,
+        store_host: SocketAddr,
+        broker_permission: BrokerPermissionState,
+    ) -> Self {
         Self {
             broker_ip: broker.broker_ip1.clone(),
             broker_name: broker.broker_name().clone(),
             broker_cluster_name: broker.broker_identity.broker_cluster_name.clone(),
-            broker_permission: broker.broker_permission,
+            broker_permission,
             broker_role: store.broker_role,
             default_retry_policy: PopRetryPolicy::from_legacy_flags(
                 broker.enable_retry_topic_v2,
@@ -148,7 +154,8 @@ impl PopPolicy {
         let block_cache_size = self.pop_rocksdb_block_cache_size;
         let write_buffer_size = self.pop_rocksdb_write_buffer_size;
         let timer_wheel_enable = self.timer_wheel_enable;
-        *self = Self::from_configs(broker, &MessageStoreConfig::default(), store_host);
+        let broker_permission = self.broker_permission.clone();
+        *self = Self::from_configs(broker, &MessageStoreConfig::default(), store_host, broker_permission);
         self.broker_role = store_role;
         self.store_path_root_dir = store_path_root_dir;
         self.pop_rocksdb_block_cache_size = block_cache_size;
@@ -172,10 +179,18 @@ pub(crate) struct PopPolicyState {
 }
 
 impl PopPolicyState {
-    pub(crate) fn from_configs(broker: &BrokerConfig, store: &MessageStoreConfig, store_host: SocketAddr) -> Self {
+    pub(crate) fn from_configs(
+        broker: &BrokerConfig,
+        store: &MessageStoreConfig,
+        store_host: SocketAddr,
+        broker_permission: BrokerPermissionState,
+    ) -> Self {
         Self {
             current: Arc::new(ArcSwap::from_pointee(PopPolicy::from_configs(
-                broker, store, store_host,
+                broker,
+                store,
+                store_host,
+                broker_permission,
             ))),
             group_retry_policies: Arc::new(DashMap::new()),
         }
@@ -598,6 +613,7 @@ impl<MS: BrokerReadWriteStore> PopReviveContext<MS> {
 mod tests {
     use std::sync::Weak;
 
+    use crate::broker::broker_runtime_config_state::BrokerPermissionState;
     use crate::config::broker_config::BrokerConfig;
     use cheetah_string::CheetahString;
     use rocketmq_model::common::broker::broker_role::BrokerRole;
@@ -613,10 +629,17 @@ mod tests {
     fn pop_policy_state_publishes_broker_and_store_updates() {
         let mut broker = BrokerConfig::default();
         let mut store = MessageStoreConfig::default();
-        let state = PopPolicyState::from_configs(&broker, &store, "127.0.0.1:10911".parse().unwrap());
+        let broker_permission = BrokerPermissionState::new(broker.broker_permission);
+        let state = PopPolicyState::from_configs(
+            &broker,
+            &store,
+            "127.0.0.1:10911".parse().unwrap(),
+            broker_permission.clone(),
+        );
 
         broker.enable_pop_log = true;
         broker.revive_interval = 321;
+        broker_permission.update(4);
         store.timer_wheel_enable = false;
         store.broker_role = BrokerRole::Slave;
         state.update_broker_config(&broker);
@@ -625,8 +648,11 @@ mod tests {
         let policy = state.snapshot();
         assert!(policy.enable_pop_log);
         assert_eq!(policy.revive_interval, 321);
+        assert_eq!(policy.broker_permission.get(), 4);
         assert!(!policy.timer_wheel_enable);
         assert_eq!(policy.broker_role, BrokerRole::Slave);
+        broker_permission.update(6);
+        assert_eq!(state.snapshot().broker_permission.get(), 6);
     }
 
     #[test]
@@ -634,7 +660,12 @@ mod tests {
         let broker = BrokerConfig::default();
         let store = MessageStoreConfig::default();
         let group = CheetahString::from_static_str("group-a");
-        let state = PopPolicyState::from_configs(&broker, &store, "127.0.0.1:10911".parse().unwrap());
+        let state = PopPolicyState::from_configs(
+            &broker,
+            &store,
+            "127.0.0.1:10911".parse().unwrap(),
+            BrokerPermissionState::new(broker.broker_permission),
+        );
         state.restore_retry_policy(group.clone(), PopRetryPolicy::dual_read_v2_write(7));
 
         assert_eq!(

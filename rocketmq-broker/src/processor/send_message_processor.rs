@@ -1721,7 +1721,7 @@ where
             ));
         }
 
-        if !PermName::is_writeable(policy.broker_permission) {
+        if !PermName::is_writeable(policy.broker_permission.get()) {
             return Ok(Some(
                 self.context.command_factory.create_response_command_with_code_remark(
                     ResponseCode::NoPermission,
@@ -2026,7 +2026,7 @@ where
     {
         //check broker permission
         let policy = self.context.policy.snapshot();
-        if broker_send_permission_denied(policy.broker_permission) {
+        if broker_send_permission_denied(policy.broker_permission.get()) {
             response.with_code(ResponseCode::NoPermission);
             response.with_remark(format!(
                 "the broker[{}] sending message is forbidden",

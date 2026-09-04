@@ -3312,6 +3312,82 @@ async fn query_message_marks_empty_result_unsafe_when_index_safe_offset_lags_con
 }
 
 #[tokio::test]
+async fn local_index_failure_sentinel_keeps_store_queries_unsafe_after_restart() {
+    let temp_dir = tempdir().unwrap();
+    let config = MessageStoreConfig {
+        flush_disk_type: FlushDiskType::AsyncFlush,
+        ..MessageStoreConfig::default()
+    };
+    let mut store = new_configured_test_store(&temp_dir, config.clone());
+    store.init().await.expect("initialize failure-sentinel Store");
+    assert!(store.load().await, "load failure-sentinel Store");
+    let topic = CheetahString::from_static_str("index-failure-query-topic");
+    let first_key = CheetahString::from_static_str("indexed-before-failure");
+    let missing_key = CheetahString::from_static_str("missing-after-failure");
+
+    let mut first = build_test_message(&topic, Bytes::from_static(b"indexed-before-failure-body"));
+    first.set_keys(first_key.clone());
+    let first_result = store.put_message(first).await;
+    let first_append = first_result.append_message_result().expect("first append");
+    assert_eq!(store.index_service.initialize_dispatch_frontier(0), Some(0));
+    store.index_service.build_index(&DispatchRequest {
+        topic: topic.clone(),
+        commit_log_offset: first_append.wrote_offset,
+        msg_size: first_append.wrote_bytes,
+        store_timestamp: first_append.store_timestamp,
+        keys: first_key.clone(),
+        success: true,
+        ..DispatchRequest::default()
+    });
+
+    let mut second = build_test_message(&topic, Bytes::from_static(b"missing-after-failure-body"));
+    second.set_keys(missing_key.clone());
+    let second_result = store.put_message(second).await;
+    let second_append = second_result.append_message_result().expect("second append");
+    store.running_flags.make_index_file_error();
+    store.index_service.build_index(&DispatchRequest {
+        topic: topic.clone(),
+        commit_log_offset: second_append.wrote_offset,
+        msg_size: second_append.wrote_bytes,
+        store_timestamp: second_append.store_timestamp,
+        keys: missing_key.clone(),
+        success: true,
+        ..DispatchRequest::default()
+    });
+    let confirm_offset = second_append.wrote_offset + i64::from(second_append.wrote_bytes);
+    BackendOps::set_confirm_offset(&mut store, confirm_offset);
+    store.commit_log.flush();
+
+    for (key, expect_hit) in [(&first_key, true), (&missing_key, false)] {
+        let result = store
+            .query_message(&topic, key, 10, 0, i64::MAX)
+            .await
+            .expect("query after local index failure");
+        assert_eq!(result.buffer_total_size > 0, expect_hit);
+        assert!(!result.index_query_safe);
+        assert_eq!(result.index_safe_phyoffset, 0);
+    }
+    store.shutdown().await;
+    drop(store);
+
+    let mut restarted = new_configured_test_store(&temp_dir, config);
+    restarted.init().await.expect("initialize restarted Store");
+    assert!(restarted.load().await, "load restarted Store");
+    assert_eq!(restarted.current_index_safe_offset(), -1);
+    assert_eq!(restarted.get_dispatch_recovery_offset(), 0);
+    for (key, expect_hit) in [(&first_key, true), (&missing_key, false)] {
+        let result = restarted
+            .query_message(&topic, key, 10, 0, i64::MAX)
+            .await
+            .expect("query after failure-sentinel restart");
+        assert_eq!(result.buffer_total_size > 0, expect_hit);
+        assert!(!result.index_query_safe);
+        assert_eq!(result.index_safe_phyoffset, 0);
+    }
+    restarted.shutdown().await;
+}
+
+#[tokio::test]
 async fn background_index_rebuild_retries_then_fails_when_commitlog_data_missing() {
     let temp_dir = tempdir().unwrap();
     let mut store = new_owned_test_store_with_broker(
@@ -4343,6 +4419,60 @@ async fn query_message_returns_indexed_message_after_reput() {
     assert!(result.buffer_total_size > 0);
     assert!(result.index_last_update_timestamp > 0);
     assert!(result.get_message_data().is_some());
+}
+
+#[tokio::test]
+async fn local_index_safe_frontier_crosses_only_a_scanner_verified_commitlog_blank() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            mapped_file_size_commit_log: 512,
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            ..MessageStoreConfig::default()
+        },
+    );
+    store.init().await.expect("initialize rollover Store");
+    assert!(store.load().await, "load rollover Store");
+    store.start().await.expect("start background Reput pipeline");
+    let topic = CheetahString::from_static_str("index-blank-roll-topic");
+
+    let mut tail = build_test_message(&topic, Bytes::from(vec![1_u8; 245]));
+    tail.set_keys(CheetahString::from_static_str("tail-key"));
+    let tail_result = store.put_message(tail).await;
+    assert_eq!(tail_result.put_message_status(), PutMessageStatus::PutOk);
+    let tail_append = tail_result.append_message_result().expect("tail append");
+    assert_eq!(tail_append.wrote_offset, 0);
+    assert!(tail_append.wrote_bytes < 512);
+
+    let mut next = build_test_message(&topic, Bytes::from(vec![2_u8; 75]));
+    next.set_keys(CheetahString::from_static_str("next-key"));
+    let next_result = store.put_message(next).await;
+    assert_eq!(next_result.put_message_status(), PutMessageStatus::PutOk);
+    let next_append = next_result.append_message_result().expect("next-file append");
+    assert_eq!(next_append.wrote_offset, 512);
+    assert!(next_append.wrote_bytes < 512);
+
+    let expected_safe_offset = next_append.wrote_offset + i64::from(next_append.wrote_bytes);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if crate::capability::BrokerAdminStore::message_index_safe_offset(&store) == Some(expected_safe_offset) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("background Reput must preserve index safety across the BLANK event");
+    for key in ["tail-key", "next-key"] {
+        let result = store
+            .query_message(&topic, &CheetahString::from_slice(key), 10, 0, i64::MAX)
+            .await
+            .expect("query result after mapped-file rollover");
+        assert!(result.buffer_total_size > 0, "missing index for {key}");
+        assert!(result.index_query_safe, "verified BLANK must preserve index safety");
+    }
+    store.shutdown().await;
 }
 
 #[tokio::test]

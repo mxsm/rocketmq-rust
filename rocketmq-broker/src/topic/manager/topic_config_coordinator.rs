@@ -494,6 +494,8 @@ fn topic_coordinator_error(error: impl ToString) -> RocketMQError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
@@ -591,6 +593,47 @@ mod tests {
         assert_eq!(coordinator.pending_count(), 0);
         assert_eq!(coordinator.persist_failure_count(), 0);
         assert_eq!(coordinator.registration_failure_count(), 0);
+
+        let report = coordinator
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await;
+        assert!(report.can_unregister(), "{report:?}");
+        let runtime_report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(runtime_report.is_healthy(), "{}", runtime_report.to_json());
+    }
+
+    #[tokio::test]
+    async fn failed_registration_keeps_admission_open_for_periodic_retry() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let (runtime, coordinator) = test_coordinator(&temp_dir);
+        coordinator
+            .manager()
+            .update_topic_config(TopicConfig::with_queues("RetryRegistrationTopic", 1, 1), 0);
+        let failed: TopicRegistrationAction = Box::new(|| {
+            Box::pin(async {
+                Err(rocketmq_error::RocketMQError::network_connection_failed(
+                    "topic-registration-test",
+                    "unavailable",
+                ))
+            })
+        });
+        assert!(coordinator.persist_and_register_wait(failed).await.is_err());
+        assert_eq!(coordinator.registration_failure_count(), 1);
+
+        let retried = Arc::new(AtomicBool::new(false));
+        let retried_action = Arc::clone(&retried);
+        let retry: TopicRegistrationAction = Box::new(move || {
+            Box::pin(async move {
+                retried_action.store(true, Ordering::Release);
+                Ok(())
+            })
+        });
+        coordinator
+            .persist_and_register_wait(retry)
+            .await
+            .expect("a later periodic registration should be admitted");
+        assert!(retried.load(Ordering::Acquire));
+        assert_eq!(coordinator.registration_failure_count(), 1);
 
         let report = coordinator
             .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))

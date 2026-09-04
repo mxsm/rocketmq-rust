@@ -119,7 +119,9 @@ fn query_driver_walks_newest_first_and_reports_newest_metadata() {
 fn load_and_expiration_plans_keep_safe_offset_and_newest_file_rules() {
     let files = vec![fake_file(1, 10, 20, 100, vec![]), fake_file(2, 20, 30, 200, vec![])];
     assert_eq!(expired_index_file_count(&files, 150), 1);
-    assert_eq!(restore_index_safe_offset(&files, 250, false), 250);
+    assert_eq!(restore_index_safe_offset(&files, 250, false), 200);
+    assert_eq!(restore_index_safe_offset(&files, 150, false), 150);
+    assert_eq!(restore_index_safe_offset(&files, 0, false), 200);
     assert_eq!(restore_index_safe_offset(&files, 250, true), 200);
     assert!(should_remove_unsafe_index_file(false, 31, 30));
     assert!(!should_remove_unsafe_index_file(true, 31, 30));
