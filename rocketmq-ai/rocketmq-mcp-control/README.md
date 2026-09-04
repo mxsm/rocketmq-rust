@@ -5,6 +5,10 @@ standalone Cargo project and is not part of the root workspace. The reviewed `wr
 exactly five typed tools: Topic and Consumer Group upsert, consumer offset reset, Broker configuration patch,
 and consumer request mode. The default build contains neither Admin Core nor production mutation tools.
 
+Read the [reviewed mutation Tool Reference](docs/tool-reference.md) before operating the server. The
+[operations runbook](docs/operations-runbook.md) covers rollout, rollback, audit, and emergency stop-write
+handling; the [real-cluster E2E runbook](docs/e2e-runbook.md) covers the opt-in local harness and its cleanup.
+
 ## Security boundary
 
 - Streamable MCP is served only over an enforcing TLS listener. There is no plaintext or stdio transport.
