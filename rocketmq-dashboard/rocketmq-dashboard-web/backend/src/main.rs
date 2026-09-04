@@ -11,6 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#![recursion_limit = "256"]
+
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_dashboard_web_backend::config::AppConfig;
