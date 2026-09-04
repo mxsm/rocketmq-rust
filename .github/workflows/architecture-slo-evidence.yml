@@ -85,7 +85,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Validate SLO policy and fixture
         shell: bash
@@ -114,7 +114,7 @@ jobs:
       PROMETHEUS_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.prometheus_image || vars.ARCHITECTURE_PROMETHEUS_IMAGE || 'docker.io/prom/prometheus@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996' }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Bind immutable candidate commit
         id: bind-candidate

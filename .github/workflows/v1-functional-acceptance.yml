@@ -28,7 +28,7 @@ jobs:
   prepare-draft:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.candidate_source_artifact }}
@@ -60,7 +60,7 @@ jobs:
     needs: prepare-draft
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.candidate_source_artifact }}
@@ -95,7 +95,7 @@ jobs:
     needs: prepare-draft
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.candidate_source_artifact }}
@@ -131,7 +131,7 @@ jobs:
     needs: prepare-draft
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.candidate_source_artifact }}
@@ -167,7 +167,7 @@ jobs:
     needs: [prepare-draft, platform-linux, platform-windows, platform-macos]
     runs-on: [self-hosted, linux, x64, rocketmq-release-candidate]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Require the complete platform denominator
         shell: bash
         run: |
@@ -215,7 +215,7 @@ jobs:
     needs: [prepare-draft, platform-linux, platform-windows, platform-macos, aggregate-handoff]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download selected candidate control
         uses: actions/download-artifact@v4
         with:
