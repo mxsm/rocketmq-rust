@@ -14,9 +14,9 @@
 
 //! Compile-time provider factories resolved during Tiered Store startup.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 
-use crate::config::TieredStoreConfig;
+use crate::factory::TieredStoreOpenPlan;
 use crate::provider::MemoryProvider;
 use crate::provider::PosixProvider;
 use crate::provider::ProviderKind;
@@ -98,7 +98,8 @@ impl TieredProviderDescriptor {
         }
     }
 
-    /// Provider identifier used by [`TieredStoreConfig::backend_provider`].
+    /// Provider identifier selected by the `backend_provider` field on
+    /// [`crate::config::TieredStoreConfig`].
     pub const fn id(self) -> &'static str {
         self.id
     }
@@ -133,7 +134,7 @@ pub trait TieredStoreProviderFactory: Send + Sync {
     ///
     /// Returns an error when provider-owned configuration or resources cannot
     /// be established.
-    fn create(&self, config: &TieredStoreConfig) -> Result<Self::Provider, RocketMQError>;
+    fn create(&self, plan: &TieredStoreOpenPlan) -> Result<Self::Provider, StoreError>;
 }
 
 /// Factory for the built-in POSIX provider.
@@ -155,9 +156,8 @@ impl TieredStoreProviderFactory for PosixProviderFactory {
         )
     }
 
-    fn create(&self, config: &TieredStoreConfig) -> Result<Self::Provider, RocketMQError> {
-        PosixProvider::validate_root(&config.store_path_root_dir)?;
-        Ok(PosixProvider::new(config.store_path_root_dir.clone()))
+    fn create(&self, plan: &TieredStoreOpenPlan) -> Result<Self::Provider, StoreError> {
+        Ok(PosixProvider::new(plan.config().store_path_root_dir.clone()))
     }
 }
 
@@ -177,7 +177,7 @@ impl TieredStoreProviderFactory for MemoryProviderFactory {
         )
     }
 
-    fn create(&self, _config: &TieredStoreConfig) -> Result<Self::Provider, RocketMQError> {
+    fn create(&self, _plan: &TieredStoreOpenPlan) -> Result<Self::Provider, StoreError> {
         Ok(MemoryProvider::default())
     }
 }
@@ -195,16 +195,12 @@ pub enum BuiltinTieredStoreProviderFactory {
 impl BuiltinTieredStoreProviderFactory {
     /// Selects a stock factory from startup configuration.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when the configured provider is not built in.
-    pub fn select(config: &TieredStoreConfig) -> Result<Self, RocketMQError> {
+    /// Returns `None` when the configured provider is not built in.
+    pub fn select(config: &crate::config::TieredStoreConfig) -> Option<Self> {
         match config.backend_provider.as_str() {
-            "posix" => Ok(Self::Posix(PosixProviderFactory)),
-            "memory" => Ok(Self::Memory(MemoryProviderFactory)),
-            provider => Err(RocketMQError::illegal_argument(format!(
-                "unsupported tiered backend provider: {provider}"
-            ))),
+            "posix" => Some(Self::Posix(PosixProviderFactory)),
+            "memory" => Some(Self::Memory(MemoryProviderFactory)),
+            _ => None,
         }
     }
 }
@@ -219,10 +215,10 @@ impl TieredStoreProviderFactory for BuiltinTieredStoreProviderFactory {
         }
     }
 
-    fn create(&self, config: &TieredStoreConfig) -> Result<Self::Provider, RocketMQError> {
+    fn create(&self, plan: &TieredStoreOpenPlan) -> Result<Self::Provider, StoreError> {
         match self {
-            Self::Posix(factory) => factory.create(config).map(ProviderKind::Posix),
-            Self::Memory(factory) => factory.create(config).map(ProviderKind::Memory),
+            Self::Posix(factory) => factory.create(plan).map(ProviderKind::Posix),
+            Self::Memory(factory) => factory.create(plan).map(ProviderKind::Memory),
         }
     }
 }

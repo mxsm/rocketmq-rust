@@ -20,7 +20,8 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use parking_lot::RwLock;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::sync::Mutex;
 
 use crate::error;
@@ -142,15 +143,15 @@ where
         }
     }
 
-    pub(crate) async fn current(&self) -> Result<IndexGenerationLease, RocketMQError> {
-        self.ensure_initialized().await?;
+    pub(crate) async fn current(&self, operation: StoreOperation) -> Result<IndexGenerationLease, StoreError> {
+        self.ensure_initialized(operation).await?;
         Ok(IndexGenerationLease {
             generation: self.state.read().current.clone(),
         })
     }
 
-    pub(crate) async fn previous(&self) -> Result<Option<IndexGenerationLease>, RocketMQError> {
-        self.ensure_initialized().await?;
+    pub(crate) async fn previous(&self, operation: StoreOperation) -> Result<Option<IndexGenerationLease>, StoreError> {
+        self.ensure_initialized(operation).await?;
         Ok(self
             .state
             .read()
@@ -159,8 +160,8 @@ where
             .map(|generation| IndexGenerationLease { generation }))
     }
 
-    pub(crate) async fn next_generation(&self) -> Result<u64, RocketMQError> {
-        self.ensure_initialized().await?;
+    pub(crate) async fn next_generation(&self, operation: StoreOperation) -> Result<u64, StoreError> {
+        self.ensure_initialized(operation).await?;
         Ok(self.state.read().next_generation)
     }
 
@@ -180,17 +181,14 @@ where
         format!("{generation_path}/GENERATION")
     }
 
-    pub(crate) async fn publish(&self, metadata: IndexGenerationMetadata) -> Result<(), RocketMQError> {
-        self.ensure_initialized().await?;
+    pub(crate) async fn publish(&self, metadata: IndexGenerationMetadata) -> Result<(), StoreError> {
+        self.ensure_initialized(StoreOperation::AppendDerived).await?;
         let (old_current_id, next_generation) = {
             let state = self.state.read();
             if metadata.generation != state.next_generation {
-                return Err(error::storage_write_failed(
-                    self.current_path(),
-                    format!(
-                        "generation publication out of order: expected {}, got {}",
-                        state.next_generation, metadata.generation
-                    ),
+                return Err(error::contract_error(
+                    &rocketmq_error::STORAGE_WRITE_FAILED,
+                    StoreOperation::AppendDerived,
                 ));
             }
             (state.current.id(), state.next_generation.saturating_add(1))
@@ -201,7 +199,11 @@ where
             next_generation,
         };
         self.provider
-            .atomic_write(self.current_path(), encode_current(pointer))
+            .atomic_write(
+                StoreOperation::AppendDerived,
+                self.current_path(),
+                encode_current(pointer),
+            )
             .await?;
 
         let mut state = self.state.write();
@@ -218,8 +220,8 @@ where
         Ok(())
     }
 
-    pub(crate) async fn rollback_to_previous(&self) -> Result<bool, RocketMQError> {
-        self.ensure_initialized().await?;
+    pub(crate) async fn rollback_to_previous(&self, operation: StoreOperation) -> Result<bool, StoreError> {
+        self.ensure_initialized(operation).await?;
         let (current, previous, next_generation) = {
             let state = self.state.read();
             let Some(previous) = state.previous.clone() else {
@@ -229,6 +231,7 @@ where
         };
         self.provider
             .atomic_write(
+                StoreOperation::AppendDerived,
                 self.current_path(),
                 encode_current(CurrentPointer {
                     current: previous.id(),
@@ -243,8 +246,8 @@ where
         Ok(true)
     }
 
-    pub(crate) async fn rollback_to_validated_previous(&self) -> Result<bool, RocketMQError> {
-        self.ensure_initialized().await?;
+    pub(crate) async fn rollback_to_validated_previous(&self, operation: StoreOperation) -> Result<bool, StoreError> {
+        self.ensure_initialized(operation).await?;
         let (current, previous, next_generation) = {
             let state = self.state.read();
             let Some(previous) = state.previous.clone() else {
@@ -254,6 +257,7 @@ where
         };
         self.provider
             .atomic_write(
+                StoreOperation::AppendDerived,
                 self.current_path(),
                 encode_current(CurrentPointer {
                     current: previous.id(),
@@ -269,7 +273,7 @@ where
         Ok(true)
     }
 
-    pub(crate) async fn cleanup_retired(&self) -> Result<(), RocketMQError> {
+    pub(crate) async fn cleanup_retired(&self) -> Result<(), StoreError> {
         let deletable = {
             let mut state = self.state.write();
             let mut deletable = Vec::new();
@@ -286,12 +290,12 @@ where
             deletable
         };
         for path in deletable {
-            self.provider.delete_prefix(path).await?;
+            self.provider.delete_prefix(StoreOperation::AppendDerived, path).await?;
         }
         Ok(())
     }
 
-    async fn ensure_initialized(&self) -> Result<(), RocketMQError> {
+    async fn ensure_initialized(&self, operation: StoreOperation) -> Result<(), StoreError> {
         if self.state.read().initialized {
             return Ok(());
         }
@@ -300,12 +304,12 @@ where
             return Ok(());
         }
 
-        let pointer = self.load_current_pointer().await?;
+        let pointer = self.load_current_pointer(operation).await?;
         let (current, previous, next_generation) = match pointer {
             Some(pointer) => {
-                let current = self.load_generation(pointer.current).await?;
+                let current = self.load_generation(operation, pointer.current).await?;
                 let previous = match pointer.previous {
-                    Some(generation) => Some(self.load_generation(generation).await?),
+                    Some(generation) => Some(self.load_generation(operation, generation).await?),
                     None => None,
                 };
                 (current, previous, pointer.next_generation)
@@ -327,20 +331,24 @@ where
             state.next_generation = next_generation.max(1);
             state.initialized = true;
         }
-        self.cleanup_orphans_after_restart().await
+        self.cleanup_orphans_after_restart(operation).await
     }
 
-    async fn load_current_pointer(&self) -> Result<Option<CurrentPointer>, RocketMQError> {
+    async fn load_current_pointer(&self, operation: StoreOperation) -> Result<Option<CurrentPointer>, StoreError> {
         let path = self.current_path();
-        let size = self.provider.segment_size(path.clone()).await?;
+        let size = self.provider.segment_size(operation, path.clone()).await?;
         if size == 0 {
             return Ok(None);
         }
-        let bytes = self.provider.read(path.clone(), 0, size as usize).await?;
-        decode_current(&bytes, &path).map(Some)
+        let bytes = self.provider.read(operation, path.clone(), 0, size as usize).await?;
+        decode_current(operation, &bytes).map(Some)
     }
 
-    async fn load_generation(&self, generation: u64) -> Result<Arc<IndexGeneration>, RocketMQError> {
+    async fn load_generation(
+        &self,
+        operation: StoreOperation,
+        generation: u64,
+    ) -> Result<Arc<IndexGeneration>, StoreError> {
         if generation == 0 {
             return Ok(Arc::new(IndexGeneration {
                 id: 0,
@@ -350,14 +358,17 @@ where
         }
         let path = self.generation_path(generation);
         let metadata_path = self.metadata_path(&path);
-        let size = self.provider.segment_size(metadata_path.clone()).await?;
+        let size = self.provider.segment_size(operation, metadata_path.clone()).await?;
         if size != GENERATION_METADATA_SIZE as u64 {
-            return Err(error::storage_corrupted(metadata_path));
+            return Err(error::state_corrupted(operation));
         }
-        let bytes = self.provider.read(metadata_path.clone(), 0, size as usize).await?;
-        let metadata = decode_generation_metadata(&bytes, &metadata_path)?;
+        let bytes = self
+            .provider
+            .read(operation, metadata_path.clone(), 0, size as usize)
+            .await?;
+        let metadata = decode_generation_metadata(operation, &bytes)?;
         if metadata.generation != generation {
-            return Err(error::storage_corrupted(metadata_path));
+            return Err(error::state_corrupted(operation));
         }
         Ok(Arc::new(IndexGeneration {
             id: generation,
@@ -366,9 +377,9 @@ where
         }))
     }
 
-    async fn cleanup_orphans_after_restart(&self) -> Result<(), RocketMQError> {
+    async fn cleanup_orphans_after_restart(&self, operation: StoreOperation) -> Result<(), StoreError> {
         let prefix = format!("{}/generations", self.directory);
-        let paths = self.provider.list(prefix.clone()).await?;
+        let paths = self.provider.list(operation, prefix.clone()).await?;
         if paths.is_empty() {
             return Ok(());
         }
@@ -396,7 +407,7 @@ where
             let keep = parse_generation_id(&root)
                 .is_some_and(|generation| generation == current || Some(generation) == previous);
             if !keep {
-                self.provider.delete_prefix(root).await?;
+                self.provider.delete_prefix(StoreOperation::AppendDerived, root).await?;
             }
         }
         Ok(())
@@ -431,17 +442,20 @@ pub(crate) fn encode_generation_metadata(metadata: IndexGenerationMetadata) -> B
     bytes.freeze()
 }
 
-pub(crate) fn decode_generation_metadata(bytes: &Bytes, path: &str) -> Result<IndexGenerationMetadata, RocketMQError> {
+pub(crate) fn decode_generation_metadata(
+    operation: StoreOperation,
+    bytes: &Bytes,
+) -> Result<IndexGenerationMetadata, StoreError> {
     if bytes.len() != GENERATION_METADATA_SIZE {
-        return Err(error::storage_corrupted(path));
+        return Err(error::state_corrupted(operation));
     }
     let expected_checksum = u32::from_be_bytes(bytes[GENERATION_METADATA_SIZE - 4..].try_into().unwrap_or_default());
     if crc32(&bytes[..GENERATION_METADATA_SIZE - 4]) != expected_checksum {
-        return Err(error::storage_corrupted(path));
+        return Err(error::state_corrupted(operation));
     }
     let mut cursor = bytes.clone();
     if cursor.get_u32() != GENERATION_MAGIC || cursor.get_u16() != FORMAT_VERSION {
-        return Err(error::storage_corrupted(path));
+        return Err(error::state_corrupted(operation));
     }
     let _reserved = cursor.get_u16();
     let metadata = IndexGenerationMetadata {
@@ -459,12 +473,12 @@ pub(crate) fn decode_generation_metadata(bytes: &Bytes, path: &str) -> Result<In
             || metadata.min_commit_log_offset != 0
             || metadata.max_commit_log_offset != 0
         {
-            return Err(error::storage_corrupted(path));
+            return Err(error::state_corrupted(operation));
         }
     } else if metadata.min_timestamp > metadata.max_timestamp
         || metadata.min_commit_log_offset > metadata.max_commit_log_offset
     {
-        return Err(error::storage_corrupted(path));
+        return Err(error::state_corrupted(operation));
     }
     Ok(metadata)
 }
@@ -483,17 +497,17 @@ fn encode_current(pointer: CurrentPointer) -> Bytes {
     bytes.freeze()
 }
 
-fn decode_current(bytes: &Bytes, path: &str) -> Result<CurrentPointer, RocketMQError> {
+fn decode_current(operation: StoreOperation, bytes: &Bytes) -> Result<CurrentPointer, StoreError> {
     if bytes.len() != CURRENT_SIZE {
-        return Err(error::storage_corrupted(path));
+        return Err(error::state_corrupted(operation));
     }
     let expected_checksum = u32::from_be_bytes(bytes[32..36].try_into().unwrap_or_default());
     if crc32(&bytes[..32]) != expected_checksum {
-        return Err(error::storage_corrupted(path));
+        return Err(error::state_corrupted(operation));
     }
     let mut cursor = bytes.clone();
     if cursor.get_u32() != CURRENT_MAGIC || cursor.get_u16() != FORMAT_VERSION {
-        return Err(error::storage_corrupted(path));
+        return Err(error::state_corrupted(operation));
     }
     let _reserved = cursor.get_u16();
     let current = cursor.get_u64();
@@ -503,7 +517,7 @@ fn decode_current(bytes: &Bytes, path: &str) -> Result<CurrentPointer, RocketMQE
     };
     let next_generation = cursor.get_u64();
     if next_generation <= current || previous == Some(current) {
-        return Err(error::storage_corrupted(path));
+        return Err(error::state_corrupted(operation));
     }
     Ok(CurrentPointer {
         current,
@@ -548,11 +562,14 @@ mod tests {
             content_crc: 42,
         };
         let encoded = encode_generation_metadata(metadata);
-        assert_eq!(decode_generation_metadata(&encoded, "GENERATION").unwrap(), metadata);
+        assert_eq!(
+            decode_generation_metadata(StoreOperation::Load, &encoded).unwrap(),
+            metadata
+        );
 
         let mut corrupted = encoded.to_vec();
         corrupted[24] ^= 1;
-        assert!(decode_generation_metadata(&Bytes::from(corrupted), "GENERATION").is_err());
+        assert!(decode_generation_metadata(StoreOperation::Load, &Bytes::from(corrupted)).is_err());
     }
 
     #[test]
@@ -563,10 +580,10 @@ mod tests {
             next_generation: 9,
         };
         let encoded = encode_current(pointer);
-        assert_eq!(decode_current(&encoded, "CURRENT").unwrap(), pointer);
+        assert_eq!(decode_current(StoreOperation::Load, &encoded).unwrap(), pointer);
 
         let mut corrupted = encoded.to_vec();
         corrupted[8] ^= 1;
-        assert!(decode_current(&Bytes::from(corrupted), "CURRENT").is_err());
+        assert!(decode_current(StoreOperation::Load, &Bytes::from(corrupted)).is_err());
     }
 }

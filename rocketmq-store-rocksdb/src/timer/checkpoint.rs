@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerSourceCqOffset;
 use rocketmq_store_api::TimerTimelineCursor;
 use rocketmq_store_api::EXTENDED_TIMELINE_FORMAT_VERSION;
 
-use crate::error::codec_error;
+use crate::error::codec_corrupted;
+use crate::error::state_corrupted_source;
 use crate::timer::codec::crc32c;
 
 const CHECKPOINT_KEY_VERSION: u8 = 1;
@@ -37,12 +39,12 @@ pub enum TimelineCheckpointKind {
 }
 
 impl TimelineCheckpointKind {
-    fn decode(value: u8) -> Result<Self, RocketMQError> {
+    fn decode(operation: StoreOperation, value: u8) -> Result<Self, StoreError> {
         match value {
             0 => Ok(Self::MaterializedSource),
             1 => Ok(Self::Due),
             2 => Ok(Self::Completion),
-            _ => Err(codec_error("unknown extended timer checkpoint kind")),
+            _ => Err(codec_corrupted(operation)),
         }
     }
 }
@@ -80,23 +82,26 @@ impl TimelineCheckpointV1 {
     }
 
     /// Decodes and verifies a checkpoint.
-    pub fn decode(bytes: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() != CHECKPOINT_VALUE_SIZE
-            || read_u16(bytes, 0)? != EXTENDED_TIMELINE_FORMAT_VERSION
-            || crc32c(&bytes[..CHECKPOINT_VALUE_SIZE - 4]) != read_u32(bytes, CHECKPOINT_VALUE_SIZE - 4)?
+            || read_u16(operation, bytes, 0)? != EXTENDED_TIMELINE_FORMAT_VERSION
+            || crc32c(&bytes[..CHECKPOINT_VALUE_SIZE - 4]) != read_u32(operation, bytes, CHECKPOINT_VALUE_SIZE - 4)?
         {
-            return Err(codec_error("invalid extended timer checkpoint version, length, or CRC"));
+            return Err(codec_corrupted(operation));
         }
-        let materialized_source_offset = read_i64(bytes, 2)?;
+        let materialized_source_offset = read_i64(operation, bytes, 2)?;
         if materialized_source_offset < -1 {
-            return Err(codec_error("invalid materialized source offset"));
+            return Err(codec_corrupted(operation));
         }
         Ok(Self {
             materialized_source_offset: TimerSourceCqOffset::new(materialized_source_offset),
-            due_cursor: TimerTimelineCursor::new(read_i64(bytes, 10)?, read_u64(bytes, 18)?),
-            completion_cursor: TimerTimelineCursor::new(read_i64(bytes, 26)?, read_u64(bytes, 34)?),
-            format_fingerprint: read_u64(bytes, 42)?,
-            generation: read_u64(bytes, 50)?,
+            due_cursor: TimerTimelineCursor::new(read_i64(operation, bytes, 10)?, read_u64(operation, bytes, 18)?),
+            completion_cursor: TimerTimelineCursor::new(
+                read_i64(operation, bytes, 26)?,
+                read_u64(operation, bytes, 34)?,
+            ),
+            format_fingerprint: read_u64(operation, bytes, 42)?,
+            generation: read_u64(operation, bytes, 50)?,
         })
     }
 }
@@ -111,34 +116,42 @@ pub fn encode_checkpoint_key(kind: TimelineCheckpointKind, lane: u16) -> [u8; CH
 }
 
 /// Decodes a checkpoint key.
-pub fn decode_checkpoint_key(bytes: &[u8]) -> Result<(TimelineCheckpointKind, u16), RocketMQError> {
+pub fn decode_checkpoint_key(
+    operation: StoreOperation,
+    bytes: &[u8],
+) -> Result<(TimelineCheckpointKind, u16), StoreError> {
     if bytes.len() != CHECKPOINT_KEY_SIZE || bytes[0] != CHECKPOINT_KEY_VERSION {
-        return Err(codec_error("invalid extended timer checkpoint key"));
+        return Err(codec_corrupted(operation));
     }
-    Ok((TimelineCheckpointKind::decode(bytes[1])?, read_u16(bytes, 2)?))
+    Ok((
+        TimelineCheckpointKind::decode(operation, bytes[1])?,
+        read_u16(operation, bytes, 2)?,
+    ))
 }
 
-fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], RocketMQError> {
-    bytes
+fn read_array<const N: usize>(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<[u8; N], StoreError> {
+    let value = bytes
         .get(offset..offset.saturating_add(N))
-        .and_then(|value| value.try_into().ok())
-        .ok_or_else(|| codec_error("truncated extended timer checkpoint"))
+        .ok_or_else(|| codec_corrupted(operation))?;
+    value
+        .try_into()
+        .map_err(|source| state_corrupted_source(operation, source))
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, RocketMQError> {
-    Ok(u16::from_be_bytes(read_array(bytes, offset)?))
+fn read_u16(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u16, StoreError> {
+    Ok(u16::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, RocketMQError> {
-    Ok(u32::from_be_bytes(read_array(bytes, offset)?))
+fn read_u32(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u32, StoreError> {
+    Ok(u32::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, RocketMQError> {
-    Ok(u64::from_be_bytes(read_array(bytes, offset)?))
+fn read_u64(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u64, StoreError> {
+    Ok(u64::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, RocketMQError> {
-    Ok(i64::from_be_bytes(read_array(bytes, offset)?))
+fn read_i64(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<i64, StoreError> {
+    Ok(i64::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
 #[cfg(test)]
@@ -155,7 +168,7 @@ mod tests {
             generation: 29,
         };
         assert_eq!(
-            TimelineCheckpointV1::decode(&checkpoint.encode()).expect("decode"),
+            TimelineCheckpointV1::decode(StoreOperation::Read, &checkpoint.encode()).expect("decode"),
             checkpoint
         );
     }

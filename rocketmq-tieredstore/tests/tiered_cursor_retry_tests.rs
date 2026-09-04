@@ -18,10 +18,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::DerivedRecordId;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_tieredstore::DefaultTieredDispatcher;
 use rocketmq_tieredstore::FileSegmentType;
 use rocketmq_tieredstore::PosixProvider;
@@ -89,11 +90,12 @@ impl ControlledPosixProvider {
 impl TieredStoreProvider for ControlledPosixProvider {
     async fn create_segment(
         &self,
+        _operation: StoreOperation,
         path: String,
         segment_type: FileSegmentType,
         base_offset: u64,
         max_size: u64,
-    ) -> Result<TieredFileSegment<Self>, RocketMQError> {
+    ) -> Result<TieredFileSegment<Self>, StoreError> {
         let metadata = rocketmq_tieredstore::FileSegmentMetadata::new(path.clone(), segment_type, base_offset);
         Ok(TieredFileSegment::new(
             path,
@@ -105,47 +107,64 @@ impl TieredStoreProvider for ControlledPosixProvider {
         ))
     }
 
-    async fn segment_size(&self, path: String) -> Result<u64, RocketMQError> {
-        self.inner.segment_size(path).await
+    async fn segment_size(&self, operation: StoreOperation, path: String) -> Result<u64, StoreError> {
+        self.inner.segment_size(operation, path).await
     }
 
-    async fn read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
-        self.inner.read(path, position, length).await
+    async fn read(
+        &self,
+        operation: StoreOperation,
+        path: String,
+        position: u64,
+        length: usize,
+    ) -> Result<Bytes, StoreError> {
+        self.inner.read(operation, path, position, length).await
     }
 
-    async fn write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
+    async fn write(
+        &self,
+        operation: StoreOperation,
+        path: String,
+        position: u64,
+        data: Bytes,
+    ) -> Result<usize, StoreError> {
         if FailureControl::take(&self.control.fail_writes) {
-            return Err(RocketMQError::storage_write_failed(path, "injected provider timeout"));
+            return Err(StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, operation)
+                .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+                .with_source(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "injected provider timeout",
+                )));
         }
         if FailureControl::take(&self.control.partial_writes) {
             let partial = (data.len() / 2).max(1).min(data.len());
-            return self.inner.write(path, position, data.slice(..partial)).await;
+            return self.inner.write(operation, path, position, data.slice(..partial)).await;
         }
-        self.inner.write(path, position, data).await
+        self.inner.write(operation, path, position, data).await
     }
 
-    async fn delete(&self, path: String) -> Result<(), RocketMQError> {
-        self.inner.delete(path).await
+    async fn delete(&self, operation: StoreOperation, path: String) -> Result<(), StoreError> {
+        self.inner.delete(operation, path).await
     }
 
-    async fn sync(&self, path: String) -> Result<(), RocketMQError> {
-        self.inner.sync(path).await
+    async fn sync(&self, operation: StoreOperation, path: String) -> Result<(), StoreError> {
+        self.inner.sync(operation, path).await
     }
 
-    async fn rename(&self, source: String, destination: String) -> Result<(), RocketMQError> {
-        self.inner.rename(source, destination).await
+    async fn rename(&self, operation: StoreOperation, source: String, destination: String) -> Result<(), StoreError> {
+        self.inner.rename(operation, source, destination).await
     }
 
-    async fn list(&self, prefix: String) -> Result<Vec<String>, RocketMQError> {
-        self.inner.list(prefix).await
+    async fn list(&self, operation: StoreOperation, prefix: String) -> Result<Vec<String>, StoreError> {
+        self.inner.list(operation, prefix).await
     }
 
-    async fn delete_prefix(&self, prefix: String) -> Result<(), RocketMQError> {
-        self.inner.delete_prefix(prefix).await
+    async fn delete_prefix(&self, operation: StoreOperation, prefix: String) -> Result<(), StoreError> {
+        self.inner.delete_prefix(operation, prefix).await
     }
 
-    async fn atomic_write(&self, path: String, data: Bytes) -> Result<(), RocketMQError> {
-        self.inner.atomic_write(path, data).await
+    async fn atomic_write(&self, operation: StoreOperation, path: String, data: Bytes) -> Result<(), StoreError> {
+        self.inner.atomic_write(operation, path, data).await
     }
 }
 
@@ -211,9 +230,15 @@ async fn wait_for_health<P>(
 }
 
 #[tokio::test]
-async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let root = temp_dir.path().join("tiered");
     let provider_root = temp_dir.path().join("provider");
     let config = test_config(root.clone());
@@ -226,7 +251,8 @@ async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() 
         config.clone(),
         ControlledPosixProvider::new(provider_root.clone(), control),
         test_task_group(),
-    )?;
+    )?
+    .expect("valid test tiered configuration");
     store.load().await?;
     store.start().await?;
     store
@@ -244,7 +270,14 @@ async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() 
     assert_eq!(failed_health.minimum_pinned_wal_segment(), Some(32));
     let progress_bytes = tokio::fs::read(root.join("config").join("tieredDispatchProgress.bin"))
         .await
-        .map_err(|source| RocketMQError::internal("read retry progress", source))?;
+        .map_err(|source| {
+            StoreError::new(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+            .with_source(source)
+        })?;
     assert!(!progress_bytes.windows(body.len()).any(|window| window == body.as_ref()));
     store.shutdown().await?;
 
@@ -252,7 +285,8 @@ async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() 
         config.clone(),
         ControlledPosixProvider::new(provider_root, FailureControl::default()),
         test_task_group(),
-    )?;
+    )?
+    .expect("valid test tiered configuration");
     restarted.load().await?;
     assert_eq!(restarted.dispatcher().health().retry_count(), 1);
     let retry_body = body.clone();
@@ -275,9 +309,15 @@ async fn timeout_ledger_survives_restart_without_payload_and_releases_wal_pin() 
 }
 
 #[tokio::test]
-async fn partial_provider_write_resumes_and_duplicate_commit_is_idempotent() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn partial_provider_write_resumes_and_duplicate_commit_is_idempotent() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let config = test_config(temp_dir.path().join("tiered"));
     let body = Bytes::from_static(b"partial-write-body");
     let source_record = record(&config, 0, body.len());
@@ -287,7 +327,8 @@ async fn partial_provider_write_resumes_and_duplicate_commit_is_idempotent() -> 
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control.clone()),
         test_task_group(),
-    )?;
+    )?
+    .expect("valid test tiered configuration");
     store.load().await?;
     let retry_body = body.clone();
     store
@@ -319,9 +360,15 @@ async fn partial_provider_write_resumes_and_duplicate_commit_is_idempotent() -> 
 }
 
 #[tokio::test]
-async fn failed_partition_is_isolated_after_retry_is_durable() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn failed_partition_is_isolated_after_retry_is_durable() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let mut config = test_config(temp_dir.path().join("tiered"));
     config.retry_backoff_initial = Duration::from_secs(10);
     config.retry_backoff_max = Duration::from_secs(10);
@@ -331,7 +378,8 @@ async fn failed_partition_is_isolated_after_retry_is_durable() -> Result<(), Roc
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control),
         test_task_group(),
-    )?;
+    )?
+    .expect("valid test tiered configuration");
     store.load().await?;
     store.start().await?;
     let body = Bytes::from_static(b"four");
@@ -359,9 +407,15 @@ async fn failed_partition_is_isolated_after_retry_is_durable() -> Result<(), Roc
 }
 
 #[tokio::test]
-async fn full_retry_ledger_holds_cursor_and_applies_byte_backpressure() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn full_retry_ledger_holds_cursor_and_applies_byte_backpressure() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let mut config = test_config(temp_dir.path().join("tiered"));
     config.max_pending_tasks = 1;
     config.max_pending_bytes = 4;
@@ -374,7 +428,8 @@ async fn full_retry_ledger_holds_cursor_and_applies_byte_backpressure() -> Resul
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control.clone()),
         test_task_group(),
-    )?;
+    )?
+    .expect("valid test tiered configuration");
     store.load().await?;
     store.start().await?;
     let body = Bytes::from_static(b"four");
@@ -412,9 +467,15 @@ async fn full_retry_ledger_holds_cursor_and_applies_byte_backpressure() -> Resul
 }
 
 #[tokio::test]
-async fn retry_source_byte_limit_stops_cursor_before_unrecorded_failure() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn retry_source_byte_limit_stops_cursor_before_unrecorded_failure() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let mut config = test_config(temp_dir.path().join("tiered"));
     config.retry_ledger_max_entries = 4;
     config.retry_ledger_max_bytes = 4;
@@ -426,7 +487,8 @@ async fn retry_source_byte_limit_stops_cursor_before_unrecorded_failure() -> Res
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control.clone()),
         test_task_group(),
-    )?;
+    )?
+    .expect("valid test tiered configuration");
     store.load().await?;
     store.start().await?;
     let body = Bytes::from_static(b"four");
@@ -454,9 +516,15 @@ async fn retry_source_byte_limit_stops_cursor_before_unrecorded_failure() -> Res
 }
 
 #[tokio::test]
-async fn retry_age_limit_fails_readiness_without_losing_durable_entry() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn retry_age_limit_fails_readiness_without_losing_durable_entry() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let mut config = test_config(temp_dir.path().join("tiered"));
     config.retry_ledger_max_age = Duration::from_millis(10);
     config.retry_backoff_initial = Duration::from_millis(5);
@@ -467,7 +535,8 @@ async fn retry_age_limit_fails_readiness_without_losing_durable_entry() -> Resul
         config.clone(),
         ControlledPosixProvider::new(temp_dir.path().join("provider"), control),
         test_task_group(),
-    )?;
+    )?
+    .expect("valid test tiered configuration");
     store.load().await?;
     store.start().await?;
     let body = Bytes::from_static(b"aged");
@@ -485,9 +554,15 @@ async fn retry_age_limit_fails_readiness_without_losing_durable_entry() -> Resul
 }
 
 #[tokio::test]
-async fn corrupted_progress_snapshot_fails_restart_closed() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn corrupted_progress_snapshot_fails_restart_closed() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let root = temp_dir.path().join("tiered");
     let provider_root = temp_dir.path().join("provider");
     let config = test_config(root.clone());
@@ -495,7 +570,8 @@ async fn corrupted_progress_snapshot_fails_restart_closed() -> Result<(), Rocket
         config.clone(),
         ControlledPosixProvider::new(provider_root.clone(), FailureControl::default()),
         test_task_group(),
-    )?;
+    )?
+    .expect("valid test tiered configuration");
     store.load().await?;
     store.start().await?;
     let body = Bytes::from_static(b"valid");
@@ -507,29 +583,44 @@ async fn corrupted_progress_snapshot_fails_restart_closed() -> Result<(), Rocket
     store.shutdown().await?;
 
     let progress_path = root.join("config").join("tieredDispatchProgress.bin");
-    let mut encoded = tokio::fs::read(&progress_path)
-        .await
-        .map_err(|source| RocketMQError::internal("read progress snapshot", source))?;
-    let last = encoded
-        .last_mut()
-        .ok_or_else(|| RocketMQError::invariant_violated("progress snapshot must not be empty"))?;
+    let mut encoded = tokio::fs::read(&progress_path).await.map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
+    let last = encoded.last_mut().ok_or_else(|| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+    })?;
     *last ^= 0xFF;
-    tokio::fs::write(&progress_path, encoded)
-        .await
-        .map_err(|source| RocketMQError::internal("write corrupted progress snapshot", source))?;
+    tokio::fs::write(&progress_path, encoded).await.map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
 
     let restarted = TieredStore::with_provider(
         config,
         ControlledPosixProvider::new(provider_root, FailureControl::default()),
         test_task_group(),
-    )?;
+    )?
+    .expect("valid test tiered configuration");
     let error = restarted
         .load()
         .await
         .expect_err("corrupted progress must fail readiness");
-    assert!(
-        error.to_string().contains("tieredDispatchProgress.bin"),
-        "unexpected restart error: {error}"
-    );
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
+    assert_eq!(error.operation(), StoreOperation::Load);
+    assert_eq!(error.component(), rocketmq_store_api::StoreComponent::TieredStore);
+    assert!(!format!("{error:?}").contains("tieredDispatchProgress.bin"));
     Ok(())
 }

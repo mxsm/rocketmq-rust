@@ -19,7 +19,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::fs;
 
 use crate::config::TieredStoreConfig;
@@ -31,7 +32,9 @@ use crate::metadata::TopicQueueMetadata;
 use crate::provider::TieredProviderDescriptor;
 use crate::provider::TieredProviderPersistence;
 
+#[cfg(feature = "serde")]
 const METADATA_FORMAT: &str = "rocketmq-tiered-metadata";
+#[cfg(feature = "serde")]
 const METADATA_VERSION: u32 = 1;
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -61,47 +64,50 @@ impl From<TieredProviderDescriptor> for PersistedProviderContract {
 
 #[allow(async_fn_in_trait)]
 pub trait TieredMetadataStore: Send + Sync {
-    async fn load(&self) -> Result<(), RocketMQError>;
+    async fn load(&self) -> Result<(), StoreError>;
 
-    async fn persist(&self) -> Result<(), RocketMQError>;
+    async fn persist(&self) -> Result<(), StoreError>;
 
-    async fn destroy(&self) -> Result<(), RocketMQError>;
+    async fn destroy(&self) -> Result<(), StoreError>;
 
-    async fn get_topic(&self, topic: &str) -> Result<Option<TopicMetadata>, RocketMQError>;
+    async fn get_topic(&self, topic: &str) -> Result<Option<TopicMetadata>, StoreError>;
 
-    async fn upsert_topic(&self, metadata: TopicMetadata) -> Result<(), RocketMQError>;
+    async fn upsert_topic(&self, metadata: TopicMetadata) -> Result<(), StoreError>;
 
-    async fn delete_topic(&self, topic: &str) -> Result<(), RocketMQError>;
+    async fn delete_topic(&self, topic: &str) -> Result<(), StoreError>;
 
-    async fn get_queue(&self, topic: &str, queue_id: i32) -> Result<Option<TopicQueueMetadata>, RocketMQError>;
+    async fn get_queue(&self, topic: &str, queue_id: i32) -> Result<Option<TopicQueueMetadata>, StoreError>;
 
-    async fn list_queues(&self) -> Result<Vec<TopicQueueMetadata>, RocketMQError>;
+    async fn list_queues(&self) -> Result<Vec<TopicQueueMetadata>, StoreError>;
 
-    async fn upsert_queue(&self, metadata: TopicQueueMetadata) -> Result<(), RocketMQError>;
+    async fn upsert_queue(&self, metadata: TopicQueueMetadata) -> Result<(), StoreError>;
 
-    async fn delete_queue(&self, topic: &str, queue_id: i32) -> Result<(), RocketMQError>;
+    async fn delete_queue(&self, topic: &str, queue_id: i32) -> Result<(), StoreError>;
 
-    async fn list_file_segments(&self, topic: &str, queue_id: i32) -> Result<Vec<FileSegmentMetadata>, RocketMQError>;
+    async fn list_file_segments(&self, topic: &str, queue_id: i32) -> Result<Vec<FileSegmentMetadata>, StoreError>;
 
-    async fn list_all_file_segments(&self) -> Result<Vec<FileSegmentMetadata>, RocketMQError>;
+    async fn list_all_file_segments(&self) -> Result<Vec<FileSegmentMetadata>, StoreError>;
 
-    async fn upsert_file_segment(&self, metadata: FileSegmentMetadata) -> Result<(), RocketMQError>;
+    async fn upsert_file_segment(&self, metadata: FileSegmentMetadata) -> Result<(), StoreError>;
 
-    async fn mark_file_segment_deleted(&self, path: &str, base_offset: u64) -> Result<(), RocketMQError>;
+    async fn mark_file_segment_deleted(&self, path: &str, base_offset: u64) -> Result<(), StoreError>;
 
-    async fn list_index_entries(&self) -> Result<Vec<TieredIndexEntry>, RocketMQError>;
+    async fn list_index_entries(&self) -> Result<Vec<TieredIndexEntry>, StoreError>;
 
-    async fn upsert_index_entry(&self, entry: TieredIndexEntry) -> Result<(), RocketMQError>;
+    async fn upsert_index_entry(&self, entry: TieredIndexEntry) -> Result<(), StoreError>;
 
-    async fn delete_index_entries_before(&self, timestamp_millis: i64) -> Result<(), RocketMQError>;
+    async fn delete_index_entries_before(&self, timestamp_millis: i64) -> Result<(), StoreError>;
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(default, rename_all = "camelCase"))]
 #[derive(Debug, Clone)]
 struct MetadataState {
+    #[cfg(feature = "serde")]
     format: String,
+    #[cfg(feature = "serde")]
     version: u32,
+    #[cfg(feature = "serde")]
     provider: Option<PersistedProviderContract>,
     topics: HashMap<String, TopicMetadata>,
     queues: HashMap<String, TopicQueueMetadata>,
@@ -112,9 +118,14 @@ struct MetadataState {
 
 impl MetadataState {
     fn new(provider: Option<PersistedProviderContract>) -> Self {
+        #[cfg(not(feature = "serde"))]
+        let _ = provider;
         Self {
+            #[cfg(feature = "serde")]
             format: METADATA_FORMAT.to_owned(),
+            #[cfg(feature = "serde")]
             version: METADATA_VERSION,
+            #[cfg(feature = "serde")]
             provider,
             topics: HashMap::new(),
             queues: HashMap::new(),
@@ -179,8 +190,8 @@ impl JsonMetadataStore {
 }
 
 impl TieredMetadataStore for JsonMetadataStore {
-    async fn load(&self) -> Result<(), RocketMQError> {
-        if fs::metadata(&self.path).await.is_err() {
+    async fn load(&self) -> Result<(), StoreError> {
+        if !metadata_exists(fs::metadata(&self.path).await)? {
             return Ok(());
         }
 
@@ -188,15 +199,15 @@ impl TieredMetadataStore for JsonMetadataStore {
         {
             let data = fs::read(&self.path)
                 .await
-                .map_err(|err| error::storage_read_failed(path_to_string(&self.path), err.to_string()))?;
+                .map_err(|source| error::io_failed(StoreOperation::Load, source))?;
             let mut state = serde_json::from_slice::<MetadataState>(&data)
-                .map_err(|_| error::storage_corrupted(path_to_string(&self.path)))?;
+                .map_err(|source| error::state_corrupted_source(StoreOperation::Load, source))?;
             if state.format != METADATA_FORMAT || state.version != METADATA_VERSION {
-                return Err(error::storage_corrupted(path_to_string(&self.path)));
+                return Err(error::state_corrupted(StoreOperation::Load));
             }
             match (&state.provider, &self.expected_provider) {
                 (Some(stored), Some(expected)) if stored != expected => {
-                    return Err(error::storage_corrupted(path_to_string(&self.path)));
+                    return Err(error::state_corrupted(StoreOperation::Load));
                 }
                 (None, Some(expected)) => state.provider = Some(expected.clone()),
                 _ => {}
@@ -207,76 +218,73 @@ impl TieredMetadataStore for JsonMetadataStore {
         Ok(())
     }
 
-    async fn persist(&self) -> Result<(), RocketMQError> {
+    async fn persist(&self) -> Result<(), StoreError> {
         let _persist_guard = self.persist_lock.lock().await;
         let Some(parent) = self.path.parent() else {
-            return Err(error::storage_write_failed(
-                path_to_string(&self.path),
-                "metadata path has no parent",
-            ));
+            return Err(error::internal_failure(StoreOperation::AppendDerived));
         };
         fs::create_dir_all(parent)
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(parent), err.to_string()))?;
+            .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
 
         #[cfg(feature = "serde")]
         {
             let snapshot = self.state.read().clone();
             let data = serde_json::to_vec_pretty(&snapshot)
-                .map_err(|err| error::storage_write_failed(path_to_string(&self.path), err.to_string()))?;
+                .map_err(|source| error::write_failed(StoreOperation::AppendDerived, source))?;
             let tmp_path = self.path.with_extension("json.tmp");
             fs::write(&tmp_path, data)
                 .await
-                .map_err(|err| error::storage_write_failed(path_to_string(&tmp_path), err.to_string()))?;
+                .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
             fs::OpenOptions::new()
                 .write(true)
                 .open(&tmp_path)
                 .await
-                .map_err(|err| error::storage_write_failed(path_to_string(&tmp_path), err.to_string()))?
+                .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?
                 .sync_all()
                 .await
-                .map_err(|err| error::storage_write_failed(path_to_string(&tmp_path), err.to_string()))?;
+                .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
             fs::rename(&tmp_path, &self.path)
                 .await
-                .map_err(|err| error::storage_write_failed(path_to_string(&self.path), err.to_string()))?;
+                .map_err(|source| error::io_failed(StoreOperation::AppendDerived, source))?;
             self.successful_persists.fetch_add(1, Ordering::Relaxed);
         }
 
         Ok(())
     }
 
-    async fn destroy(&self) -> Result<(), RocketMQError> {
+    async fn destroy(&self) -> Result<(), StoreError> {
         *self.state.write() = MetadataState::new(self.expected_provider.clone());
         Ok(())
     }
 
-    async fn get_topic(&self, topic: &str) -> Result<Option<TopicMetadata>, RocketMQError> {
+    async fn get_topic(&self, topic: &str) -> Result<Option<TopicMetadata>, StoreError> {
         Ok(self.state.read().topics.get(topic).cloned())
     }
 
-    async fn upsert_topic(&self, metadata: TopicMetadata) -> Result<(), RocketMQError> {
+    async fn upsert_topic(&self, metadata: TopicMetadata) -> Result<(), StoreError> {
         {
             self.state.write().topics.insert(metadata.topic.clone(), metadata);
         }
         self.persist().await
     }
 
-    async fn delete_topic(&self, topic: &str) -> Result<(), RocketMQError> {
+    async fn delete_topic(&self, topic: &str) -> Result<(), StoreError> {
         {
             self.state.write().topics.remove(topic);
         }
         self.persist().await
     }
 
-    async fn get_queue(&self, topic: &str, queue_id: i32) -> Result<Option<TopicQueueMetadata>, RocketMQError> {
+    async fn get_queue(&self, topic: &str, queue_id: i32) -> Result<Option<TopicQueueMetadata>, StoreError> {
         Ok(self.state.read().queues.get(&Self::queue_key(topic, queue_id)).cloned())
     }
 
-    async fn list_queues(&self) -> Result<Vec<TopicQueueMetadata>, RocketMQError> {
+    async fn list_queues(&self) -> Result<Vec<TopicQueueMetadata>, StoreError> {
         Ok(self.state.read().queues.values().cloned().collect())
     }
 
-    async fn upsert_queue(&self, metadata: TopicQueueMetadata) -> Result<(), RocketMQError> {
+    async fn upsert_queue(&self, metadata: TopicQueueMetadata) -> Result<(), StoreError> {
         {
             self.state
                 .write()
@@ -286,14 +294,14 @@ impl TieredMetadataStore for JsonMetadataStore {
         self.persist().await
     }
 
-    async fn delete_queue(&self, topic: &str, queue_id: i32) -> Result<(), RocketMQError> {
+    async fn delete_queue(&self, topic: &str, queue_id: i32) -> Result<(), StoreError> {
         {
             self.state.write().queues.remove(&Self::queue_key(topic, queue_id));
         }
         self.persist().await
     }
 
-    async fn list_file_segments(&self, topic: &str, queue_id: i32) -> Result<Vec<FileSegmentMetadata>, RocketMQError> {
+    async fn list_file_segments(&self, topic: &str, queue_id: i32) -> Result<Vec<FileSegmentMetadata>, StoreError> {
         let queue_prefix = format!("{topic}/{queue_id}/");
         let mut segments = self
             .state
@@ -307,13 +315,13 @@ impl TieredMetadataStore for JsonMetadataStore {
         Ok(segments)
     }
 
-    async fn list_all_file_segments(&self) -> Result<Vec<FileSegmentMetadata>, RocketMQError> {
+    async fn list_all_file_segments(&self) -> Result<Vec<FileSegmentMetadata>, StoreError> {
         let mut segments = self.state.read().segments.values().cloned().collect::<Vec<_>>();
         segments.sort_by_key(|segment| (segment.path.clone(), segment.segment_type, segment.base_offset));
         Ok(segments)
     }
 
-    async fn upsert_file_segment(&self, metadata: FileSegmentMetadata) -> Result<(), RocketMQError> {
+    async fn upsert_file_segment(&self, metadata: FileSegmentMetadata) -> Result<(), StoreError> {
         {
             self.state
                 .write()
@@ -323,7 +331,7 @@ impl TieredMetadataStore for JsonMetadataStore {
         self.persist().await
     }
 
-    async fn mark_file_segment_deleted(&self, path: &str, base_offset: u64) -> Result<(), RocketMQError> {
+    async fn mark_file_segment_deleted(&self, path: &str, base_offset: u64) -> Result<(), StoreError> {
         {
             if let Some(segment) = self
                 .state
@@ -337,7 +345,7 @@ impl TieredMetadataStore for JsonMetadataStore {
         self.persist().await
     }
 
-    async fn list_index_entries(&self) -> Result<Vec<TieredIndexEntry>, RocketMQError> {
+    async fn list_index_entries(&self) -> Result<Vec<TieredIndexEntry>, StoreError> {
         Ok(self
             .state
             .read()
@@ -347,7 +355,7 @@ impl TieredMetadataStore for JsonMetadataStore {
             .collect())
     }
 
-    async fn upsert_index_entry(&self, entry: TieredIndexEntry) -> Result<(), RocketMQError> {
+    async fn upsert_index_entry(&self, entry: TieredIndexEntry) -> Result<(), StoreError> {
         {
             let mut state = self.state.write();
             let entries = state
@@ -362,7 +370,7 @@ impl TieredMetadataStore for JsonMetadataStore {
         self.persist().await
     }
 
-    async fn delete_index_entries_before(&self, timestamp_millis: i64) -> Result<(), RocketMQError> {
+    async fn delete_index_entries_before(&self, timestamp_millis: i64) -> Result<(), StoreError> {
         {
             let mut state = self.state.write();
             for entries in state.index.values_mut() {
@@ -374,29 +382,90 @@ impl TieredMetadataStore for JsonMetadataStore {
     }
 }
 
-fn path_to_string(path: &std::path::Path) -> String {
-    path.to_string_lossy().into_owned()
+fn metadata_exists(result: std::io::Result<std::fs::Metadata>) -> Result<bool, StoreError> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(error::io_failed(StoreOperation::Load, source)),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use rocketmq_error::RocketMQError;
+    use rocketmq_store_api::StoreError;
 
     use crate::config::TieredStoreConfig;
+    #[cfg(feature = "serde")]
     use crate::file::FileSegmentType;
+    #[cfg(feature = "serde")]
     use crate::metadata::FileSegmentMetadata;
     use crate::metadata::JsonMetadataStore;
     use crate::metadata::TieredMetadataStore;
     use crate::metadata::TopicMetadata;
+    #[cfg(feature = "serde")]
     use crate::metadata::TopicQueueMetadata;
+    #[cfg(feature = "serde")]
     use crate::TieredIndexEntry;
 
+    fn assert_redacted(error: &StoreError, sentinel: &str) {
+        assert!(!error.to_string().contains(sentinel));
+        assert!(!format!("{error:?}").contains(sentinel));
+    }
+
+    #[test]
+    fn load_preserves_non_not_found_io_source_without_rendering_path() {
+        let sentinel = "sensitive-metadata-io-canary";
+        let error = super::metadata_exists(Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, sentinel)))
+            .expect_err("metadata stat should fail");
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+        assert_eq!(error.operation(), rocketmq_store_api::StoreOperation::Load);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
+        assert_redacted(&error, sentinel);
+    }
+
+    #[cfg(feature = "serde")]
     #[tokio::test]
-    async fn persists_and_loads_metadata() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn load_preserves_json_source_without_rendering_payload() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory");
+        let sentinel = "sensitive-metadata-json-canary";
+        let config_dir = temp_dir.path().join("config");
+        tokio::fs::create_dir_all(&config_dir).await.expect("config directory");
+        tokio::fs::write(
+            config_dir.join("tieredStoreMetadata.json"),
+            format!("{{\"{sentinel}\":"),
+        )
+        .await
+        .expect("corrupt metadata");
+        let store = JsonMetadataStore::new(Arc::new(TieredStoreConfig {
+            store_path_root_dir: temp_dir.path().to_path_buf(),
+            ..TieredStoreConfig::default()
+        }));
+
+        let error = store.load().await.expect_err("invalid metadata JSON should fail");
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
+        assert_eq!(error.operation(), rocketmq_store_api::StoreOperation::Load);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<serde_json::Error>())
+            .is_some());
+        assert_redacted(&error, sentinel);
+    }
+
+    #[cfg(feature = "serde")]
+    #[tokio::test]
+    async fn persists_and_loads_metadata() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             ..TieredStoreConfig::default()
@@ -451,13 +520,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_metadata_replace_does_not_advance_persist_counter() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn failed_metadata_replace_does_not_advance_persist_counter() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let blocked_root = temp_dir.path().join("not-a-directory");
-        tokio::fs::write(&blocked_root, b"blocked")
-            .await
-            .map_err(|source| RocketMQError::internal("open metadata store", source))?;
+        tokio::fs::write(&blocked_root, b"blocked").await.map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let metadata_store = JsonMetadataStore::new(Arc::new(TieredStoreConfig {
             store_path_root_dir: blocked_root,
             ..TieredStoreConfig::default()
@@ -477,10 +555,16 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "serde")]
     #[tokio::test]
-    async fn supports_topic_queue_and_segment_delete_semantics() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn supports_topic_queue_and_segment_delete_semantics() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             ..TieredStoreConfig::default()

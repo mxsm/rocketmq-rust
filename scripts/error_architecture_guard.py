@@ -29,6 +29,11 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[1]
 RUST_SUFFIX = ".rs"
 PROXY_STATUS_MAPPER = ROOT / "rocketmq-proxy-core" / "src" / "status.rs"
+EXTERNAL_CFG_TEST_MODULES = frozenset(
+    {
+        "rocketmq-store-rocksdb/src/release_checkpoint_tests.rs",
+    }
+)
 
 SENSITIVE_FIELD_TERMS = (
     "secret",
@@ -139,10 +144,83 @@ SOURCE_STRINGIFICATION_ALLOWLIST: dict[str, str] = {
     "rocketmq-controller/src/openraft/state_machine.rs": "OpenRaft state machine and snapshot traits require std::io::Error at the storage boundary",
     "rocketmq-store/src/message_store/local_file_message_store.rs": "local file message store records recovery progress and HA/storage diagnostics as display text",
     "rocketmq-store/src/rocksdb/consume_queue.rs": "RocksDB group commit background worker stores task failure text for later reporting",
-    "rocketmq-store/src/rocksdb/error.rs": "rocksdb crate errors are converted to RocketMQ storage variants until the error kernel grows external source slots",
-    "rocketmq-store/src/tieredstore.rs": "tiered store test helper creates temporary directories and maps setup failures to RocketMQError",
     "rocketmq-store/src/utils/ffi.rs": "FFI helpers expose OS error reasons across a C-compatible boundary",
 }
+
+BACKEND_SOURCE_PRESERVATION_TOKENS: dict[str, tuple[tuple[str, int], ...]] = {
+    "rocketmq-tieredstore/src/metadata/metadata_store.rs": (
+        ("Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),", 1),
+        ("Err(source) => Err(error::io_failed(StoreOperation::Load, source)),", 1),
+        ("map_err(|source| error::state_corrupted_source(StoreOperation::Load, source))?;", 1),
+    ),
+    "rocketmq-tieredstore/src/dispatcher/progress_persistence.rs": (
+        ("map_err(|source| crate::error::state_corrupted_source(StoreOperation::Load, source))", 1),
+    ),
+    "rocketmq-tieredstore/src/file/index_file_segment.rs": (
+        ("map_err(|source| error::state_corrupted_source(StoreOperation::Load, source))?", 2),
+    ),
+    "rocketmq-tieredstore/src/file/index_file_segment/codec.rs": (
+        ("map_err(|source| error::state_corrupted_source(operation, source))?", 2),
+    ),
+    "rocketmq-tieredstore/src/runtime.rs": (
+        ("map_err(|source| crate::error::runtime_error(StoreOperation::Shutdown, source))?;", 1),
+    ),
+}
+
+BACKEND_SOURCE_LOSS_PATTERNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "rocketmq-tieredstore/src/metadata/metadata_store.rs": (
+        (
+            r"fs::metadata\([^;]{0,240}\)\.await\s*\.is_err\(\)",
+            "metadata errors other than NotFound must remain typed",
+        ),
+        (
+            r"serde_json::from_slice[^;]{0,320}\.map_err\(\|_\|",
+            "metadata JSON errors must remain typed",
+        ),
+    ),
+    "rocketmq-tieredstore/src/dispatcher/progress_persistence.rs": (
+        (
+            r"serde_json::from_slice[^;]{0,320}\.map_err\(\|_\|",
+            "persisted progress JSON errors must remain typed",
+        ),
+    ),
+    "rocketmq-tieredstore/src/file/index_file_segment.rs": (
+        (
+            r"std::str::from_utf8[^;]{0,320}\.map_err\(\|_\|",
+            "persisted index UTF-8 errors must remain typed",
+        ),
+        (
+            r"\.parse::<i64>\(\)[^;]{0,240}\.map_err\(\|_\|",
+            "persisted index integer errors must remain typed",
+        ),
+    ),
+    "rocketmq-tieredstore/src/file/index_file_segment/codec.rs": (
+        (
+            r"std::str::from_utf8[^;]{0,320}\.map_err\(\|_\|",
+            "persisted index UTF-8 errors must remain typed",
+        ),
+    ),
+    "rocketmq-tieredstore/src/runtime.rs": (
+        (
+            r"cancel_and_wait[^;]{0,400}\.await\s*\.is_err\(\)",
+            "Tiered shutdown runtime errors must remain typed",
+        ),
+        (
+            r"cancel_and_wait[^;]{0,400}\.await\s*\.unwrap_or(?:_else)?\(",
+            "Tiered shutdown runtime errors must not be replaced by a fallback value",
+        ),
+    ),
+}
+
+SOURCE_STRINGIFICATION_DOMAIN_ROOTS = (
+    ("rocketmq-store", "src"),
+    ("rocketmq-store-local", "src"),
+    ("rocketmq-store-rocksdb", "src"),
+    ("rocketmq-tieredstore", "src"),
+    ("rocketmq-controller", "src"),
+    ("rocketmq-auth", "src"),
+    ("rocketmq-broker", "src"),
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -175,12 +253,21 @@ def rel_path(path: Path) -> str:
     return path.relative_to(ROOT).as_posix()
 
 
+def is_test_source_path(path: Path) -> bool:
+    """Return whether a Rust source path is unambiguously test-only."""
+    rel_parts = path.relative_to(ROOT).parts
+    return (
+        "tests" in rel_parts
+        or "benches" in rel_parts
+        or "examples" in rel_parts
+        or rel_path(path) in EXTERNAL_CFG_TEST_MODULES
+        or ("src" in rel_parts and "bin" in rel_parts)
+    )
+
+
 def is_test_context(path: Path, line_number: int) -> bool:
     """Best-effort detector for unit-test modules inside Rust source files."""
-    rel_parts = path.relative_to(ROOT).parts
-    if "tests" in rel_parts or "benches" in rel_parts or "examples" in rel_parts:
-        return True
-    if "src" in rel_parts and "bin" in rel_parts:
+    if is_test_source_path(path):
         return True
 
     depth = 0
@@ -207,10 +294,7 @@ def is_test_context(path: Path, line_number: int) -> bool:
 
 def iter_non_test_lines(path: Path) -> Iterable[tuple[int, str]]:
     """Yield source lines while skipping test-only modules in one pass."""
-    rel_parts = path.relative_to(ROOT).parts
-    if "tests" in rel_parts or "benches" in rel_parts or "examples" in rel_parts:
-        return
-    if "src" in rel_parts and "bin" in rel_parts:
+    if is_test_source_path(path):
         return
 
     depth = 0
@@ -666,6 +750,20 @@ def is_source_stringification_allowlisted(path: Path) -> bool:
     return rel in SOURCE_STRINGIFICATION_ALLOWLIST
 
 
+def source_stringification_message(relative_path: str, line: str) -> str | None:
+    backend_root = any(
+        relative_path == root or relative_path.startswith(f"{root}/")
+        for root in ("rocketmq-store-rocksdb", "rocketmq-tieredstore")
+    )
+    backend_source_to_text = backend_root and (
+        re.search(r"\b(error|err|e|source)\.to_string\(\)", line) is not None
+        or re.search(r"\{(error|err|e|source)(?::[^}]*)?\}", line) is not None
+    )
+    if (backend_source_to_text or is_source_stringification_line(line)) and relative_path not in SOURCE_STRINGIFICATION_ALLOWLIST:
+        return "source stringification requires a typed source wrapper or SOURCE_STRINGIFICATION_ALLOWLIST entry"
+    return None
+
+
 def is_source_stringification_line(line: str) -> bool:
     if ".to_string()" not in line:
         return "RocketMQError::Internal(format!(" in line
@@ -725,6 +823,31 @@ def check_store_error_detail_stringification(paths: list[Path]) -> list[Finding]
     return findings
 
 
+def backend_source_loss_messages(relative_path: str, source: str) -> list[str]:
+    """Return source-loss findings for the enumerated backend repair sites."""
+    messages: list[str] = []
+    for pattern, message in BACKEND_SOURCE_LOSS_PATTERNS.get(relative_path, ()):
+        if re.search(pattern, source, re.DOTALL):
+            messages.append(message)
+    return messages
+
+
+def check_backend_source_preservation() -> list[Finding]:
+    findings: list[Finding] = []
+    for relative_path, required in BACKEND_SOURCE_PRESERVATION_TOKENS.items():
+        path = ROOT / relative_path
+        if not path.exists():
+            findings.append(Finding(path, 1, "required backend source-preservation file is missing"))
+            continue
+        source = "\n".join(line for _, line in iter_non_test_lines(path))
+        for token, minimum in required:
+            if source.count(token) < minimum:
+                findings.append(Finding(path, 1, f"required backend source-preservation token missing: {token}"))
+        for message in backend_source_loss_messages(relative_path, source):
+            findings.append(Finding(path, 1, message))
+    return findings
+
+
 def check_source_stringification_allowlist() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-store-api" / "src" / "error.rs": [
@@ -741,9 +864,9 @@ def check_source_stringification_allowlist() -> list[Finding]:
             "MmapFailed(#[source] io::Error)",
             "FlushFailed(#[source] io::Error)",
         ],
-        ROOT / "rocketmq-store" / "src" / "message_store" / "rocksdb_message_store.rs": [
-            "RocksDbMessageStoreError::Backend { source } => {",
-            "STORAGE_BACKEND_UNAVAILABLE",
+        ROOT / "rocketmq-store-rocksdb" / "src" / "error.rs": [
+            "source: ::rocksdb::Error",
+            "StoreComponent::RocksDb",
             ".with_source(source)",
         ],
     }
@@ -757,13 +880,9 @@ def check_source_stringification_allowlist() -> list[Finding]:
             if needle not in text:
                 findings.append(Finding(path, 1, f"required source-preservation token missing: {needle}"))
 
-    domain_paths = [
-        *rust_files_under("rocketmq-store", "src"),
-        *rust_files_under("rocketmq-store-local", "src"),
-        *rust_files_under("rocketmq-controller", "src"),
-        *rust_files_under("rocketmq-auth", "src"),
-        *rust_files_under("rocketmq-broker", "src"),
-    ]
+    domain_paths: list[Path] = []
+    for parts in SOURCE_STRINGIFICATION_DOMAIN_ROOTS:
+        domain_paths.extend(rust_files_under(*parts))
     store_facade_paths = [
         *rust_files_under("rocketmq-store-api", "src"),
         *rust_files_under("rocketmq-store", "src"),
@@ -775,19 +894,19 @@ def check_source_stringification_allowlist() -> list[Finding]:
         *rust_files_under("rocketmq-tools", "rocketmq-store-inspect", "src"),
     ]
     findings.extend(check_store_error_detail_stringification(store_facade_paths))
+    findings.extend(check_backend_source_preservation())
     for path in domain_paths:
         for line_number, line in enumerate(read_text(path).splitlines(), start=1):
             stripped = line.strip()
             if stripped.startswith("//") or stripped.startswith("///") or is_test_context(path, line_number):
                 continue
-            if not is_source_stringification_line(line):
-                continue
-            if not is_source_stringification_allowlisted(path):
+            message = source_stringification_message(rel_path(path), line)
+            if message is not None:
                 findings.append(
                     Finding(
                         path,
                         line_number,
-                        "source stringification requires a typed source wrapper or SOURCE_STRINGIFICATION_ALLOWLIST entry",
+                        message,
                     )
                 )
     return findings

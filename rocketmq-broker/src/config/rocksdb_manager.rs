@@ -20,7 +20,6 @@ use std::sync::Arc;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::DataVersion;
-use rocketmq_store::codec_error;
 use rocketmq_store::KeyValueStore;
 use rocketmq_store::RocksDbColumnFamilyConfig;
 use rocketmq_store::RocksDbConfig;
@@ -28,6 +27,8 @@ use rocketmq_store::RocksDbRangeScanOptions;
 use rocketmq_store::RocksDbStore;
 use rocketmq_store::RocksDbWalRecoveryMode;
 use rocketmq_store::RocksDbWriteBatch;
+use rocketmq_store::StoreError;
+use rocketmq_store::StoreOperation;
 
 const DEFAULT_COLUMN_FAMILY: &str = "default";
 const KV_DATA_VERSION_COLUMN_FAMILY: &str = "kvDataVersion";
@@ -144,7 +145,9 @@ pub(crate) struct RocksDbBrokerConfigManager {
 impl RocksDbBrokerConfigManager {
     pub(crate) fn open(config: RocksDbBrokerConfigManagerConfig) -> Result<Self, RocketMQError> {
         let rocksdb_config = build_rocksdb_config(&config);
-        let store = RocksDbStore::open_with_existing_column_families(rocksdb_config.clone())?;
+        let store = RocksDbStore::open_with_existing_column_families(rocksdb_config.clone())
+            .map_err(broker_storage_error)?
+            .ok_or_else(invalid_rocksdb_configuration)?;
         let core = Arc::new(RocksDbBrokerConfigStoreCore { rocksdb_config, store });
         Ok(Self::with_core(config, core))
     }
@@ -154,7 +157,9 @@ impl RocksDbBrokerConfigManager {
             return Ok(Vec::new());
         }
         let rocksdb_config = build_shared_rocksdb_config(&configs)?;
-        let store = RocksDbStore::open_with_existing_column_families(rocksdb_config.clone())?;
+        let store = RocksDbStore::open_with_existing_column_families(rocksdb_config.clone())
+            .map_err(broker_storage_error)?
+            .ok_or_else(invalid_rocksdb_configuration)?;
         let core = Arc::new(RocksDbBrokerConfigStoreCore { rocksdb_config, store });
         configs
             .into_iter()
@@ -201,7 +206,10 @@ impl RocksDbBrokerConfigManager {
 
     pub(crate) fn put_cf_bytes(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<(), RocketMQError> {
         self.create_cf_if_missing(cf)?;
-        self.core.store.put_cf(cf, key, value)
+        self.core
+            .store
+            .put_cf(StoreOperation::Admin, cf, key, value)
+            .map_err(broker_storage_error)
     }
 
     pub(crate) fn get_string(&self, key: &str) -> Result<Option<String>, RocketMQError> {
@@ -218,7 +226,10 @@ impl RocksDbBrokerConfigManager {
     }
 
     pub(crate) fn get_cf_bytes(&self, cf: &str, key: &[u8]) -> Result<Option<bytes::Bytes>, RocketMQError> {
-        self.core.store.get_cf(cf, key)
+        self.core
+            .store
+            .get_cf(StoreOperation::Admin, cf, key)
+            .map_err(broker_storage_error)
     }
 
     pub(crate) fn delete(&self, key: &str) -> Result<(), RocketMQError> {
@@ -226,7 +237,10 @@ impl RocksDbBrokerConfigManager {
     }
 
     pub(crate) fn delete_cf(&self, cf: &str, key: &str) -> Result<(), RocketMQError> {
-        self.core.store.delete_cf(cf, key.as_bytes())
+        self.core
+            .store
+            .delete_cf(StoreOperation::Admin, cf, key.as_bytes())
+            .map_err(broker_storage_error)
     }
 
     pub(crate) fn load_data(&self) -> Result<ConfigRecords, RocketMQError> {
@@ -240,14 +254,23 @@ impl RocksDbBrokerConfigManager {
     pub(crate) fn load_cf_data(&self, cf: &str) -> Result<ConfigRecords, RocketMQError> {
         self.core
             .store
-            .range_scan(&RocksDbRangeScanOptions::new(cf, Vec::new(), Vec::new(), 0))?
+            .range_scan(
+                StoreOperation::Admin,
+                &RocksDbRangeScanOptions::new(cf, Vec::new(), Vec::new(), 0),
+            )
+            .map_err(broker_storage_error)?
             .into_iter()
             .map(|item| Ok((item.key.to_vec(), item.value.to_vec())))
             .collect()
     }
 
     pub(crate) fn load_data_version(&self) -> Result<Option<DataVersion>, RocketMQError> {
-        let Some(body) = self.core.store.get_cf(&self.version_cf, KV_DATA_VERSION_KEY)? else {
+        let Some(body) = self
+            .core
+            .store
+            .get_cf(StoreOperation::Admin, &self.version_cf, KV_DATA_VERSION_KEY)
+            .map_err(broker_storage_error)?
+        else {
             return Ok(None);
         };
         let data_version = serde_json::from_slice::<DataVersion>(&body)
@@ -278,7 +301,10 @@ impl RocksDbBrokerConfigManager {
         for (key, value) in records {
             batch.put_cf(self.default_cf.clone(), key.clone(), value.clone());
         }
-        self.core.store.write_batch(&batch)
+        self.core
+            .store
+            .write_batch(StoreOperation::Admin, &batch)
+            .map_err(broker_storage_error)
     }
 
     /// Atomically replaces one logical broker-config snapshot and its data version.
@@ -305,17 +331,26 @@ impl RocksDbBrokerConfigManager {
             batch.put_cf(self.default_cf.clone(), key.clone(), value.clone());
         }
         batch.put_cf(self.version_cf.clone(), KV_DATA_VERSION_KEY.to_vec(), version_body);
-        self.core.store.write_batch(&batch)?;
+        self.core
+            .store
+            .write_batch(StoreOperation::Admin, &batch)
+            .map_err(broker_storage_error)?;
         self.kv_data_version.lock().assign_new_one(data_version);
         Ok(())
     }
 
     pub(crate) fn flush_wal(&self) -> Result<(), RocketMQError> {
-        self.core.store.flush_wal(false)
+        self.core
+            .store
+            .flush_wal(StoreOperation::Admin, false)
+            .map_err(broker_storage_error)
     }
 
     pub(crate) fn flush_memtable(&self) -> Result<(), RocketMQError> {
-        self.core.store.flush()
+        self.core
+            .store
+            .flush(StoreOperation::Admin)
+            .map_err(broker_storage_error)
     }
 
     pub(crate) fn close(&self) {
@@ -329,8 +364,28 @@ impl RocksDbBrokerConfigManager {
     fn create_cf_if_missing(&self, cf: &str) -> Result<(), RocketMQError> {
         self.core
             .store
-            .create_cf_if_missing(config_column_family(cf, self.block_cache_size, self.write_buffer_size))
+            .create_cf_if_missing(
+                StoreOperation::Admin,
+                config_column_family(cf, self.block_cache_size, self.write_buffer_size),
+            )
+            .map_err(broker_storage_error)
     }
+}
+
+fn broker_storage_error(source: StoreError) -> RocketMQError {
+    RocketMQError::internal("broker RocksDB storage operation failed", source)
+}
+
+fn invalid_rocksdb_configuration() -> RocketMQError {
+    RocketMQError::ConfigInvalidValue {
+        key: "rocksdbConfig",
+        value: "redacted".to_owned(),
+        reason: "broker RocksDB configuration is invalid".to_owned(),
+    }
+}
+
+fn codec_error(reason: impl Into<String>) -> RocketMQError {
+    RocketMQError::deserialization_failed("broker RocksDB configuration", reason.into())
 }
 
 fn build_rocksdb_config(config: &RocksDbBrokerConfigManagerConfig) -> RocksDbConfig {

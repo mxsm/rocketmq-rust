@@ -23,11 +23,18 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_rocksdb::column_family::RocksDbColumnFamily;
 use rocketmq_store_rocksdb::config::RocksDbConfig;
 use rocketmq_store_rocksdb::config::RocksDbConfigSource;
+use rocketmq_store_rocksdb::index::RocksDbIndexBuildConfig;
+use rocketmq_store_rocksdb::index::RocksDbIndexBuildService;
+use rocketmq_store_rocksdb::message::MessageRocksDbStorage;
 use rocketmq_store_rocksdb::store::KeyValueStore;
 use rocketmq_store_rocksdb::store::RocksDbStore;
+use rocketmq_store_rocksdb::transaction::RocksDbTransBuildConfig;
+use rocketmq_store_rocksdb::transaction::RocksDbTransBuildService;
+use rocketmq_store_rocksdb::RocksDbOpenPlan;
 use rocketmq_store_rocksdb::RocksDbResourceBudget;
 use tempfile::TempDir;
 
@@ -102,6 +109,27 @@ fn config_projection_is_owned_without_store_facade_types() {
 }
 
 #[test]
+fn open_plan_validation_performs_no_filesystem_discovery_and_redacts_debug() {
+    let root = TempDir::new().expect("create test root");
+    let sensitive_root = root.path().join("sensitive-rocksdb-plan-path-canary");
+    let unselected = sensitive_root.join("consumequeue");
+    std::fs::create_dir_all(&unselected).expect("create unselected RocksDB directory");
+    std::fs::write(unselected.join("CURRENT"), b"sensitive-manifest-canary").expect("write unselected RocksDB marker");
+    let source = TestConfigSource {
+        root: sensitive_root,
+        backup: root.path().join("sensitive-rocksdb-plan-backup-canary"),
+    };
+
+    let (consume_queue, message) =
+        RocksDbOpenPlan::from_message_store(&source).expect("pure configuration should produce plans");
+
+    let rendered = format!("{consume_queue:?} {message:?}");
+    assert!(!rendered.contains("sensitive-rocksdb-plan-path-canary"));
+    assert!(!rendered.contains("sensitive-rocksdb-plan-backup-canary"));
+    assert!(!rendered.contains("sensitive-manifest-canary"));
+}
+
+#[test]
 fn native_store_snapshot_and_reopen_preserve_column_family_data() {
     let root = TempDir::new().expect("create test root");
     let config = RocksDbConfig {
@@ -111,22 +139,31 @@ fn native_store_snapshot_and_reopen_preserve_column_family_data() {
     };
     let default_cf = RocksDbColumnFamily::Default.name();
 
-    let store = RocksDbStore::open(config.clone()).expect("open RocksDB store");
-    store.put_cf(default_cf, b"key", b"value").expect("write value");
-    store.flush().expect("flush value");
+    let store = RocksDbStore::open(config.clone())
+        .expect("open RocksDB store")
+        .expect("valid RocksDB configuration");
+    store
+        .put_cf(StoreOperation::Append, default_cf, b"key", b"value")
+        .expect("write value");
+    store.flush(StoreOperation::Flush).expect("flush value");
 
-    let snapshot = store.snapshot().expect("create snapshot");
+    let snapshot = store.snapshot(StoreOperation::Read).expect("create snapshot");
     assert_eq!(
-        snapshot.get_cf(default_cf, b"key").expect("read snapshot").as_deref(),
+        snapshot
+            .get_cf(StoreOperation::Read, default_cf, b"key")
+            .expect("read snapshot")
+            .as_deref(),
         Some(b"value".as_slice())
     );
     drop(snapshot);
     drop(store);
 
-    let reopened = RocksDbStore::open_with_existing_column_families(config).expect("reopen RocksDB store");
+    let reopened = RocksDbStore::open_with_existing_column_families(config)
+        .expect("reopen RocksDB store")
+        .expect("valid RocksDB configuration");
     assert_eq!(
         reopened
-            .get_cf(default_cf, b"key")
+            .get_cf(StoreOperation::Read, default_cf, b"key")
             .expect("read reopened store")
             .as_deref(),
         Some(b"value".as_slice())
@@ -152,14 +189,16 @@ fn multiple_databases_share_one_cache_and_write_buffer_budget() {
         path: root.path().join("second"),
         ..first_config.clone()
     };
-    let first = RocksDbStore::open_with_metrics_and_resource_budget(
-        first_config,
+    let first_plan = RocksDbOpenPlan::from_config(first_config).expect("valid first configuration");
+    let first = RocksDbStore::open_planned_with_metrics_and_resource_budget(
+        first_plan,
         rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder::noop(),
         Arc::clone(&budget),
     )
     .expect("open first database");
-    let second = RocksDbStore::open_with_metrics_and_resource_budget(
-        second_config,
+    let second_plan = RocksDbOpenPlan::from_config(second_config).expect("valid second configuration");
+    let second = RocksDbStore::open_planned_with_metrics_and_resource_budget(
+        second_plan,
         rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder::noop(),
         Arc::clone(&budget),
     )
@@ -172,13 +211,43 @@ fn multiple_databases_share_one_cache_and_write_buffer_budget() {
 
     let default_cf = RocksDbColumnFamily::Default.name();
     first
-        .put_cf(default_cf, b"first", b"value")
+        .put_cf(StoreOperation::Append, default_cf, b"first", b"value")
         .expect("write first database");
     second
-        .put_cf(default_cf, b"second", b"value")
+        .put_cf(StoreOperation::Append, default_cf, b"second", b"value")
         .expect("write second database");
     assert!(budget.block_cache_usage_bytes() <= block_cache_budget);
     assert!(budget.write_buffer_usage_bytes() <= write_buffer_budget);
+}
+
+#[test]
+fn derived_offset_lookups_retain_query_offset_on_backend_failure() {
+    let root = TempDir::new().expect("create test root");
+    let source = TestConfigSource {
+        root: root.path().to_path_buf(),
+        backup: root.path().join("backup"),
+    };
+    let config = RocksDbConfig::message_from_message_store_config(&source);
+    let storage = Arc::new(
+        MessageRocksDbStorage::open(config)
+            .expect("open message RocksDB")
+            .expect("valid message RocksDB configuration"),
+    );
+    let index = RocksDbIndexBuildService::new(Arc::clone(&storage), RocksDbIndexBuildConfig::default())
+        .expect("create index service");
+    let transaction = RocksDbTransBuildService::new(Arc::clone(&storage), RocksDbTransBuildConfig::default())
+        .expect("create transaction service");
+    storage.store().close();
+
+    let index_error = index
+        .get_dispatch_from_phy_offset()
+        .expect_err("closed index database must fail");
+    let transaction_error = transaction
+        .get_dispatch_from_phy_offset()
+        .expect_err("closed transaction database must fail");
+
+    assert_eq!(index_error.operation(), StoreOperation::QueryOffset);
+    assert_eq!(transaction_error.operation(), StoreOperation::QueryOffset);
 }
 
 #[test]
@@ -193,11 +262,18 @@ fn synchronized_wal_crash_writer_helper() {
         manual_wal_flush: true,
         ..RocksDbConfig::default()
     };
-    let store = RocksDbStore::open(config).expect("open crash-writer RocksDB");
+    let store = RocksDbStore::open(config)
+        .expect("open crash-writer RocksDB")
+        .expect("valid RocksDB configuration");
     store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"wal-key", b"wal-value")
+        .put_cf(
+            StoreOperation::Append,
+            RocksDbColumnFamily::Default.name(),
+            b"wal-key",
+            b"wal-value",
+        )
         .expect("write WAL-backed value");
-    store.flush_wal(true).expect("synchronize WAL");
+    store.flush_wal(StoreOperation::Flush, true).expect("synchronize WAL");
     println!("{WAL_SYNCED_ACK}");
     std::io::stdout().flush().expect("flush WAL acknowledgement");
     loop {
@@ -259,10 +335,12 @@ fn synchronized_wal_recovers_after_process_termination() {
         manual_wal_flush: true,
         ..RocksDbConfig::default()
     };
-    let recovered = RocksDbStore::open_with_existing_column_families(config).expect("recover RocksDB from WAL");
+    let recovered = RocksDbStore::open_with_existing_column_families(config)
+        .expect("recover RocksDB from WAL")
+        .expect("valid RocksDB configuration");
     assert_eq!(
         recovered
-            .get_cf(RocksDbColumnFamily::Default.name(), b"wal-key")
+            .get_cf(StoreOperation::Read, RocksDbColumnFamily::Default.name(), b"wal-key",)
             .expect("read WAL-recovered value")
             .as_deref(),
         Some(b"wal-value".as_slice())

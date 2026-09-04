@@ -18,11 +18,11 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_store_api::StoreError;
 use tracing::error;
 use tracing::warn;
 
@@ -130,16 +130,20 @@ impl RocksDbMaintenanceService {
         self.worker_group = Some(worker_group);
     }
 
-    pub async fn shutdown_gracefully(&mut self) -> Result<(), RocketMQError> {
+    pub async fn shutdown_gracefully(&mut self) -> Result<(), StoreError> {
         let _ = self.shutdown_gracefully_with_report().await?;
         Ok(())
     }
 
-    pub async fn shutdown_gracefully_with_report(&mut self) -> Result<Option<ShutdownReport>, RocketMQError> {
+    pub async fn shutdown_gracefully_with_report(&mut self) -> Result<Option<ShutdownReport>, StoreError> {
         self.scheduled_tasks.take();
         if let Some(worker_group) = self.worker_group.take() {
             let report = worker_group.shutdown(Duration::from_secs(5)).await;
-            crate::runtime::shutdown_report_result("maintenance shutdown", report.clone())?;
+            crate::runtime::shutdown_report_result(
+                "maintenance shutdown",
+                rocketmq_store_api::StoreOperation::Shutdown,
+                report.clone(),
+            )?;
             return Ok(Some(report));
         }
         Ok(None)
@@ -170,13 +174,19 @@ impl RocksDbMaintenanceService {
             .unwrap_or_default()
     }
 
-    pub async fn run_once(&self) -> Result<(), RocketMQError> {
+    pub async fn run_once(&self) -> Result<(), StoreError> {
         if self.config.flush_interval.is_some() {
-            self.store.flush()?;
+            self.store.flush(rocketmq_store_api::StoreOperation::Flush)?;
         }
         if self.config.compaction_interval.is_some() {
             self.store
-                .compact_range_cf_blocking(&self.runtime_scope, self.config.compaction_cf.clone(), None, None)
+                .compact_range_cf_blocking(
+                    &self.runtime_scope,
+                    rocketmq_store_api::StoreOperation::Start,
+                    self.config.compaction_cf.clone(),
+                    None,
+                    None,
+                )
                 .await?;
         }
         if self.config.checkpoint_interval.is_some() {
@@ -213,11 +223,24 @@ impl RocksDbMaintenanceService {
             let runtime_scope = runtime_scope.clone();
             async move {
                 if let Err(error) = run_operation(&store, &config, &runtime_scope, operation).await {
-                    warn!(error = %error, operation = ?operation, "rocksdb maintenance operation failed");
+                    warn!(
+                        descriptor = ?error.descriptor().code(),
+                        operation = ?error.operation(),
+                        component = ?error.component(),
+                        source_present = std::error::Error::source(&error).is_some(),
+                        "rocksdb maintenance operation failed"
+                    );
                 }
             }
         }) {
-            error!(%error, operation = ?operation, "failed to schedule rocksdb maintenance task");
+            let error = crate::error::runtime_error(rocketmq_store_api::StoreOperation::Start, error);
+            error!(
+                descriptor = ?error.descriptor().code(),
+                operation = ?error.operation(),
+                component = ?error.component(),
+                source_present = std::error::Error::source(&error).is_some(),
+                "failed to schedule rocksdb maintenance task"
+            );
         }
     }
 }
@@ -246,12 +269,18 @@ async fn run_operation(
     config: &RocksDbMaintenanceConfig,
     runtime_scope: &RocksDbRuntimeScope,
     operation: MaintenanceOperation,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     match operation {
-        MaintenanceOperation::Flush => store.flush(),
+        MaintenanceOperation::Flush => store.flush(rocketmq_store_api::StoreOperation::Flush),
         MaintenanceOperation::CompactDefaultCf => {
             store
-                .compact_range_cf_blocking(runtime_scope, config.compaction_cf.clone(), None, None)
+                .compact_range_cf_blocking(
+                    runtime_scope,
+                    rocketmq_store_api::StoreOperation::Start,
+                    config.compaction_cf.clone(),
+                    None,
+                    None,
+                )
                 .await
         }
         MaintenanceOperation::Checkpoint => {
@@ -285,13 +314,25 @@ fn default_checkpoint_root(db_path: &std::path::Path) -> PathBuf {
         .join(format!("{db_name}-checkpoints"))
 }
 
-fn next_checkpoint_dir(checkpoint_root: &std::path::Path) -> Result<PathBuf, RocketMQError> {
-    std::fs::create_dir_all(checkpoint_root).map_err(|error| {
-        RocketMQError::storage_write_failed("rocksdb", format!("Checkpoint: create root directory: {error}"))
+fn next_checkpoint_dir(checkpoint_root: &std::path::Path) -> Result<PathBuf, StoreError> {
+    std::fs::create_dir_all(checkpoint_root).map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_IO_FAILED,
+            rocketmq_store_api::StoreOperation::Flush,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::RocksDb)
+        .with_source(source)
     })?;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| RocketMQError::storage_write_failed("rocksdb", format!("Checkpoint: system time: {error}")))?
+        .map_err(|source| {
+            StoreError::new(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Flush,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::RocksDb)
+            .with_source(source)
+        })?
         .as_nanos();
     for suffix in 0..100_u32 {
         let checkpoint_dir = checkpoint_root.join(format!("{nanos}-{suffix}"));
@@ -299,8 +340,7 @@ fn next_checkpoint_dir(checkpoint_root: &std::path::Path) -> Result<PathBuf, Roc
             return Ok(checkpoint_dir);
         }
     }
-    Err(RocketMQError::storage_write_failed(
-        "rocksdb",
-        "Checkpoint: failed to allocate unique checkpoint directory",
+    Err(crate::error::internal_failure(
+        rocketmq_store_api::StoreOperation::Flush,
     ))
 }

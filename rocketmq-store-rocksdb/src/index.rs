@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 
 use crate::column_family::RocksDbColumnFamily;
 use crate::message::IndexRocksDbRecord;
@@ -57,20 +57,16 @@ impl Default for RocksDbIndexBuildConfig {
 }
 
 impl RocksDbIndexBuildConfig {
-    fn validate(self) -> Result<Self, RocketMQError> {
+    fn validate(self) -> Result<Self, StoreError> {
         if self.queue_capacity == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.index.queue_capacity",
-                value: self.queue_capacity.to_string(),
-                reason: "queue capacity must be greater than zero".to_string(),
-            });
+            return Err(crate::error::request_invalid(
+                rocketmq_store_api::StoreOperation::AppendDerived,
+            ));
         }
         if self.batch_size == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.index.batch_size",
-                value: self.batch_size.to_string(),
-                reason: "batch size must be greater than zero".to_string(),
-            });
+            return Err(crate::error::request_invalid(
+                rocketmq_store_api::StoreOperation::AppendDerived,
+            ));
         }
         Ok(self)
     }
@@ -83,7 +79,7 @@ pub struct RocksDbIndexBuildService {
 }
 
 impl RocksDbIndexBuildService {
-    pub fn new(storage: Arc<MessageRocksDbStorage>, config: RocksDbIndexBuildConfig) -> Result<Self, RocketMQError> {
+    pub fn new(storage: Arc<MessageRocksDbStorage>, config: RocksDbIndexBuildConfig) -> Result<Self, StoreError> {
         let config = config.validate()?;
         Ok(Self {
             storage,
@@ -92,7 +88,7 @@ impl RocksDbIndexBuildService {
         })
     }
 
-    pub fn build_index<R>(&self, dispatch_request: &R) -> Result<usize, RocketMQError>
+    pub fn build_index<R>(&self, dispatch_request: &R) -> Result<usize, StoreError>
     where
         R: RocksDbIndexDispatch + ?Sized,
     {
@@ -101,19 +97,14 @@ impl RocksDbIndexBuildService {
             return Ok(0);
         }
 
-        let mut pending = self.pending.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("index queue lock poisoned: {error}"))
-        })?;
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         let available = self.config.queue_capacity.saturating_sub(pending.len());
         if records.len() > available {
-            return Err(RocketMQError::storage_write_failed(
-                "rocksdb",
-                format!(
-                    "index queue full: capacity={}, pending={}, incoming={}",
-                    self.config.queue_capacity,
-                    pending.len(),
-                    records.len()
-                ),
+            return Err(crate::error::capacity_exhausted(
+                rocketmq_store_api::StoreOperation::AppendDerived,
             ));
         }
 
@@ -126,7 +117,7 @@ impl RocksDbIndexBuildService {
         self.pending.lock().map_or(0, |pending| pending.len())
     }
 
-    pub fn flush_pending(&self) -> Result<usize, RocketMQError> {
+    pub fn flush_pending(&self) -> Result<usize, StoreError> {
         let mut flushed = 0;
         loop {
             let batch = self.drain_batch()?;
@@ -146,19 +137,25 @@ impl RocksDbIndexBuildService {
     pub async fn flush_pending_blocking(
         self: Arc<Self>,
         runtime_scope: &crate::runtime::RocksDbRuntimeScope,
-    ) -> Result<usize, RocketMQError> {
-        crate::runtime::spawn_io(runtime_scope, "rocksdb.index.flush_pending", move || {
-            self.flush_pending()
-        })
+    ) -> Result<usize, StoreError> {
+        crate::runtime::spawn_io(
+            runtime_scope,
+            "rocksdb.index.flush_pending",
+            rocketmq_store_api::StoreOperation::AppendDerived,
+            move || self.flush_pending(),
+        )
         .await?
     }
 
-    pub fn get_dispatch_from_phy_offset(&self) -> Result<Option<i64>, RocketMQError> {
-        let last_offset = self.storage.get_last_offset_py(RocksDbColumnFamily::Default.name())?;
+    pub fn get_dispatch_from_phy_offset(&self) -> Result<Option<i64>, StoreError> {
+        let last_offset = self.storage.get_last_offset_py(
+            rocketmq_store_api::StoreOperation::QueryOffset,
+            RocksDbColumnFamily::Default.name(),
+        )?;
         Ok((last_offset > 0).then_some(last_offset))
     }
 
-    fn records_for_dispatch<R>(&self, dispatch_request: &R) -> Result<Vec<IndexRocksDbRecord>, RocketMQError>
+    fn records_for_dispatch<R>(&self, dispatch_request: &R) -> Result<Vec<IndexRocksDbRecord>, StoreError>
     where
         R: RocksDbIndexDispatch + ?Sized,
     {
@@ -221,18 +218,20 @@ impl RocksDbIndexBuildService {
         Ok(records)
     }
 
-    fn drain_batch(&self) -> Result<Vec<IndexRocksDbRecord>, RocketMQError> {
-        let mut pending = self.pending.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("index queue lock poisoned: {error}"))
-        })?;
+    fn drain_batch(&self) -> Result<Vec<IndexRocksDbRecord>, StoreError> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         let batch_len = self.config.batch_size.min(pending.len());
         Ok(pending.drain(..batch_len).collect())
     }
 
-    fn requeue_front(&self, mut batch: Vec<IndexRocksDbRecord>) -> Result<(), RocketMQError> {
-        let mut pending = self.pending.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("index queue lock poisoned: {error}"))
-        })?;
+    fn requeue_front(&self, mut batch: Vec<IndexRocksDbRecord>) -> Result<(), StoreError> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         while let Some(record) = batch.pop() {
             pending.push_front(record);
         }

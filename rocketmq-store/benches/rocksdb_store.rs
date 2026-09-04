@@ -24,6 +24,7 @@ use rocketmq_store::RocksDbConfig;
 use rocketmq_store::RocksDbScanOptions;
 use rocketmq_store::RocksDbStore;
 use rocketmq_store::RocksDbWriteBatch;
+use rocketmq_store::StoreOperation;
 use std::hint::black_box;
 use tempfile::TempDir;
 
@@ -45,7 +46,9 @@ impl BenchRocksDb {
             path: temp_dir.path().join(name),
             ..RocksDbConfig::default()
         };
-        let store = RocksDbStore::open(config).expect("open rocksdb benchmark store");
+        let store = RocksDbStore::open(config)
+            .expect("open rocksdb benchmark store")
+            .expect("valid rocksdb benchmark configuration");
         Self {
             store,
             _temp_dir: temp_dir,
@@ -60,7 +63,8 @@ fn encode_cq_key(offset: i64) -> Vec<u8> {
         cq_offset: offset,
     };
     let mut bytes = Vec::with_capacity(key.encoded_len());
-    key.encode(&mut bytes).expect("encode consume queue key");
+    key.encode(StoreOperation::AppendDerived, &mut bytes)
+        .expect("encode consume queue key");
     bytes
 }
 
@@ -72,7 +76,9 @@ fn encode_cq_value(offset: i64) -> Vec<u8> {
         msg_store_time: 1_700_000_000_000_i64.saturating_add(offset),
     };
     let mut bytes = Vec::with_capacity(ConsumeQueueValue::ENCODED_LEN);
-    value.encode(&mut bytes).expect("encode consume queue value");
+    value
+        .encode(StoreOperation::AppendDerived, &mut bytes)
+        .expect("encode consume queue value");
     bytes
 }
 
@@ -85,7 +91,8 @@ fn bench_codec(c: &mut Criterion) {
         };
         b.iter(|| {
             let mut bytes = Vec::with_capacity(key.encoded_len());
-            key.encode(&mut bytes).expect("encode consume queue key");
+            key.encode(StoreOperation::AppendDerived, &mut bytes)
+                .expect("encode consume queue key");
             black_box(bytes);
         });
     });
@@ -99,8 +106,10 @@ fn bench_codec(c: &mut Criterion) {
         };
         b.iter(|| {
             let mut bytes = Vec::with_capacity(ConsumeQueueValue::ENCODED_LEN);
-            value.encode(&mut bytes).expect("encode consume queue value");
-            let decoded = ConsumeQueueValue::decode(&bytes).expect("decode consume queue value");
+            value
+                .encode(StoreOperation::AppendDerived, &mut bytes)
+                .expect("encode consume queue value");
+            let decoded = ConsumeQueueValue::decode(StoreOperation::Read, &bytes).expect("decode consume queue value");
             black_box(decoded);
         });
     });
@@ -123,7 +132,9 @@ fn bench_batch_write(c: &mut Criterion) {
                 batch
             },
             |batch| {
-                db.store.write_batch(&batch).expect("write rocksdb benchmark batch");
+                db.store
+                    .write_batch(StoreOperation::AppendDerived, &batch)
+                    .expect("write rocksdb benchmark batch");
             },
             BatchSize::SmallInput,
         );
@@ -137,7 +148,12 @@ fn bench_point_read(c: &mut Criterion) {
     let cf = RocksDbColumnFamily::Default.name();
     for offset in 0..POINT_READ_KEYS as i64 {
         db.store
-            .put_cf(cf, &encode_cq_key(offset), &encode_cq_value(offset))
+            .put_cf(
+                StoreOperation::AppendDerived,
+                cf,
+                &encode_cq_key(offset),
+                &encode_cq_value(offset),
+            )
             .expect("prefill point read key");
     }
 
@@ -146,7 +162,10 @@ fn bench_point_read(c: &mut Criterion) {
         b.iter(|| {
             let key = encode_cq_key(next as i64);
             next = (next + 1) % POINT_READ_KEYS;
-            let value = db.store.get_cf(cf, &key).expect("read rocksdb benchmark key");
+            let value = db
+                .store
+                .get_cf(StoreOperation::Read, cf, &key)
+                .expect("read rocksdb benchmark key");
             black_box(value);
         });
     });
@@ -163,14 +182,17 @@ fn bench_prefix_scan(c: &mut Criterion) {
         let key = format!("scan:{offset:08}");
         let value = encode_cq_value(offset as i64);
         db.store
-            .put_cf(cf, key.as_bytes(), &value)
+            .put_cf(StoreOperation::AppendDerived, cf, key.as_bytes(), &value)
             .expect("prefill prefix scan key");
     }
 
     let options = RocksDbScanOptions::prefix(cf, prefix.to_vec(), PREFIX_SCAN_LIMIT);
     c.bench_function("rocksdb/prefix_scan_100", |b| {
         b.iter(|| {
-            let rows = db.store.prefix_scan(&options).expect("scan rocksdb benchmark prefix");
+            let rows = db
+                .store
+                .prefix_scan(StoreOperation::Read, &options)
+                .expect("scan rocksdb benchmark prefix");
             black_box(rows);
         });
     });

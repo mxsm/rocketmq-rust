@@ -199,6 +199,8 @@ pub(crate) enum TimelineGcError {
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error(transparent)]
     Store(#[from] rocketmq_store_api::StoreError),
+    #[error(transparent)]
+    Completion(#[from] super::TimelineCompletionError),
 }
 
 #[cfg(test)]

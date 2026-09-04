@@ -20,13 +20,14 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use parking_lot::RwLock;
-use rocketmq_error::RocketMQError;
 use rocketmq_store_api::CursorAdvanceDisposition;
 use rocketmq_store_api::DerivedCheckpoint;
 use rocketmq_store_api::DerivedCursor;
 use rocketmq_store_api::DerivedEngine;
 use rocketmq_store_api::DerivedRecordId;
 use rocketmq_store_api::StoreContractViolation;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::sync::Mutex;
 
 use super::progress_persistence::PersistedTieredProgress;
@@ -161,9 +162,9 @@ impl TieredRetryEntry {
         }
     }
 
-    pub(crate) fn record(&self) -> Result<DerivedRecordId, RocketMQError> {
+    pub(crate) fn record(&self) -> Result<DerivedRecordId, StoreError> {
         DerivedRecordId::try_new(self.source_epoch, self.physical_offset, self.length)
-            .map_err(|source| tiered_contract("validate tiered retry record", source))
+            .map_err(|source| crate::error::state_corrupted_source(StoreOperation::Load, source))
     }
 
     pub(crate) fn request_with_body(&self, body: Bytes) -> TieredDispatchRequest {
@@ -217,7 +218,7 @@ pub(crate) enum FailureRecordOutcome {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RetryCapacityError {
+pub(crate) enum RetryCapacityRejection {
     Entries,
     Bytes,
     Age,
@@ -254,7 +255,7 @@ impl TieredProgressTracker {
         }
     }
 
-    pub(crate) async fn load(&self, now_millis: u64) -> Result<(), RocketMQError> {
+    pub(crate) async fn load(&self, now_millis: u64) -> Result<(), StoreError> {
         if self
             .loaded
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -269,34 +270,26 @@ impl TieredProgressTracker {
         result
     }
 
-    async fn load_inner(&self, now_millis: u64) -> Result<(), RocketMQError> {
+    async fn load_inner(&self, now_millis: u64) -> Result<(), StoreError> {
         let Some(persisted) = self.persistence.load().await? else {
             self.refresh_health(&TieredProgressState::default(), now_millis, None);
             return Ok(());
         };
         let checkpoint = DerivedCheckpoint::decode(&persisted.checkpoint, DerivedEngine::Tiered)
-            .map_err(|source| tiered_contract("validate tiered progress checkpoint", source))?;
+            .map_err(|source| crate::error::state_corrupted_source(StoreOperation::Load, source))?;
         let cursor = checkpoint.cursor();
         if cursor.source_epoch() != self.source_epoch {
-            return Err(crate::error::storage_corrupted(format!(
-                "tiered progress source epoch mismatch: expected {}, got {}",
-                self.source_epoch,
-                cursor.source_epoch()
-            )));
+            return Err(crate::error::state_corrupted(StoreOperation::Load));
         }
 
         let mut retries = BTreeMap::new();
         for entry in persisted.retries {
             let record = entry.record()?;
             if record.source_epoch() != self.source_epoch || record.end_offset() > cursor.next_offset() {
-                return Err(crate::error::storage_corrupted(
-                    "tiered retry record is outside the persisted cursor prefix",
-                ));
+                return Err(crate::error::state_corrupted(StoreOperation::Load));
             }
             if retries.insert(record, entry).is_some() {
-                return Err(crate::error::storage_corrupted(
-                    "tiered retry ledger contains duplicate record identity",
-                ));
+                return Err(crate::error::state_corrupted(StoreOperation::Load));
             }
         }
         let state = TieredProgressState {
@@ -309,7 +302,7 @@ impl TieredProgressTracker {
         Ok(())
     }
 
-    pub(crate) async fn destroy(&self) -> Result<(), RocketMQError> {
+    pub(crate) async fn destroy(&self) -> Result<(), StoreError> {
         self.persistence.destroy().await?;
         let state = TieredProgressState::default();
         *self.state.lock().await = state.clone();
@@ -322,7 +315,7 @@ impl TieredProgressTracker {
         self.retry_backoff_initial
     }
 
-    pub(crate) async fn classify(&self, record: DerivedRecordId) -> Result<RecordDisposition, RocketMQError> {
+    pub(crate) async fn classify(&self, record: DerivedRecordId) -> Result<RecordDisposition, StoreError> {
         self.validate_epoch(record)?;
         let state = self.state.lock().await;
         if state.retries.contains_key(&record) {
@@ -333,14 +326,14 @@ impl TieredProgressTracker {
         };
         match cursor
             .prepare(record)
-            .map_err(|source| tiered_contract("validate tiered cursor", source))?
+            .map_err(|source| tiered_contract(StoreOperation::AppendDerived, source))?
         {
             CursorAdvanceDisposition::AlreadyCommitted => Ok(RecordDisposition::AlreadyCommitted),
             CursorAdvanceDisposition::Advance(_) => Ok(RecordDisposition::Deliver),
         }
     }
 
-    pub(crate) async fn record_success(&self, record: DerivedRecordId, now_millis: u64) -> Result<(), RocketMQError> {
+    pub(crate) async fn record_success(&self, record: DerivedRecordId, now_millis: u64) -> Result<(), StoreError> {
         self.validate_epoch(record)?;
         let mut state_guard = self.state.lock().await;
         let mut candidate = state_guard.clone();
@@ -349,7 +342,7 @@ impl TieredProgressTracker {
             .unwrap_or_else(|| DerivedCursor::restore(record.source_epoch(), record.physical_offset()));
         match current
             .prepare(record)
-            .map_err(|source| tiered_contract("validate tiered cursor", source))?
+            .map_err(|source| tiered_contract(StoreOperation::AppendDerived, source))?
         {
             CursorAdvanceDisposition::AlreadyCommitted => {
                 if candidate.retries.remove(&record).is_none() {
@@ -372,7 +365,7 @@ impl TieredProgressTracker {
         record: DerivedRecordId,
         request: &TieredDispatchRequest,
         now_millis: u64,
-    ) -> Result<Result<FailureRecordOutcome, RetryCapacityError>, RocketMQError> {
+    ) -> Result<Result<FailureRecordOutcome, RetryCapacityRejection>, StoreError> {
         self.validate_epoch(record)?;
         let mut state_guard = self.state.lock().await;
         let mut candidate = state_guard.clone();
@@ -381,7 +374,7 @@ impl TieredProgressTracker {
             .unwrap_or_else(|| DerivedCursor::restore(record.source_epoch(), record.physical_offset()));
         let advance = match current
             .prepare(record)
-            .map_err(|source| tiered_contract("validate tiered cursor", source))?
+            .map_err(|source| tiered_contract(StoreOperation::AppendDerived, source))?
         {
             CursorAdvanceDisposition::AlreadyCommitted => {
                 if !candidate.retries.contains_key(&record) {
@@ -405,11 +398,14 @@ impl TieredProgressTracker {
             candidate.cursor = Some(advance.next_cursor());
         }
         if let Some(readiness) = self.capacity_violation(&candidate, now_millis) {
-            let capacity = match readiness {
-                TieredDispatchReadiness::RetryLedgerFull => RetryCapacityError::Entries,
-                TieredDispatchReadiness::RetryLedgerBytesExceeded => RetryCapacityError::Bytes,
-                TieredDispatchReadiness::RetryLedgerExpired => RetryCapacityError::Age,
-                _ => unreachable!("only hard retry limits are returned here"),
+            let capacity = if readiness == TieredDispatchReadiness::RetryLedgerFull {
+                RetryCapacityRejection::Entries
+            } else if readiness == TieredDispatchReadiness::RetryLedgerBytesExceeded {
+                RetryCapacityRejection::Bytes
+            } else if readiness == TieredDispatchReadiness::RetryLedgerExpired {
+                RetryCapacityRejection::Age
+            } else {
+                return Err(crate::error::internal_failure(StoreOperation::AppendDerived));
             };
             self.refresh_health(
                 &state_guard,
@@ -441,7 +437,7 @@ impl TieredProgressTracker {
         &self,
         record: DerivedRecordId,
         now_millis: u64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         let mut state_guard = self.state.lock().await;
         let Some(_) = state_guard.retries.get(&record) else {
             return Ok(());
@@ -460,7 +456,7 @@ impl TieredProgressTracker {
         &self,
         record: DerivedRecordId,
         now_millis: u64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         let mut state_guard = self.state.lock().await;
         if !state_guard.retries.contains_key(&record) {
             return Ok(());
@@ -493,7 +489,7 @@ impl TieredProgressTracker {
         )
     }
 
-    async fn persist_candidate(&self, candidate: &TieredProgressState) -> Result<(), RocketMQError> {
+    async fn persist_candidate(&self, candidate: &TieredProgressState) -> Result<(), StoreError> {
         let Some(cursor) = candidate.cursor else {
             return Ok(());
         };
@@ -508,16 +504,12 @@ impl TieredProgressTracker {
         Ok(())
     }
 
-    fn validate_epoch(&self, record: DerivedRecordId) -> Result<(), RocketMQError> {
+    fn validate_epoch(&self, record: DerivedRecordId) -> Result<(), StoreError> {
         if record.source_epoch() == self.source_epoch {
             return Ok(());
         }
         self.mark_unready(TieredDispatchReadiness::CursorInvariantViolated);
-        Err(RocketMQError::illegal_argument(format!(
-            "tiered source epoch mismatch: expected {}, got {}",
-            self.source_epoch,
-            record.source_epoch()
-        )))
+        Err(crate::error::request_invalid(StoreOperation::AppendDerived))
     }
 
     fn capacity_violation(&self, state: &TieredProgressState, now_millis: u64) -> Option<TieredDispatchReadiness> {
@@ -564,8 +556,8 @@ impl TieredProgressTracker {
     }
 }
 
-fn tiered_contract(operation: &'static str, source: StoreContractViolation) -> RocketMQError {
-    RocketMQError::internal(operation, source)
+fn tiered_contract(operation: StoreOperation, source: StoreContractViolation) -> StoreError {
+    crate::error::source_error(&rocketmq_error::STORAGE_REQUEST_INVALID, operation, source)
 }
 
 fn retry_source_bytes(retries: &BTreeMap<DerivedRecordId, TieredRetryEntry>) -> u64 {
@@ -597,9 +589,41 @@ mod tests {
     #[test]
     fn derived_checkpoint_contract_remains_a_typed_source() {
         let error = DerivedCheckpoint::decode(&[], DerivedEngine::Tiered)
-            .map_err(|source| tiered_contract("validate tiered progress checkpoint", source))
+            .map_err(|source| tiered_contract(StoreOperation::Load, source))
             .expect_err("an empty checkpoint must fail");
 
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<StoreContractViolation>())
+            .is_some());
+    }
+
+    #[test]
+    fn persisted_retry_record_violation_is_load_corruption_with_typed_source() {
+        let entry = TieredRetryEntry {
+            source_epoch: 1,
+            physical_offset: 10,
+            length: 0,
+            topic: "TopicA".to_owned(),
+            queue_id: 0,
+            queue_offset: 0,
+            message_size: 1,
+            tags_code: 0,
+            store_timestamp: 1,
+            keys: None,
+            uniq_key: None,
+            offset_id: None,
+            sys_flag: 0,
+            attempts: 1,
+            first_failed_at_millis: 1,
+            next_attempt_at_millis: 2,
+        };
+
+        let error = entry.record().expect_err("zero persisted record length must fail");
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
+        assert_eq!(error.operation(), StoreOperation::Load);
+        assert_eq!(error.component(), rocketmq_store_api::StoreComponent::TieredStore);
         assert!(error
             .source()
             .and_then(|source| source.downcast_ref::<StoreContractViolation>())

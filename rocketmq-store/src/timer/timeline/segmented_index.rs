@@ -669,11 +669,11 @@ const fn map_state(state: TimerRecordState) -> TimelineState {
     }
 }
 
-fn storage_error(error: rocketmq_error::RocketMQError) -> TimerEngineError {
+fn local_error(error: rocketmq_store_api::StoreError) -> TimerEngineError {
     TimerEngineError::Storage(std::io::Error::other(error))
 }
 
-fn local_error(error: rocketmq_store_api::StoreError) -> TimerEngineError {
+fn storage_error(error: rocketmq_store_api::StoreError) -> TimerEngineError {
     TimerEngineError::Storage(std::io::Error::other(error))
 }
 
@@ -686,8 +686,6 @@ fn commit_error(error: SegmentedCommitError) -> TimerEngineError {
 pub(crate) enum SegmentedCommitError {
     #[error(transparent)]
     Store(#[from] rocketmq_store_api::StoreError),
-    #[error(transparent)]
-    Rocks(#[from] rocketmq_error::RocketMQError),
     #[error("segmented commit batch is empty")]
     EmptyBatch,
     #[error("segmented commit produced an invalid native Timeline batch")]

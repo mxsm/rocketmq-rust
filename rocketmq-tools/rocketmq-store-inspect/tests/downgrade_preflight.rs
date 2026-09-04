@@ -18,6 +18,7 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 
+use rocketmq_store::StoreOperation;
 use rocketmq_store_inspect::downgrade_preflight::run_preflight;
 use rocketmq_store_inspect::downgrade_preflight::DowngradePreflightRequest;
 use rocketmq_store_rocksdb::config::RocksDbColumnFamilyConfig;
@@ -281,17 +282,20 @@ fn create_pop_database(path: &Path, profile_cf: bool, marker: Option<PopConsumer
         profile.name = POP_CONSUMER_PROFILE_COLUMN_FAMILY.to_owned();
         config.column_families.push(profile);
     }
-    let database = RocksDbStore::open(config).expect("create RocksDB fixture");
+    let database = RocksDbStore::open(config)
+        .expect("create RocksDB fixture")
+        .expect("valid fixture configuration");
     if let Some(marker) = marker {
         database
             .put_cf(
+                StoreOperation::Admin,
                 POP_CONSUMER_PROFILE_COLUMN_FAMILY,
                 POP_CONSUMER_PROFILE_MARKER_KEY,
                 &marker.encode().expect("encode marker"),
             )
             .expect("write marker");
     }
-    database.flush().expect("flush fixture");
+    database.flush(StoreOperation::Flush).expect("flush fixture");
     database.close();
 }
 

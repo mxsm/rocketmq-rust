@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use rocketmq_store_api::PersistedTimerRoute;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerGeneration;
@@ -94,14 +95,14 @@ fn timeline_codec_preserves_deadline_lane_and_generation_order() {
         topic: "a+b".to_string(),
         unique_key: "c".to_string(),
     }
-    .encode()
+    .encode(StoreOperation::AppendDerived)
     .expect("lookup");
     let recall_b = RecallLookupKeyV1 {
         engine: TimerEngineId::ExtendedTimeline,
         topic: "a".to_string(),
         unique_key: "b+c".to_string(),
     }
-    .encode()
+    .encode(StoreOperation::AppendDerived)
     .expect("lookup");
     assert_ne!(recall_a, recall_b, "length prefixes must prevent delimiter collisions");
 }
@@ -109,7 +110,9 @@ fn timeline_codec_preserves_deadline_lane_and_generation_order() {
 #[test]
 fn timeline_range_scan_is_bounded_and_continuable() {
     let directory = tempfile::tempdir().expect("root");
-    let index = RocksDbTimelineIndex::open(directory.path()).expect("open");
+    let index = RocksDbTimelineIndex::open(directory.path())
+        .expect("open")
+        .expect("valid Timeline configuration");
     let records = [
         entry(1, 7_999, 0, 1, false),
         entry(2, 8_000, 1, 2, false),
@@ -131,7 +134,9 @@ fn timeline_range_scan_is_bounded_and_continuable() {
 #[test]
 fn shadow_namespace_cannot_be_returned_by_formal_due_scan() {
     let directory = tempfile::tempdir().expect("root");
-    let index = RocksDbTimelineIndex::open(directory.path()).expect("open");
+    let index = RocksDbTimelineIndex::open(directory.path())
+        .expect("open")
+        .expect("valid Timeline configuration");
     assert_eq!(
         index
             .put_batch(&[entry(1, 8_000, 0, 1, true)], None)
@@ -148,7 +153,9 @@ fn shadow_namespace_cannot_be_returned_by_formal_due_scan() {
 #[test]
 fn state_compare_and_set_never_overwrites_a_conflict() {
     let directory = tempfile::tempdir().expect("root");
-    let index = RocksDbTimelineIndex::open(directory.path()).expect("open");
+    let index = RocksDbTimelineIndex::open(directory.path())
+        .expect("open")
+        .expect("valid Timeline configuration");
     let state = RocksDbTimelineStateIndex::new(index.store());
     let timer_id = TimerId::new(7);
     let generation = TimerGeneration::new(3);
@@ -203,7 +210,9 @@ fn state_compare_and_set_never_overwrites_a_conflict() {
 #[test]
 fn state_views_from_one_timeline_share_a_single_cas_domain() {
     let directory = tempfile::tempdir().expect("root");
-    let index = RocksDbTimelineIndex::open(directory.path()).expect("open");
+    let index = RocksDbTimelineIndex::open(directory.path())
+        .expect("open")
+        .expect("valid Timeline configuration");
     let ready_view = index.state_index();
     let recall_view = index.state_index();
     let timer_id = TimerId::new(11);

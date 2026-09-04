@@ -57,7 +57,11 @@ pub struct TimerIndexMigrationProbe {
 /// Runs a complete checkpoint export, restart, mirrored increment, cutover, and rollback.
 pub fn run_timer_index_migration_probe() -> TimerIndexMigrationProbe {
     let root = tempfile::tempdir().expect("migration root");
-    let rocks = Arc::new(RocksDbTimelineIndex::open(root.path()).expect("rocks Timeline"));
+    let rocks = Arc::new(
+        RocksDbTimelineIndex::open(root.path())
+            .expect("rocks Timeline")
+            .expect("valid rocks Timeline configuration"),
+    );
     let native = Arc::new(
         SegmentedTimeline::open(root.path(), SegmentedTimelineConfig::default())
             .expect("native Timeline")

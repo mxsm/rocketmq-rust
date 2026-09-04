@@ -17,6 +17,7 @@ mod transaction_metrics;
 
 use rocketmq_broker::config::java_properties::JavaBrokerProperties;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_rocksdb::profile_marker::PopConsumerProfileMarker;
 use rocketmq_store_rocksdb::profile_marker::POP_CONSUMER_PROFILE_COLUMN_FAMILY;
 use rocketmq_store_rocksdb::profile_marker::POP_CONSUMER_PROFILE_MARKER_KEY;
@@ -33,12 +34,13 @@ fn pop_profile_and_transaction_checkpoint_survive_a_restart_boundary() {
     let marker = PopConsumerProfileMarker::new(3);
     store
         .put_cf(
+            StoreOperation::AppendDerived,
             POP_CONSUMER_PROFILE_COLUMN_FAMILY,
             POP_CONSUMER_PROFILE_MARKER_KEY,
             &marker.encode().expect("marker"),
         )
         .expect("persist profile marker");
-    store.flush().expect("flush profile marker");
+    store.flush(StoreOperation::Flush).expect("flush profile marker");
     store.close();
     drop(store);
 
@@ -87,5 +89,7 @@ fn open_profile_store(path: std::path::PathBuf) -> RocksDbStore {
     let mut profile = rocketmq_store_rocksdb::config::RocksDbColumnFamilyConfig::consume_queue_default();
     profile.name = POP_CONSUMER_PROFILE_COLUMN_FAMILY.to_owned();
     config.column_families.push(profile);
-    RocksDbStore::open(config).expect("open profile store")
+    RocksDbStore::open(config)
+        .expect("open profile store")
+        .expect("valid profile store configuration")
 }

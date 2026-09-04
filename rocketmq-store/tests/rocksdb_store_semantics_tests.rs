@@ -512,7 +512,7 @@ async fn restart_reput_advances_the_single_local_wal_queue_offset() {
 }
 
 #[test]
-fn rocksdb_time_lookup_and_failure_mapping_stay_on_the_legacy_contract() {
+fn rocksdb_time_lookup_and_closed_backend_mapping_preserve_owner_context() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let topic = CheetahString::from_static_str("rocksdb-time-topic");
     let mut store = new_owned_test_store(&temp_dir);
@@ -539,18 +539,20 @@ fn rocksdb_time_lookup_and_failure_mapping_stay_on_the_legacy_contract() {
     let error = store
         .try_get_max_offset_in_queue(&topic, 0)
         .expect_err("closed RocksDB must expose a typed error");
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
     assert_eq!(error.operation(), StoreOperation::QueryOffset);
     assert_eq!(error.component(), StoreComponent::RocksDb);
+    assert!(std::error::Error::source(&error).is_none());
     assert_eq!(store.get_max_offset_in_queue(&topic, 0), 0);
     assert_eq!(store.get_commit_log_offset_in_queue(&topic, 0, 0), -1);
     let flush_error = store.try_flush().expect_err("closed RocksDB flush must fail");
-    assert_eq!(flush_error.descriptor(), &rocketmq_error::STORAGE_WRITE_FAILED);
+    assert_eq!(flush_error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
     assert_eq!(flush_error.operation(), StoreOperation::Flush);
     assert_eq!(flush_error.component(), StoreComponent::RocksDb);
+    assert!(std::error::Error::source(&flush_error).is_none());
     let health_error = store
         .health_snapshot()
         .last_error
         .expect("flush failure must be reflected in health");
-    assert_eq!(health_error, &rocketmq_error::STORAGE_WRITE_FAILED);
+    assert_eq!(health_error, &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
 }

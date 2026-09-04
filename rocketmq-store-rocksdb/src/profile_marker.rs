@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -35,33 +35,22 @@ impl PopConsumerProfileMarker {
         }
     }
 
-    pub fn encode(self) -> Result<Vec<u8>, RocketMQError> {
-        serde_json::to_vec(&self).map_err(profile_codec_error)
+    pub fn encode(self) -> Result<Vec<u8>, StoreError> {
+        serde_json::to_vec(&self).map_err(profile_invalid_codec)
     }
 
-    pub fn decode(body: &[u8]) -> Result<Self, RocketMQError> {
-        let marker: Self = serde_json::from_slice(body).map_err(profile_codec_error)?;
+    pub fn decode(body: &[u8]) -> Result<Self, StoreError> {
+        let marker: Self = serde_json::from_slice(body).map_err(profile_invalid_codec)?;
         if marker.format_version != POP_CONSUMER_PROFILE_FORMAT_VERSION {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "popConsumerProfile.formatVersion",
-                value: marker.format_version.to_string(),
-                reason: format!(
-                    "unsupported POP consumer profile format version {}",
-                    marker.format_version
-                ),
-            });
+            return Err(crate::error::codec_corrupted(rocketmq_store_api::StoreOperation::Admin));
         }
         Ok(marker)
     }
 }
 
-pub fn pop_consumer_profile_key(group: &str) -> Result<Vec<u8>, RocketMQError> {
+pub fn pop_consumer_profile_key(group: &str) -> Result<Vec<u8>, StoreError> {
     if group.is_empty() || group.as_bytes().contains(&b'/') {
-        return Err(RocketMQError::ConfigInvalidValue {
-            key: "popConsumerProfile.group",
-            value: group.to_owned(),
-            reason: "group must be non-empty and must not contain '/'".into(),
-        });
+        return Err(crate::error::request_invalid(rocketmq_store_api::StoreOperation::Admin));
     }
     Ok(format!("{POP_CONSUMER_PROFILE_FORMAT_VERSION}/{group}").into_bytes())
 }
@@ -70,8 +59,13 @@ pub fn pop_consumer_profile_prefix() -> Vec<u8> {
     format!("{POP_CONSUMER_PROFILE_FORMAT_VERSION}/").into_bytes()
 }
 
-fn profile_codec_error(error: serde_json::Error) -> RocketMQError {
-    RocketMQError::deserialization_failed("POP consumer profile marker JSON", error.to_string())
+fn profile_invalid_codec(error: serde_json::Error) -> StoreError {
+    StoreError::new(
+        &rocketmq_error::STORAGE_STATE_CORRUPTED,
+        rocketmq_store_api::StoreOperation::Admin,
+    )
+    .in_component(rocketmq_store_api::StoreComponent::RocksDb)
+    .with_source(error)
 }
 
 #[cfg(test)]
@@ -96,8 +90,8 @@ mod tests {
         let error = PopConsumerProfileMarker::decode(br#"{"formatVersion":2,"generation":1}"#)
             .expect_err("unknown version must fail");
 
-        assert!(error
-            .to_string()
-            .contains("unsupported POP consumer profile format version 2"));
+        assert_eq!(&rocketmq_error::STORAGE_STATE_CORRUPTED, error.descriptor());
+        assert_eq!(rocketmq_store_api::StoreOperation::Admin, error.operation());
+        assert!(std::error::Error::source(&error).is_none());
     }
 }

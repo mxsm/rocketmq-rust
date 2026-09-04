@@ -628,7 +628,11 @@ mod tests {
     #[test]
     fn due_scanner_persists_ready_before_advancing() {
         let dir = tempdir().expect("tempdir");
-        let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("open"));
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("open")
+                .expect("valid Timeline configuration"),
+        );
         let entry = formal_entry(8_000, 1);
         put_formal(&timeline, entry, false);
         let scanner = TimelineDueScanner::new(TimerStoreConfig::default(), Arc::clone(&timeline));
@@ -651,7 +655,11 @@ mod tests {
     #[test]
     fn late_ready_is_drained_even_after_due_cursor_passed() {
         let dir = tempdir().expect("tempdir");
-        let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("open"));
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("open")
+                .expect("valid Timeline configuration"),
+        );
         let entry = formal_entry(8_000, 2);
         put_formal(&timeline, entry, true);
         timeline
@@ -683,7 +691,11 @@ mod tests {
     #[test]
     fn shadow_due_observation_never_creates_claimable_ready_work() {
         let dir = tempdir().expect("tempdir");
-        let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("open"));
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("open")
+                .expect("valid Timeline configuration"),
+        );
         let entry = shadow_entry(8_000);
         timeline.put_batch(&[entry], None).expect("shadow entry");
         let scanner = TimelineDueScanner::new(TimerStoreConfig::default(), Arc::clone(&timeline));
@@ -709,7 +721,11 @@ mod tests {
     #[test]
     fn segmented_due_index_uses_the_same_state_and_ready_overlay() {
         let dir = tempdir().expect("tempdir");
-        let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("open overlay"));
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("open overlay")
+                .expect("valid overlay configuration"),
+        );
         let native = Arc::new(
             SegmentedTimeline::open(dir.path(), SegmentedTimelineConfig::default())
                 .expect("open native")

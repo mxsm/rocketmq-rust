@@ -207,7 +207,8 @@ impl TimelineIndexMigrationManager {
             return Err(IndexMigrationError::CheckpointExists(path_sequence));
         }
         self.rocks.store().create_checkpoint_blocking(checkpoint_path.clone())?;
-        let checkpoint_index = RocksDbTimelineIndex::open_database_path(&checkpoint_path)?;
+        let checkpoint_index =
+            RocksDbTimelineIndex::open_database_path(&checkpoint_path)?.ok_or(IndexMigrationError::CorruptState)?;
         let rocks_sequence = checkpoint_index.store().latest_sequence_number()?.max(1);
         checkpoint_index.close();
         drop(checkpoint_index);
@@ -248,7 +249,8 @@ impl TimelineIndexMigrationManager {
         if state.phase != TimelineIndexMigrationPhase::Building || state.bulk_complete {
             return Err(IndexMigrationError::InvalidTransition);
         }
-        let snapshot = RocksDbTimelineIndex::open_database_path(self.checkpoint_path(state.rocks_sequence))?;
+        let snapshot = RocksDbTimelineIndex::open_database_path(self.checkpoint_path(state.rocks_sequence))?
+            .ok_or(IndexMigrationError::CorruptState)?;
         let page = snapshot.range_scan(i64::MIN, i64::MAX, state.continuation, max_records, max_bytes)?;
         let states = snapshot.state_index().get_many(
             &page
@@ -590,7 +592,11 @@ impl TimelineIndexMigrationManager {
     fn load_state(&self) -> Result<TimelineIndexMigrationState, IndexMigrationError> {
         self.rocks
             .store()
-            .get_cf(NATIVE_META_CF, MIGRATION_STATE_KEY)?
+            .get_cf(
+                rocketmq_store_api::StoreOperation::Load,
+                NATIVE_META_CF,
+                MIGRATION_STATE_KEY,
+            )?
             .map(|bytes| decode_state(&bytes))
             .transpose()
             .map(Option::unwrap_or_default)
@@ -670,7 +676,7 @@ fn decode_state(bytes: &[u8]) -> Result<TimelineIndexMigrationState, IndexMigrat
         return Err(IndexMigrationError::CorruptState);
     }
     let continuation = (bytes[19] == 1)
-        .then(|| TimelineKeyV1::decode(&bytes[20..55]))
+        .then(|| TimelineKeyV1::decode(rocketmq_store_api::StoreOperation::Load, &bytes[20..55]))
         .transpose()?;
     let engine_epoch = TimerEngineEpoch::new(read_u64(bytes, 55)?);
     if engine_epoch.get() == 0 {
@@ -798,8 +804,6 @@ pub(crate) enum IndexMigrationError {
     EpochExhausted,
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Rocks(#[from] rocketmq_error::RocketMQError),
     #[error(transparent)]
     Store(#[from] rocketmq_store_api::StoreError),
     #[error(transparent)]

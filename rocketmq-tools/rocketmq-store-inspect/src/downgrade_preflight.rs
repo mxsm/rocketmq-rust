@@ -22,6 +22,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_store::StoreError;
 use rocketmq_store_rocksdb::read_only::PopConsumerProfileState;
 use rocketmq_store_rocksdb::read_only::ReadOnlyRocksDb;
 use serde::Deserialize;
@@ -230,12 +231,12 @@ fn check_pop(
     actions: &mut Vec<String>,
 ) -> Result<(), RocketMQError> {
     let declared = inventory.pop_consumer_profile.declared;
-    let database = ReadOnlyRocksDb::open_existing(root.join("kvStore"))?;
+    let database = ReadOnlyRocksDb::open_existing(root.join("kvStore")).map_err(store_inspect_error)?;
     let state = match database {
-        Some(database) => database.inspect_pop_consumer_profile(declared)?,
-        None if declared => PopConsumerProfileState::DeclaredPresentInvalid {
-            reason: "format inventory declares POP consumer profiles but kvStore is absent".to_owned(),
-        },
+        Some(database) => database
+            .inspect_pop_consumer_profile(declared)
+            .map_err(store_inspect_error)?,
+        None if declared => PopConsumerProfileState::DeclaredColumnFamilyMissing,
         None => PopConsumerProfileState::LegacyAbsent,
     };
     match state {
@@ -260,12 +261,36 @@ fn check_pop(
             ));
             actions.push("drain POP inflight/profile ownership using a 1.0 dual-reader before downgrade".to_owned());
         }
-        PopConsumerProfileState::DeclaredPresentInvalid { reason } => {
-            checks.push(check("pop", "declared-present-invalid", reason));
+        PopConsumerProfileState::DeclaredColumnFamilyMissing => {
+            checks.push(check(
+                "pop",
+                "declared-present-invalid",
+                "format inventory declares POP consumer profiles but their database or column family is absent",
+            ));
+            actions.push("repair the declared POP profile database before starting any Broker".to_owned());
+        }
+        PopConsumerProfileState::DeclaredMarkerMissing => {
+            checks.push(check(
+                "pop",
+                "declared-present-invalid",
+                "the declared POP consumer-profile format marker is absent",
+            ));
+            actions.push("repair the declared POP profile database before starting any Broker".to_owned());
+        }
+        PopConsumerProfileState::DeclaredMarkerInvalid => {
+            checks.push(check(
+                "pop",
+                "declared-present-invalid",
+                "the declared POP consumer-profile format marker is invalid",
+            ));
             actions.push("repair the declared POP profile database before starting any Broker".to_owned());
         }
     }
     Ok(())
+}
+
+fn store_inspect_error(source: StoreError) -> RocketMQError {
+    RocketMQError::internal("Store inspection backend operation failed", source)
 }
 
 fn check_timer(

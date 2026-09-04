@@ -18,7 +18,6 @@ pub mod codec;
 pub mod column_family;
 pub mod config;
 pub mod consume_queue;
-pub mod error;
 pub mod index;
 pub mod iterator;
 pub mod key;

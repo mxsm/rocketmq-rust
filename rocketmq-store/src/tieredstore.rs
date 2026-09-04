@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetricsRecorder;
@@ -34,6 +33,7 @@ use rocketmq_tieredstore::provider::TieredStoreProvider;
 use rocketmq_tieredstore::TieredLifecycle;
 use rocketmq_tieredstore::TieredLocalResidency;
 use rocketmq_tieredstore::TieredMessageFetcher;
+use rocketmq_tieredstore::TieredProviderOpenPlan;
 use rocketmq_tieredstore::TieredReadContext;
 use rocketmq_tieredstore::TieredReadErrorDisposition;
 use rocketmq_tieredstore::TieredReadPolicy;
@@ -66,21 +66,59 @@ pub struct TieredStoreDecorator {
 }
 
 impl TieredStoreDecorator {
-    pub fn new(config: TieredStoreConfig, parent_task_group: TaskGroup) -> Result<Self, StoreError> {
+    /// Validates and opens a Tiered Store decorator.
+    ///
+    /// Returns `Ok(None)` when Tiered Store is disabled, unsupported, or invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only when operational provider or Store composition fails.
+    pub fn new(config: TieredStoreConfig, parent_task_group: TaskGroup) -> Result<Option<Self>, StoreError> {
         Self::new_with_metrics(config, TieredStoreMetricsRecorder::noop(), parent_task_group)
     }
 
+    /// Validates and opens a Tiered Store decorator with the supplied metrics recorder.
+    ///
+    /// Returns `Ok(None)` before provider or filesystem I/O when Tiered Store is
+    /// disabled, unsupported, or its raw configuration cannot form a capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only when operational provider or Store composition fails.
     pub fn new_with_metrics(
         config: TieredStoreConfig,
         metrics: TieredStoreMetricsRecorder,
         parent_task_group: TaskGroup,
+    ) -> Result<Option<Self>, StoreError> {
+        TieredStore::new_with_metrics(config, metrics, parent_task_group)
+            .map(|store| store.map(|store| Self { store: Arc::new(store) }))
+    }
+
+    /// Opens a Tiered Store decorator from a validated capability plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only when operational provider or Store composition fails.
+    pub fn new_planned(
+        plan: TieredProviderOpenPlan<rocketmq_tieredstore::provider::BuiltinTieredStoreProviderFactory>,
+        parent_task_group: TaskGroup,
     ) -> Result<Self, StoreError> {
-        let store = TieredStore::new_with_metrics(config, metrics, parent_task_group).map_err(|error| {
-            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)
-                .in_component(StoreComponent::TieredStore)
-                .with_source(error)
-        })?;
-        Ok(Self { store: Arc::new(store) })
+        Self::new_planned_with_metrics(plan, TieredStoreMetricsRecorder::noop(), parent_task_group)
+    }
+
+    /// Opens a Tiered Store decorator with metrics from a validated capability plan.
+    ///
+    /// # Errors
+    ///
+    /// Because validation is complete, returns an error only when operational
+    /// provider or Store composition fails.
+    pub fn new_planned_with_metrics(
+        plan: TieredProviderOpenPlan<rocketmq_tieredstore::provider::BuiltinTieredStoreProviderFactory>,
+        metrics: TieredStoreMetricsRecorder,
+        parent_task_group: TaskGroup,
+    ) -> Result<Self, StoreError> {
+        TieredStore::new_planned_with_metrics(plan, metrics, parent_task_group)
+            .map(|store| Self { store: Arc::new(store) })
     }
 
     pub fn commit_log_dispatcher(&self, body_resolver: Arc<DispatchBodyResolver>) -> Arc<dyn CommitLogDispatcher> {
@@ -103,27 +141,15 @@ impl TieredStoreDecorator {
     }
 
     pub async fn load(&self) -> Result<(), StoreError> {
-        self.store.load().await.map_err(|error| {
-            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Load)
-                .in_component(StoreComponent::TieredStore)
-                .with_source(error)
-        })
+        self.store.load().await
     }
 
     pub async fn start(&self) -> Result<(), StoreError> {
-        self.store.start().await.map_err(|error| {
-            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Start)
-                .in_component(StoreComponent::TieredStore)
-                .with_source(error)
-        })
+        self.store.start().await
     }
 
     pub async fn shutdown(&self) -> Result<(), StoreError> {
-        self.store.shutdown().await.map_err(|error| {
-            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Shutdown)
-                .in_component(StoreComponent::TieredStore)
-                .with_source(error)
-        })
+        self.store.shutdown().await
     }
 
     pub fn metrics(&self) -> Arc<TieredStoreMetrics> {
@@ -199,21 +225,15 @@ impl TieredStoreDecorator {
             }
             Err(error) => {
                 warn!(
-                    group = %group,
-                    topic = %topic,
-                    queue_id,
-                    offset,
-                    error = %error,
+                    descriptor = ?error.descriptor().code(),
+                    operation = error.operation().as_str(),
+                    component = error.component().as_str(),
+                    source_present = std::error::Error::source(&error).is_some(),
                     "tieredstore get_message fallback failed"
                 );
-                match TieredReadPolicy::classify_error(error.kind(), local_available) {
+                match TieredReadPolicy::classify_error(&error, local_available) {
                     TieredReadErrorDisposition::FallbackToLocal | TieredReadErrorDisposition::Miss => Ok(None),
-                    TieredReadErrorDisposition::Fatal => Err(StoreError::new(
-                        &rocketmq_error::STORAGE_READ_FAILED,
-                        StoreOperation::Read,
-                    )
-                    .in_component(StoreComponent::TieredStore)
-                    .with_source(error)),
+                    TieredReadErrorDisposition::Fatal => Err(error),
                 }
             }
         }
@@ -245,15 +265,16 @@ impl TieredStoreDecorator {
             }
             Ok(_) => Ok(None),
             Err(error) => {
-                warn!(topic = %topic, key = %key, error = %error, "tieredstore query_message fallback failed");
-                match TieredReadPolicy::classify_error(error.kind(), local_available) {
+                warn!(
+                    descriptor = ?error.descriptor().code(),
+                    operation = error.operation().as_str(),
+                    component = error.component().as_str(),
+                    source_present = std::error::Error::source(&error).is_some(),
+                    "tieredstore query_message fallback failed"
+                );
+                match TieredReadPolicy::classify_error(&error, local_available) {
                     TieredReadErrorDisposition::FallbackToLocal | TieredReadErrorDisposition::Miss => Ok(None),
-                    TieredReadErrorDisposition::Fatal => Err(StoreError::new(
-                        &rocketmq_error::STORAGE_READ_FAILED,
-                        StoreOperation::Read,
-                    )
-                    .in_component(StoreComponent::TieredStore)
-                    .with_source(error)),
+                    TieredReadErrorDisposition::Fatal => Err(error),
                 }
             }
         }
@@ -271,11 +292,6 @@ impl TieredStoreDecorator {
             .get_offset_by_time_with_boundary(topic.to_string(), queue_id, timestamp, boundary_type)
             .await
             .map(|offset| (offset >= 0).then_some(offset))
-            .map_err(|error| {
-                StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::QueryOffset)
-                    .in_component(StoreComponent::TieredStore)
-                    .with_source(error)
-            })
     }
 
     pub async fn message_timestamp(
@@ -288,11 +304,6 @@ impl TieredStoreDecorator {
             .fetcher()
             .get_message_timestamp(topic.to_string(), queue_id, consume_queue_offset)
             .await
-            .map_err(|error| {
-                StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::QueryOffset)
-                    .in_component(StoreComponent::TieredStore)
-                    .with_source(error)
-            })
     }
 
     #[cfg(test)]
@@ -448,18 +459,20 @@ where
         }
     }
 
-    fn derived_record(&self, request: &DispatchRequest) -> Result<DerivedRecordId, RocketMQError> {
-        let physical_offset = u64::try_from(request.commit_log_offset)
-            .map_err(|_| RocketMQError::illegal_argument("tiered CommitLog offset must not be negative"))?;
-        let length = u32::try_from(request.msg_size)
-            .map_err(|_| RocketMQError::illegal_argument("tiered CommitLog length must be positive"))?;
-        DerivedRecordId::try_new(self.source_epoch, physical_offset, length)
-            .map_err(|source| tiered_contract("validate tiered dispatch record", source))
+    fn derived_record(&self, request: &DispatchRequest) -> Result<DerivedRecordId, StoreError> {
+        let physical_offset = u64::try_from(request.commit_log_offset).map_err(|_| tiered_request_invalid())?;
+        let length = u32::try_from(request.msg_size).map_err(|_| tiered_request_invalid())?;
+        DerivedRecordId::try_new(self.source_epoch, physical_offset, length).map_err(tiered_contract)
     }
 }
 
-fn tiered_contract(operation: &'static str, source: StoreContractViolation) -> RocketMQError {
-    RocketMQError::internal(operation, source)
+fn tiered_request_invalid() -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::AppendDerived)
+        .in_component(StoreComponent::TieredStore)
+}
+
+fn tiered_contract(source: StoreContractViolation) -> StoreError {
+    tiered_request_invalid().with_source(source)
 }
 
 impl<P> CommitLogDispatcher for TieredCommitLogDispatcher<P>
@@ -495,10 +508,10 @@ where
             .and_then(|record| self.dispatcher.try_dispatch_derived(record, request));
         if let Err(error) = result {
             warn!(
-                topic = %dispatch_request.topic,
-                queue_id = dispatch_request.queue_id,
-                queue_offset = dispatch_request.consume_queue_offset,
-                error = %error,
+                descriptor = ?error.descriptor().code(),
+                operation = error.operation().as_str(),
+                component = error.component().as_str(),
+                source_present = std::error::Error::source(&error).is_some(),
                 "failed to enqueue tieredstore dispatch request"
             );
         }
@@ -515,7 +528,13 @@ where
             let record = match self.derived_record(dispatch_request) {
                 Ok(record) => record,
                 Err(error) => {
-                    warn!(error = %error, "reject invalid tieredstore CommitLog identity");
+                    warn!(
+                        descriptor = ?error.descriptor().code(),
+                        operation = error.operation().as_str(),
+                        component = error.component().as_str(),
+                        source_present = std::error::Error::source(&error).is_some(),
+                        "reject invalid tieredstore CommitLog identity"
+                    );
                     return;
                 }
             };
@@ -543,10 +562,10 @@ where
                     Ok(()) => break,
                     Err(error) => {
                         warn!(
-                            topic = %dispatch_request.topic,
-                            queue_id = dispatch_request.queue_id,
-                            queue_offset = dispatch_request.consume_queue_offset,
-                            error = %error,
+                            descriptor = ?error.descriptor().code(),
+                            operation = error.operation().as_str(),
+                            component = error.component().as_str(),
+                            source_present = std::error::Error::source(&error).is_some(),
                             "pause tieredstore derived reader after dispatch failure"
                         );
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -599,7 +618,6 @@ mod tests {
 
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
     use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
     use rocketmq_tieredstore::TieredLifecycle;
     use rocketmq_tieredstore::TieredMessageFetcher;
@@ -642,9 +660,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatcher_derived_record_preserves_contract_violation_source() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn dispatcher_derived_record_preserves_contract_violation_source() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Load)
+                .in_component(StoreComponent::TieredStore)
+                .with_source(source)
+        })?;
         let runtime = rocketmq_runtime::RuntimeContext::from_current("tieredstore-derived-record-test");
         let tiered_store = TieredStore::new(
             TieredStoreConfig {
@@ -654,7 +675,8 @@ mod tests {
                 ..TieredStoreConfig::default()
             },
             runtime.root_group().clone(),
-        )?;
+        )?
+        .expect("valid tiered store configuration");
         let adapter = TieredCommitLogDispatcher::new(tiered_store.dispatcher(), Arc::new(|_| None));
 
         let error = adapter
@@ -675,9 +697,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatcher_adapter_writes_commitlog_and_consumequeue_to_tieredstore() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn dispatcher_adapter_writes_commitlog_and_consumequeue_to_tieredstore() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Load)
+                .in_component(StoreComponent::TieredStore)
+                .with_source(source)
+        })?;
         let runtime = rocketmq_runtime::RuntimeContext::from_current("tieredstore-adapter-test");
         let tiered_store = TieredStore::new(
             TieredStoreConfig {
@@ -688,7 +713,8 @@ mod tests {
                 ..TieredStoreConfig::default()
             },
             runtime.root_group().clone(),
-        )?;
+        )?
+        .expect("valid tiered store configuration");
         tiered_store.load().await?;
         tiered_store.start().await?;
 

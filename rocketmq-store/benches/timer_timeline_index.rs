@@ -118,7 +118,9 @@ fn benchmark(c: &mut Criterion) {
             b.iter_batched(
                 || tempfile::tempdir().expect("RocksDB ingest root"),
                 |root| {
-                    let index = RocksDbTimelineIndex::open(root.path()).expect("open RocksDB Timeline");
+                    let index = RocksDbTimelineIndex::open(root.path())
+                        .expect("open RocksDB Timeline")
+                        .expect("valid RocksDB Timeline configuration");
                     populate_rocks(&index, count, workload);
                     black_box(index.store().latest_sequence_number().expect("sequence"));
                 },
@@ -151,7 +153,9 @@ fn benchmark(c: &mut Criterion) {
 
 fn benchmark_scan(c: &mut Criterion, records: u64, workload: Workload) {
     let rocks_root = tempfile::tempdir().expect("RocksDB scan root");
-    let rocks = RocksDbTimelineIndex::open(rocks_root.path()).expect("open RocksDB scan Timeline");
+    let rocks = RocksDbTimelineIndex::open(rocks_root.path())
+        .expect("open RocksDB scan Timeline")
+        .expect("valid RocksDB scan Timeline configuration");
     populate_rocks(&rocks, records, workload);
     let native_root = tempfile::tempdir().expect("native scan root");
     let native = SegmentedTimeline::open(native_root.path(), SegmentedTimelineConfig::default())
@@ -278,7 +282,9 @@ fn native_record(entry: TimelineIndexEntry) -> TimelineSegmentRecord {
 
 fn report_physical_bytes(records: u64, workload: Workload) {
     let rocks_root = tempfile::tempdir().expect("RocksDB size root");
-    let rocks = RocksDbTimelineIndex::open(rocks_root.path()).expect("open RocksDB size Timeline");
+    let rocks = RocksDbTimelineIndex::open(rocks_root.path())
+        .expect("open RocksDB size Timeline")
+        .expect("valid RocksDB size Timeline configuration");
     populate_rocks(&rocks, records, workload);
     rocks.close();
     let rocks_bytes = directory_bytes(rocks_root.path());

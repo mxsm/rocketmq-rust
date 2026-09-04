@@ -17,12 +17,12 @@ pub mod commit_log_recover_service;
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
+use rocketmq_store_api::StoreError;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::TieredStoreConfig;
@@ -67,7 +67,7 @@ where
         config: Arc<TieredStoreConfig>,
         flat_file_store: Arc<TieredFlatFileStore<P>>,
         shutdown: CancellationToken,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         if !config.delete_file_enable {
             return Ok(());
         }
@@ -84,12 +84,12 @@ where
         Ok(())
     }
 
-    pub async fn shutdown(&self) -> Result<(), RocketMQError> {
+    pub async fn shutdown(&self) -> Result<(), StoreError> {
         let _ = self.shutdown_with_report().await?;
         Ok(())
     }
 
-    pub async fn shutdown_with_report(&self) -> Result<Option<ShutdownReport>, RocketMQError> {
+    pub async fn shutdown_with_report(&self) -> Result<Option<ShutdownReport>, StoreError> {
         if let Some(shutdown) = self.cleanup_shutdown.lock().await.take() {
             shutdown.cancel();
         }
@@ -98,7 +98,7 @@ where
         if let Some(owner) = self.cleanup_owner.lock().await.take() {
             let report = owner
                 .shutdown_report("rocketmq-tieredstore.cleanup", std::time::Duration::from_secs(5))
-                .await;
+                .await?;
             runtime::shutdown_report_result("tieredstore cleanup", report.clone())?;
             shutdown_report = Some(report);
         }
@@ -140,17 +140,22 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeContext;
+    use rocketmq_store_api::StoreError;
 
     use super::*;
     use crate::metadata::JsonMetadataStore;
     use crate::provider::MemoryProvider;
 
     #[tokio::test]
-    async fn new_with_task_group_parents_cleanup_tasks() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn new_with_task_group_parents_cleanup_tasks() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),

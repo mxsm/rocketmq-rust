@@ -5875,15 +5875,6 @@
         },
         {
           "category": "experimental",
-          "declaration": "pub mod error",
-          "identity": "rocketmq-store-rocksdb/src/lib.rs:pub mod error",
-          "owner": "store-rocksdb",
-          "path": "rocketmq-store-rocksdb/src/lib.rs",
-          "rationale": "explicitly exposed module or diagnostic surface under non-growth review",
-          "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
-        },
-        {
-          "category": "experimental",
           "declaration": "pub mod index",
           "identity": "rocketmq-store-rocksdb/src/lib.rs:pub mod index",
           "owner": "store-rocksdb",
@@ -6045,22 +6036,13 @@
           "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
         },
         {
-          "category": "experimental",
-          "declaration": "pub use error::RocksDbErrorKind",
-          "identity": "rocketmq-store-rocksdb/src/lib.rs:pub use error::RocksDbErrorKind",
-          "owner": "store-rocksdb",
-          "path": "rocketmq-store-rocksdb/src/lib.rs",
-          "rationale": "explicitly exposed module or diagnostic surface under non-growth review",
-          "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
-        },
-        {
           "category": "stable",
-          "declaration": "pub use error::RocksDbResultExt",
-          "identity": "rocketmq-store-rocksdb/src/lib.rs:pub use error::RocksDbResultExt",
+          "declaration": "pub use message_store::RocksDbOpenPlan",
+          "identity": "rocketmq-store-rocksdb/src/lib.rs:pub use message_store::RocksDbOpenPlan",
           "owner": "store-rocksdb",
           "path": "rocketmq-store-rocksdb/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
+          "rationale": "deliberate validated capability entry point",
+          "removal_condition": "retain while RocksDB capability planning remains supported"
         },
         {
           "category": "stable",
@@ -6081,7 +6063,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 29
+      "maximum_exports": 27
     },
     "rocketmq-transport": {
       "entries": [

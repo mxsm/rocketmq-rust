@@ -27,6 +27,7 @@ use rocketmq_store_rocksdb::profile_marker::POP_CONSUMER_PROFILE_FORMAT_VERSION;
 use serde::Deserialize;
 use serde::Serialize;
 
+use super::rocksdb_store::broker_storage_error;
 use super::rocksdb_store::PopConsumerProfileState;
 use super::rocksdb_store::PopConsumerRocksDbStore;
 
@@ -80,7 +81,7 @@ impl PopConsumerProfileStore {
         }
         let generation = marker
             .as_deref()
-            .map(PopConsumerProfileMarker::decode)
+            .map(|marker| PopConsumerProfileMarker::decode(marker).map_err(broker_storage_error))
             .transpose()?
             .map_or(0, |marker| marker.generation);
         let mut profiles = BTreeMap::new();
@@ -94,7 +95,7 @@ impl PopConsumerProfileStore {
                     if profile.generation > generation {
                         return Err(codec_error("profile generation is newer than the format marker"));
                     }
-                    if pop_consumer_profile_key(profile.group.as_str())? != key {
+                    if pop_consumer_profile_key(profile.group.as_str()).map_err(broker_storage_error)? != key {
                         return Err(codec_error("profile key does not match the encoded group"));
                     }
                     profiles.insert(profile.group.clone(), profile);
@@ -106,7 +107,9 @@ impl PopConsumerProfileStore {
                     ..
                 } => {
                     validate_format_version(format_version)?;
-                    if tombstone_generation > generation || pop_consumer_profile_key(group.as_str())? != key {
+                    if tombstone_generation > generation
+                        || pop_consumer_profile_key(group.as_str()).map_err(broker_storage_error)? != key
+                    {
                         return Err(codec_error("invalid POP consumer profile tombstone"));
                     }
                     profiles.remove(&group);
@@ -169,13 +172,18 @@ impl PopConsumerProfileStore {
             format_version: POP_CONSUMER_PROFILE_FORMAT_VERSION,
         };
         validate_profile(&profile)?;
-        let marker = PopConsumerProfileMarker::new(generation).encode()?;
+        let marker = PopConsumerProfileMarker::new(generation)
+            .encode()
+            .map_err(broker_storage_error)?;
         let value = serde_json::to_vec(&StoredProfileRecord::Profile {
             profile: profile.clone(),
         })
         .map_err(|error| codec_error(format!("profile record encode failed: {error}")))?;
-        self.rocksdb
-            .write_profile_record(marker, pop_consumer_profile_key(group.as_str())?, value)?;
+        self.rocksdb.write_profile_record(
+            marker,
+            pop_consumer_profile_key(group.as_str()).map_err(broker_storage_error)?,
+            value,
+        )?;
         state.generation = generation;
         state.profiles.insert(group, profile.clone());
         Ok(profile)
@@ -190,7 +198,9 @@ impl PopConsumerProfileStore {
             .generation
             .checked_add(1)
             .ok_or_else(|| codec_error("POP consumer profile generation overflow"))?;
-        let marker = PopConsumerProfileMarker::new(generation).encode()?;
+        let marker = PopConsumerProfileMarker::new(generation)
+            .encode()
+            .map_err(broker_storage_error)?;
         let value = serde_json::to_vec(&StoredProfileRecord::Tombstone {
             group: group.clone(),
             generation,
@@ -198,8 +208,11 @@ impl PopConsumerProfileStore {
             format_version: POP_CONSUMER_PROFILE_FORMAT_VERSION,
         })
         .map_err(|error| codec_error(format!("profile tombstone encode failed: {error}")))?;
-        self.rocksdb
-            .write_profile_record(marker, pop_consumer_profile_key(group.as_str())?, value)?;
+        self.rocksdb.write_profile_record(
+            marker,
+            pop_consumer_profile_key(group.as_str()).map_err(broker_storage_error)?,
+            value,
+        )?;
         state.generation = generation;
         state.profiles.remove(group);
         Ok(true)
@@ -224,7 +237,7 @@ impl PopConsumerProfileStore {
 
 fn validate_profile(profile: &PopConsumerProfile) -> Result<(), RocketMQError> {
     validate_format_version(profile.format_version)?;
-    pop_consumer_profile_key(profile.group.as_str())?;
+    pop_consumer_profile_key(profile.group.as_str()).map_err(broker_storage_error)?;
     if profile.subscriptions.is_empty() {
         return Err(invalid_profile(
             "subscriptions",

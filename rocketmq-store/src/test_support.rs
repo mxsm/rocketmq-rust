@@ -1282,7 +1282,11 @@ pub async fn run_store_rocksdb_maintenance_lifecycle_probe(
         flush_interval_ms: 1,
         ..RocksDbConfig::default()
     };
-    let store = Arc::new(RocksDbStore::open(config.clone()).expect("rocksdb maintenance benchmark store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(config.clone())
+            .expect("rocksdb maintenance benchmark store should open")
+            .expect("rocksdb maintenance benchmark configuration should be valid"),
+    );
     let runtime_scope = RocksDbRuntimeScope::new(service_context);
     let mut service = RocksDbMaintenanceService::new(Arc::clone(&store), config, runtime_scope);
     service.start();

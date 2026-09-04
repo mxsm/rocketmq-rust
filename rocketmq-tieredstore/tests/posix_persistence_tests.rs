@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "serde")]
+
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_store_api::StoreError;
 use rocketmq_tieredstore::fetcher::TieredGetMessageStatus;
 use rocketmq_tieredstore::TieredDispatchRequest;
 use rocketmq_tieredstore::TieredDispatcher;
@@ -29,9 +31,15 @@ use rocketmq_tieredstore::TieredStoreConfig;
 const MESSAGE_STORE_TIMESTAMP_POSITION: usize = 56;
 
 #[tokio::test]
-async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let config = TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
         backend_provider: "posix".to_owned(),
@@ -50,7 +58,8 @@ async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> R
     let message = encoded_message(store_timestamp, b"persisted-posix-message");
 
     let context = RuntimeContext::from_current("tiered-posix-persistence-test");
-    let store = TieredStore::new(config.clone(), context.root_group().clone())?;
+    let store =
+        TieredStore::new(config.clone(), context.root_group().clone())?.expect("valid POSIX persistence configuration");
     store.load().await?;
     store.start().await?;
     store
@@ -80,16 +89,31 @@ async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> R
                 .join("config")
                 .join("tieredStoreMetadata.json"),
         )
-        .map_err(|source| RocketMQError::internal("read tiered metadata", source))?,
+        .map_err(|source| {
+            StoreError::new(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+            .with_source(source)
+        })?,
     )
-    .map_err(|source| RocketMQError::internal("decode tiered metadata", source))?;
+    .map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     assert_eq!(metadata["format"], "rocketmq-tiered-metadata");
     assert_eq!(metadata["version"], 1);
     assert_eq!(metadata["provider"]["id"], "posix");
     assert_eq!(metadata["provider"]["format"], "rocketmq-tiered-posix");
     assert_eq!(metadata["provider"]["version"], 1);
 
-    let reloaded = TieredStore::new(config.clone(), context.root_group().clone())?;
+    let reloaded =
+        TieredStore::new(config.clone(), context.root_group().clone())?.expect("valid POSIX persistence configuration");
     reloaded.load().await?;
     assert_eq!(
         provider_file_snapshot(&config.store_path_root_dir)?,
@@ -138,7 +162,7 @@ async fn posix_store_recovers_dispatched_messages_and_index_after_restart() -> R
     Ok(())
 }
 
-fn provider_file_snapshot(root: &std::path::Path) -> Result<Vec<(String, Vec<u8>)>, RocketMQError> {
+fn provider_file_snapshot(root: &std::path::Path) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
     let mut snapshot = Vec::new();
     collect_provider_files(root, root, &mut snapshot)?;
     snapshot.sort_by(|left, right| left.0.cmp(&right.0));
@@ -149,13 +173,32 @@ fn collect_provider_files(
     root: &std::path::Path,
     current: &std::path::Path,
     snapshot: &mut Vec<(String, Vec<u8>)>,
-) -> Result<(), RocketMQError> {
-    for entry in std::fs::read_dir(current).map_err(|source| RocketMQError::internal("list provider files", source))? {
-        let entry = entry.map_err(|source| RocketMQError::internal("read provider entry", source))?;
+) -> Result<(), StoreError> {
+    for entry in std::fs::read_dir(current).map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })? {
+        let entry = entry.map_err(|source| {
+            StoreError::new(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+            .with_source(source)
+        })?;
         let path = entry.path();
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|source| RocketMQError::internal("resolve provider path", source))?;
+        let relative = path.strip_prefix(root).map_err(|source| {
+            StoreError::new(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+            .with_source(source)
+        })?;
         if relative
             .components()
             .next()
@@ -168,7 +211,14 @@ fn collect_provider_files(
         } else {
             snapshot.push((
                 relative.to_string_lossy().replace('\\', "/"),
-                std::fs::read(&path).map_err(|source| RocketMQError::internal("read provider file", source))?,
+                std::fs::read(&path).map_err(|source| {
+                    StoreError::new(
+                        &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                        rocketmq_store_api::StoreOperation::Load,
+                    )
+                    .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+                    .with_source(source)
+                })?,
             ));
         }
     }

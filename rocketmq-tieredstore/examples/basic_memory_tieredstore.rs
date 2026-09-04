@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_store_api::StoreError;
 use rocketmq_tieredstore::TieredDispatchRequest;
 use rocketmq_tieredstore::TieredDispatcher;
 use rocketmq_tieredstore::TieredLifecycle;
@@ -24,11 +24,17 @@ use rocketmq_tieredstore::TieredStore;
 use rocketmq_tieredstore::TieredStoreConfig;
 
 #[tokio::main]
-async fn main() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn main() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let runtime = RuntimeContext::from_current("tieredstore-example");
-    let store = TieredStore::new(
+    let Some(store) = TieredStore::new(
         TieredStoreConfig {
             storage_level: TieredStorageLevel::Force,
             backend_provider: "memory".to_owned(),
@@ -37,7 +43,11 @@ async fn main() -> Result<(), RocketMQError> {
             ..TieredStoreConfig::default()
         },
         runtime.root_group().clone(),
-    )?;
+    )?
+    else {
+        eprintln!("tiered store configuration is invalid");
+        return Ok(());
+    };
 
     store.load().await?;
     store.start().await?;

@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 
 use crate::message::MessageRocksDbStorage;
 use crate::message::TimerRocksDbAction;
@@ -51,20 +51,16 @@ impl Default for RocksDbTimerBuildConfig {
 }
 
 impl RocksDbTimerBuildConfig {
-    fn validate(self) -> Result<Self, RocketMQError> {
+    fn validate(self) -> Result<Self, StoreError> {
         if self.queue_capacity == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.timer.queue_capacity",
-                value: self.queue_capacity.to_string(),
-                reason: "queue capacity must be greater than zero".to_string(),
-            });
+            return Err(crate::error::request_invalid(
+                rocketmq_store_api::StoreOperation::AppendDerived,
+            ));
         }
         if self.batch_size == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.timer.batch_size",
-                value: self.batch_size.to_string(),
-                reason: "batch size must be greater than zero".to_string(),
-            });
+            return Err(crate::error::request_invalid(
+                rocketmq_store_api::StoreOperation::AppendDerived,
+            ));
         }
         Ok(self)
     }
@@ -83,7 +79,7 @@ pub struct RocksDbTimerBuildService {
 }
 
 impl RocksDbTimerBuildService {
-    pub fn new(storage: Arc<MessageRocksDbStorage>, config: RocksDbTimerBuildConfig) -> Result<Self, RocketMQError> {
+    pub fn new(storage: Arc<MessageRocksDbStorage>, config: RocksDbTimerBuildConfig) -> Result<Self, StoreError> {
         let config = config.validate()?;
         Ok(Self {
             storage,
@@ -92,26 +88,22 @@ impl RocksDbTimerBuildService {
         })
     }
 
-    pub fn enqueue(&self, entry: TimerRocksDbBuildEntry) -> Result<usize, RocketMQError> {
+    pub fn enqueue(&self, entry: TimerRocksDbBuildEntry) -> Result<usize, StoreError> {
         validate_timer_entry(&entry)?;
-        let mut pending = self.pending.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("timer queue lock poisoned: {error}"))
-        })?;
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         if pending.len() >= self.config.queue_capacity {
-            return Err(RocketMQError::storage_write_failed(
-                "rocksdb",
-                format!(
-                    "timer queue full: capacity={}, pending={}",
-                    self.config.queue_capacity,
-                    pending.len()
-                ),
+            return Err(crate::error::capacity_exhausted(
+                rocketmq_store_api::StoreOperation::AppendDerived,
             ));
         }
         pending.push_back(entry);
         Ok(1)
     }
 
-    pub fn build_timer_index<S>(&self, dispatch: &S) -> Result<usize, RocketMQError>
+    pub fn build_timer_index<S>(&self, dispatch: &S) -> Result<usize, StoreError>
     where
         S: RocksDbTimerDispatch + ?Sized,
     {
@@ -125,7 +117,7 @@ impl RocksDbTimerBuildService {
         self.pending.lock().map_or(0, |pending| pending.len())
     }
 
-    pub fn flush_pending(&self) -> Result<usize, RocketMQError> {
+    pub fn flush_pending(&self) -> Result<usize, StoreError> {
         let mut flushed = 0;
         loop {
             let batch = self.drain_batch()?;
@@ -145,21 +137,25 @@ impl RocksDbTimerBuildService {
     pub async fn flush_pending_blocking(
         self: Arc<Self>,
         runtime_scope: &crate::runtime::RocksDbRuntimeScope,
-    ) -> Result<usize, RocketMQError> {
-        crate::runtime::spawn_io(runtime_scope, "rocksdb.timer.flush_pending", move || {
-            self.flush_pending()
-        })
+    ) -> Result<usize, StoreError> {
+        crate::runtime::spawn_io(
+            runtime_scope,
+            "rocksdb.timer.flush_pending",
+            rocketmq_store_api::StoreOperation::AppendDerived,
+            move || self.flush_pending(),
+        )
         .await?
     }
 
-    pub fn get_dispatch_from_queue_offset(&self) -> Result<Option<i64>, RocketMQError> {
-        let offset = self
-            .storage
-            .get_checkpoint_for_timer(TIMER_SYS_TOPIC_SCAN_OFFSET_CHECKPOINT)?;
+    pub fn get_dispatch_from_queue_offset(&self) -> Result<Option<i64>, StoreError> {
+        let offset = self.storage.get_checkpoint_for_timer(
+            rocketmq_store_api::StoreOperation::QueryOffset,
+            TIMER_SYS_TOPIC_SCAN_OFFSET_CHECKPOINT,
+        )?;
         Ok((offset > 0).then_some(offset))
     }
 
-    fn entry_for_dispatch<S>(&self, dispatch: &S) -> Result<Option<TimerRocksDbBuildEntry>, RocketMQError>
+    fn entry_for_dispatch<S>(&self, dispatch: &S) -> Result<Option<TimerRocksDbBuildEntry>, StoreError>
     where
         S: RocksDbTimerDispatch + ?Sized,
     {
@@ -210,14 +206,15 @@ impl RocksDbTimerBuildService {
         }))
     }
 
-    fn flush_batch(&self, batch: &[TimerRocksDbBuildEntry]) -> Result<(), RocketMQError> {
+    fn flush_batch(&self, batch: &[TimerRocksDbBuildEntry]) -> Result<(), StoreError> {
         let records = batch.iter().map(|entry| entry.record.clone()).collect::<Vec<_>>();
         self.storage.write_records_for_timer(&records)?;
         if let Some(max_queue_offset) = batch.iter().map(|entry| entry.queue_offset).max() {
             let next_offset = max_queue_offset.saturating_add(1);
-            let stored_offset = self
-                .storage
-                .get_checkpoint_for_timer(TIMER_SYS_TOPIC_SCAN_OFFSET_CHECKPOINT)?;
+            let stored_offset = self.storage.get_checkpoint_for_timer(
+                rocketmq_store_api::StoreOperation::AppendDerived,
+                TIMER_SYS_TOPIC_SCAN_OFFSET_CHECKPOINT,
+            )?;
             if next_offset > stored_offset {
                 self.storage
                     .write_checkpoint_for_timer(TIMER_SYS_TOPIC_SCAN_OFFSET_CHECKPOINT, next_offset)?;
@@ -226,18 +223,20 @@ impl RocksDbTimerBuildService {
         Ok(())
     }
 
-    fn drain_batch(&self) -> Result<Vec<TimerRocksDbBuildEntry>, RocketMQError> {
-        let mut pending = self.pending.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("timer queue lock poisoned: {error}"))
-        })?;
+    fn drain_batch(&self) -> Result<Vec<TimerRocksDbBuildEntry>, StoreError> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         let batch_len = self.config.batch_size.min(pending.len());
         Ok(pending.drain(..batch_len).collect())
     }
 
-    fn requeue_front(&self, mut batch: Vec<TimerRocksDbBuildEntry>) -> Result<(), RocketMQError> {
-        let mut pending = self.pending.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("timer queue lock poisoned: {error}"))
-        })?;
+    fn requeue_front(&self, mut batch: Vec<TimerRocksDbBuildEntry>) -> Result<(), StoreError> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         while let Some(entry) = batch.pop() {
             pending.push_front(entry);
         }
@@ -252,13 +251,43 @@ fn extract_delete_uniq_key(delete_key: &str) -> &str {
         .unwrap_or(delete_key)
 }
 
-fn validate_timer_entry(entry: &TimerRocksDbBuildEntry) -> Result<(), RocketMQError> {
+fn validate_timer_entry(entry: &TimerRocksDbBuildEntry) -> Result<(), StoreError> {
     if entry.queue_offset < 0 {
-        return Err(RocketMQError::ConfigInvalidValue {
-            key: "rocksdb.timer.queue_offset",
-            value: entry.queue_offset.to_string(),
-            reason: "queue offset must be non-negative".to_string(),
-        });
+        return Err(crate::error::request_invalid(
+            rocketmq_store_api::StoreOperation::AppendDerived,
+        ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_store_api::StoreComponent;
+    use rocketmq_store_api::StoreOperation;
+
+    use super::*;
+    use crate::config::RocksDbConfig;
+
+    #[test]
+    fn dispatch_checkpoint_lookup_retains_query_operation() -> Result<(), StoreError> {
+        let temp = tempfile::tempdir().expect("create timer checkpoint query fixture");
+        let storage = Arc::new(
+            MessageRocksDbStorage::open(RocksDbConfig {
+                enabled: true,
+                path: temp.path().join("timer-checkpoint-query"),
+                ..RocksDbConfig::default()
+            })?
+            .ok_or_else(|| crate::error::internal_failure(StoreOperation::Load))?,
+        );
+        let service = RocksDbTimerBuildService::new(Arc::clone(&storage), RocksDbTimerBuildConfig::default())?;
+        storage.store().close();
+
+        let error = service
+            .get_dispatch_from_queue_offset()
+            .expect_err("a closed checkpoint store must retain the query owner");
+
+        assert_eq!(error.operation(), StoreOperation::QueryOffset);
+        assert_eq!(error.component(), StoreComponent::RocksDb);
+        Ok(())
+    }
 }

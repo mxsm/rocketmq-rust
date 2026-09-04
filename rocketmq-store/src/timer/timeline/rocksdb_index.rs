@@ -402,7 +402,7 @@ const fn map_state(state: TimerRecordState) -> TimelineState {
     }
 }
 
-fn storage_error(error: rocketmq_error::RocketMQError) -> TimerEngineError {
+fn storage_error(error: rocketmq_store_api::StoreError) -> TimerEngineError {
     TimerEngineError::Storage(std::io::Error::other(error))
 }
 
@@ -411,16 +411,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn storage_error_preserves_rocketmq_error_as_source() {
-        let error = storage_error(rocketmq_error::RocketMQError::InvalidProperty(
-            "invalid timer property".to_owned(),
-        ));
+    fn storage_error_preserves_store_error_as_source() {
+        let error = storage_error(
+            rocketmq_store_api::StoreError::new(
+                &rocketmq_error::STORAGE_READ_FAILED,
+                rocketmq_store_api::StoreOperation::Read,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::RocksDb),
+        );
 
         let TimerEngineError::Storage(error) = error else {
             panic!("expected timer storage error");
         };
         assert!(error
             .get_ref()
-            .is_some_and(|source| source.is::<rocketmq_error::RocketMQError>()));
+            .is_some_and(|source| source.is::<rocketmq_store_api::StoreError>()));
     }
 }

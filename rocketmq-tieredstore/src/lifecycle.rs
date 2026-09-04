@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 
 #[allow(async_fn_in_trait)]
 pub trait TieredLifecycle: Send + Sync {
-    async fn load(&self) -> Result<(), RocketMQError>;
+    async fn load(&self) -> Result<(), StoreError>;
 
-    async fn start(&self) -> Result<(), RocketMQError>;
+    async fn start(&self) -> Result<(), StoreError>;
 
-    async fn shutdown(&self) -> Result<(), RocketMQError>;
+    async fn shutdown(&self) -> Result<(), StoreError>;
 
-    async fn destroy(&self) -> Result<(), RocketMQError>;
+    async fn destroy(&self) -> Result<(), StoreError>;
 }

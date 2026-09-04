@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 pub trait RocksDbCodec {
     type Item;
 
-    fn encode(value: &Self::Item, dst: &mut Vec<u8>) -> Result<(), RocketMQError>;
+    fn encode(value: &Self::Item, operation: StoreOperation, dst: &mut Vec<u8>) -> Result<(), StoreError>;
 
-    fn decode(src: &[u8]) -> Result<Self::Item, RocketMQError>;
+    fn decode(operation: StoreOperation, src: &[u8]) -> Result<Self::Item, StoreError>;
 }

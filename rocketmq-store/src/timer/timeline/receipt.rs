@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
@@ -24,6 +25,8 @@ use rocketmq_store_rocksdb::batch::RocksDbWriteBatch;
 use rocketmq_store_rocksdb::store::KeyValueStore;
 use rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex;
 use rocketmq_store_rocksdb::timer::RECEIPT_CF;
+
+use super::TimelineCompletionError;
 
 const RECEIPT_VALUE_SIZE: usize = 60;
 const RECEIPT_KEY_VERSION: u8 = 1;
@@ -104,12 +107,16 @@ impl TimelineReceiptStore {
         Ok(())
     }
 
-    pub(crate) fn get(&self, delivery_token: &str) -> Result<Option<TimelineCompletionReceiptV1>, RocketMQError> {
+    pub(crate) fn get(
+        &self,
+        delivery_token: &str,
+    ) -> Result<Option<TimelineCompletionReceiptV1>, TimelineCompletionError> {
         self.timeline
             .store()
-            .get_cf(RECEIPT_CF, &encode_key(delivery_token)?)?
+            .get_cf(StoreOperation::Read, RECEIPT_CF, &encode_key(delivery_token)?)?
             .map(|value| TimelineCompletionReceiptV1::decode(&value))
             .transpose()
+            .map_err(Into::into)
     }
 
     pub(crate) fn delete(batch: &mut RocksDbWriteBatch, delivery_token: &str) -> Result<(), RocketMQError> {
@@ -168,7 +175,11 @@ mod tests {
     #[test]
     fn completion_receipt_round_trips_and_rejects_damage() {
         let directory = tempdir().expect("tempdir");
-        let timeline = Arc::new(RocksDbTimelineIndex::open(directory.path()).expect("timeline"));
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(directory.path())
+                .expect("timeline")
+                .expect("valid Timeline configuration"),
+        );
         let store = TimelineReceiptStore::new(Arc::clone(&timeline));
         let expected = TimelineCompletionReceiptV1 {
             timer_id: TimerId::new(7),

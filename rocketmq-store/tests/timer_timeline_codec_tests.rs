@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
@@ -37,7 +38,9 @@ fn timeline_v1_golden_preserves_exact_millisecond_order() {
     assert!(key(8_000, 1, 0) < key(8_000, 1, 1));
     assert!(key(8_000, 1, 1) < key(8_001, 0, 0));
     assert_eq!(
-        TimelineKeyV1::decode(&key(8_000, 1, 1)).expect("decode").due_time_ms,
+        TimelineKeyV1::decode(StoreOperation::Read, &key(8_000, 1, 1))
+            .expect("decode")
+            .due_time_ms,
         8_000
     );
 }
@@ -54,14 +57,17 @@ fn timeline_value_rejects_unknown_version_length_and_crc() {
         shadow_only: false,
     };
     let encoded = record.encode();
-    assert_eq!(TimelineRecordV1::decode(&encoded).expect("decode"), record);
-    assert!(TimelineRecordV1::decode(&encoded[..encoded.len() - 1]).is_err());
+    assert_eq!(
+        TimelineRecordV1::decode(StoreOperation::Read, &encoded).expect("decode"),
+        record
+    );
+    assert!(TimelineRecordV1::decode(StoreOperation::Read, &encoded[..encoded.len() - 1]).is_err());
     let mut unknown_version = encoded;
     unknown_version[1] = 2;
-    assert!(TimelineRecordV1::decode(&unknown_version).is_err());
+    assert!(TimelineRecordV1::decode(StoreOperation::Read, &unknown_version).is_err());
     let mut damaged = record.encode();
     damaged[24] ^= 1;
-    assert!(TimelineRecordV1::decode(&damaged).is_err());
+    assert!(TimelineRecordV1::decode(StoreOperation::Read, &damaged).is_err());
 }
 
 #[test]
@@ -76,8 +82,11 @@ fn recall_lookup_is_length_prefixed_and_collision_free() {
         topic: "orders".to_string(),
         unique_key: "east+42".to_string(),
     };
-    let first_bytes = first.encode().expect("first key");
-    let second_bytes = second.encode().expect("second key");
+    let first_bytes = first.encode(StoreOperation::AppendDerived).expect("first key");
+    let second_bytes = second.encode(StoreOperation::AppendDerived).expect("second key");
     assert_ne!(first_bytes, second_bytes);
-    assert_eq!(RecallLookupKeyV1::decode(&first_bytes).expect("decode"), first);
+    assert_eq!(
+        RecallLookupKeyV1::decode(StoreOperation::Read, &first_bytes).expect("decode"),
+        first
+    );
 }

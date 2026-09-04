@@ -113,7 +113,11 @@ mod test_support_tests {
 
         owner.block_on(async {
             let value = scope
-                .spawn_io("rocksdb.parented.blocking", || 11usize)
+                .spawn_io(
+                    "rocksdb.parented.blocking",
+                    rocketmq_store_api::StoreOperation::Read,
+                    || 11usize,
+                )
                 .await
                 .expect("parented rocksdb blocking task should complete");
             assert_eq!(value, 11);

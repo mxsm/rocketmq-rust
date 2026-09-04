@@ -14,7 +14,8 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
 use rocketmq_store_rocksdb::batch::RocksDbWriteBatch;
@@ -53,16 +54,16 @@ impl TimelineReadyOutbox {
     }
 
     /// Returns one bounded, ordered ready page for a lane.
-    pub(crate) fn scan_ready(&self, lane: u16, max_messages: usize) -> Result<Vec<TimelineKeyV1>, RocketMQError> {
+    pub(crate) fn scan_ready(&self, lane: u16, max_messages: usize) -> Result<Vec<TimelineKeyV1>, StoreError> {
         self.scan_cf(READY_CF, lane, max_messages)
     }
 
     /// Returns one bounded late-ready page for a lane.
-    pub(crate) fn scan_late_ready(&self, lane: u16, max_messages: usize) -> Result<Vec<TimelineKeyV1>, RocketMQError> {
+    pub(crate) fn scan_late_ready(&self, lane: u16, max_messages: usize) -> Result<Vec<TimelineKeyV1>, StoreError> {
         self.scan_cf(LATE_READY_CF, lane, max_messages)
     }
 
-    fn scan_cf(&self, cf: &'static str, lane: u16, max_messages: usize) -> Result<Vec<TimelineKeyV1>, RocketMQError> {
+    fn scan_cf(&self, cf: &'static str, lane: u16, max_messages: usize) -> Result<Vec<TimelineKeyV1>, StoreError> {
         if max_messages == 0 {
             return Ok(Vec::new());
         }
@@ -85,9 +86,12 @@ impl TimelineReadyOutbox {
         };
         self.timeline
             .store()
-            .range_scan(&RocksDbRangeScanOptions::new(cf, first, end, max_messages))?
+            .range_scan(
+                StoreOperation::Read,
+                &RocksDbRangeScanOptions::new(cf, first, end, max_messages),
+            )?
             .into_iter()
-            .map(|item| decode_ready_key(&item.key))
+            .map(|item| decode_ready_key(StoreOperation::Read, &item.key))
             .collect()
     }
 }

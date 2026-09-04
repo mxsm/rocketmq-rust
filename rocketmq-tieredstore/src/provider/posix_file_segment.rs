@@ -28,7 +28,8 @@ use std::iter;
 use std::os::windows::ffi::OsStrExt;
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncSeekExt;
@@ -40,7 +41,7 @@ use crate::file::TieredFileSegment;
 use crate::metadata::FileSegmentMetadata;
 use crate::provider::TieredStoreProvider;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PosixProvider {
     root: PathBuf,
     io_counters: Arc<PosixProviderIoCounters>,
@@ -61,11 +62,9 @@ enum PathAccess {
 }
 
 impl PathAccess {
-    fn io_error(self, path: &Path, source: std::io::Error) -> RocketMQError {
-        match self {
-            Self::Read => error::storage_read_failed(path_to_string(path), source.to_string()),
-            Self::Write => error::storage_write_failed(path_to_string(path), source.to_string()),
-        }
+    fn io_error(self, operation: StoreOperation, source: std::io::Error) -> StoreError {
+        let _ = self;
+        error::io_failed(operation, source)
     }
 }
 
@@ -90,11 +89,16 @@ impl PosixProvider {
         }
     }
 
-    pub(crate) fn validate_root(root: &Path) -> Result<(), RocketMQError> {
+    pub(crate) fn validate_root(root: &Path, operation: StoreOperation) -> Result<(), StoreError> {
+        if !Self::root_is_valid(root) {
+            return Err(error::request_invalid(operation));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn root_is_valid(root: &Path) -> bool {
         if root.as_os_str().is_empty() {
-            return Err(RocketMQError::illegal_argument(
-                "tiered POSIX provider root must not be empty",
-            ));
+            return false;
         }
         let has_normal_leaf = matches!(root.components().next_back(), Some(Component::Normal(_)));
         let safe_components = if root.is_absolute() {
@@ -109,15 +113,13 @@ impl PosixProvider {
                 .all(|component| matches!(component, Component::Normal(_)))
         };
         if !has_normal_leaf || !safe_components {
-            return Err(RocketMQError::illegal_argument(
-                "tiered POSIX provider root must be a normalized non-root path with only normal relative components",
-            ));
+            return false;
         }
-        Ok(())
+        true
     }
 
-    fn resolve_lexical(&self, path: &str) -> Result<(PathBuf, PathBuf), RocketMQError> {
-        Self::validate_root(&self.root)?;
+    fn resolve_lexical(&self, operation: StoreOperation, path: &str) -> Result<(PathBuf, PathBuf), StoreError> {
+        Self::validate_root(&self.root, operation)?;
         let provider_path = Path::new(path);
         let mut relative = PathBuf::new();
         for component in provider_path.components() {
@@ -125,24 +127,25 @@ impl PosixProvider {
                 Component::Normal(component) => relative.push(component),
                 Component::CurDir => {}
                 Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                    return Err(RocketMQError::illegal_argument(format!(
-                        "tiered POSIX provider path must be relative and must not contain parent traversal: {path}"
-                    )));
+                    return Err(error::request_invalid(operation));
                 }
             }
         }
         if relative.as_os_str().is_empty() {
-            return Err(RocketMQError::illegal_argument(
-                "tiered POSIX provider key must not be empty",
-            ));
+            return Err(error::request_invalid(operation));
         }
         let full_path = self.root.join(&relative);
         Ok((relative, full_path))
     }
 
-    async fn resolve_existing(&self, path: &str, access: PathAccess) -> Result<PathBuf, RocketMQError> {
-        let (relative, full_path) = self.resolve_lexical(path)?;
-        let Some(canonical_root) = self.canonical_root(false, access).await? else {
+    async fn resolve_existing(
+        &self,
+        operation: StoreOperation,
+        path: &str,
+        access: PathAccess,
+    ) -> Result<PathBuf, StoreError> {
+        let (relative, full_path) = self.resolve_lexical(operation, path)?;
+        let Some(canonical_root) = self.canonical_root(operation, false, access).await? else {
             return Ok(full_path);
         };
 
@@ -153,7 +156,7 @@ impl PosixProvider {
             let metadata = match tokio::fs::symlink_metadata(&current).await {
                 Ok(metadata) => metadata,
                 Err(source) if source.kind() == std::io::ErrorKind::NotFound => break,
-                Err(source) => return Err(access.io_error(&current, source)),
+                Err(source) => return Err(access.io_error(operation, source)),
             };
             self.validate_existing_component(
                 &current,
@@ -161,18 +164,19 @@ impl PosixProvider {
                 components.peek().is_some(),
                 &canonical_root,
                 access,
+                operation,
             )
             .await?;
         }
         Ok(full_path)
     }
 
-    async fn resolve_for_write(&self, path: &str) -> Result<PathBuf, RocketMQError> {
-        let (relative, full_path) = self.resolve_lexical(path)?;
+    async fn resolve_for_write(&self, operation: StoreOperation, path: &str) -> Result<PathBuf, StoreError> {
+        let (relative, full_path) = self.resolve_lexical(operation, path)?;
         let canonical_root = self
-            .canonical_root(true, PathAccess::Write)
+            .canonical_root(operation, true, PathAccess::Write)
             .await?
-            .ok_or_else(|| RocketMQError::illegal_argument("tiered POSIX provider root must exist after creation"))?;
+            .ok_or_else(|| error::internal_failure(operation))?;
 
         let mut current = self.root.clone();
         if let Some(parent) = relative.parent() {
@@ -184,53 +188,72 @@ impl PosixProvider {
                         match tokio::fs::create_dir(&current).await {
                             Ok(()) => {}
                             Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
-                            Err(source) => return Err(PathAccess::Write.io_error(&current, source)),
+                            Err(source) => return Err(PathAccess::Write.io_error(operation, source)),
                         }
                         tokio::fs::symlink_metadata(&current)
                             .await
-                            .map_err(|source| PathAccess::Write.io_error(&current, source))?
+                            .map_err(|source| PathAccess::Write.io_error(operation, source))?
                     }
-                    Err(source) => return Err(PathAccess::Write.io_error(&current, source)),
+                    Err(source) => return Err(PathAccess::Write.io_error(operation, source)),
                 };
-                self.validate_existing_component(&current, &metadata, true, &canonical_root, PathAccess::Write)
-                    .await?;
+                self.validate_existing_component(
+                    &current,
+                    &metadata,
+                    true,
+                    &canonical_root,
+                    PathAccess::Write,
+                    operation,
+                )
+                .await?;
             }
         }
 
         match tokio::fs::symlink_metadata(&full_path).await {
             Ok(metadata) => {
-                self.validate_existing_component(&full_path, &metadata, false, &canonical_root, PathAccess::Write)
-                    .await?;
+                self.validate_existing_component(
+                    &full_path,
+                    &metadata,
+                    false,
+                    &canonical_root,
+                    PathAccess::Write,
+                    operation,
+                )
+                .await?;
             }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => return Err(PathAccess::Write.io_error(&full_path, source)),
+            Err(source) => return Err(PathAccess::Write.io_error(operation, source)),
         }
         Ok(full_path)
     }
 
-    async fn canonical_root(&self, create: bool, access: PathAccess) -> Result<Option<PathBuf>, RocketMQError> {
-        Self::validate_root(&self.root)?;
+    async fn canonical_root(
+        &self,
+        operation: StoreOperation,
+        create: bool,
+        access: PathAccess,
+    ) -> Result<Option<PathBuf>, StoreError> {
+        Self::validate_root(&self.root, operation)?;
         let metadata = match tokio::fs::symlink_metadata(&self.root).await {
             Ok(metadata) => metadata,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound && !create => return Ok(None),
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                 tokio::fs::create_dir_all(&self.root)
                     .await
-                    .map_err(|source| access.io_error(&self.root, source))?;
+                    .map_err(|source| access.io_error(operation, source))?;
                 tokio::fs::symlink_metadata(&self.root)
                     .await
-                    .map_err(|source| access.io_error(&self.root, source))?
+                    .map_err(|source| access.io_error(operation, source))?
             }
-            Err(source) => return Err(access.io_error(&self.root, source)),
+            Err(source) => return Err(access.io_error(operation, source)),
         };
-        validate_path_metadata(&self.root, &metadata, true)?;
+        validate_path_metadata(&self.root, &metadata, true, operation)?;
         let canonical_root = tokio::fs::canonicalize(&self.root)
             .await
-            .map_err(|source| access.io_error(&self.root, source))?;
+            .map_err(|source| access.io_error(operation, source))?;
         let confirmed = tokio::fs::symlink_metadata(&self.root)
             .await
-            .map_err(|source| access.io_error(&self.root, source))?;
-        validate_path_metadata(&self.root, &confirmed, true)?;
+            .map_err(|source| access.io_error(operation, source))?;
+        validate_path_metadata(&self.root, &confirmed, true, operation)?;
         Ok(Some(canonical_root))
     }
 
@@ -241,21 +264,19 @@ impl PosixProvider {
         must_be_directory: bool,
         canonical_root: &Path,
         access: PathAccess,
-    ) -> Result<(), RocketMQError> {
-        validate_path_metadata(path, metadata, must_be_directory)?;
+        operation: StoreOperation,
+    ) -> Result<(), StoreError> {
+        validate_path_metadata(path, metadata, must_be_directory, operation)?;
         let canonical = tokio::fs::canonicalize(path)
             .await
-            .map_err(|source| access.io_error(path, source))?;
+            .map_err(|source| access.io_error(operation, source))?;
         if !canonical.starts_with(canonical_root) {
-            return Err(RocketMQError::illegal_argument(format!(
-                "tiered POSIX provider path escaped its configured root: {}",
-                path.display()
-            )));
+            return Err(error::request_invalid(operation));
         }
         let confirmed = tokio::fs::symlink_metadata(path)
             .await
-            .map_err(|source| access.io_error(path, source))?;
-        validate_path_metadata(path, &confirmed, must_be_directory)
+            .map_err(|source| access.io_error(operation, source))?;
+        validate_path_metadata(path, &confirmed, must_be_directory, operation)
     }
 
     async fn validate_directory_tree(
@@ -263,22 +284,23 @@ impl PosixProvider {
         root: &Path,
         canonical_root: &Path,
         access: PathAccess,
-    ) -> Result<(), RocketMQError> {
+        operation: StoreOperation,
+    ) -> Result<(), StoreError> {
         let mut directories = vec![root.to_path_buf()];
         while let Some(directory) = directories.pop() {
             let mut entries = tokio::fs::read_dir(&directory)
                 .await
-                .map_err(|source| access.io_error(&directory, source))?;
+                .map_err(|source| access.io_error(operation, source))?;
             while let Some(entry) = entries
                 .next_entry()
                 .await
-                .map_err(|source| access.io_error(&directory, source))?
+                .map_err(|source| access.io_error(operation, source))?
             {
                 let path = entry.path();
                 let metadata = tokio::fs::symlink_metadata(&path)
                     .await
-                    .map_err(|source| access.io_error(&path, source))?;
-                self.validate_existing_component(&path, &metadata, false, canonical_root, access)
+                    .map_err(|source| access.io_error(operation, source))?;
+                self.validate_existing_component(&path, &metadata, false, canonical_root, access, operation)
                     .await?;
                 if metadata.is_dir() {
                     directories.push(path);
@@ -302,15 +324,16 @@ impl PosixProvider {
 impl TieredStoreProvider for PosixProvider {
     async fn create_segment(
         &self,
+        operation: StoreOperation,
         path: String,
         segment_type: FileSegmentType,
         base_offset: u64,
         max_size: u64,
-    ) -> Result<TieredFileSegment<Self>, RocketMQError>
+    ) -> Result<TieredFileSegment<Self>, StoreError>
     where
         Self: Sized,
     {
-        self.resolve_lexical(&path)?;
+        self.resolve_lexical(operation, &path)?;
         let metadata = FileSegmentMetadata::new(path.clone(), segment_type, base_offset);
         Ok(TieredFileSegment::new(
             path,
@@ -322,33 +345,39 @@ impl TieredStoreProvider for PosixProvider {
         ))
     }
 
-    async fn segment_size(&self, path: String) -> Result<u64, RocketMQError> {
-        let full_path = self.resolve_existing(&path, PathAccess::Read).await?;
+    async fn segment_size(&self, operation: StoreOperation, path: String) -> Result<u64, StoreError> {
+        let full_path = self.resolve_existing(operation, &path, PathAccess::Read).await?;
         match tokio::fs::metadata(full_path).await {
             Ok(metadata) => Ok(metadata.len()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
-            Err(err) => Err(error::storage_read_failed(path, err.to_string())),
+            Err(source) => Err(error::io_failed(operation, source)),
         }
     }
 
-    async fn read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
-        let full_path = self.resolve_existing(&path, PathAccess::Read).await?;
+    async fn read(
+        &self,
+        operation: StoreOperation,
+        path: String,
+        position: u64,
+        length: usize,
+    ) -> Result<Bytes, StoreError> {
+        let full_path = self.resolve_existing(operation, &path, PathAccess::Read).await?;
         self.io_counters.read_operations.fetch_add(1, Ordering::Relaxed);
         let mut file = OpenOptions::new()
             .read(true)
             .open(&full_path)
             .await
-            .map_err(|err| error::storage_read_failed(path_to_string(&full_path), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         file.seek(SeekFrom::Start(position))
             .await
-            .map_err(|err| error::storage_read_failed(path_to_string(&full_path), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         let mut buffer = vec![0_u8; length];
         let mut read = 0;
         while read < length {
             let chunk = file
                 .read(&mut buffer[read..])
                 .await
-                .map_err(|err| error::storage_read_failed(path_to_string(&full_path), err.to_string()))?;
+                .map_err(|source| error::io_failed(operation, source))?;
             if chunk == 0 {
                 break;
             }
@@ -359,8 +388,14 @@ impl TieredStoreProvider for PosixProvider {
         Ok(Bytes::from(buffer))
     }
 
-    async fn write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
-        let full_path = self.resolve_for_write(&path).await?;
+    async fn write(
+        &self,
+        operation: StoreOperation,
+        path: String,
+        position: u64,
+        data: Bytes,
+    ) -> Result<usize, StoreError> {
+        let full_path = self.resolve_for_write(operation, &path).await?;
         self.io_counters.write_operations.fetch_add(1, Ordering::Relaxed);
         let mut file = OpenOptions::new()
             .create(true)
@@ -368,76 +403,76 @@ impl TieredStoreProvider for PosixProvider {
             .truncate(false)
             .open(&full_path)
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         file.seek(SeekFrom::Start(position))
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         file.write_all(&data)
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         file.flush()
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         self.io_counters
             .bytes_written
             .fetch_add(data.len() as u64, Ordering::Relaxed);
         Ok(data.len())
     }
 
-    async fn delete(&self, path: String) -> Result<(), RocketMQError> {
-        let full_path = self.resolve_existing(&path, PathAccess::Write).await?;
+    async fn delete(&self, operation: StoreOperation, path: String) -> Result<(), StoreError> {
+        let full_path = self.resolve_existing(operation, &path, PathAccess::Write).await?;
         match tokio::fs::remove_file(&full_path).await {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(error::storage_write_failed(path_to_string(&full_path), err.to_string())),
+            Err(source) => Err(error::io_failed(operation, source)),
         }
     }
 
-    async fn sync(&self, path: String) -> Result<(), RocketMQError> {
-        let full_path = self.resolve_existing(&path, PathAccess::Write).await?;
+    async fn sync(&self, operation: StoreOperation, path: String) -> Result<(), StoreError> {
+        let full_path = self.resolve_existing(operation, &path, PathAccess::Write).await?;
         let metadata = match tokio::fs::metadata(&full_path).await {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(error::storage_write_failed(path_to_string(&full_path), err.to_string())),
+            Err(source) => return Err(error::io_failed(operation, source)),
         };
         if metadata.is_dir() {
-            return sync_directory(&full_path).await;
+            return sync_directory(operation, &full_path).await;
         }
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(&full_path)
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         file.sync_all()
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))
+            .map_err(|source| error::io_failed(operation, source))
     }
 
-    async fn rename(&self, source: String, destination: String) -> Result<(), RocketMQError> {
-        let source_path = self.resolve_existing(&source, PathAccess::Write).await?;
-        let destination_path = self.resolve_for_write(&destination).await?;
+    async fn rename(&self, operation: StoreOperation, source: String, destination: String) -> Result<(), StoreError> {
+        let source_path = self.resolve_existing(operation, &source, PathAccess::Write).await?;
+        let destination_path = self.resolve_for_write(operation, &destination).await?;
         rename_path(&source_path, &destination_path)
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&destination_path), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         if let Some(parent) = destination_path.parent() {
-            sync_directory(parent).await?;
+            sync_directory(operation, parent).await?;
         }
         Ok(())
     }
 
-    async fn list(&self, prefix: String) -> Result<Vec<String>, RocketMQError> {
-        let root = self.resolve_existing(&prefix, PathAccess::Read).await?;
+    async fn list(&self, operation: StoreOperation, prefix: String) -> Result<Vec<String>, StoreError> {
+        let root = self.resolve_existing(operation, &prefix, PathAccess::Read).await?;
         let metadata = match tokio::fs::symlink_metadata(&root).await {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(error::storage_read_failed(path_to_string(&root), err.to_string())),
+            Err(source) => return Err(error::io_failed(operation, source)),
         };
         let canonical_root = self
-            .canonical_root(false, PathAccess::Read)
+            .canonical_root(operation, false, PathAccess::Read)
             .await?
-            .ok_or_else(|| RocketMQError::illegal_argument("tiered POSIX provider root disappeared during list"))?;
-        self.validate_existing_component(&root, &metadata, false, &canonical_root, PathAccess::Read)
+            .ok_or_else(|| error::internal_failure(operation))?;
+        self.validate_existing_component(&root, &metadata, false, &canonical_root, PathAccess::Read, operation)
             .await?;
         if metadata.is_file() {
             return Ok(vec![prefix]);
@@ -448,22 +483,22 @@ impl TieredStoreProvider for PosixProvider {
         while let Some(directory) = directories.pop() {
             let mut entries = tokio::fs::read_dir(&directory)
                 .await
-                .map_err(|err| error::storage_read_failed(path_to_string(&directory), err.to_string()))?;
+                .map_err(|source| error::io_failed(operation, source))?;
             while let Some(entry) = entries
                 .next_entry()
                 .await
-                .map_err(|err| error::storage_read_failed(path_to_string(&directory), err.to_string()))?
+                .map_err(|source| error::io_failed(operation, source))?
             {
                 let path = entry.path();
                 let metadata = tokio::fs::symlink_metadata(&path)
                     .await
-                    .map_err(|err| error::storage_read_failed(path_to_string(&path), err.to_string()))?;
-                self.validate_existing_component(&path, &metadata, false, &canonical_root, PathAccess::Read)
+                    .map_err(|source| error::io_failed(operation, source))?;
+                self.validate_existing_component(&path, &metadata, false, &canonical_root, PathAccess::Read, operation)
                     .await?;
                 if metadata.is_dir() {
                     directories.push(path);
                 } else if metadata.is_file() {
-                    paths.push(relative_provider_path(&self.root, &path)?);
+                    paths.push(relative_provider_path(operation, &self.root, &path)?);
                 }
             }
         }
@@ -471,74 +506,78 @@ impl TieredStoreProvider for PosixProvider {
         Ok(paths)
     }
 
-    async fn delete_prefix(&self, prefix: String) -> Result<(), RocketMQError> {
-        let full_path = self.resolve_existing(&prefix, PathAccess::Write).await?;
+    async fn delete_prefix(&self, operation: StoreOperation, prefix: String) -> Result<(), StoreError> {
+        let full_path = self.resolve_existing(operation, &prefix, PathAccess::Write).await?;
         let metadata = match tokio::fs::symlink_metadata(&full_path).await {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(error::storage_write_failed(path_to_string(&full_path), err.to_string())),
+            Err(source) => return Err(error::io_failed(operation, source)),
         };
         let canonical_root = self
-            .canonical_root(false, PathAccess::Write)
+            .canonical_root(operation, false, PathAccess::Write)
             .await?
-            .ok_or_else(|| RocketMQError::illegal_argument("tiered POSIX provider root disappeared during delete"))?;
-        self.validate_existing_component(&full_path, &metadata, false, &canonical_root, PathAccess::Write)
-            .await?;
+            .ok_or_else(|| error::internal_failure(operation))?;
+        self.validate_existing_component(
+            &full_path,
+            &metadata,
+            false,
+            &canonical_root,
+            PathAccess::Write,
+            operation,
+        )
+        .await?;
         let result = if metadata.is_dir() {
-            self.validate_directory_tree(&full_path, &canonical_root, PathAccess::Write)
+            self.validate_directory_tree(&full_path, &canonical_root, PathAccess::Write, operation)
                 .await?;
             tokio::fs::remove_dir_all(&full_path).await
         } else {
             tokio::fs::remove_file(&full_path).await
         };
-        result.map_err(|err| error::storage_write_failed(path_to_string(&full_path), err.to_string()))
+        result.map_err(|source| error::io_failed(operation, source))
     }
 
-    async fn atomic_write(&self, path: String, data: Bytes) -> Result<(), RocketMQError> {
-        let destination = self.resolve_for_write(&path).await?;
+    async fn atomic_write(&self, operation: StoreOperation, path: String, data: Bytes) -> Result<(), StoreError> {
+        let destination = self.resolve_for_write(operation, &path).await?;
         let temporary_key = Path::new(&path).with_extension("atomic.tmp");
-        let temporary = self.resolve_for_write(&path_to_string(&temporary_key)).await?;
+        let temporary = self
+            .resolve_for_write(operation, &path_to_string(&temporary_key))
+            .await?;
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
             .open(&temporary)
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&temporary), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         file.write_all(&data)
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&temporary), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         file.sync_all()
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&temporary), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         drop(file);
 
         replace_file(&temporary, &destination)
             .await
-            .map_err(|err| error::storage_write_failed(path_to_string(&destination), err.to_string()))?;
+            .map_err(|source| error::io_failed(operation, source))?;
         if let Some(parent) = destination.parent() {
-            sync_directory(parent).await?;
+            sync_directory(operation, parent).await?;
         }
         Ok(())
     }
 }
 
 fn validate_path_metadata(
-    path: &Path,
+    _path: &Path,
     metadata: &std::fs::Metadata,
     must_be_directory: bool,
-) -> Result<(), RocketMQError> {
+    operation: StoreOperation,
+) -> Result<(), StoreError> {
     if is_symlink_or_reparse(metadata) {
-        return Err(RocketMQError::illegal_argument(format!(
-            "tiered POSIX provider path must not contain symbolic links or reparse points: {}",
-            path.display()
-        )));
+        return Err(error::request_invalid(operation));
     }
     if must_be_directory && !metadata.is_dir() {
-        return Err(RocketMQError::illegal_argument(format!(
-            "tiered POSIX provider path ancestor must be a directory: {}",
-            path.display()
-        )));
+        return Err(error::request_invalid(operation));
     }
     Ok(())
 }
@@ -560,10 +599,10 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn relative_provider_path(root: &Path, path: &Path) -> Result<String, RocketMQError> {
+fn relative_provider_path(operation: StoreOperation, root: &Path, path: &Path) -> Result<String, StoreError> {
     let relative = path
         .strip_prefix(root)
-        .map_err(|err| error::storage_read_failed(path_to_string(path), err.to_string()))?;
+        .map_err(|source| error::state_corrupted_source(operation, source))?;
     Ok(relative
         .components()
         .map(|component| component.as_os_str().to_string_lossy())
@@ -572,26 +611,32 @@ fn relative_provider_path(root: &Path, path: &Path) -> Result<String, RocketMQEr
 }
 
 #[cfg(unix)]
-async fn sync_directory(path: &Path) -> Result<(), RocketMQError> {
+async fn sync_directory(operation: StoreOperation, path: &Path) -> Result<(), StoreError> {
     let directory = OpenOptions::new()
         .read(true)
         .open(path)
         .await
-        .map_err(|err| error::storage_write_failed(path_to_string(path), err.to_string()))?;
+        .map_err(|source| error::io_failed(operation, source))?;
     directory
         .sync_all()
         .await
-        .map_err(|err| error::storage_write_failed(path_to_string(path), err.to_string()))
+        .map_err(|source| error::io_failed(operation, source))
+}
+
+impl std::fmt::Debug for PosixProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PosixProvider { root_present: true, redacted: true }")
+    }
 }
 
 #[cfg(windows)]
-async fn sync_directory(_path: &Path) -> Result<(), RocketMQError> {
+async fn sync_directory(_operation: StoreOperation, _path: &Path) -> Result<(), StoreError> {
     // MoveFileExW/ReplaceFileW with WRITE_THROUGH provide the Windows metadata durability boundary.
     Ok(())
 }
 
 #[cfg(not(any(unix, windows)))]
-async fn sync_directory(_path: &Path) -> Result<(), RocketMQError> {
+async fn sync_directory(_operation: StoreOperation, _path: &Path) -> Result<(), StoreError> {
     Ok(())
 }
 
@@ -660,7 +705,8 @@ mod tests {
     use std::path::PathBuf;
 
     use bytes::Bytes;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_store_api::StoreError;
+    use rocketmq_store_api::StoreOperation;
 
     use super::PosixProvider;
     use crate::file::FileSegment;
@@ -669,22 +715,54 @@ mod tests {
     use crate::metadata::FileSegmentMetadata;
     use crate::provider::TieredStoreProvider;
 
+    #[test]
+    fn debug_redacts_provider_root() {
+        let provider = PosixProvider::new(PathBuf::from("sensitive-posix-root-canary"));
+
+        let debug = format!("{provider:?}");
+
+        assert_eq!(debug, "PosixProvider { root_present: true, redacted: true }");
+        assert!(!debug.contains("sensitive-posix-root-canary"));
+    }
+
     #[tokio::test]
-    async fn write_read_size_and_delete() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn write_read_size_and_delete() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let provider = PosixProvider::new(temp_dir.path().to_path_buf());
 
         provider
-            .write("topic/0/commitlog/000".to_owned(), 0, Bytes::from_static(b"abc"))
+            .write(
+                StoreOperation::AppendDerived,
+                "topic/0/commitlog/000".to_owned(),
+                0,
+                Bytes::from_static(b"abc"),
+            )
             .await?;
         provider
-            .write("topic/0/commitlog/000".to_owned(), 3, Bytes::from_static(b"def"))
+            .write(
+                StoreOperation::AppendDerived,
+                "topic/0/commitlog/000".to_owned(),
+                3,
+                Bytes::from_static(b"def"),
+            )
             .await?;
 
-        assert_eq!(provider.segment_size("topic/0/commitlog/000".to_owned()).await?, 6);
         assert_eq!(
-            provider.read("topic/0/commitlog/000".to_owned(), 1, 4).await?,
+            provider
+                .segment_size(StoreOperation::Read, "topic/0/commitlog/000".to_owned())
+                .await?,
+            6
+        );
+        assert_eq!(
+            provider
+                .read(StoreOperation::Read, "topic/0/commitlog/000".to_owned(), 1, 4)
+                .await?,
             Bytes::from_static(b"bcde")
         );
         assert_eq!(
@@ -698,9 +776,19 @@ mod tests {
         );
         assert_eq!(provider.clone().io_snapshot(), provider.io_snapshot());
 
-        provider.delete("topic/0/commitlog/000".to_owned()).await?;
-        assert_eq!(provider.segment_size("topic/0/commitlog/000".to_owned()).await?, 0);
-        assert!(provider.read("topic/0/commitlog/000".to_owned(), 0, 1).await.is_err());
+        provider
+            .delete(StoreOperation::AppendDerived, "topic/0/commitlog/000".to_owned())
+            .await?;
+        assert_eq!(
+            provider
+                .segment_size(StoreOperation::Read, "topic/0/commitlog/000".to_owned())
+                .await?,
+            0
+        );
+        assert!(provider
+            .read(StoreOperation::Read, "topic/0/commitlog/000".to_owned(), 0, 1)
+            .await
+            .is_err());
         let after_failed_read = provider.io_snapshot();
         assert_eq!(after_failed_read.read_operations, 2);
         assert_eq!(after_failed_read.bytes_read, 4);
@@ -708,13 +796,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_append_commit_and_recover_segment() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn create_append_commit_and_recover_segment() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let provider = PosixProvider::new(temp_dir.path().to_path_buf());
         let path = "topic/0/commitlog/00000000000000000000".to_owned();
         let segment = provider
-            .create_segment(path.clone(), FileSegmentType::CommitLog, 0, 64)
+            .create_segment(
+                StoreOperation::AppendDerived,
+                path.clone(),
+                FileSegmentType::CommitLog,
+                0,
+                64,
+            )
             .await?;
 
         segment.append(Bytes::from_static(b"hello"), 100).await?;
@@ -727,7 +826,7 @@ mod tests {
         assert_eq!(segment.read(0..11).await?, Bytes::from_static(b"hello-posix"));
 
         let mut metadata = FileSegmentMetadata::new(path.clone(), FileSegmentType::CommitLog, 0);
-        metadata.size = provider.segment_size(path.clone()).await?;
+        metadata.size = provider.segment_size(StoreOperation::Read, path.clone()).await?;
         metadata.begin_timestamp = 100;
         metadata.end_timestamp = 101;
         let recovered = TieredFileSegment::new(path, FileSegmentType::CommitLog, 0, 64, metadata, provider);
@@ -738,18 +837,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsafe_provider_paths_are_rejected_before_io() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn unsafe_provider_paths_are_rejected_before_io() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let provider_root = temp_dir.path().join("provider");
         let outside_root = temp_dir.path().join("outside");
-        std::fs::create_dir_all(&provider_root)
-            .map_err(|source| RocketMQError::internal("create provider directory", source))?;
-        std::fs::create_dir_all(&outside_root)
-            .map_err(|source| RocketMQError::internal("create outside directory", source))?;
+        std::fs::create_dir_all(&provider_root).map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
+        std::fs::create_dir_all(&outside_root).map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let sentinel = outside_root.join("sentinel");
-        std::fs::write(&sentinel, b"outside")
-            .map_err(|source| RocketMQError::internal("write outside sentinel", source))?;
+        std::fs::write(&sentinel, b"outside").map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let provider = PosixProvider::new(provider_root);
 
         assert_unsafe_paths_rejected(
@@ -761,7 +880,11 @@ mod tests {
         assert_unsafe_paths_rejected(&provider, sentinel.clone(), outside_root).await;
 
         assert_eq!(
-            std::fs::read(&sentinel).map_err(|source| RocketMQError::internal("read outside sentinel", source))?,
+            std::fs::read(&sentinel).map_err(|source| crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source
+            ))?,
             b"outside"
         );
         assert_eq!(provider.io_snapshot(), super::PosixProviderIoSnapshot::default());
@@ -773,11 +896,16 @@ mod tests {
         let provider = PosixProvider::new(PathBuf::new());
 
         let error = provider
-            .write("topic/0/commitlog/000".to_owned(), 0, Bytes::from_static(b"unsafe"))
+            .write(
+                StoreOperation::AppendDerived,
+                "topic/0/commitlog/000".to_owned(),
+                0,
+                Bytes::from_static(b"unsafe"),
+            )
             .await
             .expect_err("an empty provider root must be rejected");
 
-        assert!(matches!(error, RocketMQError::IllegalArgument(_)), "{error}");
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
         assert_eq!(provider.io_snapshot(), super::PosixProviderIoSnapshot::default());
     }
 
@@ -798,45 +926,67 @@ mod tests {
         ];
 
         for root in roots {
-            let error = PosixProvider::validate_root(&root).expect_err("dangerous roots must fail closed");
-            assert!(matches!(error, RocketMQError::IllegalArgument(_)), "{root:?}: {error}");
+            let error = PosixProvider::validate_root(&root, StoreOperation::Load)
+                .expect_err("dangerous roots must fail closed");
+            assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID, "{root:?}");
         }
 
         #[cfg(windows)]
         {
             let root = PathBuf::from(r"C:drive-relative");
-            let error = PosixProvider::validate_root(&root).expect_err("drive-relative roots must fail closed");
-            assert!(matches!(error, RocketMQError::IllegalArgument(_)), "{root:?}: {error}");
+            let error = PosixProvider::validate_root(&root, StoreOperation::Load)
+                .expect_err("drive-relative roots must fail closed");
+            assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID, "{root:?}");
         }
     }
 
     #[test]
     fn normalized_relative_provider_roots_are_accepted() {
         for root in [PathBuf::from("provider"), PathBuf::from("relative/provider")] {
-            PosixProvider::validate_root(&root).expect("normalized relative roots remain compatible");
+            PosixProvider::validate_root(&root, StoreOperation::Load)
+                .expect("normalized relative roots remain compatible");
         }
     }
 
     #[tokio::test]
-    async fn empty_provider_key_cannot_delete_the_configured_root() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn empty_provider_key_cannot_delete_the_configured_root() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let provider_root = temp_dir.path().join("provider");
-        std::fs::create_dir_all(&provider_root)
-            .map_err(|source| RocketMQError::internal("create provider directory", source))?;
+        std::fs::create_dir_all(&provider_root).map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let sentinel = provider_root.join("sentinel");
-        std::fs::write(&sentinel, b"inside-root")
-            .map_err(|source| RocketMQError::internal("write provider sentinel", source))?;
+        std::fs::write(&sentinel, b"inside-root").map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let provider = PosixProvider::new(provider_root);
 
         let error = provider
-            .delete_prefix(String::new())
+            .delete_prefix(StoreOperation::AppendDerived, String::new())
             .await
             .expect_err("an empty provider key must not delete the configured root");
 
-        assert!(matches!(error, RocketMQError::IllegalArgument(_)), "{error}");
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
         assert_eq!(
-            std::fs::read(&sentinel).map_err(|source| RocketMQError::internal("read provider sentinel", source))?,
+            std::fs::read(&sentinel).map_err(|source| crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source
+            ))?,
             b"inside-root"
         );
         assert_eq!(provider.io_snapshot(), super::PosixProviderIoSnapshot::default());
@@ -845,24 +995,48 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     #[tokio::test]
-    async fn symlink_escape_is_rejected_before_provider_io() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn symlink_escape_is_rejected_before_provider_io() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let provider_root = temp_dir.path().join("provider");
         let outside_root = temp_dir.path().join("outside");
-        std::fs::create_dir_all(&provider_root)
-            .map_err(|source| RocketMQError::internal("create provider directory", source))?;
-        std::fs::create_dir_all(&outside_root)
-            .map_err(|source| RocketMQError::internal("create outside directory", source))?;
+        std::fs::create_dir_all(&provider_root).map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
+        std::fs::create_dir_all(&outside_root).map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let sentinel = outside_root.join("sentinel");
-        std::fs::write(&sentinel, b"outside")
-            .map_err(|source| RocketMQError::internal("write outside sentinel", source))?;
+        std::fs::write(&sentinel, b"outside").map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let escape = provider_root.join("escape");
         if let Err(source) = create_directory_symlink(&outside_root, &escape) {
             if symlink_creation_is_unavailable(&source) {
                 return Ok(());
             }
-            return Err(RocketMQError::internal("create escape symlink", source));
+            return Err(crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            ));
         }
         let provider = PosixProvider::new(provider_root);
 
@@ -874,7 +1048,11 @@ mod tests {
         .await;
 
         assert_eq!(
-            std::fs::read(&sentinel).map_err(|source| RocketMQError::internal("read outside sentinel", source))?,
+            std::fs::read(&sentinel).map_err(|source| crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source
+            ))?,
             b"outside"
         );
         assert_eq!(provider.io_snapshot(), super::PosixProviderIoSnapshot::default());
@@ -886,42 +1064,41 @@ mod tests {
         let prefix_path = prefix_path.to_string_lossy().into_owned();
 
         let read_error = provider
-            .read(file_path.clone(), 0, 1)
+            .read(StoreOperation::Read, file_path.clone(), 0, 1)
             .await
             .expect_err("unsafe reads must be rejected");
-        assert!(matches!(read_error, RocketMQError::IllegalArgument(_)), "{read_error}");
+        assert_eq!(read_error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
 
         let write_error = provider
-            .write(file_path.clone(), 0, Bytes::from_static(b"unsafe"))
+            .write(
+                StoreOperation::AppendDerived,
+                file_path.clone(),
+                0,
+                Bytes::from_static(b"unsafe"),
+            )
             .await
             .expect_err("unsafe writes must be rejected");
-        assert!(
-            matches!(write_error, RocketMQError::IllegalArgument(_)),
-            "{write_error}"
-        );
+        assert_eq!(write_error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
 
         let list_error = provider
-            .list(prefix_path.clone())
+            .list(StoreOperation::Read, prefix_path.clone())
             .await
             .expect_err("unsafe prefix listings must be rejected");
-        assert!(matches!(list_error, RocketMQError::IllegalArgument(_)), "{list_error}");
+        assert_eq!(list_error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
 
         let delete_error = provider
-            .delete(file_path)
+            .delete(StoreOperation::AppendDerived, file_path)
             .await
             .expect_err("unsafe deletes must be rejected");
-        assert!(
-            matches!(delete_error, RocketMQError::IllegalArgument(_)),
-            "{delete_error}"
-        );
+        assert_eq!(delete_error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
 
         let delete_prefix_error = provider
-            .delete_prefix(prefix_path)
+            .delete_prefix(StoreOperation::AppendDerived, prefix_path)
             .await
             .expect_err("unsafe recursive deletes must be rejected");
-        assert!(
-            matches!(delete_prefix_error, RocketMQError::IllegalArgument(_)),
-            "{delete_prefix_error}"
+        assert_eq!(
+            delete_prefix_error.descriptor(),
+            &rocketmq_error::STORAGE_REQUEST_INVALID
         );
     }
 

@@ -19,7 +19,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use rocketmq_error::RocketMQError;
-use rocketmq_store::codec_error;
 use rocketmq_store::KeyValueStore;
 use rocketmq_store::RocksDbColumnFamily;
 use rocketmq_store::RocksDbColumnFamilyConfig;
@@ -28,6 +27,8 @@ use rocketmq_store::RocksDbRangeScanOptions;
 use rocketmq_store::RocksDbScanOptions;
 use rocketmq_store::RocksDbStore;
 use rocketmq_store::RocksDbWriteBatch;
+use rocketmq_store::StoreError;
+use rocketmq_store::StoreOperation;
 use rocketmq_store_rocksdb::profile_marker::pop_consumer_profile_prefix;
 use rocketmq_store_rocksdb::profile_marker::POP_CONSUMER_PROFILE_MARKER_KEY;
 use serde::Deserialize;
@@ -124,7 +125,9 @@ impl PopConsumerRocksDbStore {
         write_buffer_size: usize,
     ) -> Result<Self, RocketMQError> {
         let config = pop_rocksdb_config(path, block_cache_size, write_buffer_size);
-        let store = RocksDbStore::open(config.clone())?;
+        let store = RocksDbStore::open(config.clone())
+            .map_err(broker_storage_error)?
+            .ok_or_else(invalid_rocksdb_configuration)?;
         Ok(Self { config, store })
     }
 
@@ -142,7 +145,9 @@ impl PopConsumerRocksDbStore {
         for record in records {
             batch.put_cf(pop_state_cf, record.key_bytes()?, record.value_bytes()?);
         }
-        self.store.write_batch(&batch)
+        self.store
+            .write_batch(StoreOperation::Admin, &batch)
+            .map_err(broker_storage_error)
     }
 
     pub(crate) fn delete_records(&self, records: &[PopConsumerRecord]) -> Result<(), RocketMQError> {
@@ -151,7 +156,9 @@ impl PopConsumerRocksDbStore {
         for record in records {
             batch.delete_cf(pop_state_cf, record.key_bytes()?);
         }
-        self.store.write_batch(&batch)
+        self.store
+            .write_batch(StoreOperation::Admin, &batch)
+            .map_err(broker_storage_error)
     }
 
     pub(crate) fn scan_expired_records(
@@ -171,7 +178,8 @@ impl PopConsumerRocksDbStore {
             max_count,
         );
         self.store
-            .range_scan(&options)?
+            .range_scan(StoreOperation::Admin, &options)
+            .map_err(broker_storage_error)?
             .into_iter()
             .map(|item| PopConsumerRecord::decode(&item.value))
             .collect()
@@ -181,11 +189,16 @@ impl PopConsumerRocksDbStore {
         let cf = RocksDbColumnFamily::PopConsumerProfile.name();
         let marker = self
             .store
-            .get_cf(cf, POP_CONSUMER_PROFILE_MARKER_KEY)?
+            .get_cf(StoreOperation::Admin, cf, POP_CONSUMER_PROFILE_MARKER_KEY)
+            .map_err(broker_storage_error)?
             .map(|value| value.to_vec());
         let records = self
             .store
-            .prefix_scan(&RocksDbScanOptions::prefix(cf, pop_consumer_profile_prefix(), 0))?
+            .prefix_scan(
+                StoreOperation::Admin,
+                &RocksDbScanOptions::prefix(cf, pop_consumer_profile_prefix(), 0),
+            )
+            .map_err(broker_storage_error)?
             .into_iter()
             .map(|item| (item.key.to_vec(), item.value.to_vec()))
             .collect();
@@ -202,17 +215,22 @@ impl PopConsumerRocksDbStore {
         let mut batch = RocksDbWriteBatch::with_capacity(2);
         batch.put_cf(cf, POP_CONSUMER_PROFILE_MARKER_KEY.to_vec(), marker);
         batch.put_cf(cf, key, value);
-        self.store.write_batch(&batch)?;
+        self.store
+            .write_batch(StoreOperation::Admin, &batch)
+            .map_err(broker_storage_error)?;
         self.persist_profile_format_inventory()
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn write_profile_marker_fixture(&self, marker: Vec<u8>) -> Result<(), RocketMQError> {
-        self.store.put_cf(
-            RocksDbColumnFamily::PopConsumerProfile.name(),
-            POP_CONSUMER_PROFILE_MARKER_KEY,
-            &marker,
-        )
+        self.store
+            .put_cf(
+                StoreOperation::Admin,
+                RocksDbColumnFamily::PopConsumerProfile.name(),
+                POP_CONSUMER_PROFILE_MARKER_KEY,
+                &marker,
+            )
+            .map_err(broker_storage_error)
     }
 
     pub(crate) fn close(&self) {
@@ -284,6 +302,22 @@ impl PopConsumerRocksDbStore {
         }
         Ok(())
     }
+}
+
+pub(super) fn broker_storage_error(source: StoreError) -> RocketMQError {
+    RocketMQError::internal("broker POP RocksDB operation failed", source)
+}
+
+fn invalid_rocksdb_configuration() -> RocketMQError {
+    RocketMQError::ConfigInvalidValue {
+        key: "popRocksdbConfig",
+        value: "redacted".to_owned(),
+        reason: "POP RocksDB configuration is invalid".to_owned(),
+    }
+}
+
+fn codec_error(reason: impl Into<String>) -> RocketMQError {
+    RocketMQError::deserialization_failed("POP RocksDB storage", reason.into())
 }
 
 fn pop_rocksdb_config(path: PathBuf, block_cache_size: usize, write_buffer_size: usize) -> RocksDbConfig {

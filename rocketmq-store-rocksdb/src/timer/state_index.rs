@@ -17,15 +17,18 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_store_api::PersistedTimerRoute;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
 use rocketmq_store_api::EXTENDED_TIMELINE_FORMAT_VERSION;
 
 use crate::batch::RocksDbWriteBatch;
-use crate::error::codec_error;
+use crate::error::codec_contract;
+use crate::error::codec_corrupted;
+use crate::error::state_corrupted_source;
 use crate::iterator::RocksDbRangeScanOptions;
 use crate::store::KeyValueStore;
 use crate::store::RocksDbStore;
@@ -62,7 +65,7 @@ pub enum TimelineState {
 }
 
 impl TimelineState {
-    fn decode(value: u8) -> Result<Self, RocketMQError> {
+    fn decode(operation: StoreOperation, value: u8) -> Result<Self, StoreError> {
         match value {
             0 => Ok(Self::SourceOnly),
             1 => Ok(Self::Pending),
@@ -72,7 +75,7 @@ impl TimelineState {
             5 => Ok(Self::Delivered),
             6 => Ok(Self::Cancelled),
             7 => Ok(Self::Quarantined),
-            _ => Err(codec_error("unknown extended timer state")),
+            _ => Err(codec_corrupted(operation)),
         }
     }
 
@@ -141,9 +144,9 @@ impl TimelineStateRecordV1 {
     /// # Errors
     ///
     /// Returns an error if the delivery token exceeds the V1 length field.
-    pub fn encode(&self) -> Result<Vec<u8>, RocketMQError> {
+    pub fn encode(&self, operation: StoreOperation) -> Result<Vec<u8>, StoreError> {
         let token = self.route.delivery_token().as_bytes();
-        let token_len = u16::try_from(token.len()).map_err(|_| codec_error("delivery token is too long"))?;
+        let token_len = u16::try_from(token.len()).map_err(|_| codec_contract(operation))?;
         let mut output = Vec::with_capacity(STATE_VALUE_FIXED_SIZE + token.len());
         output.extend_from_slice(&EXTENDED_TIMELINE_FORMAT_VERSION.to_be_bytes());
         output.push(self.state as u8);
@@ -166,14 +169,14 @@ impl TimelineStateRecordV1 {
     }
 
     /// Decodes a state value using the generation from its key.
-    pub fn decode(bytes: &[u8], generation: TimerGeneration) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, bytes: &[u8], generation: TimerGeneration) -> Result<Self, StoreError> {
         if bytes.len() < LEGACY_STATE_VALUE_FIXED_SIZE
-            || read_u16(bytes, 0)? != EXTENDED_TIMELINE_FORMAT_VERSION
-            || crc32c(&bytes[..bytes.len() - 4]) != read_u32(bytes, bytes.len() - 4)?
+            || read_u16(operation, bytes, 0)? != EXTENDED_TIMELINE_FORMAT_VERSION
+            || crc32c(&bytes[..bytes.len() - 4]) != read_u32(operation, bytes, bytes.len() - 4)?
         {
-            return Err(codec_error("invalid extended timer state version, length, or CRC"));
+            return Err(codec_corrupted(operation));
         }
-        let token_len = usize::from(read_u16(bytes, 38)?);
+        let token_len = usize::from(read_u16(operation, bytes, 38)?);
         let token_start = 40usize;
         let token_end = token_start.saturating_add(token_len);
         let legacy = token_end.saturating_add(5) == bytes.len();
@@ -181,40 +184,44 @@ impl TimelineStateRecordV1 {
         let recovery_fields = token_end.saturating_add(23) == bytes.len();
         let current = token_end.saturating_add(31) == bytes.len();
         if token_len == 0 || (!legacy && !claim_only && !recovery_fields && !current) || bytes[token_end] > 1 {
-            return Err(codec_error("invalid extended timer state token or flags"));
+            return Err(codec_corrupted(operation));
         }
         let token = std::str::from_utf8(&bytes[token_start..token_end])
-            .map_err(|_| codec_error("delivery token is not UTF-8"))?;
+            .map_err(|source| state_corrupted_source(operation, source))?;
         let route = PersistedTimerRoute::try_new(
-            decode_engine(bytes[27])?,
-            read_u16(bytes, 28)?,
-            read_u64(bytes, 30)?,
+            decode_engine(operation, bytes[27])?,
+            read_u16(operation, bytes, 28)?,
+            read_u64(operation, bytes, 30)?,
             generation,
             token,
         )
-        .map_err(|error| codec_error(error.to_string()))?;
+        .map_err(|source| state_corrupted_source(operation, source))?;
         Ok(Self {
-            state: TimelineState::decode(bytes[2])?,
-            state_version: read_u64(bytes, 3)?,
+            state: TimelineState::decode(operation, bytes[2])?,
+            state_version: read_u64(operation, bytes, 3)?,
             route,
-            admission_epoch: TimerEngineEpoch::new(read_u64(bytes, 11)?),
-            owner_epoch: TimerEngineEpoch::new(read_u64(bytes, 19)?),
+            admission_epoch: TimerEngineEpoch::new(read_u64(operation, bytes, 11)?),
+            owner_epoch: TimerEngineEpoch::new(read_u64(operation, bytes, 19)?),
             claim_seq: if claim_only || recovery_fields || current {
-                read_u64(bytes, token_end + 1)?
+                read_u64(operation, bytes, token_end + 1)?
             } else {
                 0
             },
             due_time_ms: if recovery_fields || current {
-                read_i64(bytes, token_end + 9)?
+                read_i64(operation, bytes, token_end + 9)?
             } else {
                 0
             },
             lane: if recovery_fields || current {
-                read_u16(bytes, token_end + 17)?
+                read_u16(operation, bytes, token_end + 17)?
             } else {
                 0
             },
-            terminal_at_ms: if current { read_i64(bytes, token_end + 19)? } else { 0 },
+            terminal_at_ms: if current {
+                read_i64(operation, bytes, token_end + 19)?
+            } else {
+                0
+            },
             shadow_only: bytes[token_end] == 1,
         })
     }
@@ -275,10 +282,14 @@ impl RocksDbTimelineStateIndex {
         &self,
         timer_id: TimerId,
         generation: TimerGeneration,
-    ) -> Result<Option<TimelineStateRecordV1>, RocketMQError> {
+    ) -> Result<Option<TimelineStateRecordV1>, StoreError> {
         self.store
-            .get_cf(STATE_CF, &encode_state_key(timer_id, generation))?
-            .map(|bytes| TimelineStateRecordV1::decode(&bytes, generation))
+            .get_cf(
+                rocketmq_store_api::StoreOperation::Read,
+                STATE_CF,
+                &encode_state_key(timer_id, generation),
+            )?
+            .map(|bytes| TimelineStateRecordV1::decode(StoreOperation::Read, &bytes, generation))
             .transpose()
     }
 
@@ -286,25 +297,25 @@ impl RocksDbTimelineStateIndex {
     pub fn get_many(
         &self,
         keys: &[(TimerId, TimerGeneration)],
-    ) -> Result<Vec<Option<TimelineStateRecordV1>>, RocketMQError> {
+    ) -> Result<Vec<Option<TimelineStateRecordV1>>, StoreError> {
         let encoded = keys
             .iter()
             .map(|(timer_id, generation)| encode_state_key(*timer_id, *generation).to_vec())
             .collect::<Vec<_>>();
         self.store
-            .multi_get_cf(STATE_CF, &encoded)?
+            .multi_get_cf(rocketmq_store_api::StoreOperation::Read, STATE_CF, &encoded)?
             .into_iter()
             .zip(keys)
             .map(|(value, (_, generation))| {
                 value
-                    .map(|value| TimelineStateRecordV1::decode(&value, *generation))
+                    .map(|value| TimelineStateRecordV1::decode(StoreOperation::Read, &value, *generation))
                     .transpose()
             })
             .collect()
     }
 
     /// Scans a bounded state page for restart/promotion lease recovery.
-    pub fn scan(&self, max_records: usize) -> Result<Vec<TimelineStateEntry>, RocketMQError> {
+    pub fn scan(&self, max_records: usize) -> Result<Vec<TimelineStateEntry>, StoreError> {
         Ok(self.scan_after(None, max_records)?.entries)
     }
 
@@ -313,7 +324,7 @@ impl RocksDbTimelineStateIndex {
         &self,
         continuation: Option<(TimerId, TimerGeneration)>,
         max_records: usize,
-    ) -> Result<TimelineStatePage, RocketMQError> {
+    ) -> Result<TimelineStatePage, StoreError> {
         if max_records == 0 {
             return Ok(TimelineStatePage::default());
         }
@@ -329,17 +340,20 @@ impl RocksDbTimelineStateIndex {
         let scan_limit = max_records.saturating_add(1);
         let mut entries = self
             .store
-            .range_scan(&RocksDbRangeScanOptions::new(STATE_CF, start, end, scan_limit))?
+            .range_scan(
+                rocketmq_store_api::StoreOperation::Read,
+                &RocksDbRangeScanOptions::new(STATE_CF, start, end, scan_limit),
+            )?
             .into_iter()
             .map(|item| {
-                let (timer_id, generation) = decode_state_key(&item.key)?;
+                let (timer_id, generation) = decode_state_key(StoreOperation::Read, &item.key)?;
                 Ok(TimelineStateEntry {
                     timer_id,
                     generation,
-                    record: TimelineStateRecordV1::decode(&item.value, generation)?,
+                    record: TimelineStateRecordV1::decode(StoreOperation::Read, &item.value, generation)?,
                 })
             })
-            .collect::<Result<Vec<_>, RocketMQError>>()?;
+            .collect::<Result<Vec<_>, StoreError>>()?;
         let scan_was_full = entries.len() == scan_limit;
         if let Some(continuation) = continuation {
             entries.retain(|entry| (entry.timer_id, entry.generation) > continuation);
@@ -361,9 +375,13 @@ impl RocksDbTimelineStateIndex {
         timer_id: TimerId,
         generation: TimerGeneration,
         record: &TimelineStateRecordV1,
-    ) -> Result<(), RocketMQError> {
-        self.store
-            .put_cf(STATE_CF, &encode_state_key(timer_id, generation), &record.encode()?)
+    ) -> Result<(), StoreError> {
+        self.store.put_cf(
+            StoreOperation::AppendDerived,
+            STATE_CF,
+            &encode_state_key(timer_id, generation),
+            &record.encode(StoreOperation::AppendDerived)?,
+        )
     }
 
     /// Appends one state record to an existing atomic materialization batch.
@@ -372,8 +390,12 @@ impl RocksDbTimelineStateIndex {
         timer_id: TimerId,
         generation: TimerGeneration,
         record: &TimelineStateRecordV1,
-    ) -> Result<(), RocketMQError> {
-        batch.put_cf(STATE_CF, encode_state_key(timer_id, generation), record.encode()?);
+    ) -> Result<(), StoreError> {
+        batch.put_cf(
+            STATE_CF,
+            encode_state_key(timer_id, generation),
+            record.encode(StoreOperation::AppendDerived)?,
+        );
         Ok(())
     }
 
@@ -391,10 +413,11 @@ impl RocksDbTimelineStateIndex {
         expected_version: u64,
         next_state: TimelineState,
         mut side_effects: RocksDbWriteBatch,
-    ) -> Result<StateTransitionResult, RocketMQError> {
-        let _guard = self.transition_lock.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("timer-timeline", format!("state transition lock poisoned: {error}"))
-        })?;
+    ) -> Result<StateTransitionResult, StoreError> {
+        let _guard = self
+            .transition_lock
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         let Some(current) = self.get(timer_id, generation)? else {
             return Ok(StateTransitionResult::Missing);
         };
@@ -402,7 +425,7 @@ impl RocksDbTimelineStateIndex {
             return Ok(StateTransitionResult::Conflict(current));
         }
         if !current.state.allows_transition_to(next_state) {
-            return Err(codec_error("illegal Extended Timeline state transition"));
+            return Err(codec_contract(StoreOperation::AppendDerived));
         }
         let mut next = current;
         next.state = next_state;
@@ -410,8 +433,13 @@ impl RocksDbTimelineStateIndex {
         if matches!(next_state, TimelineState::Delivered | TimelineState::Cancelled) {
             next.terminal_at_ms = current_time_millis();
         }
-        side_effects.put_cf(STATE_CF, encode_state_key(timer_id, generation), next.encode()?);
-        self.store.write_batch(&side_effects)?;
+        side_effects.put_cf(
+            STATE_CF,
+            encode_state_key(timer_id, generation),
+            next.encode(StoreOperation::AppendDerived)?,
+        );
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &side_effects)?;
         Ok(StateTransitionResult::Applied(next))
     }
 
@@ -427,13 +455,14 @@ impl RocksDbTimelineStateIndex {
         owner_epoch: TimerEngineEpoch,
         claim_seq: u64,
         mut side_effects: RocksDbWriteBatch,
-    ) -> Result<StateTransitionResult, RocketMQError> {
+    ) -> Result<StateTransitionResult, StoreError> {
         if owner_epoch.get() == 0 || claim_seq == 0 {
-            return Err(codec_error("delivery claim requires non-zero epoch and sequence"));
+            return Err(codec_contract(StoreOperation::AppendDerived));
         }
-        let _guard = self.transition_lock.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("timer-timeline", format!("state transition lock poisoned: {error}"))
-        })?;
+        let _guard = self
+            .transition_lock
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         let Some(current) = self.get(timer_id, generation)? else {
             return Ok(StateTransitionResult::Missing);
         };
@@ -445,8 +474,13 @@ impl RocksDbTimelineStateIndex {
         next.state_version = next.state_version.saturating_add(1);
         next.owner_epoch = owner_epoch;
         next.claim_seq = claim_seq;
-        side_effects.put_cf(STATE_CF, encode_state_key(timer_id, generation), next.encode()?);
-        self.store.write_batch(&side_effects)?;
+        side_effects.put_cf(
+            STATE_CF,
+            encode_state_key(timer_id, generation),
+            next.encode(StoreOperation::AppendDerived)?,
+        );
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &side_effects)?;
         Ok(StateTransitionResult::Applied(next))
     }
 
@@ -462,10 +496,11 @@ impl RocksDbTimelineStateIndex {
         delivery_token: &str,
         owner_epoch: TimerEngineEpoch,
         mut side_effects: RocksDbWriteBatch,
-    ) -> Result<StateTransitionResult, RocketMQError> {
-        let _guard = self.transition_lock.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("timer-timeline", format!("state transition lock poisoned: {error}"))
-        })?;
+    ) -> Result<StateTransitionResult, StoreError> {
+        let _guard = self
+            .transition_lock
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         let Some(current) = self.get(timer_id, generation)? else {
             return Ok(StateTransitionResult::Missing);
         };
@@ -484,8 +519,13 @@ impl RocksDbTimelineStateIndex {
         next.state = TimelineState::Delivered;
         next.state_version = next.state_version.saturating_add(1);
         next.terminal_at_ms = current_time_millis();
-        side_effects.put_cf(STATE_CF, encode_state_key(timer_id, generation), next.encode()?);
-        self.store.write_batch(&side_effects)?;
+        side_effects.put_cf(
+            STATE_CF,
+            encode_state_key(timer_id, generation),
+            next.encode(StoreOperation::AppendDerived)?,
+        );
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &side_effects)?;
         Ok(StateTransitionResult::Applied(next))
     }
 }
@@ -508,41 +548,43 @@ pub fn encode_state_key(timer_id: TimerId, generation: TimerGeneration) -> [u8; 
 }
 
 /// Decodes a fixed state key.
-pub fn decode_state_key(bytes: &[u8]) -> Result<(TimerId, TimerGeneration), RocketMQError> {
+pub fn decode_state_key(operation: StoreOperation, bytes: &[u8]) -> Result<(TimerId, TimerGeneration), StoreError> {
     if bytes.len() != STATE_KEY_SIZE || bytes[0] != STATE_KEY_VERSION {
-        return Err(codec_error("invalid extended timer state key"));
+        return Err(codec_corrupted(operation));
     }
     Ok((
-        TimerId::new(read_u128(bytes, 1)?),
-        TimerGeneration::new(read_u64(bytes, 17)?),
+        TimerId::new(read_u128(operation, bytes, 1)?),
+        TimerGeneration::new(read_u64(operation, bytes, 17)?),
     ))
 }
 
-fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], RocketMQError> {
-    bytes
+fn read_array<const N: usize>(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<[u8; N], StoreError> {
+    let value = bytes
         .get(offset..offset.saturating_add(N))
-        .and_then(|value| value.try_into().ok())
-        .ok_or_else(|| codec_error("truncated extended timer state record"))
+        .ok_or_else(|| codec_corrupted(operation))?;
+    value
+        .try_into()
+        .map_err(|source| state_corrupted_source(operation, source))
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, RocketMQError> {
-    Ok(u16::from_be_bytes(read_array(bytes, offset)?))
+fn read_u16(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u16, StoreError> {
+    Ok(u16::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, RocketMQError> {
-    Ok(u32::from_be_bytes(read_array(bytes, offset)?))
+fn read_u32(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u32, StoreError> {
+    Ok(u32::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, RocketMQError> {
-    Ok(u64::from_be_bytes(read_array(bytes, offset)?))
+fn read_u64(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u64, StoreError> {
+    Ok(u64::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, RocketMQError> {
-    Ok(i64::from_be_bytes(read_array(bytes, offset)?))
+fn read_i64(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<i64, StoreError> {
+    Ok(i64::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, RocketMQError> {
-    Ok(u128::from_be_bytes(read_array(bytes, offset)?))
+fn read_u128(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u128, StoreError> {
+    Ok(u128::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
 #[cfg(test)]
@@ -574,26 +616,28 @@ mod tests {
     #[test]
     fn state_codec_round_trips_and_rejects_crc_damage() {
         let expected = record(TimelineState::Pending);
-        let mut encoded = expected.encode().expect("encode");
+        let mut encoded = expected.encode(StoreOperation::AppendDerived).expect("encode");
         assert_eq!(
-            TimelineStateRecordV1::decode(&encoded, TimerGeneration::new(3)).expect("decode"),
+            TimelineStateRecordV1::decode(StoreOperation::Read, &encoded, TimerGeneration::new(3)).expect("decode"),
             expected
         );
         encoded[3] ^= 1;
-        assert!(TimelineStateRecordV1::decode(&encoded, TimerGeneration::new(3)).is_err());
+        assert!(TimelineStateRecordV1::decode(StoreOperation::Read, &encoded, TimerGeneration::new(3)).is_err());
     }
 
     #[test]
     fn state_codec_reads_the_pre_terminal_timestamp_layout_fail_closed() {
         let expected = record(TimelineState::Delivered);
-        let mut legacy = expected.encode().expect("encode current state");
+        let mut legacy = expected
+            .encode(StoreOperation::AppendDerived)
+            .expect("encode current state");
         let checksum_start = legacy.len() - 4;
         legacy.drain(checksum_start - 8..checksum_start);
         legacy.truncate(legacy.len() - 4);
         legacy.extend_from_slice(&crc32c(&legacy).to_be_bytes());
 
-        let decoded =
-            TimelineStateRecordV1::decode(&legacy, TimerGeneration::new(3)).expect("decode prior recovery layout");
+        let decoded = TimelineStateRecordV1::decode(StoreOperation::Read, &legacy, TimerGeneration::new(3))
+            .expect("decode prior recovery layout");
         assert_eq!(decoded.state, TimelineState::Delivered);
         assert_eq!(decoded.terminal_at_ms, 0);
     }

@@ -18,7 +18,7 @@ pub mod codec;
 pub mod column_family;
 pub mod config;
 pub mod consume_queue;
-pub mod error;
+mod error;
 pub mod index;
 pub mod iterator;
 pub mod key;
@@ -39,7 +39,6 @@ pub mod transaction;
 pub mod value;
 
 pub use config::RocksDbConfig;
-pub use error::RocksDbErrorKind;
-pub use error::RocksDbResultExt;
+pub use message_store::RocksDbOpenPlan;
 pub use resource_budget::RocksDbResourceBudget;
 pub use store::RocksDbStore;

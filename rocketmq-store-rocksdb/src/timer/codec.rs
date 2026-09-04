@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
@@ -20,7 +21,9 @@ use rocketmq_store_api::TimerPayloadStoreLocator;
 use rocketmq_store_api::TimerSourceCqOffset;
 use rocketmq_store_api::EXTENDED_TIMELINE_FORMAT_VERSION;
 
-use crate::error::codec_error;
+use crate::error::codec_contract;
+use crate::error::codec_corrupted;
+use crate::error::state_corrupted_source;
 
 const TIMELINE_KEY_SIZE: usize = 35;
 const TIMELINE_VALUE_SIZE: usize = 66;
@@ -60,15 +63,15 @@ impl TimelineKeyV1 {
     /// # Errors
     ///
     /// Returns an error for unknown versions or malformed lengths.
-    pub fn decode(bytes: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() != TIMELINE_KEY_SIZE || bytes[0] != KEY_VERSION {
-            return Err(codec_error("invalid extended timeline key version or length"));
+            return Err(codec_corrupted(operation));
         }
         Ok(Self {
-            due_time_ms: unordered_i64(read_u64(bytes, 1)?),
-            lane: read_u16(bytes, 9)?,
-            timer_id: TimerId::new(read_u128(bytes, 11)?),
-            generation: TimerGeneration::new(read_u64(bytes, 27)?),
+            due_time_ms: unordered_i64(read_u64(operation, bytes, 1)?),
+            lane: read_u16(operation, bytes, 9)?,
+            timer_id: TimerId::new(read_u128(operation, bytes, 11)?),
+            generation: TimerGeneration::new(read_u64(operation, bytes, 27)?),
         })
     }
 
@@ -124,35 +127,36 @@ impl TimelineRecordV1 {
     /// # Errors
     ///
     /// Returns an error for unknown versions, malformed lengths, invalid locators, or CRC damage.
-    pub fn decode(bytes: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() != TIMELINE_VALUE_SIZE
-            || read_u16(bytes, 0)? != EXTENDED_TIMELINE_FORMAT_VERSION
-            || crc32c(&bytes[..TIMELINE_VALUE_SIZE - CRC_SIZE]) != read_u32(bytes, TIMELINE_VALUE_SIZE - CRC_SIZE)?
+            || read_u16(operation, bytes, 0)? != EXTENDED_TIMELINE_FORMAT_VERSION
+            || crc32c(&bytes[..TIMELINE_VALUE_SIZE - CRC_SIZE])
+                != read_u32(operation, bytes, TIMELINE_VALUE_SIZE - CRC_SIZE)?
         {
-            return Err(codec_error("invalid extended timeline value version, length, or CRC"));
+            return Err(codec_corrupted(operation));
         }
         let payload = TimerPayloadStoreLocator::try_new(
-            read_i32(bytes, 2)?,
-            read_u16(bytes, 6)?,
-            read_u64(bytes, 8)?,
-            read_u64(bytes, 16)?,
-            read_u32(bytes, 24)?,
-            read_u32(bytes, 28)?,
+            read_i32(operation, bytes, 2)?,
+            read_u16(operation, bytes, 6)?,
+            read_u64(operation, bytes, 8)?,
+            read_u64(operation, bytes, 16)?,
+            read_u32(operation, bytes, 24)?,
+            read_u32(operation, bytes, 28)?,
         )
-        .map_err(|error| codec_error(error.to_string()))?;
-        let source_cq_offset = read_i64(bytes, 32)?;
-        let source_physical_offset = read_i64(bytes, 40)?;
-        let source_size = read_u32(bytes, 48)?;
+        .map_err(|source| state_corrupted_source(operation, source))?;
+        let source_cq_offset = read_i64(operation, bytes, 32)?;
+        let source_physical_offset = read_i64(operation, bytes, 40)?;
+        let source_size = read_u32(operation, bytes, 48)?;
         if source_cq_offset < 0 || source_physical_offset < 0 || source_size == 0 || bytes[61] > 1 {
-            return Err(codec_error("invalid extended timeline source identity or flags"));
+            return Err(codec_corrupted(operation));
         }
         Ok(Self {
             payload,
             source_cq_offset: TimerSourceCqOffset::new(source_cq_offset),
             source_physical_offset,
             source_size,
-            state_version: read_u64(bytes, 52)?,
-            owner_engine: decode_engine(bytes[60])?,
+            state_version: read_u64(operation, bytes, 52)?,
+            owner_engine: decode_engine(operation, bytes[60])?,
             shadow_only: bytes[61] == 1,
         })
     }
@@ -180,13 +184,13 @@ impl RecallLookupKeyV1 {
     /// # Errors
     ///
     /// Returns an error when a component is empty or cannot fit a `u16` length.
-    pub fn encode(&self) -> Result<Vec<u8>, RocketMQError> {
+    pub fn encode(&self, operation: StoreOperation) -> Result<Vec<u8>, StoreError> {
         let topic = self.topic.as_bytes();
         let unique_key = self.unique_key.as_bytes();
-        let topic_len = u16::try_from(topic.len()).map_err(|_| codec_error("recall topic is too long"))?;
-        let unique_len = u16::try_from(unique_key.len()).map_err(|_| codec_error("recall unique key is too long"))?;
+        let topic_len = u16::try_from(topic.len()).map_err(|_| codec_contract(operation))?;
+        let unique_len = u16::try_from(unique_key.len()).map_err(|_| codec_contract(operation))?;
         if topic.is_empty() || unique_key.is_empty() {
-            return Err(codec_error("recall lookup components must not be empty"));
+            return Err(codec_contract(operation));
         }
         let mut output = Vec::with_capacity(LOOKUP_KEY_HEADER_SIZE + topic.len() + unique_key.len() + 2);
         output.push(KEY_VERSION);
@@ -203,29 +207,29 @@ impl RecallLookupKeyV1 {
     /// # Errors
     ///
     /// Returns an error for malformed lengths, UTF-8, or unknown engines.
-    pub fn decode(bytes: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() < LOOKUP_KEY_HEADER_SIZE + 2 || bytes[0] != KEY_VERSION {
-            return Err(codec_error("invalid recall lookup key"));
+            return Err(codec_corrupted(operation));
         }
-        let topic_len = usize::from(read_u16(bytes, 2)?);
+        let topic_len = usize::from(read_u16(operation, bytes, 2)?);
         let topic_start = LOOKUP_KEY_HEADER_SIZE;
         let topic_end = topic_start.saturating_add(topic_len);
         if topic_len == 0 || topic_end.saturating_add(2) > bytes.len() {
-            return Err(codec_error("invalid recall topic length"));
+            return Err(codec_corrupted(operation));
         }
-        let unique_len = usize::from(read_u16(bytes, topic_end)?);
+        let unique_len = usize::from(read_u16(operation, bytes, topic_end)?);
         let unique_start = topic_end + 2;
         let unique_end = unique_start.saturating_add(unique_len);
         if unique_len == 0 || unique_end != bytes.len() {
-            return Err(codec_error("invalid recall unique-key length"));
+            return Err(codec_corrupted(operation));
         }
         Ok(Self {
-            engine: decode_engine(bytes[1])?,
+            engine: decode_engine(operation, bytes[1])?,
             topic: std::str::from_utf8(&bytes[topic_start..topic_end])
-                .map_err(|_| codec_error("recall topic is not UTF-8"))?
+                .map_err(|source| state_corrupted_source(operation, source))?
                 .to_owned(),
             unique_key: std::str::from_utf8(&bytes[unique_start..unique_end])
-                .map_err(|_| codec_error("recall unique key is not UTF-8"))?
+                .map_err(|source| state_corrupted_source(operation, source))?
                 .to_owned(),
         })
     }
@@ -262,19 +266,20 @@ impl RecallLookupValueV1 {
     }
 
     /// Decodes and verifies a lookup value.
-    pub fn decode(bytes: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() != LOOKUP_VALUE_SIZE
             || bytes[0] != KEY_VERSION
-            || crc32c(&bytes[..LOOKUP_VALUE_SIZE - CRC_SIZE]) != read_u32(bytes, LOOKUP_VALUE_SIZE - CRC_SIZE)?
+            || crc32c(&bytes[..LOOKUP_VALUE_SIZE - CRC_SIZE])
+                != read_u32(operation, bytes, LOOKUP_VALUE_SIZE - CRC_SIZE)?
         {
-            return Err(codec_error("invalid recall lookup value"));
+            return Err(codec_corrupted(operation));
         }
         Ok(Self {
-            timer_id: TimerId::new(read_u128(bytes, 1)?),
-            generation: TimerGeneration::new(read_u64(bytes, 17)?),
-            due_time_ms: read_i64(bytes, 25)?,
-            lane: read_u16(bytes, 33)?,
-            state_version: read_u64(bytes, 35)?,
+            timer_id: TimerId::new(read_u128(operation, bytes, 1)?),
+            generation: TimerGeneration::new(read_u64(operation, bytes, 17)?),
+            due_time_ms: read_i64(operation, bytes, 25)?,
+            lane: read_u16(operation, bytes, 33)?,
+            state_version: read_u64(operation, bytes, 35)?,
         })
     }
 }
@@ -291,15 +296,15 @@ pub fn encode_ready_key(key: TimelineKeyV1) -> [u8; READY_KEY_SIZE] {
 }
 
 /// Decodes a durable ready key.
-pub fn decode_ready_key(bytes: &[u8]) -> Result<TimelineKeyV1, RocketMQError> {
+pub fn decode_ready_key(operation: StoreOperation, bytes: &[u8]) -> Result<TimelineKeyV1, StoreError> {
     if bytes.len() != READY_KEY_SIZE || bytes[0] != KEY_VERSION {
-        return Err(codec_error("invalid ready key"));
+        return Err(codec_corrupted(operation));
     }
     Ok(TimelineKeyV1 {
-        due_time_ms: unordered_i64(read_u64(bytes, 3)?),
-        lane: read_u16(bytes, 1)?,
-        timer_id: TimerId::new(read_u128(bytes, 11)?),
-        generation: TimerGeneration::new(read_u64(bytes, 27)?),
+        due_time_ms: unordered_i64(read_u64(operation, bytes, 3)?),
+        lane: read_u16(operation, bytes, 1)?,
+        timer_id: TimerId::new(read_u128(operation, bytes, 11)?),
+        generation: TimerGeneration::new(read_u64(operation, bytes, 27)?),
     })
 }
 
@@ -310,11 +315,11 @@ pub(crate) const fn encode_engine(engine: TimerEngineId) -> u8 {
     }
 }
 
-pub(crate) fn decode_engine(value: u8) -> Result<TimerEngineId, RocketMQError> {
+pub(crate) fn decode_engine(operation: StoreOperation, value: u8) -> Result<TimerEngineId, StoreError> {
     match value {
         0 => Ok(TimerEngineId::JavaCompat),
         1 => Ok(TimerEngineId::ExtendedTimeline),
-        _ => Err(codec_error("unknown timer engine id")),
+        _ => Err(codec_corrupted(operation)),
     }
 }
 
@@ -338,35 +343,37 @@ const fn unordered_i64(value: u64) -> i64 {
     (value ^ (1u64 << 63)) as i64
 }
 
-fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], RocketMQError> {
-    bytes
+fn read_array<const N: usize>(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<[u8; N], StoreError> {
+    let value = bytes
         .get(offset..offset.saturating_add(N))
-        .and_then(|value| value.try_into().ok())
-        .ok_or_else(|| codec_error("truncated extended timer record"))
+        .ok_or_else(|| codec_corrupted(operation))?;
+    value
+        .try_into()
+        .map_err(|source| state_corrupted_source(operation, source))
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, RocketMQError> {
-    Ok(u16::from_be_bytes(read_array(bytes, offset)?))
+fn read_u16(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u16, StoreError> {
+    Ok(u16::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, RocketMQError> {
-    Ok(u32::from_be_bytes(read_array(bytes, offset)?))
+fn read_u32(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u32, StoreError> {
+    Ok(u32::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, RocketMQError> {
-    Ok(i32::from_be_bytes(read_array(bytes, offset)?))
+fn read_i32(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<i32, StoreError> {
+    Ok(i32::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, RocketMQError> {
-    Ok(u64::from_be_bytes(read_array(bytes, offset)?))
+fn read_u64(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u64, StoreError> {
+    Ok(u64::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, RocketMQError> {
-    Ok(i64::from_be_bytes(read_array(bytes, offset)?))
+fn read_i64(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<i64, StoreError> {
+    Ok(i64::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
-fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, RocketMQError> {
-    Ok(u128::from_be_bytes(read_array(bytes, offset)?))
+fn read_u128(operation: StoreOperation, bytes: &[u8], offset: usize) -> Result<u128, StoreError> {
+    Ok(u128::from_be_bytes(read_array(operation, bytes, offset)?))
 }
 
 #[cfg(test)]

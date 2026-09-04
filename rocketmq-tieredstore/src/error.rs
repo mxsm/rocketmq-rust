@@ -12,96 +12,85 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::UnifiedServiceError;
+use rocketmq_error::ErrorDescriptor;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TieredStoreErrorKind {
-    IllegalOffset,
-    SegmentFull,
-    SegmentClosed,
-    SegmentDeleted,
-    MetadataCorrupted,
-    ProviderReadFailed,
-    ProviderWriteFailed,
-    Internal,
+pub(crate) fn contract_error(descriptor: &'static ErrorDescriptor, operation: StoreOperation) -> StoreError {
+    StoreError::new(descriptor, operation).in_component(StoreComponent::TieredStore)
 }
 
-#[inline]
-pub fn illegal_argument(message: impl Into<String>) -> RocketMQError {
-    RocketMQError::illegal_argument(message)
+pub(crate) fn source_error(
+    descriptor: &'static ErrorDescriptor,
+    operation: StoreOperation,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> StoreError {
+    StoreError::new(descriptor, operation)
+        .in_component(StoreComponent::TieredStore)
+        .with_source(source)
 }
 
-#[inline]
-pub fn storage_read_failed(path: impl Into<String>, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::storage_read_failed(path, reason)
+pub(crate) fn request_invalid(operation: StoreOperation) -> StoreError {
+    contract_error(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
 }
 
-#[inline]
-pub fn storage_write_failed(path: impl Into<String>, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::storage_write_failed(path, reason)
+pub(crate) fn write_failed(
+    operation: StoreOperation,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> StoreError {
+    source_error(&rocketmq_error::STORAGE_WRITE_FAILED, operation, source)
 }
 
-#[inline]
-pub fn storage_corrupted(path: impl Into<String>) -> RocketMQError {
-    RocketMQError::StorageCorrupted { path: path.into() }
+pub(crate) fn io_failed(operation: StoreOperation, source: std::io::Error) -> StoreError {
+    source_error(&rocketmq_error::STORAGE_IO_FAILED, operation, source)
 }
 
-#[inline]
-pub fn storage_out_of_space(path: impl Into<String>) -> RocketMQError {
-    RocketMQError::StorageOutOfSpace { path: path.into() }
+pub(crate) fn state_corrupted(operation: StoreOperation) -> StoreError {
+    contract_error(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation)
 }
 
-#[inline]
-pub fn invalid_segment_type(message: impl Into<String>) -> RocketMQError {
-    illegal_argument(message)
+pub(crate) fn state_corrupted_source(
+    operation: StoreOperation,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> StoreError {
+    source_error(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation, source)
 }
 
-#[inline]
-pub fn internal(message: impl Into<String>) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(message.into()))
+pub(crate) fn capacity_exhausted(operation: StoreOperation) -> StoreError {
+    contract_error(&rocketmq_error::STORAGE_CAPACITY_EXHAUSTED, operation)
 }
 
-pub fn from_kind(kind: TieredStoreErrorKind, path: impl Into<String>, message: impl Into<String>) -> RocketMQError {
-    let path = path.into();
-    let message = message.into();
-    match kind {
-        TieredStoreErrorKind::IllegalOffset => illegal_argument(message),
-        TieredStoreErrorKind::ProviderReadFailed => storage_read_failed(path, message),
-        TieredStoreErrorKind::ProviderWriteFailed => storage_write_failed(path, message),
-        TieredStoreErrorKind::SegmentFull => storage_out_of_space(path),
-        TieredStoreErrorKind::SegmentClosed | TieredStoreErrorKind::SegmentDeleted => {
-            storage_read_failed(path, message)
+pub(crate) fn unavailable(operation: StoreOperation) -> StoreError {
+    contract_error(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, operation)
+}
+
+pub(crate) fn unsupported(operation: StoreOperation) -> StoreError {
+    contract_error(&rocketmq_error::STORAGE_OPERATION_UNSUPPORTED, operation)
+}
+
+pub(crate) fn internal_failure(operation: StoreOperation) -> StoreError {
+    contract_error(&rocketmq_error::STORAGE_INTERNAL_FAILURE, operation)
+}
+
+pub(crate) fn runtime_error(operation: StoreOperation, source: rocketmq_runtime::RuntimeError) -> StoreError {
+    use rocketmq_runtime::RuntimeError;
+
+    let descriptor = match &source {
+        RuntimeError::BlockingQueueTimeout { .. } | RuntimeError::BlockingTaskTimeoutStillRunning { .. } => {
+            &rocketmq_error::STORAGE_OPERATION_TIMED_OUT
         }
-        TieredStoreErrorKind::MetadataCorrupted => storage_corrupted(path),
-        TieredStoreErrorKind::Internal => internal(message),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use rocketmq_error::ErrorKind;
-
-    use super::*;
-
-    #[test]
-    fn from_kind_maps_segment_full_to_storage_out_of_space() {
-        let error = from_kind(TieredStoreErrorKind::SegmentFull, "tiered-segment", "full");
-
-        assert_eq!(error.kind(), ErrorKind::StorageOutOfSpace);
-    }
-
-    #[test]
-    fn from_kind_maps_metadata_corrupted_to_storage_corrupted() {
-        let error = from_kind(TieredStoreErrorKind::MetadataCorrupted, "tiered-metadata", "bad json");
-
-        assert_eq!(error.kind(), ErrorKind::StorageCorrupted);
-    }
-
-    #[test]
-    fn invalid_segment_type_uses_illegal_argument() {
-        let error = invalid_segment_type("index segment is not supported");
-
-        assert_eq!(error.kind(), ErrorKind::IllegalArgument);
-    }
+        RuntimeError::BlockingQueueFull { .. } => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+        RuntimeError::UnsupportedBlockingKind { .. } => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+        RuntimeError::BuildRuntime(_) | RuntimeError::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
+        RuntimeError::InvalidConfig(_)
+        | RuntimeError::Configuration(_)
+        | RuntimeError::NoCurrentRuntime
+        | RuntimeError::InsideTokioRuntime(_)
+        | RuntimeError::TaskGroupClosing { .. }
+        | RuntimeError::BlockingJoin { .. }
+        | RuntimeError::ScheduledTaskExists { .. }
+        | RuntimeError::LifecycleOperation { .. } => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+    };
+    source_error(descriptor, operation, source)
 }

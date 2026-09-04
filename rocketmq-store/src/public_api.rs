@@ -243,12 +243,6 @@ mod rocksdb_api {
     pub use crate::rocksdb::consume_queue::RocksDbConsumeQueueGroupCommitConfig;
     pub use crate::rocksdb::consume_queue::RocksDbConsumeQueueGroupCommitService;
     pub use crate::rocksdb::consume_queue::RocksDbConsumeQueueStore;
-    pub use crate::rocksdb::error::closed_error;
-    pub use crate::rocksdb::error::codec_error;
-    pub use crate::rocksdb::error::column_family_missing_error;
-    pub use crate::rocksdb::error::reloading_error;
-    pub use crate::rocksdb::error::RocksDbErrorKind;
-    pub use crate::rocksdb::error::RocksDbResultExt;
     pub use crate::rocksdb::index::RocksDbIndexBuildConfig;
     pub use crate::rocksdb::index::RocksDbIndexBuildService;
     pub use crate::rocksdb::iterator::RocksDbRangeScanOptions;

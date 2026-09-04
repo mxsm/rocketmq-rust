@@ -26,6 +26,7 @@ use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_store_api::DerivedCheckpoint;
 use rocketmq_store_api::DerivedCursor;
 use rocketmq_store_api::DerivedEngine;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerGeneration;
@@ -101,7 +102,10 @@ impl TimelineCompletionReconciler {
     }
 
     pub(crate) fn completion_physical_cursor(&self) -> Result<i64, TimelineCompletionError> {
-        let value = self.timeline.store().get_cf(CHECKPOINT_CF, COMPLETION_CURSOR_KEY)?;
+        let value = self
+            .timeline
+            .store()
+            .get_cf(StoreOperation::Load, CHECKPOINT_CF, COMPLETION_CURSOR_KEY)?;
         let Some(value) = value else {
             return Ok(self.commit_log.get_min_offset().max(0));
         };
@@ -341,6 +345,8 @@ pub(crate) struct CompletionReconcileResult {
 
 #[derive(Debug, Error)]
 pub(crate) enum TimelineCompletionError {
+    #[error(transparent)]
+    Store(#[from] rocketmq_store_api::StoreError),
     #[error("Timeline store failure: {0}")]
     Timeline(#[from] rocketmq_error::RocketMQError),
     #[error("completion checkpoint decode failed: {0}")]

@@ -14,8 +14,10 @@
 
 use std::path::PathBuf;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
+use crate::error::invalid_configuration;
 use crate::options::RocksDbWriteProfile;
 
 pub trait RocksDbConfigSource {
@@ -356,29 +358,15 @@ impl RocksDbColumnFamilyConfig {
         }
     }
 
-    pub fn validate(&self) -> Result<(), RocketMQError> {
-        if self.name.is_empty() {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.column_family.name",
-                value: self.name.clone(),
-                reason: "column family name must not be empty".to_string(),
-            });
-        }
-        if self.write_buffer_size == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.column_family.write_buffer_size",
-                value: self.write_buffer_size.to_string(),
-                reason: "write buffer size must be greater than zero".to_string(),
-            });
-        }
-        if self.block_size == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.column_family.block_size",
-                value: self.block_size.to_string(),
-                reason: "block size must be greater than zero".to_string(),
-            });
+    pub fn validate(&self) -> Result<(), StoreError> {
+        if !self.is_valid() {
+            return Err(invalid_configuration(StoreOperation::Load));
         }
         Ok(())
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.name.is_empty() && self.write_buffer_size != 0 && self.block_size != 0
     }
 }
 
@@ -592,39 +580,19 @@ impl RocksDbConfig {
         }
     }
 
-    pub fn validate(&self) -> Result<(), RocketMQError> {
-        if self.path.as_os_str().is_empty() {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.path",
-                value: String::new(),
-                reason: "path must not be empty".to_string(),
-            });
-        }
-        if self.write_buffer_size == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.write_buffer_size",
-                value: self.write_buffer_size.to_string(),
-                reason: "write buffer size must be greater than zero".to_string(),
-            });
-        }
-        if self.block_cache_budget_bytes == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.block_cache_budget_bytes",
-                value: self.block_cache_budget_bytes.to_string(),
-                reason: "shared block-cache budget must be greater than zero".to_string(),
-            });
-        }
-        if self.write_buffer_budget_bytes == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.write_buffer_budget_bytes",
-                value: self.write_buffer_budget_bytes.to_string(),
-                reason: "shared write-buffer budget must be greater than zero".to_string(),
-            });
-        }
-        for column_family in &self.column_families {
-            column_family.validate()?;
+    pub fn validate(&self) -> Result<(), StoreError> {
+        if !self.is_valid() {
+            return Err(invalid_configuration(StoreOperation::Load));
         }
         Ok(())
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.path.as_os_str().is_empty()
+            && self.write_buffer_size != 0
+            && self.block_cache_budget_bytes != 0
+            && self.write_buffer_budget_bytes != 0
+            && self.column_families.iter().all(RocksDbColumnFamilyConfig::is_valid)
     }
 
     pub fn write_profile(&self) -> RocksDbWriteProfile {

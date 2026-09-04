@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
-use crate::error::column_family_missing_error;
-use crate::error::RocksDbErrorKind;
-use crate::error::RocksDbResultExt;
+use crate::error::rocksdb_contract_error;
+use crate::error::RocksDbStoreResultExt;
 
 pub struct RocksDbSnapshot<'a> {
     db: &'a ::rocksdb::DB,
@@ -32,13 +32,16 @@ impl<'a> RocksDbSnapshot<'a> {
         }
     }
 
-    pub fn get_cf(&self, cf: &str, key: &[u8]) -> Result<Option<Bytes>, RocketMQError> {
-        let handle = self.db.cf_handle(cf).ok_or_else(|| column_family_missing_error(cf))?;
+    pub fn get_cf(&self, operation: StoreOperation, cf: &str, key: &[u8]) -> Result<Option<Bytes>, StoreError> {
+        let handle = self
+            .db
+            .cf_handle(cf)
+            .ok_or_else(|| rocksdb_contract_error(&rocketmq_error::STORAGE_STATE_CORRUPTED, operation))?;
         let mut read_options = ::rocksdb::ReadOptions::default();
         read_options.set_snapshot(&self.snapshot);
         self.db
             .get_cf_opt(&handle, key, &read_options)
             .map(|value| value.map(Bytes::from))
-            .map_rocksdb(RocksDbErrorKind::Snapshot)
+            .map_store(&rocketmq_error::STORAGE_READ_FAILED, operation)
     }
 }

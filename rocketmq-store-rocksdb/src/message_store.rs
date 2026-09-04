@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::error::Error as StdError;
+use std::fmt;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_store_api::GetStatus;
 use rocketmq_store_api::StoreComponent;
-use rocketmq_store_api::StoreError as ApiStoreError;
+use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreLifecycle;
 use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::WalPort;
-use thiserror::Error;
 use tracing::warn;
 
 use crate::column_family::RocksDbColumnFamily;
@@ -48,40 +48,77 @@ const INDEX_KEY_TYPE: &str = "K";
 const INDEX_UNIQUE_TYPE: &str = "U";
 const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 
-#[derive(Debug, Error)]
-pub enum RocksDbMessageStoreError {
-    #[error("RocksDB message-store configuration error: {0}")]
-    Config(String),
-    #[error("RocksDB derived-store error: {source}")]
-    Backend {
-        #[source]
-        source: RocketMQError,
-    },
-    #[error("Local CommitLog read error: {source}")]
-    Local {
-        #[source]
-        source: ApiStoreError,
-    },
+enum RocksDbMessageStoreViolation {
+    Disabled,
+    InvalidConfiguration,
 }
 
-impl RocksDbMessageStoreError {
-    pub fn into_backend(self) -> Option<RocketMQError> {
+enum RocksDbMessageStoreError {
+    Violation(RocksDbMessageStoreViolation),
+    Native(::rocksdb::Error),
+    Runtime(rocketmq_runtime::RuntimeError),
+    Io(std::io::Error),
+    Store(StoreError),
+}
+
+impl fmt::Display for RocksDbMessageStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RocksDB message-store operation failed")
+    }
+}
+
+impl fmt::Debug for RocksDbMessageStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = match self {
+            Self::Violation(violation) => match violation {
+                RocksDbMessageStoreViolation::Disabled => "Disabled",
+                RocksDbMessageStoreViolation::InvalidConfiguration => "InvalidConfiguration",
+            },
+            Self::Native(_) => "Native",
+            Self::Runtime(_) => "Runtime",
+            Self::Io(_) => "Io",
+            Self::Store(_) => "Store",
+        };
+        f.debug_struct("RocksDbMessageStoreError")
+            .field("kind", &kind)
+            .field("source_present", &self.source().is_some())
+            .finish()
+    }
+}
+
+impl StdError for RocksDbMessageStoreError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
-            Self::Backend { source } => Some(source),
-            Self::Config(_) | Self::Local { .. } => None,
+            Self::Violation(_) => None,
+            Self::Native(source) => Some(source),
+            Self::Runtime(source) => Some(source),
+            Self::Io(source) => Some(source),
+            Self::Store(source) => Some(source),
         }
     }
 }
 
-impl From<RocketMQError> for RocksDbMessageStoreError {
-    fn from(source: RocketMQError) -> Self {
-        Self::Backend { source }
+impl From<StoreError> for RocksDbMessageStoreError {
+    fn from(source: StoreError) -> Self {
+        Self::Store(source)
     }
 }
 
-impl From<ApiStoreError> for RocksDbMessageStoreError {
-    fn from(source: ApiStoreError) -> Self {
-        Self::Local { source }
+impl From<::rocksdb::Error> for RocksDbMessageStoreError {
+    fn from(source: ::rocksdb::Error) -> Self {
+        Self::Native(source)
+    }
+}
+
+impl From<rocketmq_runtime::RuntimeError> for RocksDbMessageStoreError {
+    fn from(source: rocketmq_runtime::RuntimeError) -> Self {
+        Self::Runtime(source)
+    }
+}
+
+impl From<std::io::Error> for RocksDbMessageStoreError {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io(source)
     }
 }
 
@@ -89,6 +126,58 @@ impl From<ApiStoreError> for RocksDbMessageStoreError {
 pub struct RocksDbMessageStoreOptions {
     pub timer_enabled: bool,
     pub transaction_enabled: bool,
+}
+
+/// Validated, redacted capability for opening RocksDB derived state.
+#[derive(Clone)]
+pub struct RocksDbOpenPlan {
+    pub(crate) config: RocksDbConfig,
+}
+
+impl fmt::Debug for RocksDbOpenPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RocksDbOpenPlan").field("validated", &true).finish()
+    }
+}
+
+impl RocksDbOpenPlan {
+    /// Validates one raw RocksDB database configuration without opening it.
+    pub fn from_config(config: RocksDbConfig) -> Option<Self> {
+        if !config.enabled || !config.is_valid() {
+            return None;
+        }
+        Some(Self { config })
+    }
+
+    /// Validates raw RocksDB configuration without opening or mutating a database.
+    ///
+    /// Returns `None` when RocksDB is disabled or a deterministic configuration
+    /// constraint is invalid. This validation does not inspect the filesystem.
+    pub fn from_message_store<S>(source: &S) -> Option<(Self, Self)>
+    where
+        S: RocksDbConfigSource + ?Sized,
+    {
+        if !source.rocksdb_store_enabled() {
+            let _violation = RocksDbMessageStoreError::Violation(RocksDbMessageStoreViolation::Disabled);
+            return None;
+        }
+        let rocksdb_config = RocksDbConfig::consume_queue_from_message_store_config(source);
+        if !rocksdb_config.is_valid() {
+            let _violation = RocksDbMessageStoreError::Violation(RocksDbMessageStoreViolation::InvalidConfiguration);
+            return None;
+        }
+        let message_rocksdb_config = RocksDbConfig::message_from_message_store_config(source);
+        if !message_rocksdb_config.is_valid() {
+            let _violation = RocksDbMessageStoreError::Violation(RocksDbMessageStoreViolation::InvalidConfiguration);
+            return None;
+        }
+        Some((
+            Self { config: rocksdb_config },
+            Self {
+                config: message_rocksdb_config,
+            },
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,13 +237,14 @@ impl RocksDbDerivedStore {
     ///
     /// # Errors
     ///
-    /// Returns a configuration error for an incompatible path or a backend error
-    /// when native RocksDB cannot be opened.
+    /// Returns `Ok(None)` when RocksDB is disabled or its raw configuration is
+    /// invalid. Operational initialization and native database failures are
+    /// returned as [`StoreError`].
     pub fn open<S>(
         source: &S,
         options: RocksDbMessageStoreOptions,
         service_context: rocketmq_runtime::ChildServiceContext,
-    ) -> Result<Self, RocksDbMessageStoreError>
+    ) -> Result<Option<Self>, StoreError>
     where
         S: RocksDbConfigSource + ?Sized,
     {
@@ -166,32 +256,71 @@ impl RocksDbDerivedStore {
         )
     }
 
+    /// Opens the two RocksDB derived-state databases with metrics without
+    /// creating a message log.
+    ///
+    /// Returns `Ok(None)` when RocksDB is disabled or its deterministic raw
+    /// configuration is invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational storage error when runtime, resource, or native
+    /// database initialization fails.
     pub fn open_with_metrics<S>(
         source: &S,
         options: RocksDbMessageStoreOptions,
         service_context: rocketmq_runtime::ChildServiceContext,
         metrics: rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder,
-    ) -> Result<Self, RocksDbMessageStoreError>
+    ) -> Result<Option<Self>, StoreError>
     where
         S: RocksDbConfigSource + ?Sized,
     {
-        let runtime_scope = RocksDbRuntimeScope::new(service_context);
-        if !source.rocksdb_store_enabled() {
-            return Err(RocksDbMessageStoreError::Config(
-                "RocksDBMessageStore requires store_type=RocksDB".to_string(),
-            ));
-        }
-        let conflict_path = RocksDbConfig::consume_queue_conflict_path_from_message_store_config(source);
-        if conflict_path.join("CURRENT").is_file() {
-            return Err(RocksDbMessageStoreError::Config(format!(
-                "found RocksDB consume queue in incompatible path: {}, maybe incompatible \
-                 use_separate_store_path_for_rocksdb_cq config",
-                conflict_path.display()
-            )));
-        }
+        let Some((rocksdb_plan, message_rocksdb_plan)) = RocksDbOpenPlan::from_message_store(source) else {
+            return Ok(None);
+        };
+        Self::open_planned_with_metrics(rocksdb_plan, message_rocksdb_plan, options, service_context, metrics).map(Some)
+    }
 
-        let rocksdb_config = RocksDbConfig::consume_queue_from_message_store_config(source);
-        rocksdb_config.validate()?;
+    /// Opens RocksDB derived state from a previously validated capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational storage error when runtime or native database
+    /// initialization fails.
+    pub fn open_planned(
+        rocksdb_plan: RocksDbOpenPlan,
+        message_rocksdb_plan: RocksDbOpenPlan,
+        options: RocksDbMessageStoreOptions,
+        service_context: rocketmq_runtime::ChildServiceContext,
+    ) -> Result<Self, StoreError> {
+        Self::open_planned_with_metrics(
+            rocksdb_plan,
+            message_rocksdb_plan,
+            options,
+            service_context,
+            rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder::noop(),
+        )
+    }
+
+    /// Opens RocksDB derived state from validated capabilities with metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational storage error when runtime, resource, or native
+    /// database initialization fails. Configuration validation has already
+    /// completed before this method is called.
+    pub fn open_planned_with_metrics(
+        rocksdb_plan: RocksDbOpenPlan,
+        message_rocksdb_plan: RocksDbOpenPlan,
+        options: RocksDbMessageStoreOptions,
+        service_context: rocketmq_runtime::ChildServiceContext,
+        metrics: rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder,
+    ) -> Result<Self, StoreError> {
+        let RocksDbOpenPlan { config: rocksdb_config } = rocksdb_plan;
+        let RocksDbOpenPlan {
+            config: message_rocksdb_config,
+        } = message_rocksdb_plan;
+        let runtime_scope = RocksDbRuntimeScope::new(service_context);
         let resource_budget = Arc::new(RocksDbResourceBudget::from_config(&rocksdb_config)?);
         let block_cache_budget = Arc::clone(&resource_budget);
         metrics.register_resource_cache("rocksdb-block-cache", move || {
@@ -207,15 +336,13 @@ impl RocksDbDerivedStore {
                 budget_bytes: write_buffer_budget.write_buffer_budget_bytes() as u64,
             }
         });
-        let rocksdb_store = Arc::new(RocksDbStore::open_with_metrics_and_resource_budget(
+        let rocksdb_store = Arc::new(RocksDbStore::open_validated_with_metrics_and_resource_budget(
             rocksdb_config.clone(),
             metrics.clone(),
             Arc::clone(&resource_budget),
         )?);
         let consume_queue_store = RocksDbConsumeQueueStore::new(Arc::clone(&rocksdb_store));
-        let message_rocksdb_config = RocksDbConfig::message_from_message_store_config(source);
-        message_rocksdb_config.validate()?;
-        let message_rocksdb_storage = Arc::new(MessageRocksDbStorage::open_with_metrics_and_resource_budget(
+        let message_rocksdb_storage = Arc::new(MessageRocksDbStorage::open_validated_with_metrics_and_resource_budget(
             message_rocksdb_config.clone(),
             metrics,
             resource_budget,
@@ -313,49 +440,67 @@ impl RocksDbDerivedStore {
         self.message_rocksdb_maintenance_service.start();
     }
 
-    pub async fn shutdown_maintenance(&mut self) -> Result<(), RocksDbMessageStoreError> {
+    pub async fn shutdown_maintenance(&mut self) -> Result<(), StoreError> {
         let consume_queue_result = self.rocksdb_maintenance_service.shutdown_gracefully().await;
         let message_result = self.message_rocksdb_maintenance_service.shutdown_gracefully().await;
-        consume_queue_result?;
-        message_result?;
+        consume_queue_result
+            .map_err(|source| lifecycle_error(StoreOperation::Shutdown, RocksDbMessageStoreError::Store(source)))?;
+        message_result
+            .map_err(|source| lifecycle_error(StoreOperation::Shutdown, RocksDbMessageStoreError::Store(source)))?;
         Ok(())
     }
 
     pub fn close(&self) {
         if let Err(error) = self.rocksdb_index_service.flush_pending() {
-            warn!(error = %error, "failed to flush pending RocksDB index records before close");
+            warn!(
+                descriptor = ?error.descriptor().code(),
+                operation = ?error.operation(),
+                component = ?error.component(),
+                source_present = std::error::Error::source(&error).is_some(),
+                "failed to flush pending RocksDB index records before close"
+            );
         }
         if let Some(timer_service) = self.rocksdb_timer_service.as_ref() {
             if let Err(error) = timer_service.flush_pending() {
-                warn!(error = %error, "failed to flush pending RocksDB timer records before close");
+                warn!(
+                    descriptor = ?error.descriptor().code(),
+                    operation = ?error.operation(),
+                    component = ?error.component(),
+                    source_present = std::error::Error::source(&error).is_some(),
+                    "failed to flush pending RocksDB timer records before close"
+                );
             }
         }
         if let Some(trans_service) = self.rocksdb_trans_service.as_ref() {
             if let Err(error) = trans_service.flush_pending() {
-                warn!(error = %error, "failed to flush pending RocksDB transaction records before close");
+                warn!(
+                    descriptor = ?error.descriptor().code(),
+                    operation = ?error.operation(),
+                    component = ?error.component(),
+                    source_present = std::error::Error::source(&error).is_some(),
+                    "failed to flush pending RocksDB transaction records before close"
+                );
             }
         }
         self.rocksdb_store.close();
         self.message_rocksdb_storage.store().close();
     }
 
-    pub fn flush_derived(&self) -> Result<(), RocksDbMessageStoreError> {
+    pub fn flush_derived(&self) -> Result<(), StoreError> {
         self.rocksdb_index_service.flush_pending()?;
-        self.rocksdb_store.flush()?;
-        self.message_rocksdb_storage.store().flush()?;
+        self.rocksdb_store.flush(rocketmq_store_api::StoreOperation::Flush)?;
+        self.message_rocksdb_storage.store().flush(StoreOperation::Flush)?;
         Ok(())
     }
 
-    pub fn max_offset(&self, topic: &str, queue_id: i32) -> Result<i64, RocksDbMessageStoreError> {
-        Ok(self
-            .consume_queue_store
-            .get_max_offset_in_queue(topic.to_string(), queue_id)?)
+    pub fn max_offset(&self, topic: &str, queue_id: i32) -> Result<i64, StoreError> {
+        self.consume_queue_store
+            .get_max_offset_in_queue(topic.to_string(), queue_id)
     }
 
-    pub fn min_offset(&self, topic: &str, queue_id: i32) -> Result<i64, RocksDbMessageStoreError> {
-        Ok(self
-            .consume_queue_store
-            .get_min_offset_in_queue(topic.to_string(), queue_id)?)
+    pub fn min_offset(&self, topic: &str, queue_id: i32) -> Result<i64, StoreError> {
+        self.consume_queue_store
+            .get_min_offset_in_queue(topic.to_string(), queue_id)
     }
 
     pub fn consume_queue_value(
@@ -363,11 +508,19 @@ impl RocksDbDerivedStore {
         topic: &str,
         queue_id: i32,
         offset: i64,
-    ) -> Result<Option<ConsumeQueueValue>, RocksDbMessageStoreError> {
+    ) -> Result<Option<ConsumeQueueValue>, StoreError> {
+        self.consume_queue_value_with_operation(StoreOperation::Read, topic, queue_id, offset)
+    }
+
+    fn consume_queue_value_with_operation(
+        &self,
+        operation: StoreOperation,
+        topic: &str,
+        queue_id: i32,
+        offset: i64,
+    ) -> Result<Option<ConsumeQueueValue>, StoreError> {
         self.consume_queue_store
-            .get(topic.to_string(), queue_id, offset)?
-            .map(|value| ConsumeQueueValue::decode(value.as_ref()).map_err(Into::into))
-            .transpose()
+            .get_value_with_operation(operation, topic.to_string(), queue_id, offset)
     }
 
     pub fn offset_by_time(
@@ -376,7 +529,7 @@ impl RocksDbDerivedStore {
         queue_id: i32,
         timestamp: i64,
         boundary: RocksDbTimeBoundary,
-    ) -> Result<i64, RocksDbMessageStoreError> {
+    ) -> Result<i64, StoreError> {
         let min_offset = self.min_offset(topic, queue_id)?;
         let max_offset = self.max_offset(topic, queue_id)?;
         if max_offset <= min_offset {
@@ -388,7 +541,9 @@ impl RocksDbDerivedStore {
         let mut lower = max_offset;
         while low <= high {
             let middle = low + (high - low) / 2;
-            let Some(value) = self.consume_queue_value(topic, queue_id, middle)? else {
+            let Some(value) =
+                self.consume_queue_value_with_operation(StoreOperation::QueryOffset, topic, queue_id, middle)?
+            else {
                 return Ok(0);
             };
             if value.msg_store_time >= timestamp {
@@ -407,7 +562,9 @@ impl RocksDbDerivedStore {
         let mut upper = None;
         while low <= high {
             let middle = low + (high - low) / 2;
-            let Some(value) = self.consume_queue_value(topic, queue_id, middle)? else {
+            let Some(value) =
+                self.consume_queue_value_with_operation(StoreOperation::QueryOffset, topic, queue_id, middle)?
+            else {
                 return Ok(0);
             };
             if value.msg_store_time <= timestamp {
@@ -420,21 +577,21 @@ impl RocksDbDerivedStore {
         Ok(upper.unwrap_or(0))
     }
 
-    pub fn topic_queue_offsets(&self) -> Result<HashMap<(String, i32), i64>, RocksDbMessageStoreError> {
-        Ok(self.consume_queue_store.max_offsets_by_topic_queue()?)
+    pub fn topic_queue_offsets(&self) -> Result<HashMap<(String, i32), i64>, StoreError> {
+        self.consume_queue_store.max_offsets_by_topic_queue()
     }
 
-    pub fn delete_topic(&self, topic: &str) -> Result<(), RocksDbMessageStoreError> {
+    pub fn delete_topic(&self, topic: &str) -> Result<(), StoreError> {
         self.consume_queue_store.destroy_topic(topic)?;
         Ok(())
     }
 
-    pub fn truncate_dirty(&self, physical_offset: i64) -> Result<(), RocksDbMessageStoreError> {
+    pub fn truncate_dirty(&self, physical_offset: i64) -> Result<(), StoreError> {
         self.consume_queue_store.truncate_dirty(physical_offset)?;
         Ok(())
     }
 
-    pub fn clean_expired(&self, min_physical_offset: i64) -> Result<(), RocksDbMessageStoreError> {
+    pub fn clean_expired(&self, min_physical_offset: i64) -> Result<(), StoreError> {
         self.consume_queue_store
             .clean_expired_background(&self.runtime_scope, min_physical_offset)?;
         Ok(())
@@ -450,7 +607,7 @@ impl RocksDbDerivedStore {
         end: i64,
         last_key: Option<&str>,
         max_query_days: usize,
-    ) -> Result<(Vec<i64>, i64, i64), RocksDbMessageStoreError> {
+    ) -> Result<(Vec<i64>, i64, i64), StoreError> {
         let (begin, end) = normalize_index_query_time_range(begin, end, max_query_days);
         let mut offsets = self.message_rocksdb_storage.query_offsets_for_index(
             topic,
@@ -473,28 +630,28 @@ impl RocksDbDerivedStore {
             )?;
         }
         offsets.sort_unstable();
-        let last_timestamp = self.message_rocksdb_storage.get_last_store_timestamp_for_index()?;
+        let last_timestamp = self
+            .message_rocksdb_storage
+            .get_last_store_timestamp_for_index(StoreOperation::QueryOffset)?;
         let last_offset = self
             .message_rocksdb_storage
-            .get_last_offset_py(RocksDbColumnFamily::Default.name())?;
+            .get_last_offset_py(StoreOperation::QueryOffset, RocksDbColumnFamily::Default.name())?;
         Ok((offsets, last_timestamp, last_offset))
     }
 }
 
 impl StoreLifecycle for RocksDbDerivedStore {
-    async fn load(&mut self) -> Result<bool, ApiStoreError> {
+    async fn load(&mut self) -> Result<bool, StoreError> {
         Ok(true)
     }
 
-    async fn start(&mut self) -> Result<(), ApiStoreError> {
+    async fn start(&mut self) -> Result<(), StoreError> {
         self.start_maintenance();
         Ok(())
     }
 
-    async fn shutdown(&mut self) -> Result<(), ApiStoreError> {
-        self.shutdown_maintenance()
-            .await
-            .map_err(|error| lifecycle_error(StoreOperation::Shutdown, error))?;
+    async fn shutdown(&mut self) -> Result<(), StoreError> {
+        self.shutdown_maintenance().await?;
         self.close();
         Ok(())
     }
@@ -511,20 +668,18 @@ fn rocksdb_failure_descriptor(operation: StoreOperation) -> &'static rocketmq_er
     }
 }
 
-fn lifecycle_error(operation: StoreOperation, error: RocksDbMessageStoreError) -> ApiStoreError {
+fn lifecycle_error(operation: StoreOperation, error: RocksDbMessageStoreError) -> StoreError {
     match error {
-        RocksDbMessageStoreError::Config(detail) => {
-            ApiStoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
-                .in_component(StoreComponent::Configuration)
-                .with_detail(detail.clone())
-                .with_source(RocksDbMessageStoreError::Config(detail))
-        }
-        RocksDbMessageStoreError::Backend { source } => {
-            ApiStoreError::new(rocksdb_failure_descriptor(operation), operation)
-                .in_component(StoreComponent::RocksDb)
-                .with_source(source)
-        }
-        RocksDbMessageStoreError::Local { source } => source,
+        RocksDbMessageStoreError::Violation(_) => StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
+            .in_component(StoreComponent::Configuration),
+        RocksDbMessageStoreError::Native(source) => StoreError::new(rocksdb_failure_descriptor(operation), operation)
+            .in_component(StoreComponent::RocksDb)
+            .with_source(source),
+        RocksDbMessageStoreError::Runtime(source) => crate::error::runtime_error(operation, source),
+        RocksDbMessageStoreError::Io(source) => StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, operation)
+            .in_component(StoreComponent::RocksDb)
+            .with_source(source),
+        RocksDbMessageStoreError::Store(source) => source,
     }
 }
 
@@ -554,7 +709,7 @@ impl RocksDbMessageStoreRoot {
         request: RocksDbReadRequest<'_>,
         mut cq_filter: CqFilter,
         mut message_filter: MessageFilter,
-    ) -> Result<RocksDbReadResult<L::Selection>, RocksDbMessageStoreError>
+    ) -> Result<RocksDbReadResult<L::Selection>, StoreError>
     where
         L: WalPort,
         CqFilter: FnMut(i64) -> bool,
@@ -647,7 +802,7 @@ impl RocksDbMessageStoreRoot {
         end: i64,
         last_key: Option<&str>,
         max_query_days: usize,
-    ) -> Result<RocksDbIndexLookup<L::Selection>, RocksDbMessageStoreError>
+    ) -> Result<RocksDbIndexLookup<L::Selection>, StoreError>
     where
         L: WalPort,
     {
@@ -681,76 +836,5 @@ fn normalize_index_query_time_range(begin: i64, end: i64, max_query_days: usize)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("private local source")]
-    struct LocalCause;
-
-    #[test]
-    fn normalize_index_query_time_range_uses_configured_query_days() {
-        let before = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should follow Unix epoch")
-            .as_millis() as i64;
-        let (begin, end) = normalize_index_query_time_range(0, i64::MAX, 2);
-        let after = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should follow Unix epoch")
-            .as_millis() as i64;
-        assert!(end >= before && end <= after);
-        assert_eq!(end - begin, 2 * MILLIS_PER_DAY);
-    }
-
-    #[test]
-    fn local_store_error_is_forwarded_without_a_second_storage_wrapper() {
-        let source = ApiStoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Append)
-            .in_component(StoreComponent::CommitLog)
-            .with_source(LocalCause);
-
-        let error = lifecycle_error(StoreOperation::Shutdown, RocksDbMessageStoreError::Local { source });
-
-        assert_eq!(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, error.descriptor());
-        assert_eq!(StoreOperation::Append, error.operation());
-        assert_eq!(StoreComponent::CommitLog, error.component());
-        assert!(std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<LocalCause>())
-            .is_some());
-    }
-
-    #[test]
-    fn lifecycle_leaf_mapping_retains_descriptor_context_source_and_redaction() {
-        let config = lifecycle_error(
-            StoreOperation::Start,
-            RocksDbMessageStoreError::Config("private configuration path".to_string()),
-        );
-        assert_eq!(&rocketmq_error::STORAGE_REQUEST_INVALID, config.descriptor());
-        assert_eq!(StoreOperation::Start, config.operation());
-        assert_eq!(StoreComponent::Configuration, config.component());
-        assert!(std::error::Error::source(&config)
-            .and_then(|source| source.downcast_ref::<RocksDbMessageStoreError>())
-            .is_some());
-        assert!(config
-            .public_view()
-            .expect("valid public view")
-            .fields()
-            .next()
-            .is_none());
-        assert!(!config.to_string().contains("private configuration"));
-        assert!(!format!("{config:?}").contains("private configuration"));
-
-        let backend = lifecycle_error(
-            StoreOperation::Shutdown,
-            RocksDbMessageStoreError::Backend {
-                source: RocketMQError::internal("rocksdb-test", LocalCause),
-            },
-        );
-        assert_eq!(&rocketmq_error::STORAGE_IO_FAILED, backend.descriptor());
-        assert_eq!(StoreOperation::Shutdown, backend.operation());
-        assert_eq!(StoreComponent::RocksDb, backend.component());
-        assert!(std::error::Error::source(&backend)
-            .and_then(|source| source.downcast_ref::<RocketMQError>())
-            .is_some());
-    }
-}
+#[path = "message_store/tests.rs"]
+mod tests;

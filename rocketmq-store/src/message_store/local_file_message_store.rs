@@ -1784,6 +1784,7 @@ impl BackendOps for LocalFileMessageStore {
                         );
                     }
                     if let Ok(ready) = materializer.timeline().store().get_cf(
+                        rocketmq_store_api::StoreOperation::Read,
                         rocketmq_store_rocksdb::timer::READY_CF,
                         &rocketmq_store_rocksdb::timer::codec::encode_ready_key(entry.key),
                     ) {

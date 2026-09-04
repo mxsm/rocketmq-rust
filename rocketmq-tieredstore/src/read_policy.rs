@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::ErrorKind;
+use rocketmq_store_api::StoreError;
 
 use crate::TieredStorageLevel;
 
@@ -99,17 +99,21 @@ impl TieredReadPolicy {
         }
     }
 
-    pub const fn classify_error(error_kind: ErrorKind, local_available: bool) -> TieredReadErrorDisposition {
-        match error_kind {
-            ErrorKind::QueryNotFound | ErrorKind::MessageLookupFailed | ErrorKind::QueueNotExist => {
-                TieredReadErrorDisposition::Miss
-            }
-            ErrorKind::Timeout | ErrorKind::Network | ErrorKind::StorageReadFailed | ErrorKind::Io
-                if local_available =>
-            {
-                TieredReadErrorDisposition::FallbackToLocal
-            }
-            _ => TieredReadErrorDisposition::Fatal,
+    pub fn classify_error(error: &StoreError, local_available: bool) -> TieredReadErrorDisposition {
+        if local_available
+            && matches!(
+                error.descriptor(),
+                descriptor
+                    if descriptor == &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
+                        || descriptor == &rocketmq_error::STORAGE_OPERATION_TIMED_OUT
+                        || descriptor == &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED
+                        || descriptor == &rocketmq_error::STORAGE_READ_FAILED
+                        || descriptor == &rocketmq_error::STORAGE_IO_FAILED
+            )
+        {
+            TieredReadErrorDisposition::FallbackToLocal
+        } else {
+            TieredReadErrorDisposition::Fatal
         }
     }
 }

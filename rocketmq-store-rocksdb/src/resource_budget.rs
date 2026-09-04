@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 
 use crate::config::RocksDbConfig;
 
@@ -35,20 +35,12 @@ impl RocksDbResourceBudget {
     /// # Errors
     ///
     /// Returns a configuration error when either budget is zero.
-    pub fn new(block_cache_budget_bytes: usize, write_buffer_budget_bytes: usize) -> Result<Self, RocketMQError> {
+    pub fn new(block_cache_budget_bytes: usize, write_buffer_budget_bytes: usize) -> Result<Self, StoreError> {
         if block_cache_budget_bytes == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.block_cache_budget_bytes",
-                value: block_cache_budget_bytes.to_string(),
-                reason: "shared block-cache budget must be greater than zero".to_string(),
-            });
+            return Err(crate::error::request_invalid(rocketmq_store_api::StoreOperation::Load));
         }
         if write_buffer_budget_bytes == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.write_buffer_budget_bytes",
-                value: write_buffer_budget_bytes.to_string(),
-                reason: "shared write-buffer budget must be greater than zero".to_string(),
-            });
+            return Err(crate::error::request_invalid(rocketmq_store_api::StoreOperation::Load));
         }
 
         let block_cache = ::rocksdb::Cache::new_lru_cache(block_cache_budget_bytes);
@@ -62,7 +54,7 @@ impl RocksDbResourceBudget {
         })
     }
 
-    pub(crate) fn from_config(config: &RocksDbConfig) -> Result<Self, RocketMQError> {
+    pub(crate) fn from_config(config: &RocksDbConfig) -> Result<Self, StoreError> {
         Self::new(config.block_cache_budget_bytes, config.write_buffer_budget_bytes)
     }
 

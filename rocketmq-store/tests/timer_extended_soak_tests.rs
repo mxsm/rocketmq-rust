@@ -50,7 +50,9 @@ fn entry(sequence: u64) -> TimelineIndexEntry {
 fn one_hundred_thousand_records_span_the_full_four_hundred_day_horizon() {
     const RECORDS: u64 = 100_000;
     let root = tempfile::tempdir().expect("soak Timeline root");
-    let timeline = RocksDbTimelineIndex::open(root.path()).expect("open soak Timeline");
+    let timeline = RocksDbTimelineIndex::open(root.path())
+        .expect("open soak Timeline")
+        .expect("valid soak Timeline configuration");
     for start in (0..RECORDS).step_by(1_000) {
         let end = (start + 1_000).min(RECORDS);
         let batch = (start..end).map(entry).collect::<Vec<_>>();
