@@ -2109,4 +2109,7 @@ mod tests {
             .unwrap()
             .unwrap();
     }
+
+    #[cfg(feature = "write-tools")]
+    include!("transport/acceptance_matrix.rs");
 }
