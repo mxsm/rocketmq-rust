@@ -42,9 +42,10 @@ pub(super) async fn supervise_session(
         _ = request_cancellation.cancelled() => return Err(ControlError::cancelled()),
         _ = owner_cancellation.cancelled() => return Err(ControlError::cancelled()),
     };
+    // The adapter boundary is untrusted; its errors may contain credentials, endpoints, or payloads.
     let mut session = match opened {
         Ok(Ok(Ok(session))) => session,
-        Ok(Ok(Err(error))) => return Err(error),
+        Ok(Ok(Err(error))) => return Err(ControlError::canonical(error.code())),
         Ok(Err(_)) => return Err(ControlError::execution_failed()),
         Err(_) => return Err(ControlError::timeout()),
     };
@@ -54,7 +55,8 @@ pub(super) async fn supervise_session(
         _ = owner_cancellation.cancelled() => Err(ControlError::cancelled()),
         result = tokio::time::timeout_at(deadline, AssertUnwindSafe(session.run(request)).catch_unwind()) => {
             match result {
-                Ok(Ok(result)) => result,
+                Ok(Ok(Ok(response))) => Ok(response),
+                Ok(Ok(Err(error))) => Err(ControlError::canonical(error.code())),
                 Ok(Err(_)) => Err(ControlError::execution_failed()),
                 Err(_) => Err(ControlError::timeout()),
             }

@@ -114,6 +114,30 @@ impl ControlError {
         self.code
     }
 
+    #[cfg(feature = "write-tools")]
+    pub(crate) const fn canonical(code: ControlErrorCode) -> Self {
+        match code {
+            ControlErrorCode::InvalidConfig => Self::invalid_config(),
+            ControlErrorCode::RequestRejected => Self::request_rejected(),
+            ControlErrorCode::Unauthorized => Self::unauthorized(),
+            ControlErrorCode::PermissionDenied => Self::permission_denied(),
+            ControlErrorCode::ClusterNotAllowed => Self::cluster_not_allowed(),
+            ControlErrorCode::OperationNotAllowed => Self::operation_not_allowed(),
+            ControlErrorCode::MutationDisabled => Self::mutation_disabled(),
+            ControlErrorCode::OperationUnavailable => Self::operation_unavailable(),
+            ControlErrorCode::ConfirmationRequired => Self::confirmation_required(),
+            ControlErrorCode::InvalidArgument => Self::invalid_argument(),
+            ControlErrorCode::AuditUnavailable => Self::audit_unavailable(),
+            ControlErrorCode::PreconditionConflict => Self::precondition_conflict(),
+            ControlErrorCode::PartialApply => Self::partial_apply(),
+            ControlErrorCode::VerificationFailed => Self::verification_failed(),
+            ControlErrorCode::Timeout => Self::timeout(),
+            ControlErrorCode::Cancelled => Self::cancelled(),
+            ControlErrorCode::ExecutionFailed => Self::execution_failed(),
+            ControlErrorCode::ShutdownFailed => Self::shutdown_failed(),
+        }
+    }
+
     pub const fn envelope(&self) -> ControlErrorEnvelope {
         ControlErrorEnvelope {
             schema_version: ControlErrorSchemaVersion::V2,

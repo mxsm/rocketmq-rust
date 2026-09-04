@@ -284,6 +284,9 @@ impl ToolRuntime {
                 Err(error) if error.code() == crate::error::ControlErrorCode::PreconditionConflict => {
                     (AuditResult::Conflict, Some(error.code()))
                 }
+                Err(error) if error.code() == crate::error::ControlErrorCode::PartialApply => {
+                    (AuditResult::Partial, Some(error.code()))
+                }
                 Err(error) => (AuditResult::Failed, Some(error.code())),
             };
             let terminal = audit.terminal(&task_invocation, audit_result, error_code).await;

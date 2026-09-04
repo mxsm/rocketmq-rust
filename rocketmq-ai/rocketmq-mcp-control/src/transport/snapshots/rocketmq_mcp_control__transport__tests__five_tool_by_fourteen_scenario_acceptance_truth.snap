@@ -1,0 +1,2057 @@
+---
+source: src/transport/acceptance_matrix.rs
+expression: exact_contract
+---
+{
+  "broker/audit": {
+    "code": "audit_unavailable",
+    "message": "reliable audit storage is unavailable",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "broker/bounds": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "broker/cluster-denied": {
+    "code": "cluster_not_allowed",
+    "message": "mutation cluster is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "broker/conflict": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "autoCreateSubscriptionGroup": true,
+        "autoCreateTopicEnable": true,
+        "brokerPermission": 6,
+        "defaultTopicQueueNums": 8,
+        "generation": 7,
+        "messageIndexEnable": true,
+        "traceTopicEnable": false
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "precondition_conflict",
+    "mode": "execute",
+    "operation": "broker_config_patch",
+    "requested": {
+      "autoCreateSubscriptionGroup": null,
+      "autoCreateTopicEnable": null,
+      "brokerPermission": null,
+      "defaultTopicQueueNums": null,
+      "messageIndexEnable": null,
+      "traceTopicEnable": true
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "conflict",
+    "target": {
+      "broker_name": "broker-a"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "autoCreateSubscriptionGroup": true,
+          "autoCreateTopicEnable": true,
+          "brokerPermission": 6,
+          "defaultTopicQueueNums": 8,
+          "generation": 7,
+          "messageIndexEnable": true,
+          "traceTopicEnable": false
+        },
+        "broker_name": "broker-a",
+        "changed": false,
+        "failure": "conflict",
+        "persistence": "not_required",
+        "requested": {
+          "autoCreateSubscriptionGroup": null,
+          "autoCreateTopicEnable": null,
+          "brokerPermission": null,
+          "defaultTopicQueueNums": null,
+          "messageIndexEnable": null,
+          "traceTopicEnable": true
+        },
+        "retryable": false,
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "broker/dry-run": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "autoCreateSubscriptionGroup": true,
+        "autoCreateTopicEnable": true,
+        "brokerPermission": 6,
+        "defaultTopicQueueNums": 8,
+        "generation": 7,
+        "messageIndexEnable": true,
+        "traceTopicEnable": false
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "dry_run",
+    "operation": "broker_config_patch",
+    "requested": {
+      "autoCreateSubscriptionGroup": null,
+      "autoCreateTopicEnable": null,
+      "brokerPermission": null,
+      "defaultTopicQueueNums": null,
+      "messageIndexEnable": null,
+      "traceTopicEnable": true
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "planned",
+    "target": {
+      "broker_name": "broker-a"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "autoCreateSubscriptionGroup": true,
+          "autoCreateTopicEnable": true,
+          "brokerPermission": 6,
+          "defaultTopicQueueNums": 8,
+          "generation": 7,
+          "messageIndexEnable": true,
+          "traceTopicEnable": false
+        },
+        "broker_name": "broker-a",
+        "changed": false,
+        "failure": null,
+        "persistence": "not_required",
+        "requested": {
+          "autoCreateSubscriptionGroup": null,
+          "autoCreateTopicEnable": null,
+          "brokerPermission": null,
+          "defaultTopicQueueNums": null,
+          "messageIndexEnable": null,
+          "traceTopicEnable": true
+        },
+        "retryable": false,
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "broker/execute": {
+    "after": {
+      "broker-a": {
+        "autoCreateSubscriptionGroup": true,
+        "autoCreateTopicEnable": true,
+        "brokerPermission": 6,
+        "defaultTopicQueueNums": 8,
+        "generation": 7,
+        "messageIndexEnable": true,
+        "traceTopicEnable": true
+      }
+    },
+    "before": {
+      "broker-a": {
+        "autoCreateSubscriptionGroup": true,
+        "autoCreateTopicEnable": true,
+        "brokerPermission": 6,
+        "defaultTopicQueueNums": 8,
+        "generation": 7,
+        "messageIndexEnable": true,
+        "traceTopicEnable": false
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "execute",
+    "operation": "broker_config_patch",
+    "requested": {
+      "autoCreateSubscriptionGroup": null,
+      "autoCreateTopicEnable": null,
+      "brokerPermission": null,
+      "defaultTopicQueueNums": null,
+      "messageIndexEnable": null,
+      "traceTopicEnable": true
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "applied",
+    "target": {
+      "broker_name": "broker-a"
+    },
+    "targets": [
+      {
+        "after": {
+          "autoCreateSubscriptionGroup": true,
+          "autoCreateTopicEnable": true,
+          "brokerPermission": 6,
+          "defaultTopicQueueNums": 8,
+          "generation": 7,
+          "messageIndexEnable": true,
+          "traceTopicEnable": true
+        },
+        "applied": true,
+        "before": {
+          "autoCreateSubscriptionGroup": true,
+          "autoCreateTopicEnable": true,
+          "brokerPermission": 6,
+          "defaultTopicQueueNums": 8,
+          "generation": 7,
+          "messageIndexEnable": true,
+          "traceTopicEnable": false
+        },
+        "broker_name": "broker-a",
+        "changed": true,
+        "failure": null,
+        "persistence": "persisted",
+        "requested": {
+          "autoCreateSubscriptionGroup": null,
+          "autoCreateTopicEnable": null,
+          "brokerPermission": null,
+          "defaultTopicQueueNums": null,
+          "messageIndexEnable": null,
+          "traceTopicEnable": true
+        },
+        "retryable": false,
+        "verification": "verified"
+      }
+    ],
+    "warnings": []
+  },
+  "broker/no-confirm": {
+    "code": "confirmation_required",
+    "message": "explicit mutation confirmation is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "broker/no-reason": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "broker/no-scope": {
+    "code": "permission_denied",
+    "message": "write permission is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "broker/operation-denied": {
+    "code": "operation_not_allowed",
+    "message": "mutation operation is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "broker/partial": {
+    "accepted_argument": "broker_name",
+    "applicability": "not_applicable",
+    "contract": "broker_config_patch_is_single_target",
+    "rejected_argument": "broker_names"
+  },
+  "broker/postread": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "autoCreateSubscriptionGroup": true,
+        "autoCreateTopicEnable": true,
+        "brokerPermission": 6,
+        "defaultTopicQueueNums": 8,
+        "generation": 7,
+        "messageIndexEnable": true,
+        "traceTopicEnable": false
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "verification_failed",
+    "mode": "execute",
+    "operation": "broker_config_patch",
+    "requested": {
+      "autoCreateSubscriptionGroup": null,
+      "autoCreateTopicEnable": null,
+      "brokerPermission": null,
+      "defaultTopicQueueNums": null,
+      "messageIndexEnable": null,
+      "traceTopicEnable": true
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "broker_name": "broker-a"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": true,
+        "before": {
+          "autoCreateSubscriptionGroup": true,
+          "autoCreateTopicEnable": true,
+          "brokerPermission": 6,
+          "defaultTopicQueueNums": 8,
+          "generation": 7,
+          "messageIndexEnable": true,
+          "traceTopicEnable": false
+        },
+        "broker_name": "broker-a",
+        "changed": true,
+        "failure": "verification_failed",
+        "persistence": "persisted",
+        "requested": {
+          "autoCreateSubscriptionGroup": null,
+          "autoCreateTopicEnable": null,
+          "brokerPermission": null,
+          "defaultTopicQueueNums": null,
+          "messageIndexEnable": null,
+          "traceTopicEnable": true
+        },
+        "retryable": true,
+        "verification": "failed"
+      }
+    ],
+    "warnings": []
+  },
+  "broker/shutdown": {
+    "code": "shutdown_failed",
+    "message": "mutation session shutdown failed",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "broker/single-failure": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "autoCreateSubscriptionGroup": true,
+        "autoCreateTopicEnable": true,
+        "brokerPermission": 6,
+        "defaultTopicQueueNums": 8,
+        "generation": 7,
+        "messageIndexEnable": true,
+        "traceTopicEnable": false
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "execution_failed",
+    "mode": "execute",
+    "operation": "broker_config_patch",
+    "requested": {
+      "autoCreateSubscriptionGroup": null,
+      "autoCreateTopicEnable": null,
+      "brokerPermission": null,
+      "defaultTopicQueueNums": null,
+      "messageIndexEnable": null,
+      "traceTopicEnable": true
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "broker_name": "broker-a"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "autoCreateSubscriptionGroup": true,
+          "autoCreateTopicEnable": true,
+          "brokerPermission": 6,
+          "defaultTopicQueueNums": 8,
+          "generation": 7,
+          "messageIndexEnable": true,
+          "traceTopicEnable": false
+        },
+        "broker_name": "broker-a",
+        "changed": false,
+        "failure": "unavailable",
+        "persistence": "not_required",
+        "requested": {
+          "autoCreateSubscriptionGroup": null,
+          "autoCreateTopicEnable": null,
+          "brokerPermission": null,
+          "defaultTopicQueueNums": null,
+          "messageIndexEnable": null,
+          "traceTopicEnable": true
+        },
+        "retryable": true,
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "group/audit": {
+    "code": "audit_unavailable",
+    "message": "reliable audit storage is unavailable",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "group/bounds": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "group/cluster-denied": {
+    "code": "cluster_not_allowed",
+    "message": "mutation cluster is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "group/conflict": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "precondition_conflict",
+    "mode": "execute",
+    "operation": "consumer_group_upsert",
+    "requested": {
+      "broker_id": 0,
+      "consume_broadcast_enable": false,
+      "consume_enable": true,
+      "consume_from_min_enable": false,
+      "consume_message_orderly": false,
+      "consume_timeout_minute": 15,
+      "group_sys_flag": 0,
+      "notify_consumer_ids_changed_enable": true,
+      "retry_max_times": 16,
+      "retry_queue_nums": 1,
+      "which_broker_when_consume_slowly": 1
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "conflict",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": false,
+        "failure": "conflict",
+        "persistence": "not_required",
+        "requested": {
+          "broker_id": 0,
+          "consume_broadcast_enable": false,
+          "consume_enable": true,
+          "consume_from_min_enable": false,
+          "consume_message_orderly": false,
+          "consume_timeout_minute": 15,
+          "group_sys_flag": 0,
+          "notify_consumer_ids_changed_enable": true,
+          "retry_max_times": 16,
+          "retry_queue_nums": 1,
+          "which_broker_when_consume_slowly": 1
+        },
+        "retryable": false,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "group/dry-run": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "dry_run",
+    "operation": "consumer_group_upsert",
+    "requested": {
+      "broker_id": 0,
+      "consume_broadcast_enable": false,
+      "consume_enable": true,
+      "consume_from_min_enable": false,
+      "consume_message_orderly": false,
+      "consume_timeout_minute": 15,
+      "group_sys_flag": 0,
+      "notify_consumer_ids_changed_enable": true,
+      "retry_max_times": 16,
+      "retry_queue_nums": 1,
+      "which_broker_when_consume_slowly": 1
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "planned",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": false,
+        "failure": null,
+        "persistence": "not_required",
+        "requested": {
+          "broker_id": 0,
+          "consume_broadcast_enable": false,
+          "consume_enable": true,
+          "consume_from_min_enable": false,
+          "consume_message_orderly": false,
+          "consume_timeout_minute": 15,
+          "group_sys_flag": 0,
+          "notify_consumer_ids_changed_enable": true,
+          "retry_max_times": 16,
+          "retry_queue_nums": 1,
+          "which_broker_when_consume_slowly": 1
+        },
+        "retryable": false,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "group/execute": {
+    "after": {
+      "broker-a": {
+        "kind": "present",
+        "value": {
+          "broker_id": 0,
+          "consume_broadcast_enable": false,
+          "consume_enable": true,
+          "consume_from_min_enable": false,
+          "consume_message_orderly": false,
+          "consume_timeout_minute": 15,
+          "group_sys_flag": 0,
+          "notify_consumer_ids_changed_enable": true,
+          "retry_max_times": 16,
+          "retry_queue_nums": 1,
+          "which_broker_when_consume_slowly": 1
+        },
+        "version": 1
+      }
+    },
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "execute",
+    "operation": "consumer_group_upsert",
+    "requested": {
+      "broker_id": 0,
+      "consume_broadcast_enable": false,
+      "consume_enable": true,
+      "consume_from_min_enable": false,
+      "consume_message_orderly": false,
+      "consume_timeout_minute": 15,
+      "group_sys_flag": 0,
+      "notify_consumer_ids_changed_enable": true,
+      "retry_max_times": 16,
+      "retry_queue_nums": 1,
+      "which_broker_when_consume_slowly": 1
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "applied",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers"
+    },
+    "targets": [
+      {
+        "after": {
+          "kind": "present",
+          "value": {
+            "broker_id": 0,
+            "consume_broadcast_enable": false,
+            "consume_enable": true,
+            "consume_from_min_enable": false,
+            "consume_message_orderly": false,
+            "consume_timeout_minute": 15,
+            "group_sys_flag": 0,
+            "notify_consumer_ids_changed_enable": true,
+            "retry_max_times": 16,
+            "retry_queue_nums": 1,
+            "which_broker_when_consume_slowly": 1
+          },
+          "version": 1
+        },
+        "applied": true,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": true,
+        "failure": null,
+        "persistence": "persisted",
+        "requested": {
+          "broker_id": 0,
+          "consume_broadcast_enable": false,
+          "consume_enable": true,
+          "consume_from_min_enable": false,
+          "consume_message_orderly": false,
+          "consume_timeout_minute": 15,
+          "group_sys_flag": 0,
+          "notify_consumer_ids_changed_enable": true,
+          "retry_max_times": 16,
+          "retry_queue_nums": 1,
+          "which_broker_when_consume_slowly": 1
+        },
+        "retryable": false,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "verified"
+      }
+    ],
+    "warnings": []
+  },
+  "group/no-confirm": {
+    "code": "confirmation_required",
+    "message": "explicit mutation confirmation is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "group/no-reason": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "group/no-scope": {
+    "code": "permission_denied",
+    "message": "write permission is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "group/operation-denied": {
+    "code": "operation_not_allowed",
+    "message": "mutation operation is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "group/partial": {
+    "after": {
+      "broker-a": {
+        "kind": "present",
+        "value": {
+          "broker_id": 0,
+          "consume_broadcast_enable": false,
+          "consume_enable": true,
+          "consume_from_min_enable": false,
+          "consume_message_orderly": false,
+          "consume_timeout_minute": 15,
+          "group_sys_flag": 0,
+          "notify_consumer_ids_changed_enable": true,
+          "retry_max_times": 16,
+          "retry_queue_nums": 1,
+          "which_broker_when_consume_slowly": 1
+        },
+        "version": 1
+      }
+    },
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      },
+      "broker-b": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "partial_apply",
+    "mode": "execute",
+    "operation": "consumer_group_upsert",
+    "requested": {
+      "broker_id": 0,
+      "consume_broadcast_enable": false,
+      "consume_enable": true,
+      "consume_from_min_enable": false,
+      "consume_message_orderly": false,
+      "consume_timeout_minute": 15,
+      "group_sys_flag": 0,
+      "notify_consumer_ids_changed_enable": true,
+      "retry_max_times": 16,
+      "retry_queue_nums": 1,
+      "which_broker_when_consume_slowly": 1
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "partial",
+    "target": {
+      "brokers": [
+        "broker-a",
+        "broker-b"
+      ],
+      "consumer_group": "orders_consumers"
+    },
+    "targets": [
+      {
+        "after": {
+          "kind": "present",
+          "value": {
+            "broker_id": 0,
+            "consume_broadcast_enable": false,
+            "consume_enable": true,
+            "consume_from_min_enable": false,
+            "consume_message_orderly": false,
+            "consume_timeout_minute": 15,
+            "group_sys_flag": 0,
+            "notify_consumer_ids_changed_enable": true,
+            "retry_max_times": 16,
+            "retry_queue_nums": 1,
+            "which_broker_when_consume_slowly": 1
+          },
+          "version": 1
+        },
+        "applied": true,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": true,
+        "failure": null,
+        "persistence": "persisted",
+        "requested": {
+          "broker_id": 0,
+          "consume_broadcast_enable": false,
+          "consume_enable": true,
+          "consume_from_min_enable": false,
+          "consume_message_orderly": false,
+          "consume_timeout_minute": 15,
+          "group_sys_flag": 0,
+          "notify_consumer_ids_changed_enable": true,
+          "retry_max_times": 16,
+          "retry_queue_nums": 1,
+          "which_broker_when_consume_slowly": 1
+        },
+        "retryable": false,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "verified"
+      },
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": false,
+        "failure": "unavailable",
+        "persistence": "not_required",
+        "requested": {
+          "broker_id": 0,
+          "consume_broadcast_enable": false,
+          "consume_enable": true,
+          "consume_from_min_enable": false,
+          "consume_message_orderly": false,
+          "consume_timeout_minute": 15,
+          "group_sys_flag": 0,
+          "notify_consumer_ids_changed_enable": true,
+          "retry_max_times": 16,
+          "retry_queue_nums": 1,
+          "which_broker_when_consume_slowly": 1
+        },
+        "retryable": true,
+        "target": {
+          "broker_name": "broker-b"
+        },
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "group/postread": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "verification_failed",
+    "mode": "execute",
+    "operation": "consumer_group_upsert",
+    "requested": {
+      "broker_id": 0,
+      "consume_broadcast_enable": false,
+      "consume_enable": true,
+      "consume_from_min_enable": false,
+      "consume_message_orderly": false,
+      "consume_timeout_minute": 15,
+      "group_sys_flag": 0,
+      "notify_consumer_ids_changed_enable": true,
+      "retry_max_times": 16,
+      "retry_queue_nums": 1,
+      "which_broker_when_consume_slowly": 1
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": true,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": true,
+        "failure": "verification_failed",
+        "persistence": "persisted",
+        "requested": {
+          "broker_id": 0,
+          "consume_broadcast_enable": false,
+          "consume_enable": true,
+          "consume_from_min_enable": false,
+          "consume_message_orderly": false,
+          "consume_timeout_minute": 15,
+          "group_sys_flag": 0,
+          "notify_consumer_ids_changed_enable": true,
+          "retry_max_times": 16,
+          "retry_queue_nums": 1,
+          "which_broker_when_consume_slowly": 1
+        },
+        "retryable": true,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "failed"
+      }
+    ],
+    "warnings": []
+  },
+  "group/shutdown": {
+    "code": "shutdown_failed",
+    "message": "mutation session shutdown failed",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "group/single-failure": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "execution_failed",
+    "mode": "execute",
+    "operation": "consumer_group_upsert",
+    "requested": {
+      "broker_id": 0,
+      "consume_broadcast_enable": false,
+      "consume_enable": true,
+      "consume_from_min_enable": false,
+      "consume_message_orderly": false,
+      "consume_timeout_minute": 15,
+      "group_sys_flag": 0,
+      "notify_consumer_ids_changed_enable": true,
+      "retry_max_times": 16,
+      "retry_queue_nums": 1,
+      "which_broker_when_consume_slowly": 1
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": false,
+        "failure": "unavailable",
+        "persistence": "not_required",
+        "requested": {
+          "broker_id": 0,
+          "consume_broadcast_enable": false,
+          "consume_enable": true,
+          "consume_from_min_enable": false,
+          "consume_message_orderly": false,
+          "consume_timeout_minute": 15,
+          "group_sys_flag": 0,
+          "notify_consumer_ids_changed_enable": true,
+          "retry_max_times": 16,
+          "retry_queue_nums": 1,
+          "which_broker_when_consume_slowly": 1
+        },
+        "retryable": true,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "mode/audit": {
+    "code": "audit_unavailable",
+    "message": "reliable audit storage is unavailable",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "mode/bounds": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "mode/cluster-denied": {
+    "code": "cluster_not_allowed",
+    "message": "mutation cluster is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "mode/conflict": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "mode": "pull",
+        "pop_share_queue_num": 0
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "precondition_conflict",
+    "mode": "execute",
+    "operation": "consumer_request_mode",
+    "requested": {
+      "mode": "pop",
+      "pop_share_queue_num": 4,
+      "timeout_millis": 12000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "conflict",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "mode": "pull",
+          "pop_share_queue_num": 0
+        },
+        "broker_name": "broker-a",
+        "changed": false,
+        "failure": "conflict",
+        "persistence": "not_required",
+        "requested": {
+          "mode": "pop",
+          "pop_share_queue_num": 4
+        },
+        "retryable": false,
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "mode/dry-run": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "mode": "pull",
+        "pop_share_queue_num": 0
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "dry_run",
+    "operation": "consumer_request_mode",
+    "requested": {
+      "mode": "pop",
+      "pop_share_queue_num": 4,
+      "timeout_millis": 12000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "planned",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "mode": "pull",
+          "pop_share_queue_num": 0
+        },
+        "broker_name": "broker-a",
+        "changed": false,
+        "failure": null,
+        "persistence": "not_required",
+        "requested": {
+          "mode": "pop",
+          "pop_share_queue_num": 4
+        },
+        "retryable": false,
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "mode/execute": {
+    "after": {
+      "broker-a": {
+        "mode": "pop",
+        "pop_share_queue_num": 4
+      }
+    },
+    "before": {
+      "broker-a": {
+        "mode": "pull",
+        "pop_share_queue_num": 0
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "execute",
+    "operation": "consumer_request_mode",
+    "requested": {
+      "mode": "pop",
+      "pop_share_queue_num": 4,
+      "timeout_millis": 12000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "applied",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": {
+          "mode": "pop",
+          "pop_share_queue_num": 4
+        },
+        "applied": true,
+        "before": {
+          "mode": "pull",
+          "pop_share_queue_num": 0
+        },
+        "broker_name": "broker-a",
+        "changed": true,
+        "failure": null,
+        "persistence": "persisted",
+        "requested": {
+          "mode": "pop",
+          "pop_share_queue_num": 4
+        },
+        "retryable": false,
+        "verification": "verified"
+      }
+    ],
+    "warnings": []
+  },
+  "mode/no-confirm": {
+    "code": "confirmation_required",
+    "message": "explicit mutation confirmation is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "mode/no-reason": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "mode/no-scope": {
+    "code": "permission_denied",
+    "message": "write permission is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "mode/operation-denied": {
+    "code": "operation_not_allowed",
+    "message": "mutation operation is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "mode/partial": {
+    "after": {
+      "broker-a": {
+        "mode": "pop",
+        "pop_share_queue_num": 4
+      },
+      "broker-b": null
+    },
+    "before": {
+      "broker-a": {
+        "mode": "pull",
+        "pop_share_queue_num": 0
+      },
+      "broker-b": {
+        "mode": "pull",
+        "pop_share_queue_num": 0
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "partial_apply",
+    "mode": "execute",
+    "operation": "consumer_request_mode",
+    "requested": {
+      "mode": "pop",
+      "pop_share_queue_num": 4,
+      "timeout_millis": 12000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "partial",
+    "target": {
+      "brokers": [
+        "broker-a",
+        "broker-b"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": {
+          "mode": "pop",
+          "pop_share_queue_num": 4
+        },
+        "applied": true,
+        "before": {
+          "mode": "pull",
+          "pop_share_queue_num": 0
+        },
+        "broker_name": "broker-a",
+        "changed": true,
+        "failure": null,
+        "persistence": "persisted",
+        "requested": {
+          "mode": "pop",
+          "pop_share_queue_num": 4
+        },
+        "retryable": false,
+        "verification": "verified"
+      },
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "mode": "pull",
+          "pop_share_queue_num": 0
+        },
+        "broker_name": "broker-b",
+        "changed": false,
+        "failure": "unavailable",
+        "persistence": "not_required",
+        "requested": {
+          "mode": "pop",
+          "pop_share_queue_num": 4
+        },
+        "retryable": true,
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "mode/postread": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "mode": "pull",
+        "pop_share_queue_num": 0
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "verification_failed",
+    "mode": "execute",
+    "operation": "consumer_request_mode",
+    "requested": {
+      "mode": "pop",
+      "pop_share_queue_num": 4,
+      "timeout_millis": 12000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": true,
+        "before": {
+          "mode": "pull",
+          "pop_share_queue_num": 0
+        },
+        "broker_name": "broker-a",
+        "changed": true,
+        "failure": "verification_failed",
+        "persistence": "persisted",
+        "requested": {
+          "mode": "pop",
+          "pop_share_queue_num": 4
+        },
+        "retryable": true,
+        "verification": "failed"
+      }
+    ],
+    "warnings": []
+  },
+  "mode/shutdown": {
+    "code": "shutdown_failed",
+    "message": "mutation session shutdown failed",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "mode/single-failure": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "mode": "pull",
+        "pop_share_queue_num": 0
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "execution_failed",
+    "mode": "execute",
+    "operation": "consumer_request_mode",
+    "requested": {
+      "mode": "pop",
+      "pop_share_queue_num": 4,
+      "timeout_millis": 12000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "mode": "pull",
+          "pop_share_queue_num": 0
+        },
+        "broker_name": "broker-a",
+        "changed": false,
+        "failure": "unavailable",
+        "persistence": "not_required",
+        "requested": {
+          "mode": "pop",
+          "pop_share_queue_num": 4
+        },
+        "retryable": true,
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "offset/audit": {
+    "code": "audit_unavailable",
+    "message": "reliable audit storage is unavailable",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "offset/bounds": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "offset/cluster-denied": {
+    "code": "cluster_not_allowed",
+    "message": "mutation cluster is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "offset/conflict": {
+    "after": null,
+    "before": [
+      {
+        "broker_name": "broker-a",
+        "offset": 9,
+        "queue_id": 0
+      }
+    ],
+    "cluster": "cluster-a",
+    "error_code": "precondition_conflict",
+    "mode": "execute",
+    "operation": "consumer_offset_reset",
+    "requested": {
+      "force": false,
+      "timestamp": "2026-08-30T00:00:00Z",
+      "timestamp_millis": 1788048000000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "conflict",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": 9,
+        "broker_name": "broker-a",
+        "changed": false,
+        "delta": -5,
+        "failure": "conflict",
+        "planned": 4,
+        "queue_id": 0,
+        "retryable": false
+      }
+    ],
+    "warnings": []
+  },
+  "offset/dry-run": {
+    "after": null,
+    "before": [
+      {
+        "broker_name": "broker-a",
+        "offset": 9,
+        "queue_id": 0
+      }
+    ],
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "dry_run",
+    "operation": "consumer_offset_reset",
+    "requested": {
+      "force": false,
+      "timestamp": "2026-08-30T00:00:00Z",
+      "timestamp_millis": 1788048000000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "planned",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": 9,
+        "broker_name": "broker-a",
+        "changed": false,
+        "delta": -5,
+        "failure": null,
+        "planned": 4,
+        "queue_id": 0,
+        "retryable": false
+      }
+    ],
+    "warnings": []
+  },
+  "offset/execute": {
+    "after": [
+      {
+        "broker_name": "broker-a",
+        "offset": 4,
+        "queue_id": 0
+      }
+    ],
+    "before": [
+      {
+        "broker_name": "broker-a",
+        "offset": 9,
+        "queue_id": 0
+      }
+    ],
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "execute",
+    "operation": "consumer_offset_reset",
+    "requested": {
+      "force": false,
+      "timestamp": "2026-08-30T00:00:00Z",
+      "timestamp_millis": 1788048000000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "applied",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": 4,
+        "applied": true,
+        "before": 9,
+        "broker_name": "broker-a",
+        "changed": true,
+        "delta": -5,
+        "failure": null,
+        "planned": 4,
+        "queue_id": 0,
+        "retryable": false
+      }
+    ],
+    "warnings": []
+  },
+  "offset/no-confirm": {
+    "code": "confirmation_required",
+    "message": "explicit mutation confirmation is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "offset/no-reason": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "offset/no-scope": {
+    "code": "permission_denied",
+    "message": "write permission is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "offset/operation-denied": {
+    "code": "operation_not_allowed",
+    "message": "mutation operation is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "offset/partial": {
+    "after": [
+      {
+        "broker_name": "broker-a",
+        "offset": 4,
+        "queue_id": 0
+      }
+    ],
+    "before": [
+      {
+        "broker_name": "broker-a",
+        "offset": 9,
+        "queue_id": 0
+      },
+      {
+        "broker_name": "broker-b",
+        "offset": 9,
+        "queue_id": 1
+      }
+    ],
+    "cluster": "cluster-a",
+    "error_code": "partial_apply",
+    "mode": "execute",
+    "operation": "consumer_offset_reset",
+    "requested": {
+      "force": false,
+      "timestamp": "2026-08-30T00:00:00Z",
+      "timestamp_millis": 1788048000000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "partial",
+    "target": {
+      "brokers": [
+        "broker-a",
+        "broker-b"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": 4,
+        "applied": true,
+        "before": 9,
+        "broker_name": "broker-a",
+        "changed": true,
+        "delta": -5,
+        "failure": null,
+        "planned": 4,
+        "queue_id": 0,
+        "retryable": false
+      },
+      {
+        "after": null,
+        "applied": false,
+        "before": 9,
+        "broker_name": "broker-b",
+        "changed": false,
+        "delta": -5,
+        "failure": "unavailable",
+        "planned": 4,
+        "queue_id": 1,
+        "retryable": true
+      }
+    ],
+    "warnings": []
+  },
+  "offset/postread": {
+    "after": null,
+    "before": [
+      {
+        "broker_name": "broker-a",
+        "offset": 9,
+        "queue_id": 0
+      }
+    ],
+    "cluster": "cluster-a",
+    "error_code": "verification_failed",
+    "mode": "execute",
+    "operation": "consumer_offset_reset",
+    "requested": {
+      "force": false,
+      "timestamp": "2026-08-30T00:00:00Z",
+      "timestamp_millis": 1788048000000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": true,
+        "before": 9,
+        "broker_name": "broker-a",
+        "changed": true,
+        "delta": -5,
+        "failure": "verification_failed",
+        "planned": 4,
+        "queue_id": 0,
+        "retryable": true
+      }
+    ],
+    "warnings": []
+  },
+  "offset/shutdown": {
+    "code": "shutdown_failed",
+    "message": "mutation session shutdown failed",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "offset/single-failure": {
+    "after": null,
+    "before": [
+      {
+        "broker_name": "broker-a",
+        "offset": 9,
+        "queue_id": 0
+      }
+    ],
+    "cluster": "cluster-a",
+    "error_code": "execution_failed",
+    "mode": "execute",
+    "operation": "consumer_offset_reset",
+    "requested": {
+      "force": false,
+      "timestamp": "2026-08-30T00:00:00Z",
+      "timestamp_millis": 1788048000000
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "consumer_group": "orders_consumers",
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": 9,
+        "broker_name": "broker-a",
+        "changed": false,
+        "delta": -5,
+        "failure": "unavailable",
+        "planned": 4,
+        "queue_id": 0,
+        "retryable": true
+      }
+    ],
+    "warnings": []
+  },
+  "topic/audit": {
+    "code": "audit_unavailable",
+    "message": "reliable audit storage is unavailable",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "topic/bounds": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "topic/cluster-denied": {
+    "code": "cluster_not_allowed",
+    "message": "mutation cluster is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "topic/conflict": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "precondition_conflict",
+    "mode": "execute",
+    "operation": "topic_upsert",
+    "requested": {
+      "message_type": "NORMAL",
+      "order": false,
+      "perm": 6,
+      "read_queue_nums": 8,
+      "write_queue_nums": 8
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "conflict",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": false,
+        "failure": "conflict",
+        "persistence": "not_required",
+        "requested": {
+          "message_type": "NORMAL",
+          "order": false,
+          "perm": 6,
+          "read_queue_nums": 8,
+          "write_queue_nums": 8
+        },
+        "retryable": false,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "topic/dry-run": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "dry_run",
+    "operation": "topic_upsert",
+    "requested": {
+      "message_type": "NORMAL",
+      "order": false,
+      "perm": 6,
+      "read_queue_nums": 8,
+      "write_queue_nums": 8
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "planned",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": false,
+        "failure": null,
+        "persistence": "not_required",
+        "requested": {
+          "message_type": "NORMAL",
+          "order": false,
+          "perm": 6,
+          "read_queue_nums": 8,
+          "write_queue_nums": 8
+        },
+        "retryable": false,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "topic/execute": {
+    "after": {
+      "broker-a": {
+        "kind": "present",
+        "value": {
+          "message_type": "NORMAL",
+          "order": false,
+          "perm": 6,
+          "read_queue_nums": 8,
+          "write_queue_nums": 8
+        },
+        "version": 1
+      }
+    },
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": null,
+    "mode": "execute",
+    "operation": "topic_upsert",
+    "requested": {
+      "message_type": "NORMAL",
+      "order": false,
+      "perm": 6,
+      "read_queue_nums": 8,
+      "write_queue_nums": 8
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "applied",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": {
+          "kind": "present",
+          "value": {
+            "message_type": "NORMAL",
+            "order": false,
+            "perm": 6,
+            "read_queue_nums": 8,
+            "write_queue_nums": 8
+          },
+          "version": 1
+        },
+        "applied": true,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": true,
+        "failure": null,
+        "persistence": "persisted",
+        "requested": {
+          "message_type": "NORMAL",
+          "order": false,
+          "perm": 6,
+          "read_queue_nums": 8,
+          "write_queue_nums": 8
+        },
+        "retryable": false,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "verified"
+      }
+    ],
+    "warnings": []
+  },
+  "topic/no-confirm": {
+    "code": "confirmation_required",
+    "message": "explicit mutation confirmation is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "topic/no-reason": {
+    "code": "invalid_argument",
+    "message": "mutation argument is invalid",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "topic/no-scope": {
+    "code": "permission_denied",
+    "message": "write permission is required",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "topic/operation-denied": {
+    "code": "operation_not_allowed",
+    "message": "mutation operation is not allowed",
+    "retryable": false,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "topic/partial": {
+    "after": {
+      "broker-a": {
+        "kind": "present",
+        "value": {
+          "message_type": "NORMAL",
+          "order": false,
+          "perm": 6,
+          "read_queue_nums": 8,
+          "write_queue_nums": 8
+        },
+        "version": 1
+      }
+    },
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      },
+      "broker-b": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "partial_apply",
+    "mode": "execute",
+    "operation": "topic_upsert",
+    "requested": {
+      "message_type": "NORMAL",
+      "order": false,
+      "perm": 6,
+      "read_queue_nums": 8,
+      "write_queue_nums": 8
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "partial",
+    "target": {
+      "brokers": [
+        "broker-a",
+        "broker-b"
+      ],
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": {
+          "kind": "present",
+          "value": {
+            "message_type": "NORMAL",
+            "order": false,
+            "perm": 6,
+            "read_queue_nums": 8,
+            "write_queue_nums": 8
+          },
+          "version": 1
+        },
+        "applied": true,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": true,
+        "failure": null,
+        "persistence": "persisted",
+        "requested": {
+          "message_type": "NORMAL",
+          "order": false,
+          "perm": 6,
+          "read_queue_nums": 8,
+          "write_queue_nums": 8
+        },
+        "retryable": false,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "verified"
+      },
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": false,
+        "failure": "unavailable",
+        "persistence": "not_required",
+        "requested": {
+          "message_type": "NORMAL",
+          "order": false,
+          "perm": 6,
+          "read_queue_nums": 8,
+          "write_queue_nums": 8
+        },
+        "retryable": true,
+        "target": {
+          "broker_name": "broker-b"
+        },
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  },
+  "topic/postread": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "verification_failed",
+    "mode": "execute",
+    "operation": "topic_upsert",
+    "requested": {
+      "message_type": "NORMAL",
+      "order": false,
+      "perm": 6,
+      "read_queue_nums": 8,
+      "write_queue_nums": 8
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": true,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": true,
+        "failure": "verification_failed",
+        "persistence": "persisted",
+        "requested": {
+          "message_type": "NORMAL",
+          "order": false,
+          "perm": 6,
+          "read_queue_nums": 8,
+          "write_queue_nums": 8
+        },
+        "retryable": true,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "failed"
+      }
+    ],
+    "warnings": []
+  },
+  "topic/shutdown": {
+    "code": "shutdown_failed",
+    "message": "mutation session shutdown failed",
+    "retryable": true,
+    "schema_version": "rocketmq-mcp-control.error.v2"
+  },
+  "topic/single-failure": {
+    "after": null,
+    "before": {
+      "broker-a": {
+        "kind": "absent"
+      }
+    },
+    "cluster": "cluster-a",
+    "error_code": "execution_failed",
+    "mode": "execute",
+    "operation": "topic_upsert",
+    "requested": {
+      "message_type": "NORMAL",
+      "order": false,
+      "perm": 6,
+      "read_queue_nums": 8,
+      "write_queue_nums": 8
+    },
+    "schema_version": "rocketmq-mcp-mutation.v1",
+    "status": "failed",
+    "target": {
+      "brokers": [
+        "broker-a"
+      ],
+      "topic": "orders"
+    },
+    "targets": [
+      {
+        "after": null,
+        "applied": false,
+        "before": {
+          "kind": "absent"
+        },
+        "changed": false,
+        "failure": "unavailable",
+        "persistence": "not_required",
+        "requested": {
+          "message_type": "NORMAL",
+          "order": false,
+          "perm": 6,
+          "read_queue_nums": 8,
+          "write_queue_nums": 8
+        },
+        "retryable": true,
+        "target": {
+          "broker_name": "broker-a"
+        },
+        "verification": "not_performed"
+      }
+    ],
+    "warnings": []
+  }
+}
