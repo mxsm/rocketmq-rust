@@ -15,11 +15,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::UnifiedServiceError;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -27,7 +27,7 @@ use crate::config::TieredStoreConfig;
 use crate::file::TieredFlatFileStore;
 use crate::provider::TieredStoreProvider;
 
-pub(super) type CleanupErrorSlot = Arc<Mutex<Option<RocketMQError>>>;
+pub(super) type CleanupErrorSlot = Arc<Mutex<Option<StoreError>>>;
 
 pub struct CleanupService<P>
 where
@@ -62,7 +62,7 @@ where
         &self,
         owner: &crate::runtime::TaskOperationOwner,
         cleanup_error: CleanupErrorSlot,
-    ) -> Result<ScheduledTaskGroup, RocketMQError> {
+    ) -> Result<ScheduledTaskGroup, StoreError> {
         let scheduled_tasks = ScheduledTaskGroup::new(owner.task_group().clone());
         let flat_file_store = self.flat_file_store.clone();
         let operation_on_error = owner.operation().clone();
@@ -116,11 +116,11 @@ where
         Ok(scheduled_tasks)
     }
 
-    pub async fn cleanup_once(&self) -> Result<(), RocketMQError> {
+    pub async fn cleanup_once(&self) -> Result<(), StoreError> {
         self.flat_file_store.cleanup_expired(current_time_millis()).await
     }
 
-    pub async fn run(self, parent_task_group: TaskGroup) -> Result<(), RocketMQError> {
+    pub async fn run(self, parent_task_group: TaskGroup) -> Result<(), StoreError> {
         let owner = crate::runtime::TaskOperationOwner::new(parent_task_group, rocketmq_runtime::TaskKind::Service);
         let cleanup_error = Arc::new(Mutex::new(None));
         self.schedule(&owner, cleanup_error.clone())?;
@@ -128,24 +128,22 @@ where
         self.shutdown.cancelled().await;
         let report = owner
             .shutdown_report("rocketmq-tieredstore.cleanup.run", Duration::from_secs(5))
-            .await;
+            .await?;
         crate::runtime::shutdown_report_result("tieredstore cleanup run", report)?;
         let cleanup_error = cleanup_error.lock().await.take();
         cleanup_worker_result(cleanup_error)
     }
 }
 
-pub(super) fn cleanup_worker_result(error: Option<RocketMQError>) -> Result<(), RocketMQError> {
+pub(super) fn cleanup_worker_result(error: Option<StoreError>) -> Result<(), StoreError> {
     match error {
         Some(error) => Err(error),
         None => Ok(()),
     }
 }
 
-fn cleanup_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "tieredstore cleanup {operation}: {error}"
-    )))
+fn cleanup_startup_failed(_operation: &'static str, source: rocketmq_runtime::RuntimeError) -> StoreError {
+    crate::error::runtime_error(StoreOperation::Start, source)
 }
 
 fn current_time_millis() -> i64 {
@@ -161,8 +159,7 @@ mod tests {
     use std::time::Duration;
 
     use bytes::Bytes;
-    use rocketmq_error::ErrorKind;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_store_api::StoreError;
     use tokio::time::sleep;
 
     use super::*;
@@ -173,25 +170,35 @@ mod tests {
 
     #[test]
     fn cleanup_worker_result_preserves_original_error_kind() {
-        let error = cleanup_worker_result(Some(RocketMQError::IllegalArgument("bad cleanup offset".to_owned())))
-            .expect_err("cleanup worker error should be propagated");
+        let original = crate::error::request_invalid(StoreOperation::AppendDerived);
+        let error = cleanup_worker_result(Some(original)).expect_err("cleanup worker error should be propagated");
 
-        assert_eq!(error.kind(), ErrorKind::IllegalArgument);
-        assert!(error.to_string().contains("bad cleanup offset"));
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+        assert_eq!(error.operation(), StoreOperation::AppendDerived);
     }
 
     #[test]
     fn cleanup_startup_failed_uses_service_error_kind() {
-        let error = cleanup_startup_failed("schedule test", "task group closed");
+        let error = cleanup_startup_failed(
+            "schedule test",
+            rocketmq_runtime::RuntimeError::InsideTokioRuntime("task group closed"),
+        );
 
-        assert_eq!(error.kind(), ErrorKind::Service);
-        assert!(error.to_string().contains("tieredstore cleanup schedule test"));
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<rocketmq_runtime::RuntimeError>())
+            .is_some());
     }
 
     #[tokio::test]
-    async fn cleanup_service_runs_periodically_and_stops_on_shutdown() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn cleanup_service_runs_periodically_and_stops_on_shutdown() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -231,7 +238,12 @@ mod tests {
         flat_file.commit().await?;
 
         let first_commit_log_path = "CleanupTopic/0/commitlog/00000000000000000000".to_owned();
-        assert_eq!(provider.segment_size(first_commit_log_path.clone()).await?, 5);
+        assert_eq!(
+            provider
+                .segment_size(StoreOperation::Read, first_commit_log_path.clone())
+                .await?,
+            5
+        );
 
         let shutdown = CancellationToken::new();
         let service = CleanupService::new(config, flat_file_store, shutdown.clone());
@@ -249,7 +261,11 @@ mod tests {
             .map_err(|error| cleanup_startup_failed("spawn cleanup service test", error))?;
 
         for _ in 0..50 {
-            if provider.segment_size(first_commit_log_path.clone()).await? == 0 {
+            if provider
+                .segment_size(StoreOperation::Read, first_commit_log_path.clone())
+                .await?
+                == 0
+            {
                 break;
             }
             sleep(Duration::from_millis(20)).await;
@@ -262,7 +278,12 @@ mod tests {
             return Err(error);
         }
 
-        assert_eq!(provider.segment_size(first_commit_log_path).await?, 0);
+        assert_eq!(
+            provider
+                .segment_size(StoreOperation::Read, first_commit_log_path)
+                .await?,
+            0
+        );
         Ok(())
     }
 }

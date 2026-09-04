@@ -80,6 +80,16 @@
       "reason": "The observation records ResponseBodyKind rather than a plan category; the unreleased telemetry field is renamed with the corresponding accessor.",
       "approved_by": "repository-owner",
       "approved_on": "2026-08-30"
+    },
+    {
+      "id": "API-0.9-009",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_store_rocksdb and rocketmq_tieredstore public RocketMQError/backend-error returns and raw constructors",
+      "replacement": "StoreError plus RocksDbOpenPlan/TieredStoreOpenPlan capability constructors returning Result<Option<_>, StoreError>",
+      "reason": "Unreleased backend APIs must preserve typed storage causes and represent pre-I/O capability validation without backend-specific public errors, panic, or default normalization.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-09-02"
     }
   ],
   "frozen_contracts": [

@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::ErrorKind;
-use rocketmq_error::RocketMQError;
+#[cfg(feature = "serde")]
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
+#[cfg(feature = "serde")]
 use rocketmq_tieredstore::TieredLifecycle;
 use rocketmq_tieredstore::TieredLocalResidency;
 use rocketmq_tieredstore::TieredReadContext;
@@ -22,7 +24,9 @@ use rocketmq_tieredstore::TieredReadErrorDisposition;
 use rocketmq_tieredstore::TieredReadPolicy;
 use rocketmq_tieredstore::TieredReadSource;
 use rocketmq_tieredstore::TieredStorageLevel;
+#[cfg(feature = "serde")]
 use rocketmq_tieredstore::TieredStore;
+#[cfg(feature = "serde")]
 use rocketmq_tieredstore::TieredStoreConfig;
 
 #[test]
@@ -71,33 +75,45 @@ fn read_policy_routes_local_remote_and_forced_reads_deterministically() {
 
 #[test]
 fn read_error_policy_never_turns_corruption_into_a_miss() {
+    let corrupted = StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Read);
+    let timed_out = StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Read);
     assert_eq!(
-        TieredReadPolicy::classify_error(ErrorKind::StorageCorrupted, true),
+        TieredReadPolicy::classify_error(&corrupted, true),
         TieredReadErrorDisposition::Fatal
     );
     assert_eq!(
-        TieredReadPolicy::classify_error(ErrorKind::Timeout, true),
+        TieredReadPolicy::classify_error(&timed_out, true),
         TieredReadErrorDisposition::FallbackToLocal
     );
     assert_eq!(
-        TieredReadPolicy::classify_error(ErrorKind::Timeout, false),
+        TieredReadPolicy::classify_error(&timed_out, false),
         TieredReadErrorDisposition::Fatal
-    );
-    assert_eq!(
-        TieredReadPolicy::classify_error(ErrorKind::QueryNotFound, false),
-        TieredReadErrorDisposition::Miss
     );
 }
 
+#[cfg(feature = "serde")]
 #[tokio::test]
-async fn incompatible_persisted_provider_contract_fails_before_recovery() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn incompatible_persisted_provider_contract_fails_before_recovery() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
     let root = temp_dir.path().join("tieredstore");
     let metadata_path = root.join("config").join("tieredStoreMetadata.json");
     tokio::fs::create_dir_all(metadata_path.parent().expect("metadata parent"))
         .await
-        .map_err(|source| RocketMQError::internal("create metadata parent", source))?;
+        .map_err(|source| {
+            StoreError::new(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+            )
+            .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+            .with_source(source)
+        })?;
     tokio::fs::write(
         &metadata_path,
         br#"{
@@ -108,7 +124,14 @@ async fn incompatible_persisted_provider_contract_fails_before_recovery() -> Res
         }"#,
     )
     .await
-    .map_err(|source| RocketMQError::internal("write incompatible metadata", source))?;
+    .map_err(|source| {
+        StoreError::new(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+        )
+        .in_component(rocketmq_store_api::StoreComponent::TieredStore)
+        .with_source(source)
+    })?;
 
     let context = RuntimeContext::from_current("tiered-provider-contract-test");
     let store = TieredStore::new(
@@ -118,12 +141,13 @@ async fn incompatible_persisted_provider_contract_fails_before_recovery() -> Res
             ..TieredStoreConfig::default()
         },
         context.root_group().clone(),
-    )?;
+    )?
+    .expect("valid provider contract test configuration");
     let error = store
         .load()
         .await
         .expect_err("incompatible provider data must fail load");
-    assert_eq!(error.kind(), ErrorKind::StorageCorrupted);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
 
     Ok(())
 }

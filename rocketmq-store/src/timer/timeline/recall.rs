@@ -14,7 +14,8 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_rocksdb::batch::RocksDbWriteBatch;
 use rocketmq_store_rocksdb::store::KeyValueStore;
 use rocketmq_store_rocksdb::timer::codec::RecallLookupKeyV1;
@@ -47,17 +48,21 @@ impl TimelineRecallService {
         batch: &mut RocksDbWriteBatch,
         key: &RecallLookupKeyV1,
         value: RecallLookupValueV1,
-    ) -> Result<(), RocketMQError> {
-        batch.put_cf(LOOKUP_CF, key.encode()?, value.encode());
+    ) -> Result<(), StoreError> {
+        batch.put_cf(LOOKUP_CF, key.encode(StoreOperation::AppendDerived)?, value.encode());
         Ok(())
     }
 
     /// Cancels PENDING/READY only. Delivery states are immutable RecallTooLate outcomes.
-    pub(crate) fn recall(&self, lookup: &RecallLookupKeyV1) -> Result<RecallResult, RocketMQError> {
-        let Some(encoded) = self.timeline.store().get_cf(LOOKUP_CF, &lookup.encode()?)? else {
+    pub(crate) fn recall(&self, lookup: &RecallLookupKeyV1) -> Result<RecallResult, StoreError> {
+        let Some(encoded) =
+            self.timeline
+                .store()
+                .get_cf(StoreOperation::Read, LOOKUP_CF, &lookup.encode(StoreOperation::Read)?)?
+        else {
             return Ok(RecallResult::NotFound);
         };
-        let target = RecallLookupValueV1::decode(&encoded)?;
+        let target = RecallLookupValueV1::decode(StoreOperation::Read, &encoded)?;
         let Some(current) = self.state.get(target.timer_id, target.generation)? else {
             return Ok(RecallResult::NotFound);
         };
@@ -154,7 +159,11 @@ mod tests {
     #[test]
     fn recall_cancels_only_the_lookup_generation() {
         let dir = tempdir().expect("tempdir");
-        let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("open"));
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("open")
+                .expect("valid Timeline configuration"),
+        );
         let timer_id = TimerId::new(7);
         let active = TimerGeneration::new(2);
         let old = TimerGeneration::new(1);
@@ -199,7 +208,11 @@ mod tests {
     #[test]
     fn delivering_recall_is_too_late() {
         let dir = tempdir().expect("tempdir");
-        let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("open"));
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("open")
+                .expect("valid Timeline configuration"),
+        );
         let timer_id = TimerId::new(9);
         let generation = TimerGeneration::new(1);
         let lookup = RecallLookupKeyV1 {

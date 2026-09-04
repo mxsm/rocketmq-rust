@@ -16,9 +16,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use rocketmq_error::ErrorKind;
-use rocketmq_error::RocketMQError;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_store_api::DerivedRecordId;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
@@ -27,27 +29,54 @@ use crate::file::TieredFlatFileStore;
 use crate::metadata::JsonMetadataStore;
 use crate::provider::MemoryProvider;
 
+fn valid_dispatch_request(queue_offset: i64) -> TieredDispatchRequest {
+    TieredDispatchRequest {
+        topic: "TopicA".to_owned(),
+        queue_id: 0,
+        queue_offset,
+        commit_log_offset: 1024,
+        message_size: 4,
+        tags_code: 7,
+        store_timestamp: 100,
+        keys: None,
+        uniq_key: None,
+        offset_id: None,
+        sys_flag: 0,
+        body: Some(Bytes::from_static(b"body")),
+    }
+}
+
 #[test]
 fn dispatcher_task_result_preserves_original_error_kind() {
-    let error = dispatcher_task_result(Some(RocketMQError::illegal_argument("dispatch offset gap")))
-        .expect_err("dispatcher worker error should be propagated");
+    let original = StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::AppendDerived);
+    let error = dispatcher_task_result(Some(original)).expect_err("dispatcher worker error should be propagated");
 
-    assert_eq!(error.kind(), ErrorKind::IllegalArgument);
-    assert!(error.to_string().contains("dispatch offset gap"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+    assert_eq!(error.operation(), StoreOperation::AppendDerived);
 }
 
 #[test]
 fn dispatcher_startup_failed_uses_service_error_kind() {
-    let error = dispatcher_startup_failed("spawn test worker", "task group closed");
+    let error = dispatcher_startup_failed(
+        "spawn test worker",
+        rocketmq_runtime::RuntimeError::InsideTokioRuntime("task group closed"),
+    );
 
-    assert_eq!(error.kind(), ErrorKind::Service);
-    assert!(error.to_string().contains("tieredstore dispatcher spawn test worker"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<rocketmq_runtime::RuntimeError>())
+        .is_some());
 }
 
 #[tokio::test]
-async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        crate::error::source_error(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+            source,
+        )
+    })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
         backend_provider: "memory".to_owned(),
@@ -88,11 +117,11 @@ async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), Rocke
 
     let flat_file = flat_file_store
         .get("TopicA", 0)
-        .ok_or_else(|| RocketMQError::invariant_violated("dispatch must publish a flat file"))?;
+        .ok_or_else(|| crate::error::internal_failure(rocketmq_store_api::StoreOperation::Load))?;
     let cq_unit = flat_file
         .read_consume_queue_unit(3)
         .await?
-        .ok_or_else(|| RocketMQError::invariant_violated("dispatch must publish a consume queue unit"))?;
+        .ok_or_else(|| crate::error::internal_failure(rocketmq_store_api::StoreOperation::Load))?;
 
     assert_eq!(cq_unit.commit_log_offset, 0);
     assert_eq!(cq_unit.size, 4);
@@ -105,9 +134,14 @@ async fn dispatch_writes_commit_log_and_consume_queue_unit() -> Result<(), Rocke
 }
 
 #[tokio::test]
-async fn new_with_task_group_parents_dispatcher_task() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn new_with_task_group_parents_dispatcher_task() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        crate::error::source_error(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+            source,
+        )
+    })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
         backend_provider: "memory".to_owned(),
@@ -140,9 +174,14 @@ async fn new_with_task_group_parents_dispatcher_task() -> Result<(), RocketMQErr
 }
 
 #[tokio::test]
-async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<(), RocketMQError> {
-    let temp_dir =
-        tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        crate::error::source_error(
+            &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+            rocketmq_store_api::StoreOperation::Load,
+            source,
+        )
+    })?;
     let config = Arc::new(TieredStoreConfig {
         store_path_root_dir: temp_dir.path().to_path_buf(),
         backend_provider: "memory".to_owned(),
@@ -184,9 +223,67 @@ async fn cancellation_releases_a_sender_waiting_for_byte_capacity() -> Result<()
     shutdown.cancel();
     let error = tokio::time::timeout(Duration::from_secs(1), blocked)
         .await
-        .map_err(|source| RocketMQError::internal("await dispatcher shutdown", source))?
+        .map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?
         .expect_err("cancelled sender must return an interruption");
-    assert_eq!(error.kind(), ErrorKind::Service);
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
     assert!(dispatcher.is_shutdown());
+    Ok(())
+}
+
+#[tokio::test]
+async fn try_dispatch_distinguishes_full_capacity_from_closed_backend() -> Result<(), StoreError> {
+    let temp_dir = tempfile::tempdir().map_err(|source| {
+        crate::error::source_error(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Load, source)
+    })?;
+    let config = Arc::new(TieredStoreConfig {
+        store_path_root_dir: temp_dir.path().to_path_buf(),
+        backend_provider: "memory".to_owned(),
+        max_pending_tasks: 1,
+        ..TieredStoreConfig::default()
+    });
+    let flat_file_store = Arc::new(TieredFlatFileStore::new(
+        config.clone(),
+        Arc::new(JsonMetadataStore::new(config.clone())),
+        MemoryProvider::default(),
+    ));
+    let context = RuntimeContext::from_current("tieredstore-try-dispatch-error-test");
+    let dispatcher = DefaultTieredDispatcher::new(
+        config.clone(),
+        flat_file_store.clone(),
+        CancellationToken::new(),
+        context.root_group().clone(),
+    );
+
+    dispatcher.try_dispatch(valid_dispatch_request(0))?;
+    let full = dispatcher
+        .try_dispatch(valid_dispatch_request(1))
+        .expect_err("a full dispatch channel must report capacity exhaustion");
+    assert_eq!(full.descriptor(), &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED);
+    assert_eq!(full.recovery_hint(), rocketmq_error::RecoveryHint::OperatorAction);
+    assert_eq!(full.operation(), StoreOperation::AppendDerived);
+    assert_eq!(full.component(), StoreComponent::TieredStore);
+
+    let closed_dispatcher = DefaultTieredDispatcher::new(
+        config.clone(),
+        flat_file_store,
+        CancellationToken::new(),
+        context.root_group().clone(),
+    );
+    drop(closed_dispatcher.receiver.lock().await.take());
+    let record =
+        DerivedRecordId::try_new(config.source_epoch, 1024, 4).expect("the derived record fixture must be valid");
+    let closed = closed_dispatcher
+        .try_dispatch_derived(record, valid_dispatch_request(0))
+        .expect_err("a closed dispatch channel must report backend unavailability");
+    assert_eq!(closed.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(closed.recovery_hint(), rocketmq_error::RecoveryHint::Backoff);
+    assert_eq!(closed.operation(), StoreOperation::AppendDerived);
+    assert_eq!(closed.component(), StoreComponent::TieredStore);
     Ok(())
 }

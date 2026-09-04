@@ -14,13 +14,16 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
 use rocketmq_store_api::TimerSourceCqOffset;
 
 use crate::batch::RocksDbWriteBatch;
-use crate::error::codec_error;
+use crate::error::codec_contract;
+use crate::error::codec_corrupted;
+use crate::error::state_corrupted_source;
 use crate::store::KeyValueStore;
 use crate::store::RocksDbStore;
 use crate::timer::codec::crc32c;
@@ -54,7 +57,7 @@ pub struct NativeDurabilityV1 {
 
 impl NativeDurabilityV1 {
     /// Rejects future, incomplete, or mismatched native references.
-    pub fn validate_against(self, checkpoint: NativeOverlayCheckpointV1) -> Result<(), RocketMQError> {
+    pub fn validate_against(self, checkpoint: NativeOverlayCheckpointV1) -> Result<(), StoreError> {
         if self.manifest_generation == 0
             || self.manifest_generation > checkpoint.manifest_generation
             || self.durable_end == 0
@@ -62,9 +65,7 @@ impl NativeDurabilityV1 {
             || self.record_hash == 0
             || self.manifest_checksum == 0
         {
-            return Err(codec_error(
-                "native Timeline locator is ahead of its durable overlay checkpoint",
-            ));
+            return Err(codec_corrupted(StoreOperation::Read));
         }
         Ok(())
     }
@@ -119,10 +120,7 @@ impl RocksDbNativeTimelineOverlay {
     }
 
     /// Appends a direct locator to an existing sync-WAL WriteBatch.
-    pub fn append_locator(
-        batch: &mut RocksDbWriteBatch,
-        locator: NativeTimelineLocatorV1,
-    ) -> Result<(), RocketMQError> {
+    pub fn append_locator(batch: &mut RocksDbWriteBatch, locator: NativeTimelineLocatorV1) -> Result<(), StoreError> {
         batch.put_cf(
             NATIVE_LOCATOR_CF,
             encode_locator_key(locator.entry.key.timer_id, locator.entry.key.generation),
@@ -136,13 +134,17 @@ impl RocksDbNativeTimelineOverlay {
         &self,
         timer_id: TimerId,
         generation: TimerGeneration,
-    ) -> Result<Option<NativeTimelineLocatorV1>, RocketMQError> {
+    ) -> Result<Option<NativeTimelineLocatorV1>, StoreError> {
         self.store
-            .get_cf(NATIVE_LOCATOR_CF, &encode_locator_key(timer_id, generation))?
+            .get_cf(
+                rocketmq_store_api::StoreOperation::Read,
+                NATIVE_LOCATOR_CF,
+                &encode_locator_key(timer_id, generation),
+            )?
             .map(|value| {
                 let locator = decode_locator(&value)?;
                 if locator.entry.key.timer_id != timer_id || locator.entry.key.generation != generation {
-                    return Err(codec_error("native Timeline locator key mismatch"));
+                    return Err(codec_corrupted(StoreOperation::Read));
                 }
                 Ok(locator)
             })
@@ -153,13 +155,13 @@ impl RocksDbNativeTimelineOverlay {
     pub fn get_many(
         &self,
         keys: &[(TimerId, TimerGeneration)],
-    ) -> Result<Vec<Option<NativeTimelineLocatorV1>>, RocketMQError> {
+    ) -> Result<Vec<Option<NativeTimelineLocatorV1>>, StoreError> {
         let encoded = keys
             .iter()
             .map(|(timer_id, generation)| encode_locator_key(*timer_id, *generation).to_vec())
             .collect::<Vec<_>>();
         self.store
-            .multi_get_cf(NATIVE_LOCATOR_CF, &encoded)?
+            .multi_get_cf(rocketmq_store_api::StoreOperation::Read, NATIVE_LOCATOR_CF, &encoded)?
             .into_iter()
             .zip(keys)
             .map(|(value, (timer_id, generation))| {
@@ -167,7 +169,7 @@ impl RocksDbNativeTimelineOverlay {
                     .map(|value| {
                         let locator = decode_locator(&value)?;
                         if locator.entry.key.timer_id != *timer_id || locator.entry.key.generation != *generation {
-                            return Err(codec_error("native Timeline locator key mismatch"));
+                            return Err(codec_corrupted(StoreOperation::Read));
                         }
                         Ok(locator)
                     })
@@ -181,9 +183,9 @@ impl RocksDbNativeTimelineOverlay {
         batch: &mut RocksDbWriteBatch,
         source_offset: TimerSourceCqOffset,
         marker: NativeMaterializedMarkerV1,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         if source_offset.get() < 0 {
-            return Err(codec_error("native Timeline source marker offset is negative"));
+            return Err(codec_contract(StoreOperation::AppendDerived));
         }
         batch.put_cf(
             NATIVE_MATERIALIZED_CF,
@@ -197,9 +199,13 @@ impl RocksDbNativeTimelineOverlay {
     pub fn materialized_marker(
         &self,
         source_offset: TimerSourceCqOffset,
-    ) -> Result<Option<NativeMaterializedMarkerV1>, RocketMQError> {
+    ) -> Result<Option<NativeMaterializedMarkerV1>, StoreError> {
         self.store
-            .get_cf(NATIVE_MATERIALIZED_CF, &encode_marker_key(source_offset))?
+            .get_cf(
+                rocketmq_store_api::StoreOperation::Read,
+                NATIVE_MATERIALIZED_CF,
+                &encode_marker_key(source_offset),
+            )?
             .map(|value| decode_marker(&value))
             .transpose()
     }
@@ -214,9 +220,13 @@ impl RocksDbNativeTimelineOverlay {
     }
 
     /// Reads the durable cross-media checkpoint.
-    pub fn checkpoint(&self) -> Result<Option<NativeOverlayCheckpointV1>, RocketMQError> {
+    pub fn checkpoint(&self) -> Result<Option<NativeOverlayCheckpointV1>, StoreError> {
         self.store
-            .get_cf(NATIVE_META_CF, NATIVE_CHECKPOINT_KEY)?
+            .get_cf(
+                rocketmq_store_api::StoreOperation::Read,
+                NATIVE_META_CF,
+                NATIVE_CHECKPOINT_KEY,
+            )?
             .map(|value| decode_checkpoint(&value))
             .transpose()
     }
@@ -255,17 +265,17 @@ fn encode_locator(locator: NativeTimelineLocatorV1) -> [u8; NATIVE_LOCATOR_VALUE
     output
 }
 
-fn decode_locator(bytes: &[u8]) -> Result<NativeTimelineLocatorV1, RocketMQError> {
+fn decode_locator(bytes: &[u8]) -> Result<NativeTimelineLocatorV1, StoreError> {
     if bytes.len() != NATIVE_LOCATOR_VALUE_SIZE
         || read_u16(bytes, 0)? != 1
         || crc32c(&bytes[..NATIVE_LOCATOR_VALUE_SIZE - 4]) != read_u32(bytes, NATIVE_LOCATOR_VALUE_SIZE - 4)?
     {
-        return Err(codec_error("invalid native Timeline locator"));
+        return Err(codec_corrupted(StoreOperation::Read));
     }
     Ok(NativeTimelineLocatorV1 {
         entry: TimelineIndexEntry {
-            key: TimelineKeyV1::decode(&bytes[2..37])?,
-            record: TimelineRecordV1::decode(&bytes[37..103])?,
+            key: TimelineKeyV1::decode(StoreOperation::Read, &bytes[2..37])?,
+            record: TimelineRecordV1::decode(StoreOperation::Read, &bytes[37..103])?,
         },
         durability: NativeDurabilityV1 {
             manifest_generation: read_u64(bytes, 103)?,
@@ -297,12 +307,12 @@ fn encode_marker(marker: NativeMaterializedMarkerV1) -> [u8; NATIVE_MARKER_VALUE
     output
 }
 
-fn decode_marker(bytes: &[u8]) -> Result<NativeMaterializedMarkerV1, RocketMQError> {
+fn decode_marker(bytes: &[u8]) -> Result<NativeMaterializedMarkerV1, StoreError> {
     if bytes.len() != NATIVE_MARKER_VALUE_SIZE
         || read_u16(bytes, 0)? != 1
         || crc32c(&bytes[..NATIVE_MARKER_VALUE_SIZE - 4]) != read_u32(bytes, NATIVE_MARKER_VALUE_SIZE - 4)?
     {
-        return Err(codec_error("invalid native Timeline materialized marker"));
+        return Err(codec_corrupted(StoreOperation::Read));
     }
     Ok(NativeMaterializedMarkerV1 {
         timer_id: TimerId::new(read_u128(bytes, 2)?),
@@ -329,12 +339,12 @@ fn encode_checkpoint(checkpoint: NativeOverlayCheckpointV1) -> [u8; NATIVE_CHECK
     output
 }
 
-fn decode_checkpoint(bytes: &[u8]) -> Result<NativeOverlayCheckpointV1, RocketMQError> {
+fn decode_checkpoint(bytes: &[u8]) -> Result<NativeOverlayCheckpointV1, StoreError> {
     if bytes.len() != NATIVE_CHECKPOINT_VALUE_SIZE
         || read_u16(bytes, 0)? != 1
         || crc32c(&bytes[..NATIVE_CHECKPOINT_VALUE_SIZE - 4]) != read_u32(bytes, NATIVE_CHECKPOINT_VALUE_SIZE - 4)?
     {
-        return Err(codec_error("invalid native Timeline overlay checkpoint"));
+        return Err(codec_corrupted(StoreOperation::Read));
     }
     let checkpoint = NativeOverlayCheckpointV1 {
         manifest_generation: read_u64(bytes, 2)?,
@@ -349,34 +359,36 @@ fn decode_checkpoint(bytes: &[u8]) -> Result<NativeOverlayCheckpointV1, RocketMQ
         || checkpoint.materialized_source_offset.get() < -1
         || checkpoint.generation == 0
     {
-        return Err(codec_error("invalid native Timeline overlay checkpoint fields"));
+        return Err(codec_corrupted(StoreOperation::Read));
     }
     Ok(checkpoint)
 }
 
-fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], RocketMQError> {
-    bytes
+fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], StoreError> {
+    let value = bytes
         .get(offset..offset.saturating_add(N))
-        .and_then(|value| value.try_into().ok())
-        .ok_or_else(|| codec_error("truncated native Timeline overlay record"))
+        .ok_or_else(|| codec_corrupted(StoreOperation::Read))?;
+    value
+        .try_into()
+        .map_err(|source| state_corrupted_source(StoreOperation::Read, source))
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, RocketMQError> {
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, StoreError> {
     Ok(u16::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, RocketMQError> {
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, StoreError> {
     Ok(u32::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, RocketMQError> {
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, StoreError> {
     Ok(u64::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, RocketMQError> {
+fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, StoreError> {
     Ok(i64::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, RocketMQError> {
+fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, StoreError> {
     Ok(u128::from_be_bytes(read_array(bytes, offset)?))
 }

@@ -33,7 +33,9 @@ pub use dispatcher::TieredDispatchHealth;
 pub use dispatcher::TieredDispatchReadiness;
 pub use dispatcher::TieredDispatchRequest;
 pub use dispatcher::TieredDispatcher;
+pub use factory::TieredProviderOpenPlan;
 pub use factory::TieredStoreFactory;
+pub use factory::TieredStoreOpenPlan;
 pub use fetcher::DefaultTieredMessageFetcher;
 pub use fetcher::TieredMessageFetcher;
 pub use file::CommitLogSegment;
@@ -88,9 +90,10 @@ pub mod bench_support {
     use std::time::UNIX_EPOCH;
 
     use bytes::Bytes;
-    use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::ShutdownReport;
+    use rocketmq_store_api::StoreError;
+    use rocketmq_store_api::StoreOperation;
     use serde::Serialize;
     use tokio_util::sync::CancellationToken;
 
@@ -135,7 +138,7 @@ pub mod bench_support {
     pub async fn run_tiered_dispatcher_lifecycle_probe(
         root: PathBuf,
         request_count: usize,
-    ) -> Result<TieredDispatcherLifecycleProbe, RocketMQError> {
+    ) -> Result<TieredDispatcherLifecycleProbe, StoreError> {
         let _ = std::fs::remove_dir_all(&root);
         create_probe_root(&root)?;
 
@@ -226,9 +229,7 @@ pub mod bench_support {
         })
     }
 
-    pub async fn run_tiered_cleanup_lifecycle_probe(
-        root: PathBuf,
-    ) -> Result<TieredCleanupLifecycleProbe, RocketMQError> {
+    pub async fn run_tiered_cleanup_lifecycle_probe(root: PathBuf) -> Result<TieredCleanupLifecycleProbe, StoreError> {
         let _ = std::fs::remove_dir_all(&root);
         create_probe_root(&root)?;
 
@@ -280,7 +281,11 @@ pub mod bench_support {
 
         let mut cleanup_completed = false;
         for _ in 0..100 {
-            if provider.segment_size(first_commit_log_path.clone()).await? == 0 {
+            if provider
+                .segment_size(StoreOperation::Read, first_commit_log_path.clone())
+                .await?
+                == 0
+            {
                 cleanup_completed = true;
                 break;
             }
@@ -339,9 +344,8 @@ pub mod bench_support {
         std::env::temp_dir().join(format!("rocketmq-tieredstore-dispatcher-{}-{id}", std::process::id()))
     }
 
-    pub(super) fn create_probe_root(root: &Path) -> Result<(), RocketMQError> {
-        std::fs::create_dir_all(root)
-            .map_err(|error| RocketMQError::storage_write_failed(root.display().to_string(), error.to_string()))
+    pub(super) fn create_probe_root(root: &Path) -> Result<(), StoreError> {
+        std::fs::create_dir_all(root).map_err(|source| crate::error::io_failed(StoreOperation::AppendDerived, source))
     }
 
     fn current_time_millis() -> i64 {
@@ -354,17 +358,17 @@ pub mod bench_support {
 
 #[cfg(all(test, feature = "serde"))]
 mod bench_support_tests {
-    use rocketmq_error::ErrorKind;
-
     #[test]
     fn create_probe_root_reports_storage_write_failure_for_file_path() {
         let temp_file = tempfile::NamedTempFile::new().expect("temporary file should be created");
-        let path = temp_file.path().display().to_string();
         let error =
             super::bench_support::create_probe_root(temp_file.path()).expect_err("file path should not become a dir");
 
-        assert_eq!(error.kind(), ErrorKind::StorageWriteFailed);
-        assert!(error.to_string().contains(&path));
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+        assert_eq!(error.operation(), rocketmq_store_api::StoreOperation::AppendDerived);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

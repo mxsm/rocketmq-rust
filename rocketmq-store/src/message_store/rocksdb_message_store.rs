@@ -40,9 +40,9 @@ use rocketmq_store_api::GetStatus as ApiGetStatus;
 use rocketmq_store_api::WalPort;
 use rocketmq_store_api::WriteLeaseToken;
 use rocketmq_store_rocksdb::message_store::RocksDbDerivedStore;
-use rocketmq_store_rocksdb::message_store::RocksDbMessageStoreError;
 use rocketmq_store_rocksdb::message_store::RocksDbMessageStoreOptions;
 use rocketmq_store_rocksdb::message_store::RocksDbMessageStoreRoot;
+use rocketmq_store_rocksdb::message_store::RocksDbOpenPlan;
 use rocketmq_store_rocksdb::message_store::RocksDbReadRequest;
 use rocketmq_store_rocksdb::message_store::RocksDbTimeBoundary;
 use tracing::warn;
@@ -90,9 +90,7 @@ use crate::rocksdb::transaction::RocksDbTransBuildService;
 use crate::rocksdb::value::ConsumeQueueValue;
 use crate::stats::broker_stats_manager::BrokerStatsManager;
 use crate::store::running_flags::RunningFlags;
-use crate::store_error::StoreComponent;
 use crate::store_error::StoreError;
-use crate::store_error::StoreOperation;
 use crate::timer::timer_message_store::TimerMessageStore;
 
 /// RocksDB-backed message store boundary.
@@ -138,18 +136,20 @@ impl WalPort for StoreLocalWalAdapter<'_> {
 
 impl fmt::Debug for RocksDBMessageStore {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RocksDBMessageStore")
-            .field("rocksdb_config", self.root.derived().rocksdb_config())
-            .finish_non_exhaustive()
+        write_redacted_debug(formatter)
     }
 }
 
+fn write_redacted_debug(formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter.write_str("RocksDBMessageStore { configuration_present: true, redacted: true }")
+}
+
 impl RocksDBMessageStore {
-    /// Creates a RocksDB Store after validating caller-owned Timer limits.
+    /// Creates a RocksDB Store after validating caller-owned Timer, RocksDB,
+    /// and, when enabled, Tiered Store configuration.
     ///
-    /// Returns `Ok(None)` before any RocksDB or Store-root I/O when the Timer
-    /// configuration is inconsistent.
+    /// Returns `Ok(None)` before any RocksDB or Store-root I/O when any of those
+    /// raw configuration capabilities cannot be formed.
     ///
     /// # Errors
     ///
@@ -175,10 +175,11 @@ impl RocksDBMessageStore {
         )
     }
 
-    /// Creates a RocksDB Store with telemetry after validating caller-owned Timer limits.
+    /// Creates a RocksDB Store with telemetry after validating caller-owned
+    /// Timer, RocksDB, and, when enabled, Tiered Store configuration.
     ///
-    /// Returns `Ok(None)` before any RocksDB or Store-root I/O when the Timer
-    /// configuration is inconsistent.
+    /// Returns `Ok(None)` before any RocksDB or Store-root I/O when any of those
+    /// raw configuration capabilities cannot be formed.
     ///
     /// # Errors
     ///
@@ -196,10 +197,23 @@ impl RocksDBMessageStore {
         let Some(timer_store_config) = message_store_config.timer_store_config.validated() else {
             return Ok(None);
         };
+        let Some((rocksdb_open_plan, message_rocksdb_open_plan)) =
+            RocksDbOpenPlan::from_message_store(message_store_config.as_ref())
+        else {
+            return Ok(None);
+        };
+        #[cfg(feature = "tieredstore")]
+        let Some(tiered_store_open_plan) = LocalFileMessageStore::tiered_store_open_plan(message_store_config.as_ref()) else {
+            return Ok(None);
+        };
         Self::try_new_with_telemetry_validated(
             message_store_config,
             micro_batch_policy,
             timer_store_config,
+            rocksdb_open_plan,
+            message_rocksdb_open_plan,
+            #[cfg(feature = "tieredstore")]
+            tiered_store_open_plan,
             broker_config,
             topic_config_table,
             broker_stats_manager,
@@ -214,6 +228,13 @@ impl RocksDBMessageStore {
         message_store_config: Arc<MessageStoreConfig>,
         micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
         timer_store_config: ValidatedTimerStoreConfig,
+        rocksdb_open_plan: RocksDbOpenPlan,
+        message_rocksdb_open_plan: RocksDbOpenPlan,
+        #[cfg(feature = "tieredstore")] tiered_store_open_plan: Option<
+            rocketmq_tieredstore::TieredProviderOpenPlan<
+                rocketmq_tieredstore::provider::BuiltinTieredStoreProviderFactory,
+            >,
+        >,
         broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
@@ -224,16 +245,16 @@ impl RocksDBMessageStore {
         let message_store_config_for_index = Arc::clone(&message_store_config);
         let message_store_config_for_timer = Arc::clone(&message_store_config);
         let message_store_config_for_trans = Arc::clone(&message_store_config);
-        let derived = RocksDbDerivedStore::open_with_metrics(
-            message_store_config.as_ref(),
+        let derived = RocksDbDerivedStore::open_planned_with_metrics(
+            rocksdb_open_plan,
+            message_rocksdb_open_plan,
             RocksDbMessageStoreOptions {
                 timer_enabled: message_store_config.timer_rocksdb_enable,
                 transaction_enabled: message_store_config.trans_rocksdb_enable,
             },
             service_context.component("rocksdb-derived"),
             telemetry.rocksdb().clone(),
-        )
-        .map_err(|error| message_store_adapter_error(StoreOperation::Load, error))?;
+        )?;
         let consume_queue_store = derived.consume_queue_store().clone();
         let rocksdb_index_service = derived.rocksdb_index_service();
         let rocksdb_timer_service = derived.rocksdb_timer_service();
@@ -242,6 +263,8 @@ impl RocksDBMessageStore {
             Arc::clone(&message_store_config),
             micro_batch_policy,
             timer_store_config,
+            #[cfg(feature = "tieredstore")]
+            tiered_store_open_plan,
             broker_config,
             topic_config_table,
             broker_stats_manager,
@@ -338,10 +361,7 @@ impl RocksDBMessageStore {
     }
 
     pub fn try_get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, StoreError> {
-        self.root
-            .derived()
-            .max_offset(topic.as_str(), queue_id)
-            .map_err(|error| message_store_adapter_error(StoreOperation::QueryOffset, error))
+        self.root.derived().max_offset(topic.as_str(), queue_id)
     }
 
     pub fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
@@ -355,10 +375,7 @@ impl RocksDBMessageStore {
     }
 
     pub fn try_get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> Result<i64, StoreError> {
-        self.root
-            .derived()
-            .min_offset(topic.as_str(), queue_id)
-            .map_err(|error| message_store_adapter_error(StoreOperation::QueryOffset, error))
+        self.root.derived().min_offset(topic.as_str(), queue_id)
     }
 
     pub fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
@@ -518,20 +535,17 @@ impl RocksDBMessageStore {
             return Ok(QueryMessageResult::default());
         }
         let local_wal = self.local_wal_adapter();
-        let lookup = self
-            .root
-            .query_index(
-                &local_wal,
-                topic.as_str(),
-                key.as_str(),
-                index_type,
-                max_num as usize,
-                begin,
-                end,
-                last_key,
-                self.get_message_store_config().max_rocksdb_index_query_days,
-            )
-            .map_err(|error| message_store_adapter_error(StoreOperation::Read, error))?;
+        let lookup = self.root.query_index(
+            &local_wal,
+            topic.as_str(),
+            key.as_str(),
+            index_type,
+            max_num as usize,
+            begin,
+            end,
+            last_key,
+            self.get_message_store_config().max_rocksdb_index_query_days,
+        )?;
         let mut result = QueryMessageResult {
             index_last_update_timestamp: lookup.last_update_timestamp,
             index_last_update_phyoffset: lookup.last_update_physical_offset,
@@ -552,15 +566,13 @@ impl RocksDBMessageStore {
         self.root
             .derived()
             .consume_queue_value(topic.as_str(), queue_id, consume_queue_offset)
-            .map_err(|error| message_store_adapter_error(StoreOperation::Read, error))
     }
 
     fn sync_local_topic_queue_offsets(&self) -> Result<(), StoreError> {
         let topic_queue_table = self
             .root
             .derived()
-            .topic_queue_offsets()
-            .map_err(|error| message_store_adapter_error(StoreOperation::Load, error))?
+            .topic_queue_offsets()?
             .into_iter()
             .map(|((topic, queue_id), offset)| (CheetahString::from_string(format!("{topic}-{queue_id}")), offset))
             .collect();
@@ -581,34 +593,6 @@ fn legacy_get_status(status: ApiGetStatus) -> GetMessageStatus {
         ApiGetStatus::NoMatchedLogicQueue => GetMessageStatus::NoMatchedLogicQueue,
         ApiGetStatus::NoMessageInQueue => GetMessageStatus::NoMessageInQueue,
         ApiGetStatus::OffsetReset => GetMessageStatus::OffsetReset,
-    }
-}
-
-fn rocksdb_failure_descriptor(operation: StoreOperation) -> &'static rocketmq_error::ErrorDescriptor {
-    match operation {
-        StoreOperation::Load | StoreOperation::Start => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
-        StoreOperation::Read | StoreOperation::QueryOffset => &rocketmq_error::STORAGE_READ_FAILED,
-        StoreOperation::Append | StoreOperation::Flush | StoreOperation::Replicate | StoreOperation::AppendDerived => {
-            &rocketmq_error::STORAGE_WRITE_FAILED
-        }
-        StoreOperation::Shutdown | StoreOperation::Admin => &rocketmq_error::STORAGE_IO_FAILED,
-    }
-}
-
-fn message_store_adapter_error(operation: StoreOperation, error: RocksDbMessageStoreError) -> StoreError {
-    match error {
-        RocksDbMessageStoreError::Config(message) => {
-            StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, operation)
-                .in_component(StoreComponent::Configuration)
-                .with_detail(message.clone())
-                .with_source(RocksDbMessageStoreError::Config(message))
-        }
-        RocksDbMessageStoreError::Backend { source } => {
-            StoreError::new(rocksdb_failure_descriptor(operation), operation)
-                .in_component(StoreComponent::RocksDb)
-                .with_source(source)
-        }
-        RocksDbMessageStoreError::Local { source } => source,
     }
 }
 
@@ -640,7 +624,7 @@ impl BackendOps for RocksDBMessageStore {
         self.close_rocksdb();
 
         let report = local_file_result?;
-        derived_maintenance_result.map_err(|error| message_store_adapter_error(StoreOperation::Shutdown, error))?;
+        derived_maintenance_result?;
         Ok(report)
     }
 
@@ -775,7 +759,6 @@ impl BackendOps for RocksDBMessageStore {
         self.root
             .derived()
             .offset_by_time(topic.as_str(), queue_id, timestamp, RocksDbTimeBoundary::Lower)
-            .map_err(|error| message_store_adapter_error(StoreOperation::QueryOffset, error))
     }
 
     async fn get_offset_in_queue_by_time_with_boundary_async(
@@ -792,7 +775,6 @@ impl BackendOps for RocksDBMessageStore {
         self.root
             .derived()
             .offset_by_time(topic.as_str(), queue_id, timestamp, boundary)
-            .map_err(|error| message_store_adapter_error(StoreOperation::QueryOffset, error))
     }
 
     fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt> {
@@ -1028,7 +1010,6 @@ impl BackendOps for RocksDBMessageStore {
 
     fn try_flush(&self) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError> {
         if let Err(error) = self.root.derived().flush_derived() {
-            let error = message_store_adapter_error(StoreOperation::Flush, error);
             self.local_file_store.record_flush_failure(&error);
             return Err(error);
         }
@@ -1405,69 +1386,28 @@ impl DerefMut for RocksDBMessageStore {
 }
 
 #[cfg(test)]
-mod adapter_tests {
-    use super::*;
+mod redaction_tests {
+    use std::fmt;
 
-    fn backend_error() -> RocksDbMessageStoreError {
-        RocksDbMessageStoreError::Backend {
-            source: rocketmq_error::RocketMQError::storage_read_failed("rocksdb", "typed backend leaf"),
+    struct RocksDbStoreDebugProbe;
+
+    impl fmt::Debug for RocksDbStoreDebugProbe {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            super::write_redacted_debug(formatter)
         }
     }
 
     #[test]
-    fn rocksdb_adapter_preserves_operation_descriptor_and_typed_source() {
-        let cases = [
-            (StoreOperation::Load, &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE),
-            (StoreOperation::Read, &rocketmq_error::STORAGE_READ_FAILED),
-            (StoreOperation::QueryOffset, &rocketmq_error::STORAGE_READ_FAILED),
-            (StoreOperation::Flush, &rocketmq_error::STORAGE_WRITE_FAILED),
-            (StoreOperation::Shutdown, &rocketmq_error::STORAGE_IO_FAILED),
-        ];
+    fn rocksdb_message_store_debug_redacts_path_and_configuration_values() {
+        let sensitive_path = "sensitive-rocksdb-root-canary";
+        let sensitive_value = "sensitive-rocksdb-config-canary";
+        let rendered = format!("{:?}", RocksDbStoreDebugProbe);
 
-        for (operation, descriptor) in cases {
-            let error = message_store_adapter_error(operation, backend_error());
-            assert_eq!(error.descriptor(), descriptor);
-            assert_eq!(error.operation(), operation);
-            assert_eq!(error.component(), StoreComponent::RocksDb);
-            assert!(std::error::Error::source(&error)
-                .and_then(|source| source.downcast_ref::<rocketmq_error::RocketMQError>())
-                .is_some());
-        }
-    }
-
-    #[test]
-    fn rocksdb_adapter_keeps_configuration_and_local_boundaries_distinct() {
-        let config = message_store_adapter_error(
-            StoreOperation::Start,
-            RocksDbMessageStoreError::Config("private configuration detail".to_string()),
+        assert_eq!(
+            rendered,
+            "RocksDBMessageStore { configuration_present: true, redacted: true }"
         );
-        assert_eq!(config.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
-        assert_eq!(config.operation(), StoreOperation::Start);
-        assert_eq!(config.component(), StoreComponent::Configuration);
-        assert!(std::error::Error::source(&config)
-            .and_then(|source| source.downcast_ref::<RocksDbMessageStoreError>())
-            .is_some());
-        assert!(config
-            .public_view()
-            .expect("valid public view")
-            .fields()
-            .next()
-            .is_none());
-        assert!(!config.to_string().contains("private configuration detail"));
-        assert!(!format!("{config:?}").contains("private configuration detail"));
-
-        let local_source = StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Read)
-            .in_component(StoreComponent::CommitLog)
-            .with_source(std::io::Error::other("private Local source"));
-        let local = message_store_adapter_error(
-            StoreOperation::Read,
-            RocksDbMessageStoreError::Local { source: local_source },
-        );
-        assert_eq!(local.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
-        assert_eq!(local.operation(), StoreOperation::Read);
-        assert_eq!(local.component(), StoreComponent::CommitLog);
-        assert!(std::error::Error::source(&local)
-            .and_then(|source| source.downcast_ref::<std::io::Error>())
-            .is_some());
+        assert!(!rendered.contains(sensitive_path));
+        assert!(!rendered.contains(sensitive_value));
     }
 }

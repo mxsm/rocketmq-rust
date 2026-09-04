@@ -39,6 +39,7 @@ use rocketmq_store::StoreRuntimeConfig;
 use rocketmq_store::TIMER_OUT_MS;
 use rocketmq_store::TIMER_TOPIC;
 use rocketmq_store_api::PersistedTimerRoute;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerEngineId;
 use rocketmq_store_api::TimerGeneration;
@@ -209,7 +210,9 @@ async fn materializer_payload_first_shadow_restart_keeps_one_year_payload_idempo
     drop(store);
 
     {
-        let timeline = RocksDbTimelineIndex::open(root.path()).expect("reopen Timeline");
+        let timeline = RocksDbTimelineIndex::open(root.path())
+            .expect("reopen Timeline")
+            .expect("valid Timeline configuration");
         let checkpoint = timeline
             .checkpoint(TimelineCheckpointKind::MaterializedSource, 0)
             .expect("checkpoint read")
@@ -222,7 +225,7 @@ async fn materializer_payload_first_shadow_restart_keeps_one_year_payload_idempo
         assert_eq!(page.entries[0].key.generation, TimerGeneration::new(7));
         assert!(timeline
             .store()
-            .get_cf(READY_CF, &encode_ready_key(page.entries[0].key))
+            .get_cf(StoreOperation::Read, READY_CF, &encode_ready_key(page.entries[0].key),)
             .expect("ready lookup")
             .is_none());
 
@@ -314,7 +317,9 @@ async fn materializer_gap_keeps_checkpoint_and_cleanup_fence_at_first_failed_sou
     store.shutdown().await;
     drop(store);
 
-    let timeline = RocksDbTimelineIndex::open(root.path()).expect("Timeline");
+    let timeline = RocksDbTimelineIndex::open(root.path())
+        .expect("Timeline")
+        .expect("valid Timeline configuration");
     assert!(timeline
         .checkpoint(TimelineCheckpointKind::MaterializedSource, 0)
         .expect("checkpoint")
@@ -351,7 +356,9 @@ fn formal_state(generation: TimerGeneration, state: TimelineState) -> TimelineSt
 #[test]
 fn late_ready_due_scanner_ready_outbox_transition_is_crash_safe() {
     let root = TempDir::new().expect("tempdir");
-    let timeline = RocksDbTimelineIndex::open(root.path()).expect("Timeline");
+    let timeline = RocksDbTimelineIndex::open(root.path())
+        .expect("Timeline")
+        .expect("valid Timeline configuration");
     let generation = TimerGeneration::new(3);
     let key = TimelineKeyV1 {
         due_time_ms: 8_000,
@@ -402,12 +409,12 @@ fn late_ready_due_scanner_ready_outbox_transition_is_crash_safe() {
     ));
     assert!(timeline
         .store()
-        .get_cf(READY_CF, &encode_ready_key(key))
+        .get_cf(StoreOperation::Read, READY_CF, &encode_ready_key(key))
         .expect("ready")
         .is_some());
     assert!(timeline
         .store()
-        .get_cf(LATE_READY_CF, &encode_ready_key(key))
+        .get_cf(StoreOperation::Read, LATE_READY_CF, &encode_ready_key(key))
         .expect("late ready")
         .is_none());
     assert_eq!(
@@ -423,7 +430,9 @@ fn late_ready_due_scanner_ready_outbox_transition_is_crash_safe() {
 #[test]
 fn recall_generation_state_keys_fence_old_work() {
     let root = TempDir::new().expect("tempdir");
-    let timeline = RocksDbTimelineIndex::open(root.path()).expect("Timeline");
+    let timeline = RocksDbTimelineIndex::open(root.path())
+        .expect("Timeline")
+        .expect("valid Timeline configuration");
     let timer_id = TimerId::new(123);
     let old = TimerGeneration::new(1);
     let active = TimerGeneration::new(2);

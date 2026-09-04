@@ -19,13 +19,16 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerGeneration;
 use rocketmq_store_api::TimerId;
 
 use crate::batch::RocksDbWriteBatch;
 use crate::config::RocksDbConfig;
-use crate::error::codec_error;
+use crate::error::codec_contract;
+use crate::error::codec_corrupted;
+use crate::error::state_corrupted_source;
 use crate::iterator::RocksDbRangeScanOptions;
 use crate::store::KeyValueStore;
 use crate::store::RocksDbStore;
@@ -105,7 +108,7 @@ impl RocksDbTimelineIndex {
     /// # Errors
     ///
     /// Returns an error when RocksDB cannot open with the required WAL/sync profile.
-    pub fn open(store_root: impl AsRef<Path>) -> Result<Self, RocketMQError> {
+    pub fn open(store_root: impl AsRef<Path>) -> Result<Option<Self>, StoreError> {
         let config = RocksDbConfig::timer_timeline(store_root);
         Self::open_with_config(config)
     }
@@ -116,18 +119,21 @@ impl RocksDbTimelineIndex {
     ///
     /// Returns an error when the checkpoint cannot be opened or its persisted snapshot pin is
     /// invalid.
-    pub fn open_database_path(path: impl AsRef<Path>) -> Result<Self, RocketMQError> {
+    pub fn open_database_path(path: impl AsRef<Path>) -> Result<Option<Self>, StoreError> {
         Self::open_with_config(RocksDbConfig::timer_timeline_at_database_path(
             path.as_ref().to_path_buf(),
         ))
     }
 
-    fn open_with_config(config: RocksDbConfig) -> Result<Self, RocketMQError> {
+    fn open_with_config(config: RocksDbConfig) -> Result<Option<Self>, StoreError> {
         debug_assert!(config.wal_enabled && config.sync_write);
-        let store = Arc::new(RocksDbStore::open(config)?);
+        let Some(store) = RocksDbStore::open(config)? else {
+            return Ok(None);
+        };
+        let store = Arc::new(store);
         let index = Self::from_store(store);
         index.restore_snapshot_pin()?;
-        Ok(index)
+        Ok(Some(index))
     }
 
     /// Creates an index over an already opened dedicated Timeline DB.
@@ -158,7 +164,7 @@ impl RocksDbTimelineIndex {
         &self,
         entries: &[TimelineIndexEntry],
         checkpoint: Option<(TimelineCheckpointKind, u16, TimelineCheckpointV1)>,
-    ) -> Result<usize, RocketMQError> {
+    ) -> Result<usize, StoreError> {
         let mut batch = RocksDbWriteBatch::with_capacity(entries.len().saturating_add(1));
         for entry in entries {
             Self::append_entry(&mut batch, entry)?;
@@ -166,12 +172,13 @@ impl RocksDbTimelineIndex {
         if let Some((kind, lane, checkpoint)) = checkpoint {
             Self::append_checkpoint(&mut batch, kind, lane, checkpoint);
         }
-        self.store.write_batch(&batch)?;
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)?;
         Ok(entries.len())
     }
 
     /// Appends one formal or shadow entry to an existing atomic batch.
-    pub fn append_entry(batch: &mut RocksDbWriteBatch, entry: &TimelineIndexEntry) -> Result<(), RocketMQError> {
+    pub fn append_entry(batch: &mut RocksDbWriteBatch, entry: &TimelineIndexEntry) -> Result<(), StoreError> {
         let value = entry.record.encode();
         if entry.record.shadow_only {
             batch.put_cf(
@@ -206,19 +213,19 @@ impl RocksDbTimelineIndex {
         source_cq_offset: i64,
         source_physical_offset: i64,
         generation: TimerGeneration,
-    ) -> Result<Option<TimelineRecordV1>, RocketMQError> {
+    ) -> Result<Option<TimelineRecordV1>, StoreError> {
         let key = encode_shadow_key(source_cq_offset, source_physical_offset, generation)?;
         self.store
-            .get_cf(SHADOW_TIMELINE_CF, &key)?
-            .map(|value| TimelineRecordV1::decode(&value))
+            .get_cf(rocketmq_store_api::StoreOperation::Read, SHADOW_TIMELINE_CF, &key)?
+            .map(|value| TimelineRecordV1::decode(StoreOperation::Read, &value))
             .transpose()
     }
 
     /// Reads and verifies one formal Timeline record.
-    pub fn get(&self, key: TimelineKeyV1) -> Result<Option<TimelineRecordV1>, RocketMQError> {
+    pub fn get(&self, key: TimelineKeyV1) -> Result<Option<TimelineRecordV1>, StoreError> {
         self.store
-            .get_cf(TIMELINE_CF, &key.encode())?
-            .map(|value| TimelineRecordV1::decode(&value))
+            .get_cf(rocketmq_store_api::StoreOperation::Read, TIMELINE_CF, &key.encode())?
+            .map(|value| TimelineRecordV1::decode(StoreOperation::Read, &value))
             .transpose()
     }
 
@@ -232,7 +239,7 @@ impl RocksDbTimelineIndex {
         continuation: Option<TimelineKeyV1>,
         max_messages: usize,
         max_bytes: usize,
-    ) -> Result<TimelineIndexPage, RocketMQError> {
+    ) -> Result<TimelineIndexPage, StoreError> {
         self.range_scan_cf(
             TIMELINE_CF,
             start_due_ms,
@@ -251,7 +258,7 @@ impl RocksDbTimelineIndex {
         continuation: Option<TimelineKeyV1>,
         max_messages: usize,
         max_bytes: usize,
-    ) -> Result<TimelineIndexPage, RocketMQError> {
+    ) -> Result<TimelineIndexPage, StoreError> {
         self.range_scan_cf(
             SHADOW_OBSERVATION_CF,
             start_due_ms,
@@ -270,14 +277,10 @@ impl RocksDbTimelineIndex {
         continuation: Option<TimelineKeyV1>,
         max_messages: usize,
         max_bytes: usize,
-    ) -> Result<TimelineIndexPage, RocketMQError> {
+    ) -> Result<TimelineIndexPage, StoreError> {
         let minimum_record_bytes = TimelineKeyV1::encoded_size().saturating_add(TimelineRecordV1::encoded_size());
         if max_messages == 0 || max_bytes < minimum_record_bytes || end_due_exclusive_ms <= start_due_ms {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "timer.timeline.scan_budget",
-                value: format!("messages={max_messages}, bytes={max_bytes}"),
-                reason: "scan budget must fit at least one record and a non-empty time range".to_string(),
-            });
+            return Err(crate::error::request_invalid(rocketmq_store_api::StoreOperation::Read));
         }
         let first = TimelineKeyV1 {
             due_time_ms: start_due_ms,
@@ -292,16 +295,14 @@ impl RocksDbTimelineIndex {
             generation: TimerGeneration::new(0),
         };
         let scan_start = continuation.unwrap_or(first);
-        let raw = self.store.range_scan(&RocksDbRangeScanOptions::new(
-            cf,
-            scan_start.encode(),
-            end.encode(),
-            max_messages.saturating_add(2),
-        ))?;
+        let raw = self.store.range_scan(
+            rocketmq_store_api::StoreOperation::Read,
+            &RocksDbRangeScanOptions::new(cf, scan_start.encode(), end.encode(), max_messages.saturating_add(2)),
+        )?;
         let mut page = TimelineIndexPage::default();
         let mut has_more = false;
         for item in raw {
-            let key = TimelineKeyV1::decode(&item.key)?;
+            let key = TimelineKeyV1::decode(StoreOperation::Read, &item.key)?;
             if continuation == Some(key) {
                 continue;
             }
@@ -313,7 +314,7 @@ impl RocksDbTimelineIndex {
             page.retained_bytes = page.retained_bytes.saturating_add(retained);
             page.entries.push(TimelineIndexEntry {
                 key,
-                record: TimelineRecordV1::decode(&item.value)?,
+                record: TimelineRecordV1::decode(StoreOperation::Read, &item.value)?,
             });
         }
         if has_more {
@@ -330,7 +331,7 @@ impl RocksDbTimelineIndex {
         generation: TimerGeneration,
         kind: ShadowObservationKind,
         value: impl Into<Vec<u8>>,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         batch.put_cf(
             SHADOW_OBSERVATION_CF,
             encode_shadow_observation_key(source_cq_offset, source_physical_offset, generation, kind)?,
@@ -351,11 +352,11 @@ impl RocksDbTimelineIndex {
         source_physical_offset: i64,
         generation: TimerGeneration,
         kind: ShadowObservationKind,
-    ) -> Result<Option<Vec<u8>>, RocketMQError> {
+    ) -> Result<Option<Vec<u8>>, StoreError> {
         let key = encode_shadow_observation_key(source_cq_offset, source_physical_offset, generation, kind)?;
         Ok(self
             .store
-            .get_cf(SHADOW_OBSERVATION_CF, &key)?
+            .get_cf(rocketmq_store_api::StoreOperation::Read, SHADOW_OBSERVATION_CF, &key)?
             .map(|value| value.to_vec()))
     }
 
@@ -364,20 +365,25 @@ impl RocksDbTimelineIndex {
         &self,
         kind: TimelineCheckpointKind,
         lane: u16,
-    ) -> Result<Option<TimelineCheckpointV1>, RocketMQError> {
+    ) -> Result<Option<TimelineCheckpointV1>, StoreError> {
         self.store
-            .get_cf(CHECKPOINT_CF, &encode_checkpoint_key(kind, lane))?
-            .map(|value| TimelineCheckpointV1::decode(&value))
+            .get_cf(
+                rocketmq_store_api::StoreOperation::Read,
+                CHECKPOINT_CF,
+                &encode_checkpoint_key(kind, lane),
+            )?
+            .map(|value| TimelineCheckpointV1::decode(StoreOperation::Read, &value))
             .transpose()
     }
 
     /// Atomically writes arbitrary Timeline/state/outbox operations.
-    pub fn write_batch(&self, batch: &RocksDbWriteBatch) -> Result<(), RocketMQError> {
-        self.store.write_batch(batch)
+    pub fn write_batch(&self, batch: &RocksDbWriteBatch) -> Result<(), StoreError> {
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, batch)
     }
 
     /// Pins a logical GC fence for snapshot/replication readers.
-    pub fn pin_snapshot(&self, gc_fence: TimelineKeyV1) -> Result<TimelineSnapshotPin, RocketMQError> {
+    pub fn pin_snapshot(&self, gc_fence: TimelineKeyV1) -> Result<TimelineSnapshotPin, StoreError> {
         let generation = self
             .next_snapshot_generation
             .fetch_add(1, Ordering::AcqRel)
@@ -390,103 +396,81 @@ impl RocksDbTimelineIndex {
         &self,
         gc_fence: TimelineKeyV1,
         generation: u64,
-    ) -> Result<TimelineSnapshotPin, RocketMQError> {
+    ) -> Result<TimelineSnapshotPin, StoreError> {
         if generation == 0 {
-            return Err(codec_error("Timeline snapshot generation must be non-zero"));
+            return Err(codec_contract(StoreOperation::Read));
         }
-        let mut pins = self.snapshot_pins.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("timer-timeline", format!("snapshot pin lock poisoned: {error}"))
-        })?;
+        let mut pins = self
+            .snapshot_pins
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         if !pins.is_empty() {
-            return Err(codec_error("Timeline snapshot is already pinned"));
+            return Err(codec_contract(StoreOperation::Read));
         }
         let value = encode_snapshot_pin(generation, gc_fence);
-        self.store.put_cf(CHECKPOINT_CF, ACTIVE_SNAPSHOT_PIN_KEY, &value)?;
+        self.store.put_cf(
+            rocketmq_store_api::StoreOperation::AppendDerived,
+            CHECKPOINT_CF,
+            ACTIVE_SNAPSHOT_PIN_KEY,
+            &value,
+        )?;
         pins.insert(generation, gc_fence);
         self.next_snapshot_generation.fetch_max(generation, Ordering::Release);
         Ok(TimelineSnapshotPin { generation, gc_fence })
     }
 
     /// Releases a logical snapshot pin.
-    pub fn release_snapshot(&self, pin: TimelineSnapshotPin) -> Result<(), RocketMQError> {
-        let mut pins = self.snapshot_pins.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("timer-timeline", format!("snapshot pin lock poisoned: {error}"))
-        })?;
+    pub fn release_snapshot(&self, pin: TimelineSnapshotPin) -> Result<(), StoreError> {
+        let mut pins = self
+            .snapshot_pins
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
         match pins.remove(&pin.generation) {
-            Some(fence) if fence == pin.gc_fence => self.store.delete_cf(CHECKPOINT_CF, ACTIVE_SNAPSHOT_PIN_KEY),
-            _ => Err(codec_error("unknown or mismatched Timeline snapshot pin")),
+            Some(fence) if fence == pin.gc_fence => self.store.delete_cf(
+                rocketmq_store_api::StoreOperation::AppendDerived,
+                CHECKPOINT_CF,
+                ACTIVE_SNAPSHOT_PIN_KEY,
+            ),
+            _ => Err(codec_contract(StoreOperation::Read)),
         }
     }
 
-    fn restore_snapshot_pin(&self) -> Result<(), RocketMQError> {
-        let Some(value) = self.store.get_cf(CHECKPOINT_CF, ACTIVE_SNAPSHOT_PIN_KEY)? else {
+    fn restore_snapshot_pin(&self) -> Result<(), StoreError> {
+        let Some(value) = self.store.get_cf(
+            rocketmq_store_api::StoreOperation::Read,
+            CHECKPOINT_CF,
+            ACTIVE_SNAPSHOT_PIN_KEY,
+        )?
+        else {
             return Ok(());
         };
         let pin = decode_snapshot_pin(&value)?;
         self.next_snapshot_generation.store(pin.generation, Ordering::Release);
         self.snapshot_pins
             .lock()
-            .map_err(|error| {
-                RocketMQError::storage_read_failed("timer-timeline", format!("snapshot pin lock poisoned: {error}"))
-            })?
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?
             .insert(pin.generation, pin.gc_fence);
         Ok(())
     }
 
     /// Deletes at most `max_records` formal Timeline records below the effective GC fence.
-    pub fn gc(&self, requested_fence: TimelineKeyV1, max_records: usize) -> Result<usize, RocketMQError> {
+    pub fn gc(&self, requested_fence: TimelineKeyV1, max_records: usize) -> Result<usize, StoreError> {
         if max_records == 0 {
             return Ok(0);
         }
         let effective_fence = {
-            let pins = self.snapshot_pins.lock().map_err(|error| {
-                RocketMQError::storage_write_failed("timer-timeline", format!("snapshot pin lock poisoned: {error}"))
-            })?;
+            let pins = self
+                .snapshot_pins
+                .lock()
+                .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
             pins.values()
                 .copied()
                 .min()
                 .map_or(requested_fence, |pin| pin.min(requested_fence))
         };
-        let raw = self.store.range_scan(&RocksDbRangeScanOptions::new(
-            TIMELINE_CF,
-            TimelineKeyV1 {
-                due_time_ms: i64::MIN,
-                lane: 0,
-                timer_id: TimerId::new(0),
-                generation: TimerGeneration::new(0),
-            }
-            .encode(),
-            effective_fence.encode(),
-            max_records,
-        ))?;
-        let mut batch = RocksDbWriteBatch::with_capacity(raw.len());
-        for item in &raw {
-            batch.delete_cf(TIMELINE_CF, item.key.to_vec());
-        }
-        self.store.write_batch(&batch)?;
-        Ok(raw.len())
-    }
-
-    /// Returns a bounded formal GC page below all active snapshot pins without deleting it.
-    pub fn gc_candidates(
-        &self,
-        requested_fence: TimelineKeyV1,
-        max_records: usize,
-    ) -> Result<Vec<TimelineIndexEntry>, RocketMQError> {
-        if max_records == 0 {
-            return Ok(Vec::new());
-        }
-        let effective_fence = {
-            let pins = self.snapshot_pins.lock().map_err(|error| {
-                RocketMQError::storage_read_failed("timer-timeline", format!("snapshot pin lock poisoned: {error}"))
-            })?;
-            pins.values()
-                .copied()
-                .min()
-                .map_or(requested_fence, |pin| pin.min(requested_fence))
-        };
-        self.store
-            .range_scan(&RocksDbRangeScanOptions::new(
+        let raw = self.store.range_scan(
+            rocketmq_store_api::StoreOperation::Read,
+            &RocksDbRangeScanOptions::new(
                 TIMELINE_CF,
                 TimelineKeyV1 {
                     due_time_ms: i64::MIN,
@@ -497,12 +481,57 @@ impl RocksDbTimelineIndex {
                 .encode(),
                 effective_fence.encode(),
                 max_records,
-            ))?
+            ),
+        )?;
+        let mut batch = RocksDbWriteBatch::with_capacity(raw.len());
+        for item in &raw {
+            batch.delete_cf(TIMELINE_CF, item.key.to_vec());
+        }
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)?;
+        Ok(raw.len())
+    }
+
+    /// Returns a bounded formal GC page below all active snapshot pins without deleting it.
+    pub fn gc_candidates(
+        &self,
+        requested_fence: TimelineKeyV1,
+        max_records: usize,
+    ) -> Result<Vec<TimelineIndexEntry>, StoreError> {
+        if max_records == 0 {
+            return Ok(Vec::new());
+        }
+        let effective_fence = {
+            let pins = self
+                .snapshot_pins
+                .lock()
+                .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
+            pins.values()
+                .copied()
+                .min()
+                .map_or(requested_fence, |pin| pin.min(requested_fence))
+        };
+        self.store
+            .range_scan(
+                rocketmq_store_api::StoreOperation::Read,
+                &RocksDbRangeScanOptions::new(
+                    TIMELINE_CF,
+                    TimelineKeyV1 {
+                        due_time_ms: i64::MIN,
+                        lane: 0,
+                        timer_id: TimerId::new(0),
+                        generation: TimerGeneration::new(0),
+                    }
+                    .encode(),
+                    effective_fence.encode(),
+                    max_records,
+                ),
+            )?
             .into_iter()
             .map(|item| {
                 Ok(TimelineIndexEntry {
-                    key: TimelineKeyV1::decode(&item.key)?,
-                    record: TimelineRecordV1::decode(&item.value)?,
+                    key: TimelineKeyV1::decode(StoreOperation::Read, &item.key)?,
+                    record: TimelineRecordV1::decode(StoreOperation::Read, &item.value)?,
                 })
             })
             .collect()
@@ -514,11 +543,16 @@ impl RocksDbTimelineIndex {
     }
 
     /// Stores an 8-byte bucket count/byte summary under a caller-defined ordered bucket key.
-    pub fn put_bucket_summary(&self, key: &[u8], count: u64, bytes: u64) -> Result<(), RocketMQError> {
+    pub fn put_bucket_summary(&self, key: &[u8], count: u64, bytes: u64) -> Result<(), StoreError> {
         let mut value = [0u8; 16];
         value[..8].copy_from_slice(&count.to_be_bytes());
         value[8..].copy_from_slice(&bytes.to_be_bytes());
-        self.store.put_cf(BUCKET_SUMMARY_CF, key, &value)
+        self.store.put_cf(
+            rocketmq_store_api::StoreOperation::AppendDerived,
+            BUCKET_SUMMARY_CF,
+            key,
+            &value,
+        )
     }
 
     /// Appends one bucket summary replacement to an existing atomic Timeline batch.
@@ -530,15 +564,23 @@ impl RocksDbTimelineIndex {
     }
 
     /// Reads one bucket count/byte summary.
-    pub fn bucket_summary(&self, key: &[u8]) -> Result<Option<(u64, u64)>, RocketMQError> {
+    pub fn bucket_summary(&self, key: &[u8]) -> Result<Option<(u64, u64)>, StoreError> {
         self.store
-            .get_cf(BUCKET_SUMMARY_CF, key)?
+            .get_cf(rocketmq_store_api::StoreOperation::Read, BUCKET_SUMMARY_CF, key)?
             .map(|value| {
                 if value.len() != 16 {
-                    return Err(codec_error("invalid Timeline bucket summary"));
+                    return Err(codec_corrupted(StoreOperation::Read));
                 }
-                let count = u64::from_be_bytes(value[..8].try_into().map_err(|_| codec_error("invalid count"))?);
-                let bytes = u64::from_be_bytes(value[8..].try_into().map_err(|_| codec_error("invalid bytes"))?);
+                let count = u64::from_be_bytes(
+                    value[..8]
+                        .try_into()
+                        .map_err(|source| state_corrupted_source(StoreOperation::Read, source))?,
+                );
+                let bytes = u64::from_be_bytes(
+                    value[8..]
+                        .try_into()
+                        .map_err(|source| state_corrupted_source(StoreOperation::Read, source))?,
+                );
                 Ok((count, bytes))
             })
             .transpose()
@@ -559,28 +601,28 @@ fn encode_snapshot_pin(generation: u64, gc_fence: TimelineKeyV1) -> [u8; SNAPSHO
     value
 }
 
-fn decode_snapshot_pin(value: &[u8]) -> Result<TimelineSnapshotPin, RocketMQError> {
+fn decode_snapshot_pin(value: &[u8]) -> Result<TimelineSnapshotPin, StoreError> {
     if value.len() != SNAPSHOT_PIN_VALUE_SIZE
         || crc32c(&value[..43])
             != u32::from_be_bytes(
                 value[43..47]
                     .try_into()
-                    .map_err(|_| codec_error("invalid Timeline snapshot pin"))?,
+                    .map_err(|source| state_corrupted_source(StoreOperation::Read, source))?,
             )
     {
-        return Err(codec_error("invalid Timeline snapshot pin"));
+        return Err(codec_corrupted(StoreOperation::Read));
     }
     let generation = u64::from_be_bytes(
         value[..8]
             .try_into()
-            .map_err(|_| codec_error("invalid Timeline snapshot generation"))?,
+            .map_err(|source| state_corrupted_source(StoreOperation::Read, source))?,
     );
     if generation == 0 {
-        return Err(codec_error("invalid Timeline snapshot generation"));
+        return Err(codec_corrupted(StoreOperation::Read));
     }
     Ok(TimelineSnapshotPin {
         generation,
-        gc_fence: TimelineKeyV1::decode(&value[8..43])?,
+        gc_fence: TimelineKeyV1::decode(StoreOperation::Read, &value[8..43])?,
     })
 }
 
@@ -589,9 +631,9 @@ pub fn encode_shadow_key(
     source_cq_offset: i64,
     source_physical_offset: i64,
     generation: TimerGeneration,
-) -> Result<[u8; SHADOW_KEY_SIZE], RocketMQError> {
+) -> Result<[u8; SHADOW_KEY_SIZE], StoreError> {
     if source_cq_offset < 0 || source_physical_offset < 0 {
-        return Err(codec_error("shadow source identity must be non-negative"));
+        return Err(codec_contract(StoreOperation::AppendDerived));
     }
     let mut output = [0u8; SHADOW_KEY_SIZE];
     output[0] = SHADOW_KEY_VERSION;
@@ -606,7 +648,7 @@ fn encode_shadow_observation_key(
     source_physical_offset: i64,
     generation: TimerGeneration,
     kind: ShadowObservationKind,
-) -> Result<[u8; SHADOW_KEY_SIZE + 1], RocketMQError> {
+) -> Result<[u8; SHADOW_KEY_SIZE + 1], StoreError> {
     let source = encode_shadow_key(source_cq_offset, source_physical_offset, generation)?;
     let mut output = [0u8; SHADOW_KEY_SIZE + 1];
     output[0] = SHADOW_OBSERVATION_KEY_VERSION;

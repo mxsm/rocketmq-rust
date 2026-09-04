@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 
 use crate::file::TieredFlatFileStore;
 use crate::metadata::JsonMetadataStore;
@@ -46,7 +46,7 @@ where
         }
     }
 
-    pub async fn recover(&self) -> Result<TieredRecoverResult, RocketMQError> {
+    pub async fn recover(&self) -> Result<TieredRecoverResult, StoreError> {
         self.metadata_store.load().await?;
         self.flat_file_store.load().await?;
         Ok(TieredRecoverResult {
@@ -56,12 +56,13 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "serde"))]
 mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_store_api::StoreError;
+    use rocketmq_store_api::StoreOperation;
 
     use super::CommitLogRecoverService;
     use crate::config::TieredStoreConfig;
@@ -75,9 +76,14 @@ mod tests {
     use crate::provider::TieredStoreProvider;
 
     #[tokio::test]
-    async fn recover_corrects_half_committed_segment_metadata_size() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn recover_corrects_half_committed_segment_metadata_size() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -90,6 +96,7 @@ mod tests {
 
         let commit_log_segment = provider
             .create_segment(
+                StoreOperation::Load,
                 "TopicA/0/commitlog/00000000000000000000".to_owned(),
                 FileSegmentType::CommitLog,
                 0,
@@ -104,6 +111,7 @@ mod tests {
 
         let consume_queue_segment = provider
             .create_segment(
+                StoreOperation::Load,
                 "TopicA/0/consumequeue/00000000000000000000".to_owned(),
                 FileSegmentType::ConsumeQueue,
                 0,
@@ -140,7 +148,7 @@ mod tests {
         assert_eq!(result.flat_file_count, 1);
         let flat_file = flat_file_store
             .get("TopicA", 0)
-            .ok_or_else(|| RocketMQError::invariant_violated("recovery must publish a recovered flat file"))?;
+            .ok_or_else(|| crate::error::internal_failure(rocketmq_store_api::StoreOperation::Load))?;
         assert_eq!(
             flat_file.read_message_by_queue_offset(0).await?,
             Some(Bytes::from_static(b"body"))

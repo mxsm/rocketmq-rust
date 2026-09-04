@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::UnifiedServiceError;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 #[derive(Debug, Clone)]
 pub(crate) struct TaskOperationOwner {
@@ -49,13 +49,17 @@ impl TaskOperationOwner {
         self.operation.cancel();
     }
 
-    pub(crate) async fn shutdown_report(&self, name: &'static str, timeout: std::time::Duration) -> ShutdownReport {
+    pub(crate) async fn shutdown_report(
+        &self,
+        name: &'static str,
+        timeout: std::time::Duration,
+    ) -> Result<ShutdownReport, StoreError> {
         let active_before = self.task_count();
         let joined = self
             .operation
             .cancel_and_wait(&self.task_group, timeout)
             .await
-            .unwrap_or(false);
+            .map_err(|source| crate::error::runtime_error(StoreOperation::Shutdown, source))?;
         let mut report = ShutdownReport::new(name, std::time::Duration::ZERO);
         if joined {
             report.completed = active_before;
@@ -63,21 +67,18 @@ impl TaskOperationOwner {
             report.aborted = active_before;
             report.timed_out = usize::from(active_before > 0);
         }
-        report
+        Ok(report)
     }
 }
 
-pub(crate) fn shutdown_report_result(component: &'static str, report: ShutdownReport) -> Result<(), RocketMQError> {
-    report.assert_no_task_leak().map_err(|error| {
-        RocketMQError::Service(UnifiedServiceError::ShutdownFailed(format!(
-            "{component} shutdown failed: {error}"
-        )))
-    })
+pub(crate) fn shutdown_report_result(_component: &'static str, report: ShutdownReport) -> Result<(), StoreError> {
+    report
+        .assert_no_task_leak()
+        .map_err(|_| crate::error::internal_failure(StoreOperation::Shutdown))
 }
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::ErrorKind;
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
@@ -103,10 +104,24 @@ mod tests {
         let error = shutdown_report_result("tieredstore runtime test", report)
             .expect_err("unhealthy shutdown report should fail");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
-        assert!(matches!(
-            error,
-            RocketMQError::Service(UnifiedServiceError::ShutdownFailed(_))
-        ));
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
+        assert_eq!(error.operation(), StoreOperation::Shutdown);
+    }
+
+    #[test]
+    fn shutdown_runtime_mapping_preserves_source_without_rendering_detail() {
+        let sentinel = "sensitive-shutdown-runtime-canary";
+        let error = crate::error::runtime_error(
+            StoreOperation::Shutdown,
+            rocketmq_runtime::RuntimeError::InsideTokioRuntime(sentinel),
+        );
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
+        assert_eq!(error.operation(), StoreOperation::Shutdown);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<rocketmq_runtime::RuntimeError>())
+            .is_some());
+        let rendered = format!("{error} {error:?}");
+        assert!(!rendered.contains(sentinel));
     }
 }

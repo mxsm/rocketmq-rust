@@ -22,7 +22,8 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 use crate::file::FileSegment;
 use crate::file::FileSegmentType;
@@ -71,20 +72,21 @@ impl ReadAheadCache {
 
     pub(crate) async fn read<P>(
         &self,
+        operation: StoreOperation,
         segment: &TieredFileSegment<P>,
         range: Range<u64>,
         block_size: usize,
-    ) -> Result<Bytes, RocketMQError>
+    ) -> Result<Bytes, StoreError>
     where
         P: TieredStoreProvider,
     {
         if !self.enabled || block_size == 0 {
-            return segment.read(range).await;
+            return segment.read_with_operation(operation, range).await;
         }
 
         let commit_position = segment.commit_position();
         if range.start >= commit_position || range.end <= range.start {
-            return segment.read(range).await;
+            return segment.read_with_operation(operation, range).await;
         }
         let requested_end = range.end.min(commit_position);
         let block_size = block_size as u64;
@@ -104,7 +106,7 @@ impl ReadAheadCache {
             let block = match self.get(&key, required_len) {
                 Some(bytes) => bytes,
                 None => {
-                    let bytes = segment.read(block_offset..block_end).await?;
+                    let bytes = segment.read_with_operation(operation, block_offset..block_end).await?;
                     self.insert(key, bytes.clone());
                     bytes
                 }
@@ -114,10 +116,7 @@ impl ReadAheadCache {
             let slice_end =
                 usize::try_from(requested_end.min(block_end).saturating_sub(block_offset)).unwrap_or(block.len());
             if slice_start > slice_end || slice_end > block.len() {
-                return Err(RocketMQError::storage_read_failed(
-                    metadata.path.clone(),
-                    "tiered read-ahead block is shorter than the committed range",
-                ));
+                return Err(crate::error::state_corrupted(operation));
             }
             chunks.push(block.slice(slice_start..slice_end));
             block_offset = block_end;

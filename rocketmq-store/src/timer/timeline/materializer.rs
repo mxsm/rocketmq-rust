@@ -155,7 +155,8 @@ impl ShadowTimelineMaterializer {
         let payload_store =
             Arc::new(TimerPayloadStore::new(payload_config)?.ok_or(TimelineMaterializerError::InvalidPayloadConfig)?);
         payload_store.load()?;
-        let timeline = Arc::new(RocksDbTimelineIndex::open(store_root)?);
+        let timeline =
+            Arc::new(RocksDbTimelineIndex::open(store_root)?.ok_or(TimelineMaterializerError::InvalidTimelineConfig)?);
         let reconciler = Arc::new(ShadowReconciler::new(
             Arc::clone(&timeline),
             Arc::clone(&payload_store),
@@ -869,6 +870,8 @@ pub(crate) enum TimelineMaterializerError {
     InvalidCommitLogFrame,
     #[error("derived Timer payload configuration is invalid")]
     InvalidPayloadConfig,
+    #[error("derived Timeline configuration is invalid")]
+    InvalidTimelineConfig,
     #[error("derived Timer payload record is invalid")]
     InvalidPayloadRecord,
     #[error("Timer source is missing required property {0}")]

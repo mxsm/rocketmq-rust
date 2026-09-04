@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 use tokio::sync::mpsc;
 
 use super::ConsumeQueueBatchWriteRequest;
@@ -37,20 +37,16 @@ impl Default for RocksDbConsumeQueueGroupCommitConfig {
 }
 
 impl RocksDbConsumeQueueGroupCommitConfig {
-    fn validate(self) -> Result<Self, RocketMQError> {
+    fn validate(self) -> Result<Self, StoreError> {
         if self.queue_capacity == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.consume_queue.group_commit.queue_capacity",
-                value: self.queue_capacity.to_string(),
-                reason: "queue capacity must be greater than zero".to_string(),
-            });
+            return Err(crate::error::request_invalid(
+                rocketmq_store_api::StoreOperation::AppendDerived,
+            ));
         }
         if self.batch_size == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.consume_queue.group_commit.batch_size",
-                value: self.batch_size.to_string(),
-                reason: "batch size must be greater than zero".to_string(),
-            });
+            return Err(crate::error::request_invalid(
+                rocketmq_store_api::StoreOperation::AppendDerived,
+            ));
         }
         Ok(self)
     }
@@ -62,14 +58,14 @@ pub struct RocksDbConsumeQueueGroupCommitService {
     task_error: GroupCommitTaskErrorSlot,
 }
 
-type GroupCommitTaskErrorSlot = Arc<tokio::sync::Mutex<Option<RocketMQError>>>;
+type GroupCommitTaskErrorSlot = Arc<tokio::sync::Mutex<Option<StoreError>>>;
 
 impl RocksDbConsumeQueueGroupCommitService {
     pub fn start(
         store: Arc<RocksDbStore>,
         config: RocksDbConsumeQueueGroupCommitConfig,
         runtime_scope: crate::runtime::RocksDbRuntimeScope,
-    ) -> Result<Self, RocketMQError> {
+    ) -> Result<Self, StoreError> {
         let config = config.validate()?;
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
         let task_group = crate::runtime::task_group(&runtime_scope, "rocksdb.consume_queue.group_commit");
@@ -81,7 +77,7 @@ impl RocksDbConsumeQueueGroupCommitService {
                     *task_error_clone.lock().await = Some(error);
                 }
             })
-            .map_err(|error| RocketMQError::storage_write_failed("rocksdb", error.to_string()))?;
+            .map_err(|source| crate::error::runtime_error(rocketmq_store_api::StoreOperation::Start, source))?;
         Ok(Self {
             sender,
             task_group,
@@ -89,13 +85,14 @@ impl RocksDbConsumeQueueGroupCommitService {
         })
     }
 
-    pub async fn submit(&self, request: ConsumeQueueBatchWriteRequest) -> Result<(), RocketMQError> {
-        self.sender.send(request).await.map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("group commit queue closed: {error}"))
-        })
+    pub async fn submit(&self, request: ConsumeQueueBatchWriteRequest) -> Result<(), StoreError> {
+        self.sender
+            .send(request)
+            .await
+            .map_err(|_| crate::error::unavailable(rocketmq_store_api::StoreOperation::AppendDerived))
     }
 
-    pub async fn shutdown(self) -> Result<(), RocketMQError> {
+    pub async fn shutdown(self) -> Result<(), StoreError> {
         let Self {
             sender,
             task_group,
@@ -103,14 +100,18 @@ impl RocksDbConsumeQueueGroupCommitService {
         } = self;
         drop(sender);
         let report = task_group.shutdown(std::time::Duration::from_secs(5)).await;
-        crate::runtime::shutdown_report_result("consume queue group commit shutdown", report)?;
+        crate::runtime::shutdown_report_result(
+            "consume queue group commit shutdown",
+            rocketmq_store_api::StoreOperation::Shutdown,
+            report,
+        )?;
         let task_error = task_error.lock().await.take();
         group_commit_worker_result(task_error)?;
         Ok(())
     }
 }
 
-fn group_commit_worker_result(error: Option<RocketMQError>) -> Result<(), RocketMQError> {
+fn group_commit_worker_result(error: Option<StoreError>) -> Result<(), StoreError> {
     match error {
         Some(error) => Err(error),
         None => Ok(()),
@@ -122,7 +123,7 @@ async fn run_group_commit_loop(
     mut receiver: mpsc::Receiver<ConsumeQueueBatchWriteRequest>,
     batch_size: usize,
     runtime_scope: crate::runtime::RocksDbRuntimeScope,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     while let Some(first_request) = receiver.recv().await {
         let mut requests = Vec::with_capacity(batch_size);
         requests.push(first_request);
@@ -140,10 +141,15 @@ async fn run_group_commit_loop(
         }
 
         let store = Arc::clone(&store);
-        crate::runtime::spawn_io(&runtime_scope, "rocksdb.consume_queue.group_commit", move || {
-            let writer = RocksDbConsumeQueueBatchWriter::new(store.as_ref());
-            writer.write(&request)
-        })
+        crate::runtime::spawn_io(
+            &runtime_scope,
+            "rocksdb.consume_queue.group_commit",
+            rocketmq_store_api::StoreOperation::AppendDerived,
+            move || {
+                let writer = RocksDbConsumeQueueBatchWriter::new(store.as_ref());
+                writer.write(&request)
+            },
+        )
         .await??;
     }
     Ok(())
@@ -151,20 +157,16 @@ async fn run_group_commit_loop(
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::ErrorKind;
-
     use super::*;
 
     #[test]
     fn group_commit_worker_result_preserves_original_error_kind() {
-        let error = group_commit_worker_result(Some(RocketMQError::ConfigInvalidValue {
-            key: "rocksdb.consume_queue.group_commit.batch_size",
-            value: "0".to_string(),
-            reason: "batch size must be greater than zero".to_string(),
-        }))
+        let error = group_commit_worker_result(Some(crate::error::request_invalid(
+            rocketmq_store_api::StoreOperation::AppendDerived,
+        )))
         .expect_err("group commit worker error should be propagated");
 
-        assert_eq!(error.kind(), ErrorKind::ConfigInvalidValue);
-        assert!(error.to_string().contains("batch size must be greater than zero"));
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+        assert_eq!(error.operation(), rocketmq_store_api::StoreOperation::AppendDerived);
     }
 }

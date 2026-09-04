@@ -15,8 +15,8 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use rocketmq_error::RocketMQError;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
+use rocketmq_store_api::StoreError;
 
 use crate::config::TieredStoreConfig;
 use crate::dispatcher::TieredDispatchRequest;
@@ -91,7 +91,7 @@ where
         }
     }
 
-    pub async fn load(&self) -> Result<(), RocketMQError> {
+    pub async fn load(&self) -> Result<(), StoreError> {
         let keys = self.recoverable_flat_file_keys().await?;
         for key in keys {
             let flat_file = self.get_or_create(key.topic, key.queue_id)?;
@@ -113,11 +113,11 @@ where
         self.files.len()
     }
 
-    pub async fn index_segment_count(&self) -> Result<usize, RocketMQError> {
+    pub async fn index_segment_count(&self) -> Result<usize, StoreError> {
         self.index_file.segment_count().await
     }
 
-    pub fn get_or_create(&self, topic: String, queue_id: i32) -> Result<Arc<TieredFlatFile<P>>, RocketMQError> {
+    pub fn get_or_create(&self, topic: String, queue_id: i32) -> Result<Arc<TieredFlatFile<P>>, StoreError> {
         let key = FlatFileKey {
             topic: topic.clone(),
             queue_id,
@@ -136,7 +136,7 @@ where
         Ok(entry.value().clone())
     }
 
-    pub async fn cleanup_expired(&self, now_millis: i64) -> Result<(), RocketMQError> {
+    pub async fn cleanup_expired(&self, now_millis: i64) -> Result<(), StoreError> {
         let reserved_millis = self.config.file_reserved_time.as_millis() as i64;
         let expire_before_millis = now_millis.saturating_sub(reserved_millis);
         let flat_files = self.files.iter().map(|entry| entry.value().clone()).collect::<Vec<_>>();
@@ -150,11 +150,11 @@ where
         Ok(())
     }
 
-    pub async fn shutdown(&self) -> Result<(), RocketMQError> {
+    pub async fn shutdown(&self) -> Result<(), StoreError> {
         Ok(())
     }
 
-    pub async fn destroy(&self) -> Result<(), RocketMQError> {
+    pub async fn destroy(&self) -> Result<(), StoreError> {
         self.files.clear();
         self.read_ahead_cache.clear();
         Ok(())
@@ -164,7 +164,7 @@ where
         &self,
         request: &TieredDispatchRequest,
         tiered_commit_log_offset: u64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         if !self.config.message_index_enable || request.store_timestamp < 0 || request.message_size <= 0 {
             return Ok(());
         }
@@ -188,7 +188,7 @@ where
         max_num: usize,
         begin: i64,
         end: i64,
-    ) -> Result<Vec<TieredIndexEntry>, RocketMQError> {
+    ) -> Result<Vec<TieredIndexEntry>, StoreError> {
         if max_num == 0 || topic.is_empty() || key.is_empty() || end < begin {
             return Ok(Vec::new());
         }
@@ -200,7 +200,7 @@ where
         self.index_file.query_entries(topic, key, max_num, begin, end).await
     }
 
-    async fn recover_index_file(&self) -> Result<(), RocketMQError> {
+    async fn recover_index_file(&self) -> Result<(), StoreError> {
         if self.index_file.segment_count().await? > 0 {
             let entries = self.index_file.load_entries().await?;
             if !entries.is_empty() {
@@ -216,7 +216,7 @@ where
         Ok(())
     }
 
-    async fn compact_index_file(&self, retain_from_timestamp_millis: i64) -> Result<(), RocketMQError> {
+    async fn compact_index_file(&self, retain_from_timestamp_millis: i64) -> Result<(), StoreError> {
         let mut entries = self.index_entries_for_compaction().await?;
         let original_len = entries.len();
         entries.retain(|entry| entry.store_timestamp >= retain_from_timestamp_millis);
@@ -226,7 +226,7 @@ where
         self.index_file.compact_entries(&entries).await
     }
 
-    async fn index_entries_for_compaction(&self) -> Result<Vec<TieredIndexEntry>, RocketMQError> {
+    async fn index_entries_for_compaction(&self) -> Result<Vec<TieredIndexEntry>, StoreError> {
         let mut entries = if self.index_file.segment_count().await? > 0 {
             self.index_file.load_entries().await?
         } else {
@@ -245,7 +245,7 @@ where
         Ok(entries)
     }
 
-    async fn recoverable_flat_file_keys(&self) -> Result<Vec<FlatFileKey>, RocketMQError> {
+    async fn recoverable_flat_file_keys(&self) -> Result<Vec<FlatFileKey>, StoreError> {
         let mut keys = self
             .metadata_store
             .list_queues()
@@ -336,14 +336,20 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    #[cfg(feature = "serde")]
     use bytes::Bytes;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_store_api::StoreError;
+    #[cfg(feature = "serde")]
+    use rocketmq_store_api::StoreOperation;
 
     use super::*;
+    #[cfg(feature = "serde")]
     use crate::file::ConsumeQueueUnit;
+    #[cfg(feature = "serde")]
     use crate::file::FileSegment;
     use crate::metadata::JsonMetadataStore;
     use crate::provider::MemoryProvider;
+    #[cfg(feature = "serde")]
     use crate::provider::TieredStoreProvider;
 
     fn test_request(timestamp: i64, keys: &str) -> TieredDispatchRequest {
@@ -364,9 +370,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn index_query_deduplicates_keys_and_cleanup_removes_expired_entries() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn index_query_deduplicates_keys_and_cleanup_removes_expired_entries() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             file_reserved_time: Duration::from_millis(10_000),
@@ -407,9 +418,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_restores_persisted_index_entries() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn load_restores_persisted_index_entries() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -438,9 +454,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_restores_index_entries_from_provider_index_file() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn load_restores_index_entries_from_provider_index_file() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().join("metadata-a"),
             backend_provider: "memory".to_owned(),
@@ -472,10 +493,16 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "serde")]
     #[tokio::test]
-    async fn load_recovers_index_file_from_metadata_when_index_file_is_absent() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn load_recovers_index_file_from_metadata_when_index_file_is_absent() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -507,10 +534,16 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "serde")]
     #[tokio::test]
-    async fn load_recovers_queue_from_segment_metadata_when_queue_metadata_is_missing() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn load_recovers_queue_from_segment_metadata_when_queue_metadata_is_missing() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -523,6 +556,7 @@ mod tests {
 
         let commit_log_segment = provider
             .create_segment(
+                StoreOperation::Load,
                 "TopicA/0/commitlog/00000000000000000000".to_owned(),
                 FileSegmentType::CommitLog,
                 0,
@@ -537,6 +571,7 @@ mod tests {
 
         let consume_queue_segment = provider
             .create_segment(
+                StoreOperation::Load,
                 "TopicA/0/consumequeue/00000000000000000000".to_owned(),
                 FileSegmentType::ConsumeQueue,
                 0,
@@ -566,7 +601,7 @@ mod tests {
 
         let flat_file = store
             .get("TopicA", 0)
-            .ok_or_else(|| RocketMQError::invariant_violated("recovery must publish a flat file"))?;
+            .ok_or_else(|| crate::error::internal_failure(rocketmq_store_api::StoreOperation::Load))?;
         assert_eq!(
             flat_file.read_message_by_queue_offset(0).await?,
             Some(Bytes::from_static(b"body"))
@@ -574,7 +609,7 @@ mod tests {
         let queue_metadata = reloaded_metadata_store
             .get_queue("TopicA", 0)
             .await?
-            .ok_or_else(|| RocketMQError::invariant_violated("recovery must publish queue metadata"))?;
+            .ok_or_else(|| crate::error::internal_failure(rocketmq_store_api::StoreOperation::Load))?;
         assert_eq!(queue_metadata.min_offset, 0);
         assert_eq!(queue_metadata.max_offset, 1);
         Ok(())

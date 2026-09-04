@@ -18,9 +18,10 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::boundary_type::BoundaryType;
 use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 use crate::config::TieredStoreConfig;
 use crate::error;
@@ -54,17 +55,14 @@ impl ConsumeQueueUnit {
         bytes.freeze()
     }
 
-    pub fn decode(bytes: Bytes) -> Result<Self, RocketMQError> {
-        Self::decode_slice(bytes.as_ref())
+    pub fn decode(operation: StoreOperation, bytes: Bytes) -> Result<Self, StoreError> {
+        Self::decode_slice(operation, bytes.as_ref())
     }
 
     /// Decodes one borrowed ConsumeQueue unit without allocating a temporary buffer.
-    pub fn decode_slice(bytes: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode_slice(operation: StoreOperation, bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() != CONSUME_QUEUE_UNIT_SIZE {
-            return Err(error::illegal_argument(format!(
-                "tiered consume queue unit must be {CONSUME_QUEUE_UNIT_SIZE} bytes, got {}",
-                bytes.len()
-            )));
+            return Err(error::request_invalid(operation));
         }
         let mut commit_log_offset = [0_u8; 8];
         commit_log_offset.copy_from_slice(&bytes[..8]);
@@ -152,7 +150,7 @@ where
         self.queue_id
     }
 
-    pub async fn append_commit_log(&self, message: Bytes, store_timestamp: i64) -> Result<u64, RocketMQError> {
+    pub async fn append_commit_log(&self, message: Bytes, store_timestamp: i64) -> Result<u64, StoreError> {
         let append_len = message.len();
         let absolute_offset = self.commit_log_append_offset();
         let segment = self
@@ -173,18 +171,14 @@ where
         queue_offset: i64,
         unit: ConsumeQueueUnit,
         store_timestamp: i64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         if queue_offset < 0 {
-            return Err(error::illegal_argument(
-                "tiered consume queue offset must not be negative",
-            ));
+            return Err(error::request_invalid(StoreOperation::AppendDerived));
         }
         let absolute_offset = (queue_offset as u64).saturating_mul(CONSUME_QUEUE_UNIT_SIZE as u64);
         let expected_offset = self.consume_queue_append_byte_offset();
         if !self.consume_queue_segments.lock().is_empty() && absolute_offset != expected_offset {
-            return Err(error::illegal_argument(format!(
-                "tiered consume queue offset gap, expected byte offset {expected_offset}, got {absolute_offset}"
-            )));
+            return Err(error::request_invalid(StoreOperation::AppendDerived));
         }
         let segment = self
             .ensure_writable_segment(
@@ -198,7 +192,7 @@ where
         Ok(())
     }
 
-    pub async fn commit(&self) -> Result<(), RocketMQError> {
+    pub async fn commit(&self) -> Result<(), StoreError> {
         let commit_log_segments = { self.commit_log_segments.lock().clone() };
         for segment in commit_log_segments {
             segment.commit().await?;
@@ -224,7 +218,7 @@ where
         Ok(())
     }
 
-    pub async fn recover(&self) -> Result<(), RocketMQError> {
+    pub async fn recover(&self) -> Result<(), StoreError> {
         let mut commit_log_segments = Vec::new();
         let mut consume_queue_segments = Vec::new();
 
@@ -236,8 +230,11 @@ where
             if metadata.status == FileSegmentStatus::Deleted {
                 continue;
             }
-            let max_size = self.max_segment_size(metadata.segment_type)?;
-            let real_size = self.provider.segment_size(metadata.path.clone()).await?;
+            let max_size = self.max_segment_size(StoreOperation::Load, metadata.segment_type)?;
+            let real_size = self
+                .provider
+                .segment_size(StoreOperation::Load, metadata.path.clone())
+                .await?;
             if metadata.size != real_size {
                 metadata.size = real_size.min(max_size);
                 self.metadata_store.upsert_file_segment(metadata.clone()).await?;
@@ -307,7 +304,7 @@ where
             .unwrap_or(0)
     }
 
-    pub async fn cleanup_expired(&self, now_millis: i64) -> Result<(), RocketMQError> {
+    pub async fn cleanup_expired(&self, now_millis: i64) -> Result<(), StoreError> {
         let reserved_millis = self.config.file_reserved_time.as_millis() as i64;
         let expire_before_millis = now_millis.saturating_sub(reserved_millis);
         let previous_consume_queue_commit_offset = self.consume_queue_commit_offset();
@@ -330,46 +327,87 @@ where
         Ok(())
     }
 
-    pub async fn read_consume_queue_unit(&self, queue_offset: i64) -> Result<Option<ConsumeQueueUnit>, RocketMQError> {
+    pub async fn read_consume_queue_unit(&self, queue_offset: i64) -> Result<Option<ConsumeQueueUnit>, StoreError> {
+        self.read_consume_queue_unit_with_operation(StoreOperation::Read, queue_offset)
+            .await
+    }
+
+    pub(crate) async fn read_consume_queue_unit_with_operation(
+        &self,
+        operation: StoreOperation,
+        queue_offset: i64,
+    ) -> Result<Option<ConsumeQueueUnit>, StoreError> {
         if queue_offset < 0 {
-            return Err(error::illegal_argument(
-                "tiered consume queue offset must not be negative",
-            ));
+            return Err(error::request_invalid(operation));
         }
         let byte_offset = (queue_offset as u64).saturating_mul(CONSUME_QUEUE_UNIT_SIZE as u64);
         let Some(bytes) = self
-            .read_from_segments(FileSegmentType::ConsumeQueue, byte_offset, CONSUME_QUEUE_UNIT_SIZE)
+            .read_from_segments(
+                operation,
+                FileSegmentType::ConsumeQueue,
+                byte_offset,
+                CONSUME_QUEUE_UNIT_SIZE,
+            )
             .await?
         else {
             return Ok(None);
         };
-        ConsumeQueueUnit::decode_slice(bytes.as_ref()).map(Some)
+        ConsumeQueueUnit::decode_slice(operation, bytes.as_ref()).map(Some)
     }
 
-    pub async fn read_message_by_queue_offset(&self, queue_offset: i64) -> Result<Option<Bytes>, RocketMQError> {
-        let Some(unit) = self.read_consume_queue_unit(queue_offset).await? else {
+    pub async fn read_message_by_queue_offset(&self, queue_offset: i64) -> Result<Option<Bytes>, StoreError> {
+        self.read_message_by_queue_offset_with_operation(StoreOperation::Read, queue_offset)
+            .await
+    }
+
+    async fn read_message_by_queue_offset_with_operation(
+        &self,
+        operation: StoreOperation,
+        queue_offset: i64,
+    ) -> Result<Option<Bytes>, StoreError> {
+        let Some(unit) = self
+            .read_consume_queue_unit_with_operation(operation, queue_offset)
+            .await?
+        else {
             return Ok(None);
         };
         if unit.commit_log_offset < 0 || unit.size <= 0 {
             return Ok(None);
         }
-        self.read_commit_log(unit.commit_log_offset as u64, unit.size as usize)
+        self.read_from_segments(
+            operation,
+            FileSegmentType::CommitLog,
+            unit.commit_log_offset as u64,
+            unit.size as usize,
+        )
+        .await
+    }
+
+    pub async fn read_message_store_timestamp(&self, queue_offset: i64) -> Result<Option<i64>, StoreError> {
+        self.read_message_store_timestamp_with_operation(StoreOperation::QueryOffset, queue_offset)
             .await
     }
 
-    pub async fn read_message_store_timestamp(&self, queue_offset: i64) -> Result<Option<i64>, RocketMQError> {
-        let Some(message) = self.read_message_by_queue_offset(queue_offset).await? else {
+    async fn read_message_store_timestamp_with_operation(
+        &self,
+        operation: StoreOperation,
+        queue_offset: i64,
+    ) -> Result<Option<i64>, StoreError> {
+        let Some(message) = self
+            .read_message_by_queue_offset_with_operation(operation, queue_offset)
+            .await?
+        else {
             return Ok(None);
         };
         Ok(decode_message_store_timestamp(&message))
     }
 
-    pub async fn read_commit_log(&self, offset: u64, length: usize) -> Result<Option<Bytes>, RocketMQError> {
-        self.read_from_segments(FileSegmentType::CommitLog, offset, length)
+    pub async fn read_commit_log(&self, offset: u64, length: usize) -> Result<Option<Bytes>, StoreError> {
+        self.read_from_segments(StoreOperation::Read, FileSegmentType::CommitLog, offset, length)
             .await
     }
 
-    pub async fn queue_offset_by_time(&self, timestamp_millis: i64) -> Result<i64, RocketMQError> {
+    pub async fn queue_offset_by_time(&self, timestamp_millis: i64) -> Result<i64, StoreError> {
         self.queue_offset_by_time_with_boundary(timestamp_millis, BoundaryType::Lower)
             .await
     }
@@ -378,7 +416,7 @@ where
         &self,
         timestamp_millis: i64,
         boundary_type: BoundaryType,
-    ) -> Result<i64, RocketMQError> {
+    ) -> Result<i64, StoreError> {
         let cq_min = self.consume_queue_min_offset();
         let cq_commit = self.consume_queue_commit_offset();
         let cq_max = cq_commit.saturating_sub(1);
@@ -386,7 +424,10 @@ where
             return Ok(cq_min);
         }
 
-        let Some(max_store_time) = self.read_message_store_timestamp(cq_max).await? else {
+        let Some(max_store_time) = self
+            .read_message_store_timestamp_with_operation(StoreOperation::QueryOffset, cq_max)
+            .await?
+        else {
             return Ok(cq_min);
         };
         if max_store_time < timestamp_millis {
@@ -396,7 +437,10 @@ where
             });
         }
 
-        let Some(min_store_time) = self.read_message_store_timestamp(cq_min).await? else {
+        let Some(min_store_time) = self
+            .read_message_store_timestamp_with_operation(StoreOperation::QueryOffset, cq_min)
+            .await?
+        else {
             return Ok(cq_min);
         };
         if min_store_time > timestamp_millis {
@@ -408,7 +452,10 @@ where
             BoundaryType::Lower => {
                 while low < high {
                     let middle = low.saturating_add((high - low) / 2);
-                    let Some(store_time) = self.read_message_store_timestamp(middle).await? else {
+                    let Some(store_time) = self
+                        .read_message_store_timestamp_with_operation(StoreOperation::QueryOffset, middle)
+                        .await?
+                    else {
                         return Ok(low);
                     };
                     if store_time < timestamp_millis {
@@ -423,7 +470,10 @@ where
                 let mut result = cq_min;
                 while low <= high {
                     let middle = low.saturating_add((high - low) / 2);
-                    let Some(store_time) = self.read_message_store_timestamp(middle).await? else {
+                    let Some(store_time) = self
+                        .read_message_store_timestamp_with_operation(StoreOperation::QueryOffset, middle)
+                        .await?
+                    else {
                         return Ok(result);
                     };
                     if store_time <= timestamp_millis {
@@ -461,14 +511,12 @@ where
         max_size: u64,
         absolute_offset: u64,
         append_len: usize,
-    ) -> Result<Arc<TieredFileSegment<P>>, RocketMQError> {
+    ) -> Result<Arc<TieredFileSegment<P>>, StoreError> {
         let existing = match segment_type {
             FileSegmentType::CommitLog => self.commit_log_segments.lock().last().cloned(),
             FileSegmentType::ConsumeQueue => self.consume_queue_segments.lock().last().cloned(),
             FileSegmentType::Index => {
-                return Err(error::invalid_segment_type(
-                    "index segment is managed by tiered index service",
-                ));
+                return Err(error::unsupported(StoreOperation::AppendDerived));
             }
         };
         if let Some(segment) = existing {
@@ -483,7 +531,13 @@ where
         let path = segment_path(&self.topic, self.queue_id, segment_type, absolute_offset);
         let segment = Arc::new(
             self.provider
-                .create_segment(path, segment_type, absolute_offset, max_size)
+                .create_segment(
+                    StoreOperation::AppendDerived,
+                    path,
+                    segment_type,
+                    absolute_offset,
+                    max_size,
+                )
                 .await?
                 .with_metrics(self.metrics.clone()),
         );
@@ -524,13 +578,11 @@ where
             .unwrap_or(0)
     }
 
-    fn max_segment_size(&self, segment_type: FileSegmentType) -> Result<u64, RocketMQError> {
+    fn max_segment_size(&self, operation: StoreOperation, segment_type: FileSegmentType) -> Result<u64, StoreError> {
         match segment_type {
             FileSegmentType::CommitLog => Ok(self.config.commit_log_segment_size),
             FileSegmentType::ConsumeQueue => Ok(self.config.consume_queue_segment_size),
-            FileSegmentType::Index => Err(error::invalid_segment_type(
-                "index segment is managed by tiered index service",
-            )),
+            FileSegmentType::Index => Err(error::unsupported(operation)),
         }
     }
 
@@ -559,12 +611,14 @@ where
         segments.retain(|segment| segment.base_offset() != base_offset || segment.path() != path);
     }
 
-    async fn delete_segment(&self, segment: Arc<TieredFileSegment<P>>) -> Result<(), RocketMQError> {
+    async fn delete_segment(&self, segment: Arc<TieredFileSegment<P>>) -> Result<(), StoreError> {
         let metadata = segment.metadata();
         // The provider object remains readable until its deletion succeeds. Only
         // then publish the durable metadata tombstone and remove the segment
         // from the live view.
-        self.provider.delete(metadata.path.clone()).await?;
+        self.provider
+            .delete(StoreOperation::AppendDerived, metadata.path.clone())
+            .await?;
         self.metadata_store
             .mark_file_segment_deleted(&metadata.path, metadata.base_offset)
             .await?;
@@ -574,7 +628,7 @@ where
         Ok(())
     }
 
-    async fn refresh_queue_metadata(&self, previous_commit_offset: i64) -> Result<(), RocketMQError> {
+    async fn refresh_queue_metadata(&self, previous_commit_offset: i64) -> Result<(), StoreError> {
         let has_consume_queue_segments = !self.consume_queue_segments.lock().is_empty();
         let (min_offset, max_offset) = if has_consume_queue_segments {
             (self.consume_queue_min_offset(), self.consume_queue_commit_offset())
@@ -592,7 +646,7 @@ where
             .await
     }
 
-    async fn first_retained_commit_log_offset(&self) -> Result<Option<u64>, RocketMQError> {
+    async fn first_retained_commit_log_offset(&self) -> Result<Option<u64>, StoreError> {
         let consume_queue_segments = self.consume_queue_segments.lock().clone();
         let mut first_offset: Option<u64> = None;
         for segment in consume_queue_segments {
@@ -602,12 +656,13 @@ where
             let bytes = self
                 .read_ahead_cache
                 .read(
+                    StoreOperation::AppendDerived,
                     &segment,
                     0..CONSUME_QUEUE_UNIT_SIZE as u64,
                     block_size(segment.segment_type()),
                 )
                 .await?;
-            let unit = ConsumeQueueUnit::decode_slice(bytes.as_ref())?;
+            let unit = ConsumeQueueUnit::decode_slice(StoreOperation::AppendDerived, bytes.as_ref())?;
             if unit.commit_log_offset < 0 {
                 continue;
             }
@@ -636,10 +691,11 @@ where
 
     async fn read_from_segments(
         &self,
+        operation: StoreOperation,
         segment_type: FileSegmentType,
         absolute_offset: u64,
         length: usize,
-    ) -> Result<Option<Bytes>, RocketMQError> {
+    ) -> Result<Option<Bytes>, StoreError> {
         if length == 0 {
             return Ok(Some(Bytes::new()));
         }
@@ -658,6 +714,7 @@ where
         let bytes = self
             .read_ahead_cache
             .read(
+                operation,
                 &segment,
                 relative_offset..relative_offset.saturating_add(length as u64),
                 block_size(segment_type),
@@ -725,7 +782,7 @@ mod tests {
 
     use bytes::Bytes;
     use bytes::BytesMut;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_store_api::StoreError;
 
     use super::*;
     use crate::metadata::JsonMetadataStore;
@@ -753,7 +810,7 @@ mod tests {
     }
 
     #[test]
-    fn consume_queue_unit_supports_owned_and_borrowed_decode() -> Result<(), RocketMQError> {
+    fn consume_queue_unit_supports_owned_and_borrowed_decode() -> Result<(), StoreError> {
         let unit = ConsumeQueueUnit {
             commit_log_offset: 42,
             size: 128,
@@ -761,15 +818,57 @@ mod tests {
         };
         let encoded = unit.encode();
 
-        assert_eq!(ConsumeQueueUnit::decode(encoded.clone())?, unit);
-        assert_eq!(ConsumeQueueUnit::decode_slice(encoded.as_ref())?, unit);
+        assert_eq!(ConsumeQueueUnit::decode(StoreOperation::Read, encoded.clone())?, unit);
+        assert_eq!(
+            ConsumeQueueUnit::decode_slice(StoreOperation::Read, encoded.as_ref())?,
+            unit
+        );
         Ok(())
     }
 
     #[tokio::test]
-    async fn consume_queue_offsets_are_contiguous() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn consume_queue_reads_retain_query_and_derived_owners() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().expect("create consume queue owner fixture");
+        let config = test_config(temp_dir.path().to_path_buf());
+        let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
+        let flat_file = TieredFlatFile::new(
+            "TopicA".to_owned(),
+            0,
+            config,
+            metadata_store,
+            MemoryProvider::default(),
+        );
+
+        let query_error = flat_file
+            .read_message_store_timestamp(-1)
+            .await
+            .expect_err("a negative timestamp lookup must retain its query owner");
+        assert_eq!(query_error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+        assert_eq!(query_error.operation(), StoreOperation::QueryOffset);
+        assert_eq!(query_error.component(), rocketmq_store_api::StoreComponent::TieredStore);
+
+        let derived_error = flat_file
+            .read_consume_queue_unit_with_operation(StoreOperation::AppendDerived, -1)
+            .await
+            .expect_err("a derived validation read must retain its write owner");
+        assert_eq!(derived_error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+        assert_eq!(derived_error.operation(), StoreOperation::AppendDerived);
+        assert_eq!(
+            derived_error.component(),
+            rocketmq_store_api::StoreComponent::TieredStore
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consume_queue_offsets_are_contiguous() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let flat_file = TieredFlatFile::new(
@@ -810,9 +909,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_rolls_commit_log_and_consume_queue_segments() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn append_rolls_commit_log_and_consume_queue_segments() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let provider = MemoryProvider::default();
@@ -840,25 +944,37 @@ mod tests {
 
         assert_eq!(
             provider
-                .segment_size(segment_path("TopicA", 0, FileSegmentType::CommitLog, 0))
+                .segment_size(
+                    StoreOperation::Read,
+                    segment_path("TopicA", 0, FileSegmentType::CommitLog, 0)
+                )
                 .await?,
             8
         );
         assert_eq!(
             provider
-                .segment_size(segment_path("TopicA", 0, FileSegmentType::CommitLog, 8))
+                .segment_size(
+                    StoreOperation::Read,
+                    segment_path("TopicA", 0, FileSegmentType::CommitLog, 8)
+                )
                 .await?,
             4
         );
         assert_eq!(
             provider
-                .segment_size(segment_path("TopicA", 0, FileSegmentType::ConsumeQueue, 0))
+                .segment_size(
+                    StoreOperation::Read,
+                    segment_path("TopicA", 0, FileSegmentType::ConsumeQueue, 0)
+                )
                 .await?,
             (CONSUME_QUEUE_UNIT_SIZE * 2) as u64
         );
         assert_eq!(
             provider
-                .segment_size(segment_path("TopicA", 0, FileSegmentType::ConsumeQueue, 40))
+                .segment_size(
+                    StoreOperation::Read,
+                    segment_path("TopicA", 0, FileSegmentType::ConsumeQueue, 40)
+                )
                 .await?,
             CONSUME_QUEUE_UNIT_SIZE as u64
         );
@@ -874,9 +990,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_offset_by_time_respects_lower_and_upper_boundaries() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn queue_offset_by_time_respects_lower_and_upper_boundaries() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -935,9 +1056,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovers_segments_from_metadata_and_provider_size() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn recovers_segments_from_metadata_and_provider_size() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let provider = MemoryProvider::default();
@@ -973,9 +1099,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_deletes_expired_sealed_segments() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn cleanup_deletes_expired_sealed_segments() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let provider = MemoryProvider::default();
@@ -987,19 +1118,27 @@ mod tests {
         flat_file.commit().await?;
 
         let first_path = segment_path("TopicA", 0, FileSegmentType::CommitLog, 0);
-        assert_eq!(provider.segment_size(first_path.clone()).await?, 8);
+        assert_eq!(
+            provider.segment_size(StoreOperation::Read, first_path.clone()).await?,
+            8
+        );
 
         flat_file.cleanup_expired(2_000).await?;
 
-        assert_eq!(provider.segment_size(first_path).await?, 0);
+        assert_eq!(provider.segment_size(StoreOperation::Read, first_path).await?, 0);
         assert_eq!(flat_file.commit_log_append_offset(), 12);
         Ok(())
     }
 
     #[tokio::test]
-    async fn cleanup_keeps_expired_commit_log_referenced_by_retained_consume_queue() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn cleanup_keeps_expired_commit_log_referenced_by_retained_consume_queue() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -1035,7 +1174,7 @@ mod tests {
         let first_path = segment_path("TopicA", 0, FileSegmentType::CommitLog, 0);
         flat_file.cleanup_expired(2_000).await?;
 
-        assert_eq!(provider.segment_size(first_path).await?, 8);
+        assert_eq!(provider.segment_size(StoreOperation::Read, first_path).await?, 8);
         assert_eq!(
             flat_file.read_message_by_queue_offset(0).await?,
             Some(Bytes::from_static(b"abcd"))
@@ -1044,9 +1183,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_deletes_commit_log_after_referencing_consume_queue_expires() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn cleanup_deletes_commit_log_after_referencing_consume_queue_expires() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = test_config(temp_dir.path().to_path_buf());
         let metadata_store = Arc::new(JsonMetadataStore::new(config.clone()));
         let provider = MemoryProvider::default();
@@ -1075,12 +1219,12 @@ mod tests {
         let first_path = segment_path("TopicA", 0, FileSegmentType::CommitLog, 0);
         flat_file.cleanup_expired(2_000).await?;
 
-        assert_eq!(provider.segment_size(first_path).await?, 0);
+        assert_eq!(provider.segment_size(StoreOperation::Read, first_path).await?, 0);
         assert_eq!(flat_file.consume_queue_min_offset(), 2);
         let queue_metadata = metadata_store
             .get_queue("TopicA", 0)
             .await?
-            .ok_or_else(|| RocketMQError::invariant_violated("flat file must retain topic queue metadata"))?;
+            .ok_or_else(|| crate::error::internal_failure(rocketmq_store_api::StoreOperation::Load))?;
         assert_eq!(queue_metadata.min_offset, 2);
         assert_eq!(queue_metadata.max_offset, 3);
         Ok(())

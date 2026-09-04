@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 
 use crate::store::RocksDbStore;
 
@@ -23,7 +23,7 @@ pub async fn create_checkpoint(
     store: Arc<RocksDbStore>,
     runtime_scope: &crate::runtime::RocksDbRuntimeScope,
     target_dir: PathBuf,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     store.create_checkpoint(runtime_scope, target_dir).await
 }
 
@@ -31,7 +31,7 @@ pub async fn create_backup(
     store: Arc<RocksDbStore>,
     runtime_scope: &crate::runtime::RocksDbRuntimeScope,
     backup_dir: PathBuf,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     store.create_backup(runtime_scope, backup_dir).await
 }
 
@@ -40,6 +40,6 @@ pub async fn restore_latest_backup(
     backup_dir: PathBuf,
     db_dir: PathBuf,
     wal_dir: Option<PathBuf>,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     RocksDbStore::restore_latest_backup(runtime_scope, backup_dir, db_dir, wal_dir).await
 }

@@ -15,7 +15,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -45,7 +46,7 @@ impl TieredProgressPersistence {
         }
     }
 
-    pub(crate) async fn load(&self) -> Result<Option<PersistedTieredProgress>, RocketMQError> {
+    pub(crate) async fn load(&self) -> Result<Option<PersistedTieredProgress>, StoreError> {
         let encoded = match fs::read(&self.path).await {
             Ok(encoded) => encoded,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -54,12 +55,12 @@ impl TieredProgressPersistence {
         decode(&encoded, &self.path).map(Some)
     }
 
-    pub(crate) async fn persist(&self, progress: &PersistedTieredProgress) -> Result<(), RocketMQError> {
+    pub(crate) async fn persist(&self, progress: &PersistedTieredProgress) -> Result<(), StoreError> {
         let _guard = self.persist_lock.lock().await;
         let parent = self
             .path
             .parent()
-            .ok_or_else(|| RocketMQError::storage_write_failed(path_string(&self.path), "missing parent directory"))?;
+            .ok_or_else(|| crate::error::internal_failure(StoreOperation::AppendDerived))?;
         fs::create_dir_all(parent)
             .await
             .map_err(|error| write_failed(parent, error))?;
@@ -84,7 +85,7 @@ impl TieredProgressPersistence {
         Ok(())
     }
 
-    pub(crate) async fn destroy(&self) -> Result<(), RocketMQError> {
+    pub(crate) async fn destroy(&self) -> Result<(), StoreError> {
         match fs::remove_file(&self.path).await {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -93,11 +94,11 @@ impl TieredProgressPersistence {
     }
 }
 
-fn encode(progress: &PersistedTieredProgress) -> Result<Vec<u8>, RocketMQError> {
+fn encode(progress: &PersistedTieredProgress) -> Result<Vec<u8>, StoreError> {
     let payload = serde_json::to_vec(progress)
-        .map_err(|error| RocketMQError::storage_write_failed("tiered progress", error.to_string()))?;
-    let payload_len = u64::try_from(payload.len())
-        .map_err(|_| RocketMQError::storage_write_failed("tiered progress", "payload length overflow"))?;
+        .map_err(|source| crate::error::write_failed(StoreOperation::AppendDerived, source))?;
+    let payload_len =
+        u64::try_from(payload.len()).map_err(|_| crate::error::internal_failure(StoreOperation::AppendDerived))?;
     let mut encoded = Vec::with_capacity(HEADER_LEN + payload.len() + CHECKSUM_LEN);
     encoded.extend_from_slice(&PROGRESS_MAGIC);
     encoded.extend_from_slice(&PROGRESS_VERSION.to_be_bytes());
@@ -108,7 +109,7 @@ fn encode(progress: &PersistedTieredProgress) -> Result<Vec<u8>, RocketMQError> 
     Ok(encoded)
 }
 
-fn decode(encoded: &[u8], path: &Path) -> Result<PersistedTieredProgress, RocketMQError> {
+fn decode(encoded: &[u8], path: &Path) -> Result<PersistedTieredProgress, StoreError> {
     if encoded.len() < HEADER_LEN + CHECKSUM_LEN || encoded[..8] != PROGRESS_MAGIC {
         return Err(corrupted(path));
     }
@@ -145,11 +146,12 @@ fn decode(encoded: &[u8], path: &Path) -> Result<PersistedTieredProgress, Rocket
     if crc32(&encoded[..checksum_offset]) != expected_checksum {
         return Err(corrupted(path));
     }
-    serde_json::from_slice(&encoded[HEADER_LEN..checksum_offset]).map_err(|_| corrupted(path))
+    serde_json::from_slice(&encoded[HEADER_LEN..checksum_offset])
+        .map_err(|source| crate::error::state_corrupted_source(StoreOperation::Load, source))
 }
 
 #[cfg(unix)]
-async fn sync_parent_directory(parent: &Path) -> Result<(), RocketMQError> {
+async fn sync_parent_directory(parent: &Path) -> Result<(), StoreError> {
     fs::File::open(parent)
         .await
         .map_err(|error| write_failed(parent, error))?
@@ -159,7 +161,7 @@ async fn sync_parent_directory(parent: &Path) -> Result<(), RocketMQError> {
 }
 
 #[cfg(not(unix))]
-async fn sync_parent_directory(_parent: &Path) -> Result<(), RocketMQError> {
+async fn sync_parent_directory(_parent: &Path) -> Result<(), StoreError> {
     // The temporary file is synced before the atomic replacement. Windows does not expose a
     // portable async directory handle through Tokio; rename durability follows the volume's
     // metadata guarantees.
@@ -178,18 +180,43 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-fn corrupted(path: &Path) -> RocketMQError {
-    crate::error::storage_corrupted(path_string(path))
+fn corrupted(_path: &Path) -> StoreError {
+    crate::error::state_corrupted(StoreOperation::Load)
 }
 
-fn read_failed(path: &Path, error: std::io::Error) -> RocketMQError {
-    RocketMQError::storage_read_failed(path_string(path), error.to_string())
+fn read_failed(_path: &Path, source: std::io::Error) -> StoreError {
+    crate::error::io_failed(StoreOperation::Load, source)
 }
 
-fn write_failed(path: &Path, error: std::io::Error) -> RocketMQError {
-    RocketMQError::storage_write_failed(path_string(path), error.to_string())
+fn write_failed(_path: &Path, source: std::io::Error) -> StoreError {
+    crate::error::io_failed(StoreOperation::AppendDerived, source)
 }
 
-fn path_string(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_json_preserves_typed_source_and_redacts_payload_and_path() {
+        let payload = br#"{"sensitive-progress-json-canary":"#;
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&PROGRESS_MAGIC);
+        encoded.extend_from_slice(&PROGRESS_VERSION.to_be_bytes());
+        encoded.extend_from_slice(&0_u16.to_be_bytes());
+        encoded.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+        encoded.extend_from_slice(payload);
+        encoded.extend_from_slice(&crc32(&encoded).to_be_bytes());
+        let path = Path::new("sensitive-progress-path-canary");
+
+        let error = decode(&encoded, path).expect_err("invalid progress JSON should fail");
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_STATE_CORRUPTED);
+        assert_eq!(error.operation(), StoreOperation::Load);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<serde_json::Error>())
+            .is_some());
+        let rendered = format!("{error} {error:?}");
+        assert!(!rendered.contains("sensitive-progress-json-canary"));
+        assert!(!rendered.contains("sensitive-progress-path-canary"));
+    }
 }

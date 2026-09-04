@@ -82,7 +82,11 @@ pub fn run_segmented_commit_crash_probe(crash: SegmentedCommitTestCrashPoint) ->
             .expect("open native Timeline")
             .expect("valid native Timeline configuration"),
     );
-    let timeline = Arc::new(RocksDbTimelineIndex::open(root.path()).expect("open overlay"));
+    let timeline = Arc::new(
+        RocksDbTimelineIndex::open(root.path())
+            .expect("open overlay")
+            .expect("valid overlay configuration"),
+    );
     let coordinator = SegmentedCommitCoordinator::new(Arc::clone(&native), Arc::clone(&timeline));
     let entry = entry();
     let checkpoint = checkpoint();
@@ -134,7 +138,11 @@ pub fn run_segmented_snapshot_probe() -> SegmentedSnapshotProbe {
             .expect("open native Timeline")
             .expect("valid native Timeline configuration"),
     );
-    let timeline = Arc::new(RocksDbTimelineIndex::open(root.path()).expect("open overlay"));
+    let timeline = Arc::new(
+        RocksDbTimelineIndex::open(root.path())
+            .expect("open overlay")
+            .expect("valid overlay configuration"),
+    );
     SegmentedCommitCoordinator::new(Arc::clone(&native), Arc::clone(&timeline))
         .commit(&[entry()], state_batch(entry()), checkpoint())
         .expect("commit");

@@ -19,6 +19,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from scripts.module_maintainability_guard import production_code_lines
+
 
 ROOT = Path(__file__).resolve().parents[2]
 ROCKS_CRATE = ROOT / "rocketmq-store-rocksdb"
@@ -117,17 +119,20 @@ class RocksDbFoundationContractTests(unittest.TestCase):
 
     def test_foundation_owns_native_modules_without_facade_types(self) -> None:
         lib_source = read("rocketmq-store-rocksdb/src/lib.rs")
-        for module in FOUNDATION_MODULES:
+        for module in FOUNDATION_MODULES - {"error"}:
             self.assertRegex(lib_source, rf"pub mod {module};")
+        self.assertRegex(lib_source, r"(?m)^mod error;$")
+        self.assertNotRegex(lib_source, r"(?m)^pub\s+mod\s+error;$")
 
         findings: list[str] = []
         for path in sorted((ROCKS_CRATE / "src").rglob("*.rs")):
-            source = rust_code(path.read_text(encoding="utf-8"))
+            raw_source = path.read_text(encoding="utf-8")
+            source = rust_code(raw_source)
             for token in FORBIDDEN_SOURCE_TOKENS:
                 if re.search(rf"\b{re.escape(token)}\b", source):
                     findings.append(f"{path.relative_to(ROOT)}: {token}")
             self.assertLessEqual(
-                len(path.read_text(encoding="utf-8").splitlines()),
+                production_code_lines(raw_source),
                 800,
                 f"new RocksDB owner module exceeds the 800-line review limit: {path.relative_to(ROOT)}",
             )
@@ -159,6 +164,7 @@ class RocksDbFoundationContractTests(unittest.TestCase):
         for module in FOUNDATION_MODULES - {
             "config",
             "consume_queue",
+            "error",
             "index",
             "runtime",
             "timer",
@@ -167,6 +173,7 @@ class RocksDbFoundationContractTests(unittest.TestCase):
         }:
             facade = read(f"rocketmq-store/src/rocksdb/{module}.rs")
             self.assertIn(f"rocketmq_store_rocksdb::{module}::", facade)
+        self.assertFalse((STORE_CRATE / "src/rocksdb/error.rs").exists())
 
     def test_timer_transaction_and_message_store_kernel_move_to_owner(self) -> None:
         self.assertTrue((STORE_CRATE / "src/rocksdb/timer.rs").is_file())

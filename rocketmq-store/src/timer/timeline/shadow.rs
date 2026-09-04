@@ -213,7 +213,11 @@ mod tests {
     #[test]
     fn difference_samples_are_bounded_per_reason() {
         let dir = tempdir().expect("tempdir");
-        let timeline = Arc::new(RocksDbTimelineIndex::open(dir.path()).expect("timeline"));
+        let timeline = Arc::new(
+            RocksDbTimelineIndex::open(dir.path())
+                .expect("timeline")
+                .expect("valid Timeline configuration"),
+        );
         let payloads = Arc::new(
             TimerPayloadStore::new(TimerPayloadStoreConfig::for_store_root(dir.path()))
                 .expect("payload store")

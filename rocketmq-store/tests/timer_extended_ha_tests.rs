@@ -95,7 +95,9 @@ fn snapshot_gc_pin_survives_restart_until_installation_is_confirmed() {
         generation: TimerGeneration::new(0),
     };
 
-    let timeline = RocksDbTimelineIndex::open(root.path()).expect("open Timeline");
+    let timeline = RocksDbTimelineIndex::open(root.path())
+        .expect("open Timeline")
+        .expect("valid Timeline configuration");
     timeline
         .put_batch(
             &[TimelineIndexEntry {
@@ -119,7 +121,9 @@ fn snapshot_gc_pin_survives_restart_until_installation_is_confirmed() {
     timeline.close();
     drop(timeline);
 
-    let reopened = RocksDbTimelineIndex::open(root.path()).expect("reopen Timeline");
+    let reopened = RocksDbTimelineIndex::open(root.path())
+        .expect("reopen Timeline")
+        .expect("valid Timeline configuration");
     assert_eq!(
         reopened.gc(requested_fence, 16).expect("pinned GC"),
         0,

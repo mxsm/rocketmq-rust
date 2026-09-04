@@ -15,6 +15,13 @@
 use super::*;
 
 use crate::config::timer_store_config::ValidatedTimerStoreConfig;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::provider::BuiltinTieredStoreProviderFactory;
+#[cfg(feature = "tieredstore")]
+use rocketmq_tieredstore::TieredProviderOpenPlan;
+
+#[cfg(feature = "tieredstore")]
+type BuiltinTieredOpenPlan = TieredProviderOpenPlan<BuiltinTieredStoreProviderFactory>;
 
 const EXTENDED_TIMER_OWNER_MARKER: &str = "config/timer-store-owner.meta";
 const EXTENDED_TIMER_OWNER_PREFIX: &str = "extended_timeline:v1:";
@@ -149,10 +156,11 @@ impl LocalFileMessageStore {
         message_store_config.enable_dledger_commit_log || message_store_config.enable_dleger_commit_log
     }
 
-    /// Creates a local-file Store after validating caller-owned Timer limits.
+    /// Creates a local-file Store after validating caller-owned Timer and, when
+    /// enabled, Tiered Store configuration.
     ///
-    /// Returns `Ok(None)` before any Store-root I/O when the Timer configuration
-    /// is inconsistent.
+    /// Returns `Ok(None)` before any Store-root I/O when either raw configuration
+    /// capability cannot be formed.
     ///
     /// # Errors
     ///
@@ -177,10 +185,11 @@ impl LocalFileMessageStore {
         )
     }
 
-    /// Creates a local-file Store after validating caller-owned Timer limits.
+    /// Creates a local-file Store after validating caller-owned Timer and, when
+    /// enabled, Tiered Store configuration.
     ///
-    /// Returns `Ok(None)` before any Store-root I/O when the Timer configuration
-    /// is inconsistent.
+    /// Returns `Ok(None)` before any Store-root I/O when either raw configuration
+    /// capability cannot be formed.
     ///
     /// # Errors
     ///
@@ -206,10 +215,11 @@ impl LocalFileMessageStore {
         )
     }
 
-    /// Creates a local-file Store with telemetry after validating caller-owned Timer limits.
+    /// Creates a local-file Store with telemetry after validating caller-owned
+    /// Timer and, when enabled, Tiered Store configuration.
     ///
-    /// Returns `Ok(None)` before any Store-root I/O when the Timer configuration
-    /// is inconsistent.
+    /// Returns `Ok(None)` before any Store-root I/O when either raw configuration
+    /// capability cannot be formed.
     ///
     /// # Errors
     ///
@@ -227,10 +237,16 @@ impl LocalFileMessageStore {
         let Some(timer_store_config) = message_store_config.timer_store_config.validated() else {
             return Ok(None);
         };
+        #[cfg(feature = "tieredstore")]
+        let Some(tiered_store_open_plan) = Self::tiered_store_open_plan(message_store_config.as_ref()) else {
+            return Ok(None);
+        };
         Self::try_new_with_telemetry_validated(
             message_store_config,
             micro_batch_policy,
             timer_store_config,
+            #[cfg(feature = "tieredstore")]
+            tiered_store_open_plan,
             broker_config,
             topic_config_table,
             broker_stats_manager,
@@ -245,6 +261,7 @@ impl LocalFileMessageStore {
         message_store_config: Arc<MessageStoreConfig>,
         micro_batch_policy: rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy,
         _timer_store_config: ValidatedTimerStoreConfig,
+        #[cfg(feature = "tieredstore")] tiered_store_open_plan: Option<BuiltinTieredOpenPlan>,
         broker_config: Arc<StoreRuntimeConfig>,
         topic_config_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
@@ -420,7 +437,7 @@ impl LocalFileMessageStore {
         });
         #[cfg(feature = "tieredstore")]
         let tiered_store = Self::build_tiered_store(
-            message_store_config.clone(),
+            tiered_store_open_plan,
             commit_log_read,
             &mut dispatcher,
             telemetry.tiered_store().clone(),
@@ -595,22 +612,33 @@ impl LocalFileMessageStore {
     }
 
     #[cfg(feature = "tieredstore")]
+    pub(crate) fn tiered_store_open_plan(
+        message_store_config: &MessageStoreConfig,
+    ) -> Option<Option<BuiltinTieredOpenPlan>> {
+        let Some(config) = message_store_config.tiered_store_config.clone() else {
+            return Some(None);
+        };
+        if !config.storage_level.enabled() {
+            return Some(None);
+        }
+        let factory = BuiltinTieredStoreProviderFactory::select(&config)?;
+        TieredProviderOpenPlan::try_new(config, factory).map(Some)
+    }
+
+    #[cfg(feature = "tieredstore")]
     pub(super) fn build_tiered_store(
-        message_store_config: Arc<MessageStoreConfig>,
+        tiered_store_open_plan: Option<BuiltinTieredOpenPlan>,
         commit_log: CommitLogReadHandle,
         dispatcher: &mut CommitLogDispatcherDefault,
         metrics: rocketmq_observability::metrics::tiered_store::TieredStoreMetricsRecorder,
         runtime_scope: StoreRuntimeScope,
     ) -> Result<Option<Arc<TieredStoreDecorator>>, StoreError> {
-        let Some(tiered_store_config) = message_store_config.tiered_store_config.clone() else {
+        let Some(tiered_store_open_plan) = tiered_store_open_plan else {
             return Ok(None);
         };
-        if !tiered_store_config.storage_level.enabled() {
-            return Ok(None);
-        }
 
-        let tiered_store = Arc::new(TieredStoreDecorator::new_with_metrics(
-            tiered_store_config,
+        let tiered_store = Arc::new(TieredStoreDecorator::new_planned_with_metrics(
+            tiered_store_open_plan,
             metrics,
             runtime_scope.task_group("rocketmq-store.tiered"),
         )?);

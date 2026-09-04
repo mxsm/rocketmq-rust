@@ -386,7 +386,8 @@ async fn rocksdb_backend_conforms_to_the_canonical_lifecycle() {
     let runtime = RuntimeContext::from_current("rocksdb-capability-conformance");
     let context = runtime.service_context("derived-store");
     let mut store = RocksDbDerivedStore::open(&config, RocksDbMessageStoreOptions::default(), context)
-        .expect("open RocksDB derived store");
+        .expect("open RocksDB derived store")
+        .expect("valid RocksDB derived-store configuration");
 
     let consume_queue_budget = store.rocksdb_store().resource_budget();
     let message_budget = store.message_rocksdb_storage().store_arc().resource_budget();

@@ -22,7 +22,7 @@ use bytes::Bytes;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 use rocketmq_tieredstore::file::ConsumeQueueUnit;
 use rocketmq_tieredstore::file::IndexFileSegment;
 use rocketmq_tieredstore::file::TieredFlatFileStore;
@@ -80,7 +80,7 @@ fn bench_flat_file_append_commit(c: &mut Criterion) {
                     if offset % 64 == 63 {
                         flat_file.commit().await?;
                     }
-                    Ok::<(), RocketMQError>(())
+                    Ok::<(), StoreError>(())
                 })
                 .unwrap_or_else(|error| panic!("flat file benchmark iteration failed: {error}"));
         });
@@ -126,7 +126,7 @@ fn bench_index_query(c: &mut Criterion) {
                     })
                     .await?;
             }
-            Ok::<(), RocketMQError>(())
+            Ok::<(), StoreError>(())
         })
         .unwrap_or_else(|error| panic!("failed to seed index benchmark: {error}"));
 
@@ -138,7 +138,7 @@ fn bench_index_query(c: &mut Criterion) {
                         .query_entries(black_box("BenchTopic"), black_box("key-42"), 32, 0, i64::MAX)
                         .await?;
                     black_box(entries);
-                    Ok::<(), RocketMQError>(())
+                    Ok::<(), StoreError>(())
                 })
                 .unwrap_or_else(|error| panic!("index query benchmark iteration failed: {error}"));
         });

@@ -49,7 +49,9 @@ fn entry(sequence: u64) -> TimelineIndexEntry {
 
 fn timeline_range_scan(c: &mut Criterion) {
     let root = tempfile::tempdir().expect("benchmark Timeline root");
-    let timeline = RocksDbTimelineIndex::open(root.path()).expect("open benchmark Timeline");
+    let timeline = RocksDbTimelineIndex::open(root.path())
+        .expect("open benchmark Timeline")
+        .expect("valid benchmark Timeline configuration");
     let records = (0..16_384).map(entry).collect::<Vec<_>>();
     timeline.put_batch(&records, None).expect("seed benchmark Timeline");
 

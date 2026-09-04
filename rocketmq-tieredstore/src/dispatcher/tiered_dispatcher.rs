@@ -18,9 +18,9 @@ use std::time::UNIX_EPOCH;
 
 use bytes::Bytes;
 use parking_lot::RwLock;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::UnifiedServiceError;
 use rocketmq_store_api::DerivedRecordId;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
 use tokio::sync::OwnedSemaphorePermit;
@@ -47,7 +47,7 @@ use rocketmq_observability::metrics::tiered_store::TieredStoreMetrics;
 pub use crate::dispatcher::progress::TieredDispatchHealth;
 pub use crate::dispatcher::progress::TieredDispatchReadiness;
 
-type DispatcherTaskErrorSlot = Arc<tokio::sync::Mutex<Option<RocketMQError>>>;
+type DispatcherTaskErrorSlot = Arc<tokio::sync::Mutex<Option<StoreError>>>;
 type RetryPayloadResolver = dyn Fn(u64, u32) -> Option<Bytes> + Send + Sync;
 
 struct QueuedDispatch {
@@ -58,21 +58,21 @@ struct QueuedDispatch {
 
 #[allow(async_fn_in_trait)]
 pub trait TieredDispatcher: Send + Sync {
-    async fn dispatch(&self, request: TieredDispatchRequest) -> Result<(), RocketMQError>;
+    async fn dispatch(&self, request: TieredDispatchRequest) -> Result<(), StoreError>;
 
     /// Dispatches one record with its authoritative CommitLog idempotency key.
     async fn dispatch_derived(
         &self,
         record: DerivedRecordId,
         request: TieredDispatchRequest,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         let _ = record;
         self.dispatch(request).await
     }
 
-    async fn start(&self) -> Result<(), RocketMQError>;
+    async fn start(&self) -> Result<(), StoreError>;
 
-    async fn shutdown(&self) -> Result<(), RocketMQError>;
+    async fn shutdown(&self) -> Result<(), StoreError>;
 }
 
 pub struct DefaultTieredDispatcher<P>
@@ -156,12 +156,12 @@ where
     }
 
     /// Loads and validates the durable Tiered cursor/retry snapshot.
-    pub async fn load_progress(&self) -> Result<(), RocketMQError> {
+    pub async fn load_progress(&self) -> Result<(), StoreError> {
         self.progress.load(current_time_millis()).await
     }
 
     /// Removes the independently versioned Tiered cursor/retry metadata.
-    pub async fn destroy_progress(&self) -> Result<(), RocketMQError> {
+    pub async fn destroy_progress(&self) -> Result<(), StoreError> {
         self.progress.destroy().await
     }
 
@@ -188,7 +188,7 @@ where
             .unwrap_or(0)
     }
 
-    pub async fn shutdown_with_report(&self) -> Result<ShutdownReport, RocketMQError> {
+    pub async fn shutdown_with_report(&self) -> Result<ShutdownReport, StoreError> {
         self.shutdown.cancel();
         let _drained_permits = tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -197,20 +197,24 @@ where
                 .acquire_many_owned(self.pending_byte_capacity),
         )
         .await
-        .map_err(|_| {
-            RocketMQError::Service(UnifiedServiceError::ShutdownFailed(
-                "tieredstore dispatcher timed out draining accepted requests".to_owned(),
-            ))
+        .map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
+                StoreOperation::Shutdown,
+                source,
+            )
         })?
-        .map_err(|error| {
-            RocketMQError::Service(UnifiedServiceError::ShutdownFailed(format!(
-                "tieredstore dispatcher pending-byte budget closed during shutdown: {error}"
-            )))
+        .map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                StoreOperation::Shutdown,
+                source,
+            )
         })?;
         let report = if let Some(owner) = self.task_owner.lock().await.take() {
             let report = owner
                 .shutdown_report("rocketmq-tieredstore.dispatcher", std::time::Duration::from_secs(5))
-                .await;
+                .await?;
             runtime::shutdown_report_result("tieredstore dispatcher", report.clone())?;
             report
         } else {
@@ -221,12 +225,12 @@ where
         Ok(report)
     }
 
-    pub fn try_dispatch(&self, request: TieredDispatchRequest) -> Result<(), RocketMQError> {
+    pub fn try_dispatch(&self, request: TieredDispatchRequest) -> Result<(), StoreError> {
         if !self.config.storage_level.enabled() || !request.is_valid() {
             return Ok(());
         }
         if self.is_shutdown() {
-            return Err(RocketMQError::Service(UnifiedServiceError::Interrupted));
+            return Err(crate::error::unavailable(StoreOperation::AppendDerived));
         }
         let byte_permit = self.try_acquire_bytes(&request)?;
         self.sender
@@ -235,7 +239,7 @@ where
                 record: None,
                 _byte_permit: byte_permit,
             })
-            .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))?;
+            .map_err(try_dispatch_send_error)?;
         self.metrics.record_dispatch_queued();
         Ok(())
     }
@@ -245,12 +249,12 @@ where
         &self,
         record: DerivedRecordId,
         request: TieredDispatchRequest,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         if !self.config.storage_level.enabled() || !request.is_valid() {
             return Ok(());
         }
         if self.is_shutdown() {
-            return Err(RocketMQError::Service(UnifiedServiceError::Interrupted));
+            return Err(crate::error::unavailable(StoreOperation::AppendDerived));
         }
         self.validate_record(record, &request)?;
         let byte_permit = self.try_acquire_bytes(&request)?;
@@ -260,72 +264,61 @@ where
                 record: Some(record),
                 _byte_permit: byte_permit,
             })
-            .map_err(|err| RocketMQError::storage_write_failed("tiered_dispatch_queue", err.to_string()))?;
+            .map_err(try_dispatch_send_error)?;
         self.metrics.record_dispatch_queued();
         Ok(())
     }
 
-    fn validate_record(&self, record: DerivedRecordId, request: &TieredDispatchRequest) -> Result<(), RocketMQError> {
+    fn validate_record(&self, record: DerivedRecordId, request: &TieredDispatchRequest) -> Result<(), StoreError> {
         let request_offset = u64::try_from(request.commit_log_offset)
-            .map_err(|_| RocketMQError::illegal_argument("tiered CommitLog offset must not be negative"))?;
+            .map_err(|_| crate::error::request_invalid(StoreOperation::AppendDerived))?;
         let request_length = u32::try_from(request.message_size)
-            .map_err(|_| RocketMQError::illegal_argument("tiered CommitLog length must be positive"))?;
+            .map_err(|_| crate::error::request_invalid(StoreOperation::AppendDerived))?;
         if record.source_epoch() != self.config.source_epoch
             || record.physical_offset() != request_offset
             || record.length() != request_length
         {
-            return Err(RocketMQError::illegal_argument(
-                "tiered dispatch record does not match configured source epoch, offset, or length",
-            ));
+            return Err(crate::error::request_invalid(StoreOperation::AppendDerived));
         }
         Ok(())
     }
 
-    fn request_byte_count(request: &TieredDispatchRequest) -> Result<u32, RocketMQError> {
+    fn request_byte_count(request: &TieredDispatchRequest) -> Result<u32, StoreError> {
         let bytes = request.body.as_ref().map_or(0, Bytes::len);
-        u32::try_from(bytes).map_err(|_| {
-            RocketMQError::storage_write_failed("tiered_dispatch_queue", "message exceeds byte permit range")
-        })
+        u32::try_from(bytes).map_err(|_| crate::error::capacity_exhausted(StoreOperation::AppendDerived))
     }
 
-    fn try_acquire_bytes(&self, request: &TieredDispatchRequest) -> Result<OwnedSemaphorePermit, RocketMQError> {
+    fn try_acquire_bytes(&self, request: &TieredDispatchRequest) -> Result<OwnedSemaphorePermit, StoreError> {
         let bytes = Self::request_byte_count(request)?;
         if bytes > self.pending_byte_capacity {
-            return Err(RocketMQError::storage_write_failed(
-                "tiered_dispatch_queue",
-                "message exceeds bounded pending byte capacity",
-            ));
+            return Err(crate::error::capacity_exhausted(StoreOperation::AppendDerived));
         }
-        self.pending_bytes.clone().try_acquire_many_owned(bytes).map_err(|_| {
-            RocketMQError::storage_write_failed("tiered_dispatch_queue", "bounded pending byte capacity reached")
-        })
+        self.pending_bytes
+            .clone()
+            .try_acquire_many_owned(bytes)
+            .map_err(|_| crate::error::capacity_exhausted(StoreOperation::AppendDerived))
     }
 
-    async fn acquire_bytes(&self, request: &TieredDispatchRequest) -> Result<OwnedSemaphorePermit, RocketMQError> {
+    async fn acquire_bytes(&self, request: &TieredDispatchRequest) -> Result<OwnedSemaphorePermit, StoreError> {
         let bytes = Self::request_byte_count(request)?;
         if bytes > self.pending_byte_capacity {
-            return Err(RocketMQError::storage_write_failed(
-                "tiered_dispatch_queue",
-                "message exceeds bounded pending byte capacity",
-            ));
+            return Err(crate::error::capacity_exhausted(StoreOperation::AppendDerived));
         }
         tokio::select! {
             biased;
-            _ = self.shutdown.cancelled() => Err(RocketMQError::Service(UnifiedServiceError::Interrupted)),
+            _ = self.shutdown.cancelled() => Err(crate::error::unavailable(StoreOperation::AppendDerived)),
             permit = self.pending_bytes.clone().acquire_many_owned(bytes) => {
-                permit.map_err(|_| RocketMQError::Service(UnifiedServiceError::Interrupted))
+                permit.map_err(|_| crate::error::unavailable(StoreOperation::AppendDerived))
             }
         }
     }
 
-    async fn enqueue(&self, queued: QueuedDispatch) -> Result<(), RocketMQError> {
+    async fn enqueue(&self, queued: QueuedDispatch) -> Result<(), StoreError> {
         tokio::select! {
             biased;
-            _ = self.shutdown.cancelled() => Err(RocketMQError::Service(UnifiedServiceError::Interrupted)),
+            _ = self.shutdown.cancelled() => Err(crate::error::unavailable(StoreOperation::AppendDerived)),
             result = self.sender.send(queued) => {
-                result.map_err(|error| {
-                    RocketMQError::storage_write_failed("tiered_dispatch_queue", error.to_string())
-                })
+                result.map_err(|_| crate::error::unavailable(StoreOperation::AppendDerived))
             }
         }
     }
@@ -339,7 +332,7 @@ where
         progress: Arc<TieredProgressTracker>,
         retry_payload_resolver: Arc<RwLock<Option<Arc<RetryPayloadResolver>>>>,
         retry_tick: Arc<Notify>,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
@@ -398,7 +391,7 @@ where
         retry_tick: Arc<Notify>,
         queued: QueuedDispatch,
         shutdown: &CancellationToken,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         let Some(record) = queued.record else {
             return Self::dispatch_one(flat_file_store, permits, metrics, queued.request).await;
         };
@@ -446,10 +439,10 @@ where
                     match progress.record_failure(record, &queued.request, now_millis).await? {
                         Ok(FailureRecordOutcome::Recorded | FailureRecordOutcome::AlreadyCommitted) => {
                             tracing::warn!(
-                                topic = %queued.request.topic,
-                                queue_id = queued.request.queue_id,
-                                physical_offset = record.physical_offset(),
-                                error = %error,
+                                descriptor = ?error.descriptor().code(),
+                                operation = ?error.operation(),
+                                component = ?error.component(),
+                                source_present = std::error::Error::source(&error).is_some(),
                                 "tiered delivery failure recorded for bounded retry"
                             );
                             return Ok(());
@@ -490,7 +483,7 @@ where
         metrics: Arc<TieredStoreMetrics>,
         progress: Arc<TieredProgressTracker>,
         retry_payload_resolver: Arc<RwLock<Option<Arc<RetryPayloadResolver>>>>,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         let now_millis = current_time_millis();
         let retries = progress.due_retries(now_millis).await;
         if retries.is_empty() {
@@ -512,8 +505,10 @@ where
                 Ok(()) => progress.record_retry_success(record, current_time_millis()).await?,
                 Err(error) => {
                     tracing::warn!(
-                        physical_offset = record.physical_offset(),
-                        error = %error,
+                        descriptor = ?error.descriptor().code(),
+                        operation = ?error.operation(),
+                        component = ?error.component(),
+                        source_present = std::error::Error::source(&error).is_some(),
                         "tiered retry remains pending"
                     );
                     progress.record_retry_failure(record, current_time_millis()).await?;
@@ -528,13 +523,13 @@ where
         permits: Arc<Semaphore>,
         metrics: Arc<TieredStoreMetrics>,
         request: TieredDispatchRequest,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         let started = std::time::Instant::now();
         metrics.record_dispatch_dequeued();
         let _permit = permits
             .acquire_owned()
             .await
-            .map_err(|_| RocketMQError::Service(UnifiedServiceError::Interrupted))?;
+            .map_err(|_| crate::error::unavailable(StoreOperation::AppendDerived))?;
         let result = Self::dispatch_one_inner(flat_file_store, &request).await;
         match &result {
             Ok(()) => {
@@ -554,7 +549,7 @@ where
     async fn dispatch_one_inner(
         flat_file_store: Arc<TieredFlatFileStore<P>>,
         request: &TieredDispatchRequest,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         let file = flat_file_store.get_or_create(request.topic.clone(), request.queue_id)?;
         // Complete any provider write that failed after staging bytes. This makes an in-process
         // partial write retry resume the same destination range instead of appending a duplicate.
@@ -564,19 +559,15 @@ where
         if consume_queue_commit_offset > consume_queue_min_offset {
             if request.queue_offset < consume_queue_commit_offset {
                 let unit = file
-                    .read_consume_queue_unit(request.queue_offset)
+                    .read_consume_queue_unit_with_operation(StoreOperation::AppendDerived, request.queue_offset)
                     .await?
-                    .ok_or_else(|| crate::error::storage_corrupted("tiered duplicate queue unit is missing"))?;
-                let tiered_offset = u64::try_from(unit.commit_log_offset).map_err(|_| {
-                    crate::error::storage_corrupted("tiered duplicate queue unit contains a negative offset")
-                })?;
+                    .ok_or_else(|| crate::error::state_corrupted(StoreOperation::AppendDerived))?;
+                let tiered_offset = u64::try_from(unit.commit_log_offset)
+                    .map_err(|_| crate::error::state_corrupted(StoreOperation::AppendDerived))?;
                 return flat_file_store.append_index(request, tiered_offset).await;
             }
             if request.queue_offset > consume_queue_commit_offset {
-                return Err(RocketMQError::illegal_argument(format!(
-                    "tiered consume queue offset gap, expected {consume_queue_commit_offset}, got {}",
-                    request.queue_offset
-                )));
+                return Err(crate::error::request_invalid(StoreOperation::AppendDerived));
             }
         }
 
@@ -597,11 +588,18 @@ where
     }
 }
 
+fn try_dispatch_send_error(error: mpsc::error::TrySendError<QueuedDispatch>) -> StoreError {
+    match error {
+        mpsc::error::TrySendError::Full(_) => crate::error::capacity_exhausted(StoreOperation::AppendDerived),
+        mpsc::error::TrySendError::Closed(_) => crate::error::unavailable(StoreOperation::AppendDerived),
+    }
+}
+
 impl<P> TieredDispatcher for DefaultTieredDispatcher<P>
 where
     P: TieredStoreProvider,
 {
-    async fn dispatch(&self, request: TieredDispatchRequest) -> Result<(), RocketMQError> {
+    async fn dispatch(&self, request: TieredDispatchRequest) -> Result<(), StoreError> {
         if !self.config.storage_level.enabled() || !request.is_valid() {
             return Ok(());
         }
@@ -620,7 +618,7 @@ where
         &self,
         record: DerivedRecordId,
         request: TieredDispatchRequest,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         if !self.config.storage_level.enabled() || !request.is_valid() {
             return Ok(());
         }
@@ -636,7 +634,7 @@ where
         Ok(())
     }
 
-    async fn start(&self) -> Result<(), RocketMQError> {
+    async fn start(&self) -> Result<(), StoreError> {
         self.load_progress().await?;
         let mut receiver_guard = self.receiver.lock().await;
         let Some(receiver) = receiver_guard.take() else {
@@ -689,7 +687,7 @@ where
         Ok(())
     }
 
-    async fn shutdown(&self) -> Result<(), RocketMQError> {
+    async fn shutdown(&self) -> Result<(), StoreError> {
         self.shutdown_with_report().await?;
         self.progress.mark_unready(TieredDispatchReadiness::Shutdown);
         Ok(())
@@ -703,17 +701,15 @@ fn current_time_millis() -> u64 {
     }
 }
 
-fn dispatcher_task_result(error: Option<RocketMQError>) -> Result<(), RocketMQError> {
+fn dispatcher_task_result(error: Option<StoreError>) -> Result<(), StoreError> {
     match error {
         Some(error) => Err(error),
         None => Ok(()),
     }
 }
 
-fn dispatcher_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "tieredstore dispatcher {operation}: {error}"
-    )))
+fn dispatcher_startup_failed(_operation: &'static str, source: rocketmq_runtime::RuntimeError) -> StoreError {
+    crate::error::runtime_error(StoreOperation::Start, source)
 }
 
 #[cfg(test)]

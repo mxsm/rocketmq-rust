@@ -15,8 +15,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::boundary_type::BoundaryType;
+use rocketmq_store_api::StoreError;
 
 use crate::config::TieredStoreConfig;
 use crate::file::TieredFlatFileStore;
@@ -57,21 +57,11 @@ pub trait TieredMessageFetcher: Send + Sync {
         queue_id: i32,
         queue_offset: i64,
         max_msg_nums: i32,
-    ) -> Result<TieredGetMessageResult, RocketMQError>;
+    ) -> Result<TieredGetMessageResult, StoreError>;
 
-    async fn get_message_timestamp(
-        &self,
-        topic: String,
-        queue_id: i32,
-        queue_offset: i64,
-    ) -> Result<i64, RocketMQError>;
+    async fn get_message_timestamp(&self, topic: String, queue_id: i32, queue_offset: i64) -> Result<i64, StoreError>;
 
-    async fn get_offset_by_time(
-        &self,
-        topic: String,
-        queue_id: i32,
-        timestamp_millis: i64,
-    ) -> Result<i64, RocketMQError>;
+    async fn get_offset_by_time(&self, topic: String, queue_id: i32, timestamp_millis: i64) -> Result<i64, StoreError>;
 
     async fn get_offset_by_time_with_boundary(
         &self,
@@ -79,7 +69,7 @@ pub trait TieredMessageFetcher: Send + Sync {
         queue_id: i32,
         timestamp_millis: i64,
         boundary_type: BoundaryType,
-    ) -> Result<i64, RocketMQError>;
+    ) -> Result<i64, StoreError>;
 
     async fn query_message(
         &self,
@@ -88,7 +78,7 @@ pub trait TieredMessageFetcher: Send + Sync {
         max_num: i32,
         begin: i64,
         end: i64,
-    ) -> Result<TieredQueryResult<Bytes>, RocketMQError>;
+    ) -> Result<TieredQueryResult<Bytes>, StoreError>;
 }
 
 pub struct DefaultTieredMessageFetcher<P>
@@ -130,7 +120,7 @@ where
         queue_id: i32,
         queue_offset: i64,
         max_msg_nums: i32,
-    ) -> Result<TieredGetMessageResult, RocketMQError> {
+    ) -> Result<TieredGetMessageResult, StoreError> {
         let Some(flat_file) = self.flat_file_store.get(topic, queue_id) else {
             return Ok(TieredGetMessageResult {
                 status: TieredGetMessageStatus::NoMatchedLogicQueue,
@@ -258,7 +248,7 @@ where
         queue_id: i32,
         queue_offset: i64,
         max_msg_nums: i32,
-    ) -> Result<TieredGetMessageResult, RocketMQError> {
+    ) -> Result<TieredGetMessageResult, StoreError> {
         self.metrics.record_fetch_request();
         let started = std::time::Instant::now();
         let result = self
@@ -273,12 +263,7 @@ where
         result
     }
 
-    async fn get_message_timestamp(
-        &self,
-        topic: String,
-        queue_id: i32,
-        queue_offset: i64,
-    ) -> Result<i64, RocketMQError> {
+    async fn get_message_timestamp(&self, topic: String, queue_id: i32, queue_offset: i64) -> Result<i64, StoreError> {
         let started = std::time::Instant::now();
         let Some(flat_file) = self.flat_file_store.get(&topic, queue_id) else {
             self.metrics
@@ -301,12 +286,7 @@ where
         Ok(timestamp)
     }
 
-    async fn get_offset_by_time(
-        &self,
-        topic: String,
-        queue_id: i32,
-        timestamp_millis: i64,
-    ) -> Result<i64, RocketMQError> {
+    async fn get_offset_by_time(&self, topic: String, queue_id: i32, timestamp_millis: i64) -> Result<i64, StoreError> {
         self.get_offset_by_time_with_boundary(topic, queue_id, timestamp_millis, BoundaryType::Lower)
             .await
     }
@@ -317,7 +297,7 @@ where
         queue_id: i32,
         timestamp_millis: i64,
         boundary_type: BoundaryType,
-    ) -> Result<i64, RocketMQError> {
+    ) -> Result<i64, StoreError> {
         let started = std::time::Instant::now();
         let Some(flat_file) = self.flat_file_store.get(&topic, queue_id) else {
             self.metrics.record_api_latency(
@@ -345,7 +325,7 @@ where
         max_num: i32,
         begin: i64,
         end: i64,
-    ) -> Result<TieredQueryResult<Bytes>, RocketMQError> {
+    ) -> Result<TieredQueryResult<Bytes>, StoreError> {
         let started = std::time::Instant::now();
         let max_num = max_num.max(0) as usize;
         let entries = self
@@ -388,7 +368,7 @@ mod tests {
 
     use bytes::Bytes;
     use bytes::BytesMut;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_store_api::StoreError;
 
     use super::*;
     use crate::config::TieredStoreConfig;
@@ -399,6 +379,7 @@ mod tests {
     use crate::file::TieredFlatFileStore;
     use crate::metadata::FileSegmentMetadata;
     use crate::metadata::JsonMetadataStore;
+    #[cfg(feature = "serde")]
     use crate::metadata::TieredMetadataStore;
     use crate::provider::MemoryProvider;
     use crate::provider::TieredStoreProvider;
@@ -422,11 +403,12 @@ mod tests {
     impl TieredStoreProvider for CountingProvider {
         async fn create_segment(
             &self,
+            _operation: rocketmq_store_api::StoreOperation,
             path: String,
             segment_type: FileSegmentType,
             base_offset: u64,
             max_size: u64,
-        ) -> Result<TieredFileSegment<Self>, RocketMQError> {
+        ) -> Result<TieredFileSegment<Self>, StoreError> {
             Ok(TieredFileSegment::new(
                 path.clone(),
                 segment_type,
@@ -437,27 +419,48 @@ mod tests {
             ))
         }
 
-        async fn segment_size(&self, path: String) -> Result<u64, RocketMQError> {
-            self.inner.segment_size(path).await
+        async fn segment_size(
+            &self,
+            operation: rocketmq_store_api::StoreOperation,
+            path: String,
+        ) -> Result<u64, StoreError> {
+            self.inner.segment_size(operation, path).await
         }
 
-        async fn read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
+        async fn read(
+            &self,
+            operation: rocketmq_store_api::StoreOperation,
+            path: String,
+            position: u64,
+            length: usize,
+        ) -> Result<Bytes, StoreError> {
             self.reads.fetch_add(1, Ordering::AcqRel);
-            self.inner.read(path, position, length).await
+            self.inner.read(operation, path, position, length).await
         }
 
-        async fn write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
-            self.inner.write(path, position, data).await
+        async fn write(
+            &self,
+            operation: rocketmq_store_api::StoreOperation,
+            path: String,
+            position: u64,
+            data: Bytes,
+        ) -> Result<usize, StoreError> {
+            self.inner.write(operation, path, position, data).await
         }
 
-        async fn delete(&self, path: String) -> Result<(), RocketMQError> {
-            self.inner.delete(path).await
+        async fn delete(&self, operation: rocketmq_store_api::StoreOperation, path: String) -> Result<(), StoreError> {
+            self.inner.delete(operation, path).await
         }
     }
 
-    async fn build_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn build_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -500,9 +503,14 @@ mod tests {
         Ok(DefaultTieredMessageFetcher::new(config, flat_file_store))
     }
 
-    async fn build_timestamp_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn build_timestamp_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -535,9 +543,14 @@ mod tests {
         Ok(DefaultTieredMessageFetcher::new(config, flat_file_store))
     }
 
-    async fn build_query_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn build_query_fetcher() -> Result<DefaultTieredMessageFetcher<MemoryProvider>, StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -597,7 +610,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetches_messages_by_queue_offset() -> Result<(), RocketMQError> {
+    async fn fetches_messages_by_queue_offset() -> Result<(), StoreError> {
         let fetcher = build_fetcher().await?;
 
         let result = fetcher.get_message("TopicA".to_owned(), 0, 3, 2).await?;
@@ -614,9 +627,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_respects_read_ahead_message_size_after_first_message() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn fetch_respects_read_ahead_message_size_after_first_message() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -655,9 +673,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_ahead_cache_coalesces_cold_pull_and_eliminates_warm_provider_reads() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn read_ahead_cache_coalesces_cold_pull_and_eliminates_warm_provider_reads() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),
@@ -712,7 +735,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_java_aligned_offset_boundaries() -> Result<(), RocketMQError> {
+    async fn returns_java_aligned_offset_boundaries() -> Result<(), StoreError> {
         let fetcher = build_fetcher().await?;
 
         let too_small = fetcher.get_message("TopicA".to_owned(), 0, 2, 1).await?;
@@ -728,7 +751,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_flat_file_returns_no_matched_logic_queue() -> Result<(), RocketMQError> {
+    async fn missing_flat_file_returns_no_matched_logic_queue() -> Result<(), StoreError> {
         let fetcher = build_fetcher().await?;
 
         let result = fetcher.get_message("MissingTopic".to_owned(), 0, 0, 1).await?;
@@ -738,7 +761,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reads_message_store_timestamp_from_commit_log() -> Result<(), RocketMQError> {
+    async fn reads_message_store_timestamp_from_commit_log() -> Result<(), StoreError> {
         let fetcher = build_timestamp_fetcher().await?;
 
         assert_eq!(fetcher.get_message_timestamp("TopicA".to_owned(), 0, 4).await?, 200);
@@ -750,7 +773,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finds_lower_bound_offset_by_store_timestamp() -> Result<(), RocketMQError> {
+    async fn finds_lower_bound_offset_by_store_timestamp() -> Result<(), StoreError> {
         let fetcher = build_timestamp_fetcher().await?;
 
         assert_eq!(fetcher.get_offset_by_time("TopicA".to_owned(), 0, 50).await?, 3);
@@ -763,7 +786,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn finds_upper_bound_offset_by_store_timestamp() -> Result<(), RocketMQError> {
+    async fn finds_upper_bound_offset_by_store_timestamp() -> Result<(), StoreError> {
         let fetcher = build_timestamp_fetcher().await?;
 
         assert_eq!(
@@ -806,7 +829,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queries_messages_by_key_and_time_range() -> Result<(), RocketMQError> {
+    async fn queries_messages_by_key_and_time_range() -> Result<(), StoreError> {
         let fetcher = build_query_fetcher().await?;
 
         let result = fetcher
@@ -821,7 +844,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queries_messages_by_uniq_key() -> Result<(), RocketMQError> {
+    async fn queries_messages_by_uniq_key() -> Result<(), StoreError> {
         let fetcher = build_query_fetcher().await?;
 
         let result = fetcher
@@ -833,7 +856,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_message_respects_max_num() -> Result<(), RocketMQError> {
+    async fn query_message_respects_max_num() -> Result<(), StoreError> {
         let fetcher = build_query_fetcher().await?;
 
         let result = fetcher
@@ -844,10 +867,16 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "serde")]
     #[tokio::test]
-    async fn query_message_recovers_index_and_segments_after_load() -> Result<(), RocketMQError> {
-        let temp_dir =
-            tempfile::tempdir().map_err(|source| RocketMQError::internal("create temporary directory", source))?;
+    async fn query_message_recovers_index_and_segments_after_load() -> Result<(), StoreError> {
+        let temp_dir = tempfile::tempdir().map_err(|source| {
+            crate::error::source_error(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                rocketmq_store_api::StoreOperation::Load,
+                source,
+            )
+        })?;
         let config = Arc::new(TieredStoreConfig {
             store_path_root_dir: temp_dir.path().to_path_buf(),
             backend_provider: "memory".to_owned(),

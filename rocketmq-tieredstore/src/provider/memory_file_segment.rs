@@ -18,7 +18,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use bytes::BytesMut;
 use parking_lot::RwLock;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 use crate::file::FileSegmentType;
 use crate::file::TieredFileSegment;
@@ -33,11 +34,12 @@ pub struct MemoryProvider {
 impl TieredStoreProvider for MemoryProvider {
     async fn create_segment(
         &self,
+        _operation: StoreOperation,
         path: String,
         segment_type: FileSegmentType,
         base_offset: u64,
         max_size: u64,
-    ) -> Result<TieredFileSegment<Self>, RocketMQError>
+    ) -> Result<TieredFileSegment<Self>, StoreError>
     where
         Self: Sized,
     {
@@ -52,17 +54,23 @@ impl TieredStoreProvider for MemoryProvider {
         ))
     }
 
-    async fn segment_size(&self, path: String) -> Result<u64, RocketMQError> {
+    async fn segment_size(&self, _operation: StoreOperation, path: String) -> Result<u64, StoreError> {
         let files = self.files.read();
         Ok(files.get(&path).map(|bytes| bytes.len() as u64).unwrap_or(0))
     }
 
-    async fn read(&self, path: String, position: u64, length: usize) -> Result<Bytes, RocketMQError> {
+    async fn read(
+        &self,
+        operation: StoreOperation,
+        path: String,
+        position: u64,
+        length: usize,
+    ) -> Result<Bytes, StoreError> {
         let files = self.files.read();
         let Some(bytes) = files.get(&path) else {
             return Ok(Bytes::new());
         };
-        let start = position as usize;
+        let start = usize::try_from(position).map_err(|_| crate::error::request_invalid(operation))?;
         if start >= bytes.len() {
             return Ok(Bytes::new());
         }
@@ -70,14 +78,22 @@ impl TieredStoreProvider for MemoryProvider {
         Ok(Bytes::copy_from_slice(&bytes[start..end]))
     }
 
-    async fn write(&self, path: String, position: u64, data: Bytes) -> Result<usize, RocketMQError> {
+    async fn write(
+        &self,
+        operation: StoreOperation,
+        path: String,
+        position: u64,
+        data: Bytes,
+    ) -> Result<usize, StoreError> {
         let mut files = self.files.write();
         let bytes = files.entry(path).or_default();
-        let start = position as usize;
+        let start = usize::try_from(position).map_err(|_| crate::error::request_invalid(operation))?;
         if bytes.len() < start {
             bytes.resize(start, 0);
         }
-        let end = start.saturating_add(data.len());
+        let end = start
+            .checked_add(data.len())
+            .ok_or_else(|| crate::error::request_invalid(operation))?;
         if bytes.len() < end {
             bytes.resize(end, 0);
         }
@@ -85,24 +101,29 @@ impl TieredStoreProvider for MemoryProvider {
         Ok(data.len())
     }
 
-    async fn delete(&self, path: String) -> Result<(), RocketMQError> {
+    async fn delete(&self, _operation: StoreOperation, path: String) -> Result<(), StoreError> {
         self.files.write().remove(&path);
         Ok(())
     }
 
-    async fn rename(&self, source: String, destination: String) -> Result<(), RocketMQError> {
+    async fn rename(
+        &self,
+        operation: StoreOperation,
+        source_root: String,
+        destination: String,
+    ) -> Result<(), StoreError> {
         let mut files = self.files.write();
-        let source_prefix = format!("{source}/");
+        let source_prefix = format!("{source_root}/");
         let mut replacements = files
             .keys()
-            .filter(|path| **path == source || path.starts_with(&source_prefix))
+            .filter(|path| **path == source_root || path.starts_with(&source_prefix))
             .cloned()
             .collect::<Vec<_>>();
         replacements.sort();
         if replacements.is_empty() {
-            return Err(RocketMQError::storage_write_failed(
-                source,
-                "source path does not exist",
+            return Err(crate::error::contract_error(
+                &rocketmq_error::STORAGE_WRITE_FAILED,
+                operation,
             ));
         }
 
@@ -112,13 +133,13 @@ impl TieredStoreProvider for MemoryProvider {
             let Some(bytes) = files.remove(&source_path) else {
                 continue;
             };
-            let suffix = source_path.strip_prefix(&source).unwrap_or_default();
+            let suffix = source_path.strip_prefix(&source_root).unwrap_or_default();
             files.insert(format!("{destination}{suffix}"), bytes);
         }
         Ok(())
     }
 
-    async fn list(&self, prefix: String) -> Result<Vec<String>, RocketMQError> {
+    async fn list(&self, _operation: StoreOperation, prefix: String) -> Result<Vec<String>, StoreError> {
         let prefix_with_separator = format!("{prefix}/");
         let mut paths = self
             .files
@@ -131,7 +152,7 @@ impl TieredStoreProvider for MemoryProvider {
         Ok(paths)
     }
 
-    async fn delete_prefix(&self, prefix: String) -> Result<(), RocketMQError> {
+    async fn delete_prefix(&self, _operation: StoreOperation, prefix: String) -> Result<(), StoreError> {
         let prefix_with_separator = format!("{prefix}/");
         self.files
             .write()
@@ -143,29 +164,52 @@ impl TieredStoreProvider for MemoryProvider {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_store_api::StoreError;
+    use rocketmq_store_api::StoreOperation;
 
     use crate::provider::MemoryProvider;
     use crate::provider::TieredStoreProvider;
 
     #[tokio::test]
-    async fn write_read_size_and_delete() -> Result<(), RocketMQError> {
+    async fn write_read_size_and_delete() -> Result<(), StoreError> {
         let provider = MemoryProvider::default();
         provider
-            .write("segment".to_owned(), 0, Bytes::from_static(b"abc"))
+            .write(
+                StoreOperation::Append,
+                "segment".to_owned(),
+                0,
+                Bytes::from_static(b"abc"),
+            )
             .await?;
         provider
-            .write("segment".to_owned(), 3, Bytes::from_static(b"def"))
+            .write(
+                StoreOperation::Append,
+                "segment".to_owned(),
+                3,
+                Bytes::from_static(b"def"),
+            )
             .await?;
 
-        assert_eq!(provider.segment_size("segment".to_owned()).await?, 6);
         assert_eq!(
-            provider.read("segment".to_owned(), 1, 4).await?,
+            provider
+                .segment_size(StoreOperation::Read, "segment".to_owned())
+                .await?,
+            6
+        );
+        assert_eq!(
+            provider.read(StoreOperation::Read, "segment".to_owned(), 1, 4).await?,
             Bytes::from_static(b"bcde")
         );
 
-        provider.delete("segment".to_owned()).await?;
-        assert_eq!(provider.segment_size("segment".to_owned()).await?, 0);
+        provider
+            .delete(StoreOperation::AppendDerived, "segment".to_owned())
+            .await?;
+        assert_eq!(
+            provider
+                .segment_size(StoreOperation::Read, "segment".to_owned())
+                .await?,
+            0
+        );
         Ok(())
     }
 }

@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -176,26 +177,26 @@ impl<'a> RocksDbConsumeQueueBatchWriter<'a> {
         Self { store }
     }
 
-    pub fn build_batch(&self, request: &ConsumeQueueBatchWriteRequest) -> Result<RocksDbWriteBatch, RocketMQError> {
+    pub fn build_batch(&self, request: &ConsumeQueueBatchWriteRequest) -> Result<RocksDbWriteBatch, StoreError> {
         let checkpoint_len = if request.max_physical_offset.is_some() { 1 } else { 0 };
         let mut batch =
             RocksDbWriteBatch::with_capacity(request.entries.len() + request.offset_updates.len() + checkpoint_len);
         for entry in &request.entries {
             let mut key = Vec::with_capacity(entry.key().encoded_len());
-            entry.key().encode(&mut key)?;
+            entry.key().encode(StoreOperation::AppendDerived, &mut key)?;
 
             let mut value = Vec::with_capacity(ConsumeQueueValue::ENCODED_LEN);
-            entry.value().encode(&mut value)?;
+            entry.value().encode(StoreOperation::AppendDerived, &mut value)?;
 
             batch.put_cf(RocksDbColumnFamily::Default.name(), key, value);
         }
 
         for offset_update in &request.offset_updates {
             let mut key = Vec::with_capacity(offset_update.key().encoded_len());
-            offset_update.key().encode(&mut key)?;
+            offset_update.key().encode(StoreOperation::AppendDerived, &mut key)?;
 
             let mut value = Vec::with_capacity(ConsumeQueueOffsetValue::ENCODED_LEN);
-            offset_update.value.encode(&mut value)?;
+            offset_update.value.encode(StoreOperation::AppendDerived, &mut value)?;
 
             batch.put_cf(RocksDbColumnFamily::ConsumeQueueOffset.name(), key, value);
         }
@@ -203,11 +204,11 @@ impl<'a> RocksDbConsumeQueueBatchWriter<'a> {
         if let Some(max_physical_offset) = request.max_physical_offset {
             let key = ConsumeQueueOffsetKey::max_physical_offset_checkpoint();
             let mut encoded_key = Vec::with_capacity(key.encoded_len());
-            key.encode(&mut encoded_key)?;
+            key.encode(StoreOperation::AppendDerived, &mut encoded_key)?;
 
             let value = MaxPhysicalOffsetCheckpointValue { max_physical_offset };
             let mut encoded_value = Vec::with_capacity(MaxPhysicalOffsetCheckpointValue::ENCODED_LEN);
-            value.encode(&mut encoded_value)?;
+            value.encode(StoreOperation::AppendDerived, &mut encoded_value)?;
 
             batch.put_cf(
                 RocksDbColumnFamily::ConsumeQueueOffset.name(),
@@ -222,9 +223,9 @@ impl<'a> RocksDbConsumeQueueBatchWriter<'a> {
         &self,
         topic: impl AsRef<str>,
         queue_id: i32,
-    ) -> Result<RocksDbWriteBatch, RocketMQError> {
+    ) -> Result<RocksDbWriteBatch, StoreError> {
         let topic = topic.as_ref();
-        let (cq_start_key, cq_end_key) = ConsumeQueueKey::delete_range(topic, queue_id)?;
+        let (cq_start_key, cq_end_key) = ConsumeQueueKey::delete_range(StoreOperation::AppendDerived, topic, queue_id)?;
         let mut batch = RocksDbWriteBatch::with_capacity(3);
         batch.delete_range_cf(RocksDbColumnFamily::Default.name(), cq_start_key, cq_end_key);
 
@@ -235,20 +236,22 @@ impl<'a> RocksDbConsumeQueueBatchWriter<'a> {
                 boundary,
             };
             let mut encoded_key = Vec::with_capacity(key.encoded_len());
-            key.encode(&mut encoded_key)?;
+            key.encode(StoreOperation::AppendDerived, &mut encoded_key)?;
             batch.delete_cf(RocksDbColumnFamily::ConsumeQueueOffset.name(), encoded_key);
         }
         Ok(batch)
     }
 
-    pub fn destroy_topic_queue(&self, topic: impl AsRef<str>, queue_id: i32) -> Result<(), RocketMQError> {
+    pub fn destroy_topic_queue(&self, topic: impl AsRef<str>, queue_id: i32) -> Result<(), StoreError> {
         let batch = self.build_destroy_topic_queue_batch(topic, queue_id)?;
-        self.store.write_batch(&batch)
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)
     }
 
-    pub fn write(&self, request: &ConsumeQueueBatchWriteRequest) -> Result<(), RocketMQError> {
+    pub fn write(&self, request: &ConsumeQueueBatchWriteRequest) -> Result<(), StoreError> {
         let batch = self.build_batch(request)?;
-        self.store.write_batch(&batch)
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)
     }
 
     pub fn get_cq_value(
@@ -256,17 +259,27 @@ impl<'a> RocksDbConsumeQueueBatchWriter<'a> {
         topic: impl Into<String>,
         queue_id: i32,
         consume_queue_offset: i64,
-    ) -> Result<Option<ConsumeQueueValue>, RocketMQError> {
+    ) -> Result<Option<ConsumeQueueValue>, StoreError> {
+        self.get_cq_value_with_operation(StoreOperation::Read, topic, queue_id, consume_queue_offset)
+    }
+
+    pub(crate) fn get_cq_value_with_operation(
+        &self,
+        operation: StoreOperation,
+        topic: impl Into<String>,
+        queue_id: i32,
+        consume_queue_offset: i64,
+    ) -> Result<Option<ConsumeQueueValue>, StoreError> {
         let key = ConsumeQueueKey {
             topic: topic.into(),
             queue_id,
             cq_offset: consume_queue_offset,
         };
         let mut encoded_key = Vec::with_capacity(key.encoded_len());
-        key.encode(&mut encoded_key)?;
+        key.encode(operation, &mut encoded_key)?;
         self.store
-            .get_cf(RocksDbColumnFamily::Default.name(), &encoded_key)?
-            .map(|value| ConsumeQueueValue::decode(value.as_ref()))
+            .get_cf(operation, RocksDbColumnFamily::Default.name(), &encoded_key)?
+            .map(|value| ConsumeQueueValue::decode(operation, value.as_ref()))
             .transpose()
     }
 
@@ -276,7 +289,7 @@ impl<'a> RocksDbConsumeQueueBatchWriter<'a> {
         queue_id: i32,
         start_index: i64,
         num: i32,
-    ) -> Result<Vec<ConsumeQueueValue>, RocketMQError> {
+    ) -> Result<Vec<ConsumeQueueValue>, StoreError> {
         if num <= 0 {
             return Ok(Vec::new());
         }
@@ -284,31 +297,23 @@ impl<'a> RocksDbConsumeQueueBatchWriter<'a> {
         let topic = topic.into();
         let end_index = start_index
             .checked_add(i64::from(num))
-            .ok_or_else(|| RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.consume_queue.range",
-                value: format!("{start_index}+{num}"),
-                reason: "consume queue range overflowed i64".to_string(),
-            })?;
-        let start = encode_consume_queue_key(&topic, queue_id, start_index)?;
-        let end = encode_consume_queue_key(&topic, queue_id, end_index)?;
-        let items = self.store.range_scan(&RocksDbRangeScanOptions::new(
-            RocksDbColumnFamily::Default.name(),
-            start,
-            end,
-            num as usize,
-        ))?;
+            .ok_or_else(|| crate::error::request_invalid(rocketmq_store_api::StoreOperation::Read))?;
+        let start = encode_consume_queue_key(StoreOperation::Read, &topic, queue_id, start_index)?;
+        let end = encode_consume_queue_key(StoreOperation::Read, &topic, queue_id, end_index)?;
+        let items = self.store.range_scan(
+            rocketmq_store_api::StoreOperation::Read,
+            &RocksDbRangeScanOptions::new(RocksDbColumnFamily::Default.name(), start, end, num as usize),
+        )?;
         let mut values = Vec::with_capacity(items.len());
         for (offset_delta, item) in items.into_iter().enumerate() {
-            let offset_delta = i64::try_from(offset_delta).map_err(|_| RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.consume_queue.range",
-                value: offset_delta.to_string(),
-                reason: "consume queue range index exceeds i64".to_string(),
-            })?;
-            let expected_key = encode_consume_queue_key(&topic, queue_id, start_index + offset_delta)?;
+            let offset_delta = i64::try_from(offset_delta)
+                .map_err(|_| crate::error::request_invalid(rocketmq_store_api::StoreOperation::Read))?;
+            let expected_key =
+                encode_consume_queue_key(StoreOperation::Read, &topic, queue_id, start_index + offset_delta)?;
             if item.key.as_ref() != expected_key.as_slice() {
                 break;
             }
-            values.push(ConsumeQueueValue::decode(item.value.as_ref())?);
+            values.push(ConsumeQueueValue::decode(StoreOperation::Read, item.value.as_ref())?);
         }
         Ok(values)
     }
@@ -318,28 +323,36 @@ impl<'a> RocksDbConsumeQueueBatchWriter<'a> {
         topic: impl Into<String>,
         queue_id: i32,
         boundary: ConsumeQueueOffsetBoundary,
-    ) -> Result<Option<ConsumeQueueOffsetValue>, RocketMQError> {
+    ) -> Result<Option<ConsumeQueueOffsetValue>, StoreError> {
         let key = ConsumeQueueOffsetKey {
             topic: topic.into(),
             queue_id,
             boundary,
         };
         let mut encoded_key = Vec::with_capacity(key.encoded_len());
-        key.encode(&mut encoded_key)?;
+        key.encode(StoreOperation::QueryOffset, &mut encoded_key)?;
         self.store
-            .get_cf(RocksDbColumnFamily::ConsumeQueueOffset.name(), &encoded_key)?
-            .map(|value| ConsumeQueueOffsetValue::decode(value.as_ref()))
+            .get_cf(
+                StoreOperation::QueryOffset,
+                RocksDbColumnFamily::ConsumeQueueOffset.name(),
+                &encoded_key,
+            )?
+            .map(|value| ConsumeQueueOffsetValue::decode(StoreOperation::QueryOffset, value.as_ref()))
             .transpose()
     }
 
-    pub fn get_max_physical_offset_checkpoint(&self) -> Result<MaxPhysicalOffsetCheckpointValue, RocketMQError> {
+    pub fn get_max_physical_offset_checkpoint(&self) -> Result<MaxPhysicalOffsetCheckpointValue, StoreError> {
         let key = ConsumeQueueOffsetKey::max_physical_offset_checkpoint();
         let mut encoded_key = Vec::with_capacity(key.encoded_len());
-        key.encode(&mut encoded_key)?;
+        key.encode(StoreOperation::QueryOffset, &mut encoded_key)?;
 
         self.store
-            .get_cf(RocksDbColumnFamily::ConsumeQueueOffset.name(), &encoded_key)?
-            .map(|value| MaxPhysicalOffsetCheckpointValue::decode(value.as_ref()))
+            .get_cf(
+                StoreOperation::QueryOffset,
+                RocksDbColumnFamily::ConsumeQueueOffset.name(),
+                &encoded_key,
+            )?
+            .map(|value| MaxPhysicalOffsetCheckpointValue::decode(StoreOperation::QueryOffset, value.as_ref()))
             .transpose()
             .map(|value| match value {
                 Some(value) => value,
@@ -369,7 +382,7 @@ impl RocksDbConsumeQueueStore {
         Arc::downgrade(&self.store)
     }
 
-    pub fn put_message_position<R>(&self, requests: &[R]) -> Result<(), RocketMQError>
+    pub fn put_message_position<R>(&self, requests: &[R]) -> Result<(), StoreError>
     where
         R: RocksDbConsumeQueueDispatch,
     {
@@ -410,11 +423,7 @@ impl RocksDbConsumeQueueStore {
             let request_max_physical_offset = request
                 .commit_log_offset()
                 .checked_add(i64::from(request.message_size()))
-                .ok_or_else(|| RocketMQError::ConfigInvalidValue {
-                    key: "rocksdb.consume_queue.max_physical_offset",
-                    value: format!("{}+{}", request.commit_log_offset(), request.message_size()),
-                    reason: "commit log offset plus message size overflowed i64".to_string(),
-                })?;
+                .ok_or_else(|| crate::error::request_invalid(StoreOperation::AppendDerived))?;
             max_physical_offset = Some(max_physical_offset.map_or(request_max_physical_offset, |current| {
                 current.max(request_max_physical_offset)
             }));
@@ -434,12 +443,21 @@ impl RocksDbConsumeQueueStore {
         topic: impl Into<String>,
         queue_id: i32,
         consume_queue_offset: i64,
-    ) -> Result<Option<Bytes>, RocketMQError> {
-        let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
-        writer
-            .get_cq_value(topic, queue_id, consume_queue_offset)?
-            .map(encode_consume_queue_value)
+    ) -> Result<Option<Bytes>, StoreError> {
+        self.get_value_with_operation(StoreOperation::Read, topic, queue_id, consume_queue_offset)?
+            .map(|value| encode_consume_queue_value(StoreOperation::Read, value))
             .transpose()
+    }
+
+    pub(crate) fn get_value_with_operation(
+        &self,
+        operation: StoreOperation,
+        topic: impl Into<String>,
+        queue_id: i32,
+        consume_queue_offset: i64,
+    ) -> Result<Option<ConsumeQueueValue>, StoreError> {
+        let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
+        writer.get_cq_value_with_operation(operation, topic, queue_id, consume_queue_offset)
     }
 
     pub fn range_query(
@@ -448,12 +466,12 @@ impl RocksDbConsumeQueueStore {
         queue_id: i32,
         start_index: i64,
         num: i32,
-    ) -> Result<Vec<Bytes>, RocketMQError> {
+    ) -> Result<Vec<Bytes>, StoreError> {
         let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
         writer
             .range_query_cq_values(topic, queue_id, start_index, num)?
             .into_iter()
-            .map(encode_consume_queue_value)
+            .map(|value| encode_consume_queue_value(StoreOperation::Read, value))
             .collect()
     }
 
@@ -467,12 +485,12 @@ impl RocksDbConsumeQueueStore {
         queue_id: i32,
         start_index: i64,
         num: i32,
-    ) -> Result<Vec<ConsumeQueueValue>, RocketMQError> {
+    ) -> Result<Vec<ConsumeQueueValue>, StoreError> {
         let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
         writer.range_query_cq_values(topic, queue_id, start_index, num)
     }
 
-    pub fn get_max_offset_in_queue(&self, topic: impl Into<String>, queue_id: i32) -> Result<i64, RocketMQError> {
+    pub fn get_max_offset_in_queue(&self, topic: impl Into<String>, queue_id: i32) -> Result<i64, StoreError> {
         let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
         let Some(value) = writer.get_offset_value(topic, queue_id, ConsumeQueueOffsetBoundary::Max)? else {
             return Ok(0);
@@ -480,14 +498,10 @@ impl RocksDbConsumeQueueStore {
         value
             .consume_queue_offset
             .checked_add(1)
-            .ok_or_else(|| RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.consume_queue.max_offset",
-                value: value.consume_queue_offset.to_string(),
-                reason: "max consume queue offset overflowed i64 when converted to next offset".to_string(),
-            })
+            .ok_or_else(|| crate::error::state_corrupted(StoreOperation::QueryOffset))
     }
 
-    pub fn get_min_offset_in_queue(&self, topic: impl Into<String>, queue_id: i32) -> Result<i64, RocketMQError> {
+    pub fn get_min_offset_in_queue(&self, topic: impl Into<String>, queue_id: i32) -> Result<i64, StoreError> {
         let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
         Ok(writer
             .get_offset_value(topic, queue_id, ConsumeQueueOffsetBoundary::Min)?
@@ -501,22 +515,17 @@ impl RocksDbConsumeQueueStore {
     ///
     /// Returns an error when the offset column family cannot be scanned or a
     /// stored maximum cannot be represented as an exclusive offset.
-    pub fn max_offsets_by_topic_queue(&self) -> Result<HashMap<(String, i32), i64>, RocketMQError> {
+    pub fn max_offsets_by_topic_queue(&self) -> Result<HashMap<(String, i32), i64>, StoreError> {
         let mut offsets = HashMap::new();
-        for entry in self.scan_offset_entries()? {
+        for entry in self.scan_offset_entries(StoreOperation::QueryOffset)? {
             if entry.boundary != ConsumeQueueOffsetBoundary::Max {
                 continue;
             }
-            let next_offset =
-                entry
-                    .value
-                    .consume_queue_offset
-                    .checked_add(1)
-                    .ok_or_else(|| RocketMQError::ConfigInvalidValue {
-                        key: "rocksdb.consume_queue.max_offset",
-                        value: entry.value.consume_queue_offset.to_string(),
-                        reason: "max consume queue offset overflowed i64 when converted to next offset".to_string(),
-                    })?;
+            let next_offset = entry
+                .value
+                .consume_queue_offset
+                .checked_add(1)
+                .ok_or_else(|| crate::error::state_corrupted(StoreOperation::QueryOffset))?;
             offsets.insert((entry.topic, entry.queue_id), next_offset);
         }
         Ok(offsets)
@@ -526,39 +535,43 @@ impl RocksDbConsumeQueueStore {
         &self,
         topic: impl Into<String>,
         queue_id: i32,
-    ) -> Result<Option<i64>, RocketMQError> {
+    ) -> Result<Option<i64>, StoreError> {
         let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
         Ok(writer
             .get_offset_value(topic, queue_id, ConsumeQueueOffsetBoundary::Max)?
             .map(|value| value.commit_log_offset))
     }
 
-    pub fn get_max_phy_offset_in_consume_queue_global(&self) -> Result<i64, RocketMQError> {
+    pub fn get_max_phy_offset_in_consume_queue_global(&self) -> Result<i64, StoreError> {
         let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
         Ok(writer.get_max_physical_offset_checkpoint()?.max_physical_offset)
     }
 
-    pub fn destroy_topic_queue(&self, topic: impl AsRef<str>, queue_id: i32) -> Result<(), RocketMQError> {
+    pub fn destroy_topic_queue(&self, topic: impl AsRef<str>, queue_id: i32) -> Result<(), StoreError> {
         let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
         writer.destroy_topic_queue(topic, queue_id)
     }
 
-    pub fn scan_queue_ids_in_topic(&self, topic: impl AsRef<str>) -> Result<Vec<i32>, RocketMQError> {
-        let prefix = ConsumeQueueOffsetKey::topic_boundary_prefix(topic, ConsumeQueueOffsetBoundary::Max)?;
+    pub fn scan_queue_ids_in_topic(&self, topic: impl AsRef<str>) -> Result<Vec<i32>, StoreError> {
+        let prefix = ConsumeQueueOffsetKey::topic_boundary_prefix(
+            StoreOperation::QueryOffset,
+            topic,
+            ConsumeQueueOffsetBoundary::Max,
+        )?;
         let prefix_len = prefix.len();
-        let items = self.store.prefix_scan(&RocksDbScanOptions {
-            cf: RocksDbColumnFamily::ConsumeQueueOffset.name().to_string(),
-            prefix,
-            limit: 0,
-        })?;
+        let items = self.store.prefix_scan(
+            StoreOperation::QueryOffset,
+            &RocksDbScanOptions {
+                cf: RocksDbColumnFamily::ConsumeQueueOffset.name().to_string(),
+                prefix,
+                limit: 0,
+            },
+        )?;
         let mut queue_ids = Vec::with_capacity(items.len());
         for item in items {
             let key = item.key.as_ref();
             if key.len() != prefix_len + 4 {
-                return Err(RocketMQError::storage_read_failed(
-                    "rocksdb.consume_queue.offset",
-                    format!("malformed offset key length {}, expected {}", key.len(), prefix_len + 4),
-                ));
+                return Err(crate::error::state_corrupted(StoreOperation::QueryOffset));
             }
             let mut queue_id = [0_u8; 4];
             queue_id.copy_from_slice(&key[prefix_len..prefix_len + 4]);
@@ -567,7 +580,7 @@ impl RocksDbConsumeQueueStore {
         Ok(queue_ids)
     }
 
-    pub fn destroy_topic(&self, topic: impl AsRef<str>) -> Result<Vec<i32>, RocketMQError> {
+    pub fn destroy_topic(&self, topic: impl AsRef<str>) -> Result<Vec<i32>, StoreError> {
         let topic = topic.as_ref();
         let queue_ids = self.scan_queue_ids_in_topic(topic)?;
         for queue_id in &queue_ids {
@@ -576,7 +589,7 @@ impl RocksDbConsumeQueueStore {
         Ok(queue_ids)
     }
 
-    pub fn truncate_dirty(&self, offset_to_truncate: i64) -> Result<(), RocketMQError> {
+    pub fn truncate_dirty(&self, offset_to_truncate: i64) -> Result<(), StoreError> {
         let current_max_phy_offset = self.get_max_phy_offset_in_consume_queue_global()?;
         if offset_to_truncate >= current_max_phy_offset {
             return Ok(());
@@ -589,7 +602,7 @@ impl RocksDbConsumeQueueStore {
             max_physical_offset: Some(offset_to_truncate),
         })?;
 
-        for entry in self.scan_offset_entries()? {
+        for entry in self.scan_offset_entries(StoreOperation::AppendDerived)? {
             if entry.boundary == ConsumeQueueOffsetBoundary::Max && entry.value.commit_log_offset >= offset_to_truncate
             {
                 self.correct_max_offset_for_truncate(
@@ -603,18 +616,21 @@ impl RocksDbConsumeQueueStore {
         Ok(())
     }
 
-    fn scan_offset_entries(&self) -> Result<Vec<ConsumeQueueOffsetEntry>, RocketMQError> {
-        let items = self.store.prefix_scan(&RocksDbScanOptions {
-            cf: RocksDbColumnFamily::ConsumeQueueOffset.name().to_string(),
-            prefix: Vec::new(),
-            limit: 0,
-        })?;
+    fn scan_offset_entries(&self, operation: StoreOperation) -> Result<Vec<ConsumeQueueOffsetEntry>, StoreError> {
+        let items = self.store.prefix_scan(
+            operation,
+            &RocksDbScanOptions {
+                cf: RocksDbColumnFamily::ConsumeQueueOffset.name().to_string(),
+                prefix: Vec::new(),
+                limit: 0,
+            },
+        )?;
         let mut entries = Vec::new();
         for item in items {
             if item.value.len() != ConsumeQueueOffsetValue::ENCODED_LEN {
                 continue;
             }
-            if let Some(entry) = parse_consume_queue_offset_entry(item.key.as_ref(), item.value.as_ref())? {
+            if let Some(entry) = parse_consume_queue_offset_entry(operation, item.key.as_ref(), item.value.as_ref())? {
                 entries.push(entry);
             }
         }
@@ -627,7 +643,7 @@ impl RocksDbConsumeQueueStore {
         queue_id: i32,
         max_cq_offset: i64,
         offset_to_truncate: i64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
         let min_offset = writer
             .get_offset_value(topic.to_string(), queue_id, ConsumeQueueOffsetBoundary::Min)?
@@ -636,12 +652,8 @@ impl RocksDbConsumeQueueStore {
                 consume_queue_offset: 0,
             });
         if min_offset.commit_log_offset > offset_to_truncate {
-            return Err(RocketMQError::storage_read_failed(
-                "rocksdb.consume_queue.offset",
-                format!(
-                    "min physical offset {} is greater than truncate offset {} for {}:{}",
-                    min_offset.commit_log_offset, offset_to_truncate, topic, queue_id
-                ),
+            return Err(crate::error::state_corrupted(
+                rocketmq_store_api::StoreOperation::AppendDerived,
             ));
         }
 
@@ -672,7 +684,7 @@ impl RocksDbConsumeQueueStore {
         low: i64,
         high: i64,
         target_phy_offset: i64,
-    ) -> Result<Option<ConsumeQueueOffsetValue>, RocketMQError> {
+    ) -> Result<Option<ConsumeQueueOffsetValue>, StoreError> {
         let writer = RocksDbConsumeQueueBatchWriter::new(self.store.as_ref());
         let mut low = low;
         let mut high = high;
@@ -701,10 +713,11 @@ impl RocksDbConsumeQueueStore {
         &self,
         runtime_scope: &crate::runtime::RocksDbRuntimeScope,
         _min_phy_offset: i64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         self.store
             .compact_range_cf_blocking(
                 runtime_scope,
+                rocketmq_store_api::StoreOperation::AppendDerived,
                 RocksDbColumnFamily::Default.name().to_string(),
                 None,
                 None,
@@ -716,9 +729,10 @@ impl RocksDbConsumeQueueStore {
         &self,
         runtime_scope: &crate::runtime::RocksDbRuntimeScope,
         _min_phy_offset: i64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         self.store.compact_range_cf_background(
             runtime_scope,
+            rocketmq_store_api::StoreOperation::AppendDerived,
             RocksDbColumnFamily::Default.name().to_string(),
             None,
             None,
@@ -727,9 +741,10 @@ impl RocksDbConsumeQueueStore {
 }
 
 fn parse_consume_queue_offset_entry(
+    operation: StoreOperation,
     key: &[u8],
     value: &[u8],
-) -> Result<Option<ConsumeQueueOffsetEntry>, RocketMQError> {
+) -> Result<Option<ConsumeQueueOffsetEntry>, StoreError> {
     const MIN_OFFSET_KEY_LEN: usize = 4 + 1 + 1 + 3 + 1 + 4;
     if key.len() <= MIN_OFFSET_KEY_LEN {
         return Ok(None);
@@ -750,7 +765,9 @@ fn parse_consume_queue_offset_entry(
         return Ok(None);
     }
 
-    let topic = String::from_utf8_lossy(&key[5..5 + topic_len]).into_owned();
+    let topic = std::str::from_utf8(&key[5..5 + topic_len])
+        .map_err(|source| crate::error::state_corrupted_source(operation, source))?
+        .to_owned();
     let marker_start = 5 + topic_len + 1;
     let boundary = match &key[marker_start..marker_start + 3] {
         b"max" => ConsumeQueueOffsetBoundary::Max,
@@ -760,7 +777,7 @@ fn parse_consume_queue_offset_entry(
     let queue_id_start = marker_start + 3 + 1;
     let mut queue_id = [0_u8; 4];
     queue_id.copy_from_slice(&key[queue_id_start..queue_id_start + 4]);
-    let value = ConsumeQueueOffsetValue::decode(value)?;
+    let value = ConsumeQueueOffsetValue::decode(operation, value)?;
 
     Ok(Some(ConsumeQueueOffsetEntry {
         topic,
@@ -770,19 +787,28 @@ fn parse_consume_queue_offset_entry(
     }))
 }
 
-fn encode_consume_queue_value(value: ConsumeQueueValue) -> Result<Bytes, RocketMQError> {
+fn encode_consume_queue_value(operation: StoreOperation, value: ConsumeQueueValue) -> Result<Bytes, StoreError> {
     let mut encoded_value = Vec::with_capacity(ConsumeQueueValue::ENCODED_LEN);
-    value.encode(&mut encoded_value)?;
+    value.encode(operation, &mut encoded_value)?;
     Ok(Bytes::from(encoded_value))
 }
 
-fn encode_consume_queue_key(topic: &str, queue_id: i32, cq_offset: i64) -> Result<Vec<u8>, RocketMQError> {
+fn encode_consume_queue_key(
+    operation: StoreOperation,
+    topic: &str,
+    queue_id: i32,
+    cq_offset: i64,
+) -> Result<Vec<u8>, StoreError> {
     let key = ConsumeQueueKey {
         topic: topic.to_owned(),
         queue_id,
         cq_offset,
     };
     let mut encoded = Vec::with_capacity(key.encoded_len());
-    key.encode(&mut encoded)?;
+    key.encode(operation, &mut encoded)?;
     Ok(encoded)
 }
+
+#[cfg(test)]
+#[path = "consume_queue/tests.rs"]
+mod tests;

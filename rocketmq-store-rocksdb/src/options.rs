@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 
 use crate::config::RocksDbBlockBasedIndexType;
 use crate::config::RocksDbColumnFamilyConfig;
@@ -34,7 +34,7 @@ pub enum RocksDbWriteProfile {
 pub struct RocksDbOptionsFactory;
 
 impl RocksDbOptionsFactory {
-    pub fn db_options(config: &RocksDbConfig) -> Result<::rocksdb::Options, RocketMQError> {
+    pub fn db_options(config: &RocksDbConfig) -> Result<::rocksdb::Options, StoreError> {
         let resource_budget = RocksDbResourceBudget::from_config(config)?;
         Self::db_options_with_resource_budget(config, &resource_budget)
     }
@@ -42,7 +42,7 @@ impl RocksDbOptionsFactory {
     pub fn db_options_with_resource_budget(
         config: &RocksDbConfig,
         resource_budget: &RocksDbResourceBudget,
-    ) -> Result<::rocksdb::Options, RocketMQError> {
+    ) -> Result<::rocksdb::Options, StoreError> {
         config.validate()?;
         let mut options = ::rocksdb::Options::default();
         options.create_if_missing(true);
@@ -83,7 +83,7 @@ impl RocksDbOptionsFactory {
         Ok(options)
     }
 
-    pub fn cf_options(config: &RocksDbColumnFamilyConfig) -> Result<::rocksdb::Options, RocketMQError> {
+    pub fn cf_options(config: &RocksDbColumnFamilyConfig) -> Result<::rocksdb::Options, StoreError> {
         let resource_budget =
             RocksDbResourceBudget::new(config.block_cache_size, DEFAULT_ROCKSDB_WRITE_BUFFER_BUDGET_BYTES)?;
         Self::cf_options_with_resource_budget(config, &resource_budget)
@@ -92,7 +92,7 @@ impl RocksDbOptionsFactory {
     pub fn cf_options_with_resource_budget(
         config: &RocksDbColumnFamilyConfig,
         resource_budget: &RocksDbResourceBudget,
-    ) -> Result<::rocksdb::Options, RocketMQError> {
+    ) -> Result<::rocksdb::Options, StoreError> {
         config.validate()?;
         let mut options = ::rocksdb::Options::default();
         options.set_write_buffer_size(config.write_buffer_size);

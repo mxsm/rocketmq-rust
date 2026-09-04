@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
-use crate::error::codec_error;
+use crate::error::codec_corrupted;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConsumeQueueValue {
@@ -55,25 +56,21 @@ pub struct TransRocksDbValue {
 impl ConsumeQueueOffsetValue {
     pub const ENCODED_LEN: usize = 16;
 
-    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+    pub fn encode(&self, _operation: StoreOperation, dst: &mut Vec<u8>) -> Result<(), StoreError> {
         dst.reserve(Self::ENCODED_LEN);
         dst.extend_from_slice(&self.commit_log_offset.to_be_bytes());
         dst.extend_from_slice(&self.consume_queue_offset.to_be_bytes());
         Ok(())
     }
 
-    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, src: &[u8]) -> Result<Self, StoreError> {
         if src.len() != Self::ENCODED_LEN {
-            return Err(codec_error(format!(
-                "consume queue offset value must be {} bytes, got {}",
-                Self::ENCODED_LEN,
-                src.len()
-            )));
+            return Err(codec_corrupted(operation));
         }
 
         Ok(Self {
-            commit_log_offset: read_i64(src, 0)?,
-            consume_queue_offset: read_i64(src, 8)?,
+            commit_log_offset: read_i64(operation, src, 0)?,
+            consume_queue_offset: read_i64(operation, src, 8)?,
         })
     }
 }
@@ -81,23 +78,19 @@ impl ConsumeQueueOffsetValue {
 impl MaxPhysicalOffsetCheckpointValue {
     pub const ENCODED_LEN: usize = 8;
 
-    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+    pub fn encode(&self, _operation: StoreOperation, dst: &mut Vec<u8>) -> Result<(), StoreError> {
         dst.reserve(Self::ENCODED_LEN);
         dst.extend_from_slice(&self.max_physical_offset.to_be_bytes());
         Ok(())
     }
 
-    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, src: &[u8]) -> Result<Self, StoreError> {
         if src.len() != Self::ENCODED_LEN {
-            return Err(codec_error(format!(
-                "max physical offset checkpoint value must be {} bytes, got {}",
-                Self::ENCODED_LEN,
-                src.len()
-            )));
+            return Err(codec_corrupted(operation));
         }
 
         Ok(Self {
-            max_physical_offset: read_i64(src, 0)?,
+            max_physical_offset: read_i64(operation, src, 0)?,
         })
     }
 }
@@ -105,7 +98,7 @@ impl MaxPhysicalOffsetCheckpointValue {
 impl ConsumeQueueValue {
     pub const ENCODED_LEN: usize = 28;
 
-    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+    pub fn encode(&self, _operation: StoreOperation, dst: &mut Vec<u8>) -> Result<(), StoreError> {
         dst.reserve(Self::ENCODED_LEN);
         dst.extend_from_slice(&self.commit_log_physical_offset.to_be_bytes());
         dst.extend_from_slice(&self.body_size.to_be_bytes());
@@ -114,20 +107,16 @@ impl ConsumeQueueValue {
         Ok(())
     }
 
-    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, src: &[u8]) -> Result<Self, StoreError> {
         if src.len() != Self::ENCODED_LEN {
-            return Err(codec_error(format!(
-                "consume queue value must be {} bytes, got {}",
-                Self::ENCODED_LEN,
-                src.len()
-            )));
+            return Err(codec_corrupted(operation));
         }
 
         Ok(Self {
-            commit_log_physical_offset: read_i64(src, 0)?,
-            body_size: read_i32(src, 8)?,
-            tag_hash_code: read_i64(src, 12)?,
-            msg_store_time: read_i64(src, 20)?,
+            commit_log_physical_offset: read_i64(operation, src, 0)?,
+            body_size: read_i32(operation, src, 8)?,
+            tag_hash_code: read_i64(operation, src, 12)?,
+            msg_store_time: read_i64(operation, src, 20)?,
         })
     }
 }
@@ -135,29 +124,21 @@ impl ConsumeQueueValue {
 impl IndexRocksDbValue {
     pub const ENCODED_LEN: usize = 8;
 
-    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+    pub fn encode(&self, operation: StoreOperation, dst: &mut Vec<u8>) -> Result<(), StoreError> {
         if self.store_time <= 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.index.store_time",
-                value: self.store_time.to_string(),
-                reason: "store time must be greater than zero".to_string(),
-            });
+            return Err(crate::error::codec_contract(operation));
         }
         dst.reserve(Self::ENCODED_LEN);
         dst.extend_from_slice(&self.store_time.to_be_bytes());
         Ok(())
     }
 
-    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, src: &[u8]) -> Result<Self, StoreError> {
         if src.len() != Self::ENCODED_LEN {
-            return Err(codec_error(format!(
-                "index value must be {} bytes, got {}",
-                Self::ENCODED_LEN,
-                src.len()
-            )));
+            return Err(codec_corrupted(operation));
         }
         Ok(Self {
-            store_time: read_i64(src, 0)?,
+            store_time: read_i64(operation, src, 0)?,
         })
     }
 }
@@ -165,20 +146,12 @@ impl IndexRocksDbValue {
 impl TimerRocksDbValue {
     pub const ENCODED_LEN: usize = 12;
 
-    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+    pub fn encode(&self, operation: StoreOperation, dst: &mut Vec<u8>) -> Result<(), StoreError> {
         if self.size_py <= 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.timer.size_py",
-                value: self.size_py.to_string(),
-                reason: "message size must be greater than zero".to_string(),
-            });
+            return Err(crate::error::codec_contract(operation));
         }
         if self.offset_py < 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.timer.offset_py",
-                value: self.offset_py.to_string(),
-                reason: "physical offset must be non-negative".to_string(),
-            });
+            return Err(crate::error::codec_contract(operation));
         }
         dst.reserve(Self::ENCODED_LEN);
         dst.extend_from_slice(&self.size_py.to_be_bytes());
@@ -186,17 +159,13 @@ impl TimerRocksDbValue {
         Ok(())
     }
 
-    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, src: &[u8]) -> Result<Self, StoreError> {
         if src.len() != Self::ENCODED_LEN {
-            return Err(codec_error(format!(
-                "timer value must be {} bytes, got {}",
-                Self::ENCODED_LEN,
-                src.len()
-            )));
+            return Err(codec_corrupted(operation));
         }
         Ok(Self {
-            size_py: read_i32(src, 0)?,
-            offset_py: read_i64(src, 4)?,
+            size_py: read_i32(operation, src, 0)?,
+            offset_py: read_i64(operation, src, 4)?,
         })
     }
 }
@@ -204,20 +173,12 @@ impl TimerRocksDbValue {
 impl TransRocksDbValue {
     pub const ENCODED_LEN: usize = 8;
 
-    pub fn encode(&self, dst: &mut Vec<u8>) -> Result<(), RocketMQError> {
+    pub fn encode(&self, operation: StoreOperation, dst: &mut Vec<u8>) -> Result<(), StoreError> {
         if self.check_times < 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.trans.check_times",
-                value: self.check_times.to_string(),
-                reason: "check times must be non-negative".to_string(),
-            });
+            return Err(crate::error::codec_contract(operation));
         }
         if self.size_py <= 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.trans.size_py",
-                value: self.size_py.to_string(),
-                reason: "message size must be greater than zero".to_string(),
-            });
+            return Err(crate::error::codec_contract(operation));
         }
         dst.reserve(Self::ENCODED_LEN);
         dst.extend_from_slice(&self.check_times.to_be_bytes());
@@ -225,35 +186,31 @@ impl TransRocksDbValue {
         Ok(())
     }
 
-    pub fn decode(src: &[u8]) -> Result<Self, RocketMQError> {
+    pub fn decode(operation: StoreOperation, src: &[u8]) -> Result<Self, StoreError> {
         if src.len() != Self::ENCODED_LEN {
-            return Err(codec_error(format!(
-                "trans value must be {} bytes, got {}",
-                Self::ENCODED_LEN,
-                src.len()
-            )));
+            return Err(codec_corrupted(operation));
         }
         Ok(Self {
-            check_times: read_i32(src, 0)?,
-            size_py: read_i32(src, 4)?,
+            check_times: read_i32(operation, src, 0)?,
+            size_py: read_i32(operation, src, 4)?,
         })
     }
 }
 
-fn read_i64(src: &[u8], start: usize) -> Result<i64, RocketMQError> {
+fn read_i64(operation: StoreOperation, src: &[u8], start: usize) -> Result<i64, StoreError> {
     let end = start + 8;
     if end > src.len() {
-        return Err(codec_error("not enough bytes to decode i64"));
+        return Err(codec_corrupted(operation));
     }
     let mut bytes = [0_u8; 8];
     bytes.copy_from_slice(&src[start..end]);
     Ok(i64::from_be_bytes(bytes))
 }
 
-fn read_i32(src: &[u8], start: usize) -> Result<i32, RocketMQError> {
+fn read_i32(operation: StoreOperation, src: &[u8], start: usize) -> Result<i32, StoreError> {
     let end = start + 4;
     if end > src.len() {
-        return Err(codec_error("not enough bytes to decode i32"));
+        return Err(codec_corrupted(operation));
     }
     let mut bytes = [0_u8; 4];
     bytes.copy_from_slice(&src[start..end]);

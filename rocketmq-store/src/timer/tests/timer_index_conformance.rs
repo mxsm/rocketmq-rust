@@ -286,7 +286,8 @@ async fn rocksdb_pages_checkpoints_and_gc() {
     let directory = tempfile::tempdir().expect("timeline root");
     let native = std::sync::Arc::new(
         rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex::open(directory.path())
-            .expect("open Timeline"),
+            .expect("open Timeline")
+            .expect("valid Timeline configuration"),
     );
     let scope = crate::runtime::test_scope("rocksdb-timer-index-conformance");
     let index = crate::timer::timeline::RocksDbTimerIndex::new(native, scope.storage_io());
@@ -357,7 +358,8 @@ async fn segmented_pages_checkpoints_cancel_visibility_and_gc() {
     );
     let overlay = std::sync::Arc::new(
         rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex::open(directory.path())
-            .expect("open overlay"),
+            .expect("open overlay")
+            .expect("valid overlay configuration"),
     );
     let scope = crate::runtime::test_scope("segmented-timer-index-conformance");
     let index =
@@ -372,7 +374,8 @@ async fn rocksdb_fixed_random_trace_matches_reference_set() {
     let directory = tempfile::tempdir().expect("timeline root");
     let native = std::sync::Arc::new(
         rocketmq_store_rocksdb::timer::timeline_index::RocksDbTimelineIndex::open(directory.path())
-            .expect("open Timeline"),
+            .expect("open Timeline")
+            .expect("valid Timeline configuration"),
     );
     let scope = crate::runtime::test_scope("rocksdb-timer-index-trace");
     let index = crate::timer::timeline::RocksDbTimerIndex::new(native, scope.storage_io());

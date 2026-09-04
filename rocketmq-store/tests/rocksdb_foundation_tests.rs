@@ -68,6 +68,7 @@ use rocketmq_store::RocksDbTimerBuildService;
 use rocketmq_store::RocksDbTransBuildConfig;
 use rocketmq_store::RocksDbTransBuildService;
 use rocketmq_store::RocksDbWriteProfile;
+use rocketmq_store::StoreOperation;
 use rocketmq_store::StoreRuntimeConfig;
 use rocketmq_store::StoreType;
 use rocketmq_store::TimerRocksDbAction;
@@ -459,14 +460,14 @@ fn rocksdb_message_store_try_new_opens_real_rocksdb_consume_queue_backend() {
         .expect("message rocksdb index write should succeed");
     assert_eq!(
         message_rocksdb_storage
-            .get_last_offset_py(RocksDbColumnFamily::Default.name())
+            .get_last_offset_py(StoreOperation::QueryOffset, RocksDbColumnFamily::Default.name())
             .expect("index last offset should read"),
         700
     );
 }
 
 #[test]
-fn rocksdb_message_store_try_new_rejects_conflicting_consume_queue_path() {
+fn rocksdb_message_store_try_new_uses_the_configured_consume_queue_path() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let conflict_dir = temp_dir.path().join("consumequeue");
     std::fs::create_dir_all(&conflict_dir).expect("conflict dir should be created");
@@ -477,7 +478,7 @@ fn rocksdb_message_store_try_new_rejects_conflicting_consume_queue_path() {
         ..MessageStoreConfig::default()
     });
 
-    let error = RocksDBMessageStore::try_new(
+    let store = RocksDBMessageStore::try_new(
         message_store_config,
         rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
             .expect("valid test policy"),
@@ -487,17 +488,9 @@ fn rocksdb_message_store_try_new_rejects_conflicting_consume_queue_path() {
         true,
         rocksdb_service_context("rocksdb-message-store-conflict-test"),
     )
-    .expect_err("conflicting consume queue rocksdb path should be rejected");
+    .expect("configuration validation must not return an operational error");
 
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
-    assert_eq!(error.component(), rocketmq_store::StoreComponent::Configuration);
-    assert!(!error.to_string().contains("consumequeue"));
-    assert!(error
-        .public_view()
-        .expect("valid public projection")
-        .fields()
-        .next()
-        .is_none());
+    assert!(store.is_some());
 }
 
 #[test]
@@ -554,7 +547,7 @@ fn rocksdb_message_store_try_new_rejects_non_rocksdb_store_type() {
         ..MessageStoreConfig::default()
     });
 
-    let error = RocksDBMessageStore::try_new(
+    let store = RocksDBMessageStore::try_new(
         message_store_config,
         rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::disabled(1)
             .expect("valid test policy"),
@@ -564,11 +557,9 @@ fn rocksdb_message_store_try_new_rejects_non_rocksdb_store_type() {
         true,
         rocksdb_service_context("rocksdb-message-store-type-test"),
     )
-    .expect_err("rocksdb message store should reject local file store type");
+    .expect("configuration validation must not return an operational error");
 
-    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
-    assert_eq!(error.component(), rocketmq_store::StoreComponent::Configuration);
-    assert!(!error.to_string().contains("store_type"));
+    assert!(store.is_none());
 }
 
 #[test]
@@ -600,7 +591,8 @@ fn consume_queue_key_codec_matches_java_big_endian_layout() {
     };
     let mut actual = Vec::new();
 
-    key.encode(&mut actual).expect("cq key should encode");
+    key.encode(StoreOperation::QueryOffset, &mut actual)
+        .expect("cq key should encode");
 
     let mut expected = Vec::new();
     expected.extend_from_slice(&6_i32.to_be_bytes());
@@ -616,7 +608,8 @@ fn consume_queue_key_codec_matches_java_big_endian_layout() {
 
 #[test]
 fn consume_queue_delete_range_keys_match_java_ctrl_bounds() {
-    let (start_key, end_key) = ConsumeQueueKey::delete_range("TopicA", 3).expect("delete range keys should encode");
+    let (start_key, end_key) = ConsumeQueueKey::delete_range(StoreOperation::AppendDerived, "TopicA", 3)
+        .expect("delete range keys should encode");
     let mut expected_start = Vec::new();
     expected_start.extend_from_slice(&6_i32.to_be_bytes());
     expected_start.push(1);
@@ -641,7 +634,9 @@ fn consume_queue_value_codec_matches_java_28_byte_layout() {
     };
     let mut actual = Vec::new();
 
-    value.encode(&mut actual).expect("cq value should encode");
+    value
+        .encode(StoreOperation::AppendDerived, &mut actual)
+        .expect("cq value should encode");
 
     let mut expected = Vec::with_capacity(ConsumeQueueValue::ENCODED_LEN);
     expected.extend_from_slice(&1024_i64.to_be_bytes());
@@ -652,7 +647,7 @@ fn consume_queue_value_codec_matches_java_28_byte_layout() {
     assert_eq!(actual.len(), ConsumeQueueValue::ENCODED_LEN);
     assert_eq!(actual, expected);
     assert_eq!(
-        ConsumeQueueValue::decode(&actual).expect("cq value should decode"),
+        ConsumeQueueValue::decode(StoreOperation::Read, &actual).expect("cq value should decode"),
         value
     );
 }
@@ -661,10 +656,11 @@ fn consume_queue_value_codec_matches_java_28_byte_layout() {
 fn index_rocksdb_key_value_codec_matches_java_layout() {
     let store_time = 1_700_000_000_123_i64;
     let store_time_hour = (store_time / 3_600_000) * 3_600_000;
-    let key =
-        IndexRocksDbKey::normal_key("TopicA", "keyA", "uniqA", store_time, 1024).expect("index key should be valid");
+    let key = IndexRocksDbKey::normal_key(StoreOperation::QueryOffset, "TopicA", "keyA", "uniqA", store_time, 1024)
+        .expect("index key should be valid");
     let mut actual_key = Vec::new();
-    key.encode(&mut actual_key).expect("index key should encode");
+    key.encode(StoreOperation::QueryOffset, &mut actual_key)
+        .expect("index key should encode");
 
     let mut expected_key = Vec::new();
     expected_key.extend_from_slice(&store_time_hour.to_be_bytes());
@@ -673,12 +669,14 @@ fn index_rocksdb_key_value_codec_matches_java_layout() {
 
     let value = IndexRocksDbValue { store_time };
     let mut actual_value = Vec::new();
-    value.encode(&mut actual_value).expect("index value should encode");
+    value
+        .encode(StoreOperation::AppendDerived, &mut actual_value)
+        .expect("index value should encode");
 
     assert_eq!(actual_key, expected_key);
     assert_eq!(actual_value, store_time.to_be_bytes());
     assert_eq!(
-        IndexRocksDbValue::decode(&actual_value)
+        IndexRocksDbValue::decode(StoreOperation::Read, &actual_value)
             .expect("index value should decode")
             .store_time,
         store_time
@@ -690,20 +688,24 @@ fn index_rocksdb_unique_and_tag_key_codecs_match_java_layout() {
     let store_time = 1_700_000_000_123_i64;
     let store_time_hour = (store_time / 3_600_000) * 3_600_000;
 
-    let tag_key =
-        IndexRocksDbKey::tag_key("TopicA", "tagA", "uniqA", store_time, 1024).expect("tag key should be valid");
-    let unique_key =
-        IndexRocksDbKey::unique_key("TopicA", "uniqA", store_time, 1024).expect("unique key should be valid");
+    let tag_key = IndexRocksDbKey::tag_key(StoreOperation::QueryOffset, "TopicA", "tagA", "uniqA", store_time, 1024)
+        .expect("tag key should be valid");
+    let unique_key = IndexRocksDbKey::unique_key(StoreOperation::QueryOffset, "TopicA", "uniqA", store_time, 1024)
+        .expect("unique key should be valid");
 
     let mut actual_tag = Vec::new();
-    tag_key.encode(&mut actual_tag).expect("tag key should encode");
+    tag_key
+        .encode(StoreOperation::QueryOffset, &mut actual_tag)
+        .expect("tag key should encode");
     let mut expected_tag = Vec::new();
     expected_tag.extend_from_slice(&store_time_hour.to_be_bytes());
     expected_tag.extend_from_slice(b"@TopicA@T@tagA@uniqA@");
     expected_tag.extend_from_slice(&1024_i64.to_be_bytes());
 
     let mut actual_unique = Vec::new();
-    unique_key.encode(&mut actual_unique).expect("unique key should encode");
+    unique_key
+        .encode(StoreOperation::QueryOffset, &mut actual_unique)
+        .expect("unique key should encode");
     let mut expected_unique = Vec::new();
     expected_unique.extend_from_slice(&store_time_hour.to_be_bytes());
     expected_unique.extend_from_slice(b"@TopicA@U@uniqA@");
@@ -726,8 +728,11 @@ fn timer_rocksdb_key_value_codec_matches_java_layout() {
     let mut actual_key = Vec::new();
     let mut actual_value = Vec::new();
 
-    key.encode(&mut actual_key).expect("timer key should encode");
-    value.encode(&mut actual_value).expect("timer value should encode");
+    key.encode(StoreOperation::AppendDerived, &mut actual_key)
+        .expect("timer key should encode");
+    value
+        .encode(StoreOperation::AppendDerived, &mut actual_value)
+        .expect("timer value should encode");
 
     let mut expected_key = Vec::new();
     expected_key.extend_from_slice(&1_700_000_005_000_i64.to_be_bytes());
@@ -739,7 +744,8 @@ fn timer_rocksdb_key_value_codec_matches_java_layout() {
     assert_eq!(actual_key, expected_key);
     assert_eq!(actual_value, expected_value);
     assert_eq!(
-        TimerRocksDbRecord::decode(&actual_key, &actual_value).expect("timer record should decode"),
+        TimerRocksDbRecord::decode(StoreOperation::Read, &actual_key, &actual_value)
+            .expect("timer record should decode"),
         TimerRocksDbRecord {
             delay_time: 1_700_000_005_000,
             uniq_key: "uniqA".to_string(),
@@ -764,8 +770,11 @@ fn trans_rocksdb_key_value_codec_matches_java_layout() {
     let mut actual_key = Vec::new();
     let mut actual_value = Vec::new();
 
-    key.encode(&mut actual_key).expect("trans key should encode");
-    value.encode(&mut actual_value).expect("trans value should encode");
+    key.encode(StoreOperation::AppendDerived, &mut actual_key)
+        .expect("trans key should encode");
+    value
+        .encode(StoreOperation::AppendDerived, &mut actual_value)
+        .expect("trans value should encode");
 
     let mut expected_key = Vec::new();
     expected_key.extend_from_slice(&1024_i64.to_be_bytes());
@@ -777,7 +786,8 @@ fn trans_rocksdb_key_value_codec_matches_java_layout() {
     assert_eq!(actual_key, expected_key);
     assert_eq!(actual_value, expected_value);
     assert_eq!(
-        TransRocksDbRecord::decode(&actual_key, &actual_value).expect("trans record should decode"),
+        TransRocksDbRecord::decode(StoreOperation::Read, &actual_key, &actual_value)
+            .expect("trans record should decode"),
         TransRocksDbRecord {
             offset_py: 1024,
             topic: "TopicA".to_string(),
@@ -799,7 +809,8 @@ fn message_rocksdb_storage_writes_index_records_and_last_progress_keys() {
         ..MessageStoreConfig::default()
     };
     let storage = MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-        .expect("message rocksdb storage should open");
+        .expect("message rocksdb storage should open")
+        .expect("valid message RocksDB configuration");
     let store_time = 1_700_000_000_123_i64;
 
     storage
@@ -812,21 +823,22 @@ fn message_rocksdb_storage_writes_index_records_and_last_progress_keys() {
     assert_eq!(
         storage
             .get_index_store_time(
-                &IndexRocksDbKey::normal_key("TopicA", "keyA", "uniqA", store_time, 1024)
-                    .expect("index key should be valid")
+                StoreOperation::QueryOffset,
+                &IndexRocksDbKey::normal_key(StoreOperation::QueryOffset, "TopicA", "keyA", "uniqA", store_time, 1024,)
+                    .expect("index key should be valid"),
             )
             .expect("index record should read"),
         Some(store_time)
     );
     assert_eq!(
         storage
-            .get_last_offset_py(RocksDbColumnFamily::Default.name())
+            .get_last_offset_py(StoreOperation::QueryOffset, RocksDbColumnFamily::Default.name())
             .expect("last offset should read"),
         1024
     );
     assert_eq!(
         storage
-            .get_last_store_timestamp_for_index()
+            .get_last_store_timestamp_for_index(StoreOperation::QueryOffset)
             .expect("last store timestamp should read"),
         store_time
     );
@@ -841,7 +853,8 @@ fn message_rocksdb_storage_queries_index_offsets_by_java_hour_prefix() {
         ..MessageStoreConfig::default()
     };
     let storage = MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-        .expect("message rocksdb storage should open");
+        .expect("message rocksdb storage should open")
+        .expect("valid message RocksDB configuration");
     let base_hour = 1_700_000_000_123_i64 / 3_600_000 * 3_600_000;
     let begin = base_hour + 500;
     let first = base_hour + 1_000;
@@ -925,7 +938,8 @@ fn message_rocksdb_storage_writes_timer_records_with_java_delete_update_semantic
         ..MessageStoreConfig::default()
     };
     let storage = MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-        .expect("message rocksdb storage should open");
+        .expect("message rocksdb storage should open")
+        .expect("valid message RocksDB configuration");
     let key = TimerRocksDbKey {
         delay_time: 1_700_000_005_000,
         uniq_key: "uniqA".to_string(),
@@ -982,7 +996,8 @@ fn message_rocksdb_storage_scans_and_deletes_timer_records_with_java_range_bound
         ..MessageStoreConfig::default()
     };
     let storage = MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-        .expect("message rocksdb storage should open");
+        .expect("message rocksdb storage should open")
+        .expect("valid message RocksDB configuration");
     storage
         .write_records_for_timer(&[
             TimerRocksDbRecord {
@@ -1026,7 +1041,7 @@ fn message_rocksdb_storage_scans_and_deletes_timer_records_with_java_range_bound
     };
     let mut encoded_start_key = Vec::new();
     start_key
-        .encode(&mut encoded_start_key)
+        .encode(StoreOperation::QueryOffset, &mut encoded_start_key)
         .expect("timer start key should encode");
     let scanned_after_start = storage
         .scan_records_for_timer(1_000, 3_000, 10, Some(&encoded_start_key))
@@ -1054,7 +1069,7 @@ fn message_rocksdb_storage_scans_and_deletes_timer_records_with_java_range_bound
         delay_time: first_page[1].delay_time,
         uniq_key: first_page[1].uniq_key.clone(),
     }
-    .encode(&mut last_page_key)
+    .encode(StoreOperation::QueryOffset, &mut last_page_key)
     .expect("timer page key should encode");
     let second_page = storage
         .scan_records_for_timer(1_000, 4_000, 2, Some(&last_page_key))
@@ -1105,7 +1120,8 @@ fn message_rocksdb_storage_persists_timeline_checkpoint() {
         ..MessageStoreConfig::default()
     };
     let storage = MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-        .expect("message rocksdb storage should open");
+        .expect("message rocksdb storage should open")
+        .expect("valid message RocksDB configuration");
 
     assert_eq!(
         storage
@@ -1151,7 +1167,8 @@ fn rocksdb_timer_build_service_batches_records_and_persists_scan_checkpoint() {
     };
     let storage = Arc::new(
         MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-            .expect("message rocksdb storage should open"),
+            .expect("message rocksdb storage should open")
+            .expect("valid message RocksDB configuration"),
     );
     let service = RocksDbTimerBuildService::new(
         Arc::clone(&storage),
@@ -1202,7 +1219,8 @@ fn rocksdb_timer_build_service_builds_put_delete_and_update_records_from_dispatc
     };
     let storage = Arc::new(
         MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-            .expect("message rocksdb storage should open"),
+            .expect("message rocksdb storage should open")
+            .expect("valid message RocksDB configuration"),
     );
     let service = RocksDbTimerBuildService::new(
         Arc::clone(&storage),
@@ -1288,7 +1306,8 @@ fn rocksdb_timer_dispatcher_respects_timer_rocksdb_enable_and_flushes_batches() 
     };
     let storage = Arc::new(
         MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-            .expect("message rocksdb storage should open"),
+            .expect("message rocksdb storage should open")
+            .expect("valid message RocksDB configuration"),
     );
     let service = Arc::new(
         RocksDbTimerBuildService::new(
@@ -1351,7 +1370,8 @@ fn message_rocksdb_storage_writes_trans_records_and_op_deletes() {
         ..MessageStoreConfig::default()
     };
     let storage = MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-        .expect("message rocksdb storage should open");
+        .expect("message rocksdb storage should open")
+        .expect("valid message RocksDB configuration");
     let key = TransRocksDbKey {
         offset_py: 1024,
         topic: "TopicA".to_string(),
@@ -1378,7 +1398,7 @@ fn message_rocksdb_storage_writes_trans_records_and_op_deletes() {
     );
     assert_eq!(
         storage
-            .get_last_offset_py(RocksDbColumnFamily::Transaction.name())
+            .get_last_offset_py(StoreOperation::QueryOffset, RocksDbColumnFamily::Transaction.name())
             .expect("trans last offset should read"),
         1024
     );
@@ -1410,7 +1430,8 @@ fn message_rocksdb_storage_scans_and_updates_trans_records_like_java() {
         ..MessageStoreConfig::default()
     };
     let storage = MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-        .expect("message rocksdb storage should open");
+        .expect("message rocksdb storage should open")
+        .expect("valid message RocksDB configuration");
     storage
         .write_records_for_trans(&[
             trans_record(100, "TopicA", "uniqA", 0, 10),
@@ -1440,7 +1461,7 @@ fn message_rocksdb_storage_scans_and_updates_trans_records_like_java() {
         topic: "TopicA".to_string(),
         uniq_key: "uniqA".to_string(),
     }
-    .encode(&mut start_key)
+    .encode(StoreOperation::QueryOffset, &mut start_key)
     .expect("trans start key should encode");
     let scanned_after_start = storage
         .scan_records_for_trans(10, Some(&start_key))
@@ -1502,7 +1523,8 @@ fn rocksdb_trans_build_service_batches_records_into_message_rocksdb() {
     };
     let storage = Arc::new(
         MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-            .expect("message rocksdb storage should open"),
+            .expect("message rocksdb storage should open")
+            .expect("valid message RocksDB configuration"),
     );
     let service = RocksDbTransBuildService::new(
         Arc::clone(&storage),
@@ -1555,7 +1577,8 @@ fn rocksdb_trans_build_service_applies_backpressure_on_full_queue() {
     };
     let storage = Arc::new(
         MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-            .expect("message rocksdb storage should open"),
+            .expect("message rocksdb storage should open")
+            .expect("valid message RocksDB configuration"),
     );
     let service = RocksDbTransBuildService::new(
         storage,
@@ -1583,7 +1606,8 @@ fn rocksdb_trans_build_service_builds_half_and_op_records_from_dispatch_request(
     };
     let storage = Arc::new(
         MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-            .expect("message rocksdb storage should open"),
+            .expect("message rocksdb storage should open")
+            .expect("valid message RocksDB configuration"),
     );
     let service = RocksDbTransBuildService::new(
         Arc::clone(&storage),
@@ -1655,7 +1679,8 @@ fn rocksdb_trans_dispatcher_respects_trans_rocksdb_enable_and_flushes_batches() 
     };
     let storage = Arc::new(
         MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-            .expect("message rocksdb storage should open"),
+            .expect("message rocksdb storage should open")
+            .expect("valid message RocksDB configuration"),
     );
     let service = Arc::new(
         RocksDbTransBuildService::new(
@@ -1724,7 +1749,8 @@ fn rocksdb_index_build_service_batches_dispatch_request_records_into_message_roc
     };
     let storage = Arc::new(
         MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-            .expect("message rocksdb storage should open"),
+            .expect("message rocksdb storage should open")
+            .expect("valid message RocksDB configuration"),
     );
     let service = RocksDbIndexBuildService::new(
         Arc::clone(&storage),
@@ -1762,15 +1788,19 @@ fn rocksdb_index_build_service_batches_dispatch_request_records_into_message_roc
     assert_eq!(service.pending_len(), 0);
 
     for key in [
-        IndexRocksDbKey::normal_key("TopicA", "KeyA", "UniqA", store_time, 1024)
+        IndexRocksDbKey::normal_key(StoreOperation::QueryOffset, "TopicA", "KeyA", "UniqA", store_time, 1024)
             .expect("normal index key should encode"),
-        IndexRocksDbKey::normal_key("TopicA", "KeyB", "UniqA", store_time, 1024)
+        IndexRocksDbKey::normal_key(StoreOperation::QueryOffset, "TopicA", "KeyB", "UniqA", store_time, 1024)
             .expect("normal index key should encode"),
-        IndexRocksDbKey::tag_key("TopicA", "TagA", "UniqA", store_time, 1024).expect("tag index key should encode"),
-        IndexRocksDbKey::unique_key("TopicA", "UniqA", store_time, 1024).expect("unique index key should encode"),
+        IndexRocksDbKey::tag_key(StoreOperation::QueryOffset, "TopicA", "TagA", "UniqA", store_time, 1024)
+            .expect("tag index key should encode"),
+        IndexRocksDbKey::unique_key(StoreOperation::QueryOffset, "TopicA", "UniqA", store_time, 1024)
+            .expect("unique index key should encode"),
     ] {
         assert_eq!(
-            storage.get_index_store_time(&key).expect("index record should read"),
+            storage
+                .get_index_store_time(StoreOperation::QueryOffset, &key)
+                .expect("index record should read"),
             Some(store_time)
         );
     }
@@ -1792,7 +1822,8 @@ fn rocksdb_index_build_service_applies_backpressure_on_full_queue() {
     };
     let storage = Arc::new(
         MessageRocksDbStorage::open(RocksDbConfig::message_from_message_store_config(&store_config))
-            .expect("message rocksdb storage should open"),
+            .expect("message rocksdb storage should open")
+            .expect("valid message RocksDB configuration"),
     );
     let service = RocksDbIndexBuildService::new(
         storage,
@@ -1827,7 +1858,8 @@ fn consume_queue_offset_key_codec_matches_java_max_min_layout() {
     };
     let mut actual = Vec::new();
 
-    key.encode(&mut actual).expect("offset key should encode");
+    key.encode(StoreOperation::QueryOffset, &mut actual)
+        .expect("offset key should encode");
 
     let mut expected = Vec::new();
     expected.extend_from_slice(&6_i32.to_be_bytes());
@@ -1846,7 +1878,9 @@ fn consume_queue_offset_key_codec_matches_java_max_min_layout() {
         boundary: ConsumeQueueOffsetBoundary::Min,
     };
     let mut min_actual = Vec::new();
-    min_key.encode(&mut min_actual).expect("min offset key should encode");
+    min_key
+        .encode(StoreOperation::QueryOffset, &mut min_actual)
+        .expect("min offset key should encode");
 
     assert_eq!(&min_actual[12..15], b"min");
 }
@@ -1859,7 +1893,9 @@ fn consume_queue_offset_value_codec_matches_java_16_byte_layout() {
     };
     let mut actual = Vec::new();
 
-    value.encode(&mut actual).expect("offset value should encode");
+    value
+        .encode(StoreOperation::AppendDerived, &mut actual)
+        .expect("offset value should encode");
 
     let mut expected = Vec::with_capacity(ConsumeQueueOffsetValue::ENCODED_LEN);
     expected.extend_from_slice(&1024_i64.to_be_bytes());
@@ -1867,7 +1903,7 @@ fn consume_queue_offset_value_codec_matches_java_16_byte_layout() {
 
     assert_eq!(actual, expected);
     assert_eq!(
-        ConsumeQueueOffsetValue::decode(&actual).expect("offset value should decode"),
+        ConsumeQueueOffsetValue::decode(StoreOperation::Read, &actual).expect("offset value should decode"),
         value
     );
 }
@@ -1885,14 +1921,21 @@ fn column_family_config_rejects_empty_name() {
 #[test]
 fn rocksdb_store_put_get_delete_and_batch_use_configured_column_families() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
 
     store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"key-a", b"value-a")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"key-a",
+            b"value-a",
+        )
         .expect("put should succeed");
     assert_eq!(
         store
-            .get_cf(RocksDbColumnFamily::Default.name(), b"key-a")
+            .get_cf(StoreOperation::Read, RocksDbColumnFamily::Default.name(), b"key-a")
             .expect("get should succeed")
             .as_deref(),
         Some(&b"value-a"[..])
@@ -1901,21 +1944,31 @@ fn rocksdb_store_put_get_delete_and_batch_use_configured_column_families() {
     let mut batch = rocketmq_store::RocksDbWriteBatch::with_capacity(2);
     batch.put_cf(RocksDbColumnFamily::ConsumeQueueOffset.name(), b"offset-a", b"1");
     batch.put_cf(RocksDbColumnFamily::ConsumeQueueOffset.name(), b"offset-b", b"2");
-    store.write_batch(&batch).expect("batch should succeed");
+    store
+        .write_batch(StoreOperation::AppendDerived, &batch)
+        .expect("batch should succeed");
 
     assert_eq!(
         store
-            .get_cf(RocksDbColumnFamily::ConsumeQueueOffset.name(), b"offset-b")
+            .get_cf(
+                StoreOperation::Read,
+                RocksDbColumnFamily::ConsumeQueueOffset.name(),
+                b"offset-b"
+            )
             .expect("batch get should succeed")
             .as_deref(),
         Some(&b"2"[..])
     );
 
     store
-        .delete_cf(RocksDbColumnFamily::Default.name(), b"key-a")
+        .delete_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"key-a",
+        )
         .expect("delete should succeed");
     assert!(store
-        .get_cf(RocksDbColumnFamily::Default.name(), b"key-a")
+        .get_cf(StoreOperation::Read, RocksDbColumnFamily::Default.name(), b"key-a")
         .expect("get after delete should succeed")
         .is_none());
 }
@@ -1927,28 +1980,38 @@ fn rocksdb_store_creates_dynamic_cf_and_reopens_existing_cfs_like_java_config_st
         column_families: vec![RocksDbColumnFamilyConfig::consume_queue_default()],
         ..test_config(&temp_dir)
     };
-    let store = RocksDbStore::open_with_existing_column_families(config.clone()).expect("config rocksdb should open");
+    let store = RocksDbStore::open_with_existing_column_families(config.clone())
+        .expect("config rocksdb should open")
+        .expect("valid config RocksDB configuration");
 
     let dynamic_cf = RocksDbColumnFamilyConfig {
         name: "topic".to_string(),
         ..RocksDbColumnFamilyConfig::consume_queue_default()
     };
     store
-        .create_cf_if_missing(dynamic_cf)
+        .create_cf_if_missing(StoreOperation::Admin, dynamic_cf)
         .expect("dynamic cf should be created");
     store
-        .put_cf("topic", b"TopicA", br#"{"topicName":"TopicA"}"#)
+        .put_cf(
+            StoreOperation::AppendDerived,
+            "topic",
+            b"TopicA",
+            br#"{"topicName":"TopicA"}"#,
+        )
         .expect("dynamic cf put should succeed");
-    store.flush_wal(false).expect("manual wal flush should succeed");
+    store
+        .flush_wal(StoreOperation::Flush, false)
+        .expect("manual wal flush should succeed");
     store.close();
     drop(store);
 
-    let reopened =
-        RocksDbStore::open_with_existing_column_families(config).expect("existing dynamic cf should be reopened");
+    let reopened = RocksDbStore::open_with_existing_column_families(config)
+        .expect("existing dynamic cf should be reopened")
+        .expect("valid reopened RocksDB configuration");
 
     assert_eq!(
         reopened
-            .get_cf("topic", b"TopicA")
+            .get_cf(StoreOperation::Read, "topic", b"TopicA")
             .expect("dynamic cf get should succeed")
             .expect("dynamic cf value should exist"),
         Bytes::from_static(br#"{"topicName":"TopicA"}"#)
@@ -1958,7 +2021,9 @@ fn rocksdb_store_creates_dynamic_cf_and_reopens_existing_cfs_like_java_config_st
 #[test]
 fn rocksdb_store_prefix_and_range_scan_return_bounded_results() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
 
     for (key, value) in [
         (&b"cq:0001"[..], &b"a"[..]),
@@ -1967,28 +2032,30 @@ fn rocksdb_store_prefix_and_range_scan_return_bounded_results() {
         (&b"other:0001"[..], &b"d"[..]),
     ] {
         store
-            .put_cf(RocksDbColumnFamily::Default.name(), key, value)
+            .put_cf(
+                StoreOperation::AppendDerived,
+                RocksDbColumnFamily::Default.name(),
+                key,
+                value,
+            )
             .expect("seed put should succeed");
     }
 
     let prefix_items = store
-        .prefix_scan(&RocksDbScanOptions::prefix(
-            RocksDbColumnFamily::Default.name(),
-            b"cq:",
-            2,
-        ))
+        .prefix_scan(
+            StoreOperation::QueryOffset,
+            &RocksDbScanOptions::prefix(RocksDbColumnFamily::Default.name(), b"cq:", 2),
+        )
         .expect("prefix scan should succeed");
     assert_eq!(prefix_items.len(), 2);
     assert_eq!(prefix_items[0].key.as_ref(), b"cq:0001");
     assert_eq!(prefix_items[1].key.as_ref(), b"cq:0002");
 
     let range_items = store
-        .range_scan(&RocksDbRangeScanOptions::new(
-            RocksDbColumnFamily::Default.name(),
-            b"cq:0002",
-            b"cq:0004",
-            10,
-        ))
+        .range_scan(
+            StoreOperation::QueryOffset,
+            &RocksDbRangeScanOptions::new(RocksDbColumnFamily::Default.name(), b"cq:0002", b"cq:0004", 10),
+        )
         .expect("range scan should succeed");
     assert_eq!(
         range_items.iter().map(|item| item.key.as_ref()).collect::<Vec<_>>(),
@@ -1999,7 +2066,9 @@ fn rocksdb_store_prefix_and_range_scan_return_bounded_results() {
 #[tokio::test]
 async fn rocksdb_store_blocking_prefix_and_range_scan_return_bounded_results() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     let runtime_scope = rocksdb_runtime_scope("rocksdb-blocking-scan-test");
 
     for (key, value) in [
@@ -2009,13 +2078,19 @@ async fn rocksdb_store_blocking_prefix_and_range_scan_return_bounded_results() {
         (&b"other:0001"[..], &b"d"[..]),
     ] {
         store
-            .put_cf(RocksDbColumnFamily::Default.name(), key, value)
+            .put_cf(
+                StoreOperation::AppendDerived,
+                RocksDbColumnFamily::Default.name(),
+                key,
+                value,
+            )
             .expect("seed put should succeed");
     }
 
     let prefix_items = store
         .prefix_scan_blocking(
             &runtime_scope,
+            StoreOperation::QueryOffset,
             RocksDbScanOptions::prefix(RocksDbColumnFamily::Default.name(), b"timer:", 2),
         )
         .await
@@ -2028,6 +2103,7 @@ async fn rocksdb_store_blocking_prefix_and_range_scan_return_bounded_results() {
     let range_items = store
         .range_scan_blocking(
             &runtime_scope,
+            StoreOperation::QueryOffset,
             RocksDbRangeScanOptions::new(RocksDbColumnFamily::Default.name(), b"timer:0002", b"timer:0004", 10),
         )
         .await
@@ -2047,26 +2123,47 @@ fn rocksdb_snapshot_keeps_consistent_read_view() {
         column_families: vec![RocksDbColumnFamilyConfig::consume_queue_default()],
         ..test_config(&temp_dir)
     })
-    .expect("rocksdb store should open");
+    .expect("rocksdb store should open")
+    .expect("valid RocksDB configuration");
 
     store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"snapshot-key", b"before")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"snapshot-key",
+            b"before",
+        )
         .expect("initial put should succeed");
-    let snapshot = store.snapshot().expect("snapshot should be created");
+    let snapshot = store
+        .snapshot(StoreOperation::Read)
+        .expect("snapshot should be created");
     store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"snapshot-key", b"after")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"snapshot-key",
+            b"after",
+        )
         .expect("second put should succeed");
 
     assert_eq!(
         snapshot
-            .get_cf(RocksDbColumnFamily::Default.name(), b"snapshot-key")
+            .get_cf(
+                StoreOperation::Read,
+                RocksDbColumnFamily::Default.name(),
+                b"snapshot-key"
+            )
             .expect("snapshot get should succeed")
             .as_deref(),
         Some(&b"before"[..])
     );
     assert_eq!(
         store
-            .get_cf(RocksDbColumnFamily::Default.name(), b"snapshot-key")
+            .get_cf(
+                StoreOperation::Read,
+                RocksDbColumnFamily::Default.name(),
+                b"snapshot-key"
+            )
             .expect("current get should succeed")
             .as_deref(),
         Some(&b"after"[..])
@@ -2076,12 +2173,20 @@ fn rocksdb_snapshot_keeps_consistent_read_view() {
 #[test]
 fn rocksdb_store_property_queries_expose_db_and_cf_observability() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"property-key", b"v1")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"property-key",
+            b"v1",
+        )
         .expect("default cf seed write should succeed");
     store
         .put_cf(
+            StoreOperation::AppendDerived,
             RocksDbColumnFamily::ConsumeQueueOffset.name(),
             b"property-offset",
             b"v2",
@@ -2089,24 +2194,30 @@ fn rocksdb_store_property_queries_expose_db_and_cf_observability() {
         .expect("offset cf seed write should succeed");
 
     assert!(store
-        .property_value("rocksdb.stats")
+        .property_value(StoreOperation::Admin, "rocksdb.stats")
         .expect("db stats property should read")
         .is_some());
     assert!(store
-        .property_int_value_cf(RocksDbColumnFamily::Default.name(), "rocksdb.estimate-num-keys")
+        .property_int_value_cf(
+            StoreOperation::Admin,
+            RocksDbColumnFamily::Default.name(),
+            "rocksdb.estimate-num-keys",
+        )
         .expect("default cf estimate should read")
         .is_some());
     assert!(store
         .property_int_value_cf(
+            StoreOperation::Admin,
             RocksDbColumnFamily::ConsumeQueueOffset.name(),
             "rocksdb.estimate-num-keys"
         )
         .expect("offset cf estimate should read")
         .is_some());
     let error = store
-        .property_int_value_cf("missing_cf", "rocksdb.estimate-num-keys")
+        .property_int_value_cf(StoreOperation::Admin, "missing_cf", "rocksdb.estimate-num-keys")
         .expect_err("missing cf property query should fail");
-    assert!(error.to_string().contains("column family not found"));
+    assert_eq!(error.operation(), StoreOperation::Admin);
+    assert_eq!(error.component(), rocketmq_store::StoreComponent::RocksDb);
 
     let metrics = store.metrics();
     assert_eq!(metrics.property_query_count, 3);
@@ -2116,42 +2227,67 @@ fn rocksdb_store_property_queries_expose_db_and_cf_observability() {
 #[test]
 fn rocksdb_store_rejects_writes_after_close() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
 
     store.close();
 
     assert!(store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"closed-key", b"value")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"closed-key",
+            b"value",
+        )
         .is_err());
 }
 
 #[test]
 fn rocksdb_store_reloading_state_rejects_new_operations() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
 
     assert_eq!(store.state(), RocksDbStoreState::Open);
     store.mark_reloading();
     assert_eq!(store.state(), RocksDbStoreState::Reloading);
 
     let error = store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"reloading-key", b"value")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"reloading-key",
+            b"value",
+        )
         .expect_err("reloading store should reject writes");
-    assert!(error.to_string().contains("reloading"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.operation(), StoreOperation::AppendDerived);
+    assert_eq!(error.component(), rocketmq_store::StoreComponent::RocksDb);
+    assert!(std::error::Error::source(&error).is_none());
+    assert!(!error.to_string().contains("reloading"));
 
     store
         .mark_recovered()
         .expect("recovered store should reopen operations");
     assert_eq!(store.state(), RocksDbStoreState::Open);
     store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"recovered-key", b"value")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"recovered-key",
+            b"value",
+        )
         .expect("recovered store should accept writes");
 }
 
 #[test]
 fn rocksdb_store_closed_state_cannot_be_marked_recovered() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
 
     store.mark_reloading();
     store.close();
@@ -2159,14 +2295,20 @@ fn rocksdb_store_closed_state_cannot_be_marked_recovered() {
     let error = store
         .mark_recovered()
         .expect_err("closed store should not be marked recovered");
-    assert!(error.to_string().contains("closed"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+    assert_eq!(error.operation(), StoreOperation::Start);
+    assert_eq!(error.component(), rocketmq_store::StoreComponent::RocksDb);
+    assert!(std::error::Error::source(&error).is_none());
+    assert!(!error.to_string().contains("closed"));
     assert_eq!(store.state(), RocksDbStoreState::Closed);
 }
 
 #[test]
 fn consume_queue_batch_writer_persists_cq_units_and_offsets() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     let writer = RocksDbConsumeQueueBatchWriter::new(&store);
 
     let entry = ConsumeQueueBatchEntry {
@@ -2221,7 +2363,11 @@ fn group_commit_config_defaults_match_java_batching_baseline() {
 #[tokio::test]
 async fn group_commit_service_drains_requests_and_flushes_on_shutdown() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(test_config(&temp_dir))
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let runtime_scope = rocksdb_runtime_scope("rocksdb-group-commit-test");
     let service = RocksDbConsumeQueueGroupCommitService::start(
         Arc::clone(&store),
@@ -2305,7 +2451,11 @@ async fn group_commit_service_drains_requests_and_flushes_on_shutdown() {
 #[tokio::test]
 async fn group_commit_service_rejects_invalid_queue_config() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(test_config(&temp_dir))
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
 
     assert!(RocksDbConsumeQueueGroupCommitService::start(
         store,
@@ -2321,7 +2471,9 @@ async fn group_commit_service_rejects_invalid_queue_config() {
 #[test]
 fn consume_queue_range_query_returns_contiguous_values_until_first_missing() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     let writer = RocksDbConsumeQueueBatchWriter::new(&store);
     let request = ConsumeQueueBatchWriteRequest {
         entries: vec![
@@ -2387,7 +2539,9 @@ fn consume_queue_range_query_returns_contiguous_values_until_first_missing() {
 #[test]
 fn consume_queue_batch_writer_persists_max_physical_offset_checkpoint() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     let writer = RocksDbConsumeQueueBatchWriter::new(&store);
     let request = ConsumeQueueBatchWriteRequest {
         entries: Vec::new(),
@@ -2412,7 +2566,11 @@ fn consume_queue_batch_writer_persists_max_physical_offset_checkpoint() {
 #[test]
 fn rocksdb_consume_queue_store_puts_dispatch_request_and_returns_java_cq_bytes() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(test_config(&temp_dir))
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let cq_store = RocksDbConsumeQueueStore::new(Arc::clone(&store));
     let request = dispatch_request("TopicA", 3, 42, 1024, 128, 7, 1_700_000_000_000);
 
@@ -2448,7 +2606,11 @@ fn rocksdb_consume_queue_store_puts_dispatch_request_and_returns_java_cq_bytes()
 #[test]
 fn rocksdb_consume_queue_store_batch_range_query_stops_at_first_missing_offset() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(test_config(&temp_dir))
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let cq_store = RocksDbConsumeQueueStore::new(store);
     let requests = vec![
         dispatch_request("TopicA", 3, 0, 100, 10, 1, 1_700_000_000_000),
@@ -2480,7 +2642,11 @@ fn rocksdb_consume_queue_store_batch_range_query_stops_at_first_missing_offset()
 #[test]
 fn rocksdb_consume_queue_store_destroy_topic_queue_deletes_cq_range_and_offsets() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(test_config(&temp_dir))
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let writer = RocksDbConsumeQueueBatchWriter::new(store.as_ref());
     writer
         .write(&ConsumeQueueBatchWriteRequest {
@@ -2584,7 +2750,11 @@ fn rocksdb_consume_queue_store_destroy_topic_queue_deletes_cq_range_and_offsets(
 #[test]
 fn rocksdb_consume_queue_store_destroy_topic_deletes_all_scanned_topic_queues() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(test_config(&temp_dir))
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let cq_store = RocksDbConsumeQueueStore::new(Arc::clone(&store));
     cq_store
         .put_message_position(&[
@@ -2630,7 +2800,11 @@ fn rocksdb_consume_queue_store_destroy_topic_deletes_all_scanned_topic_queues() 
 #[test]
 fn rocksdb_consume_queue_store_truncate_dirty_corrects_offsets_without_deleting_cq_values() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(test_config(&temp_dir))
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let writer = RocksDbConsumeQueueBatchWriter::new(store.as_ref());
     writer
         .write(&ConsumeQueueBatchWriteRequest {
@@ -2723,7 +2897,11 @@ fn rocksdb_consume_queue_store_truncate_dirty_corrects_offsets_without_deleting_
 #[tokio::test]
 async fn rocksdb_consume_queue_store_clean_expired_runs_default_cf_manual_compaction_without_changing_offsets() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(test_config(&temp_dir))
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let cq_store = RocksDbConsumeQueueStore::new(Arc::clone(&store));
     let runtime_scope = rocksdb_runtime_scope("rocksdb-consume-queue-clean-test");
     cq_store
@@ -2758,16 +2936,21 @@ async fn rocksdb_consume_queue_store_clean_expired_runs_default_cf_manual_compac
 #[tokio::test]
 async fn rocksdb_store_checkpoint_can_be_opened_as_independent_readable_database() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     let runtime_scope = rocksdb_runtime_scope("rocksdb-checkpoint-test");
     store
         .put_cf(
+            StoreOperation::AppendDerived,
             RocksDbColumnFamily::Default.name(),
             b"checkpoint-key",
             b"checkpoint-value",
         )
         .expect("seed write should succeed");
-    store.flush().expect("flush before checkpoint should succeed");
+    store
+        .flush(StoreOperation::Flush)
+        .expect("flush before checkpoint should succeed");
     let checkpoint_dir = temp_dir.path().join("checkpoint");
 
     store
@@ -2780,10 +2963,16 @@ async fn rocksdb_store_checkpoint_can_be_opened_as_independent_readable_database
         path: checkpoint_dir,
         ..RocksDbConfig::default()
     };
-    let checkpoint_store = RocksDbStore::open(checkpoint_config).expect("checkpoint rocksdb should open");
+    let checkpoint_store = RocksDbStore::open(checkpoint_config)
+        .expect("checkpoint rocksdb should open")
+        .expect("valid checkpoint RocksDB configuration");
     assert_eq!(
         checkpoint_store
-            .get_cf(RocksDbColumnFamily::Default.name(), b"checkpoint-key")
+            .get_cf(
+                StoreOperation::Read,
+                RocksDbColumnFamily::Default.name(),
+                b"checkpoint-key"
+            )
             .expect("checkpoint value should read")
             .expect("checkpoint value should exist"),
         Bytes::from_static(b"checkpoint-value")
@@ -2793,7 +2982,9 @@ async fn rocksdb_store_checkpoint_can_be_opened_as_independent_readable_database
 #[tokio::test]
 async fn rocksdb_store_checkpoint_rejects_closed_store() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     let runtime_scope = rocksdb_runtime_scope("rocksdb-closed-checkpoint-test");
     store.close();
 
@@ -2802,19 +2993,28 @@ async fn rocksdb_store_checkpoint_rejects_closed_store() {
         .await
         .expect_err("closed store checkpoint should fail");
 
-    assert!(error.to_string().contains("store is closed"));
+    assert_eq!(error.operation(), StoreOperation::Flush);
+    assert_eq!(error.component(), rocketmq_store::StoreComponent::RocksDb);
 }
 
 #[tokio::test]
 async fn rocksdb_store_backup_can_restore_latest_backup_as_readable_database() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     let runtime_scope = rocksdb_runtime_scope("rocksdb-backup-restore-test");
     store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"backup-key", b"backup-value")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"backup-key",
+            b"backup-value",
+        )
         .expect("default cf seed write should succeed");
     store
         .put_cf(
+            StoreOperation::AppendDerived,
             RocksDbColumnFamily::ConsumeQueueOffset.name(),
             b"backup-offset-key",
             b"backup-offset-value",
@@ -2838,17 +3038,22 @@ async fn rocksdb_store_backup_can_restore_latest_backup_as_readable_database() {
         path: restore_dir,
         ..RocksDbConfig::default()
     })
-    .expect("restored rocksdb should open");
+    .expect("restored rocksdb should open")
+    .expect("valid restored RocksDB configuration");
     assert_eq!(
         restored_store
-            .get_cf(RocksDbColumnFamily::Default.name(), b"backup-key")
+            .get_cf(StoreOperation::Read, RocksDbColumnFamily::Default.name(), b"backup-key")
             .expect("restored default cf should read")
             .expect("restored default value should exist"),
         Bytes::from_static(b"backup-value")
     );
     assert_eq!(
         restored_store
-            .get_cf(RocksDbColumnFamily::ConsumeQueueOffset.name(), b"backup-offset-key")
+            .get_cf(
+                StoreOperation::Read,
+                RocksDbColumnFamily::ConsumeQueueOffset.name(),
+                b"backup-offset-key",
+            )
             .expect("restored offset cf should read")
             .expect("restored offset value should exist"),
         Bytes::from_static(b"backup-offset-value")
@@ -2858,7 +3063,9 @@ async fn rocksdb_store_backup_can_restore_latest_backup_as_readable_database() {
 #[tokio::test]
 async fn rocksdb_store_backup_rejects_closed_store() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     let runtime_scope = rocksdb_runtime_scope("rocksdb-closed-backup-test");
     store.close();
 
@@ -2867,7 +3074,8 @@ async fn rocksdb_store_backup_rejects_closed_store() {
         .await
         .expect_err("closed store backup should fail");
 
-    assert!(error.to_string().contains("store is closed"));
+    assert_eq!(error.operation(), StoreOperation::Flush);
+    assert_eq!(error.component(), rocketmq_store::StoreComponent::RocksDb);
 }
 
 #[tokio::test]
@@ -2881,7 +3089,8 @@ async fn rocksdb_store_restore_latest_backup_fails_when_no_backup_exists() {
         .await
         .expect_err("restore should fail when no backup exists");
 
-    assert!(error.to_string().contains("Restore"));
+    assert_eq!(error.operation(), StoreOperation::Read);
+    assert_eq!(error.component(), rocketmq_store::StoreComponent::RocksDb);
 }
 
 #[tokio::test]
@@ -2896,10 +3105,15 @@ async fn rocksdb_maintenance_service_run_once_executes_enabled_operations() {
         ..test_config(&temp_dir)
     };
     let checkpoint_root = RocksDbMaintenanceConfig::from_rocksdb_config(&rocksdb_config).checkpoint_root;
-    let store = Arc::new(RocksDbStore::open(rocksdb_config.clone()).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(rocksdb_config.clone())
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let runtime_scope = rocksdb_runtime_scope("rocksdb-maintenance-run-once-test");
     store
         .put_cf(
+            StoreOperation::AppendDerived,
             RocksDbColumnFamily::Default.name(),
             b"maintenance-key",
             b"maintenance-value",
@@ -2931,10 +3145,19 @@ async fn rocksdb_maintenance_service_start_and_shutdown_are_graceful() {
         flush_interval_ms: 10,
         ..test_config(&temp_dir)
     };
-    let store = Arc::new(RocksDbStore::open(rocksdb_config.clone()).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(rocksdb_config.clone())
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let runtime_scope = rocksdb_runtime_scope("rocksdb-maintenance-lifecycle-test");
     store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"maintenance-loop-key", b"value")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"maintenance-loop-key",
+            b"value",
+        )
         .expect("maintenance loop seed write should succeed");
     let mut service = RocksDbMaintenanceService::new(Arc::clone(&store), rocksdb_config, runtime_scope);
 
@@ -2960,43 +3183,57 @@ async fn rocksdb_maintenance_service_start_and_shutdown_are_graceful() {
 #[tokio::test]
 async fn rocksdb_store_metrics_count_core_operations_and_errors() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open");
+    let store = RocksDbStore::open(test_config(&temp_dir))
+        .expect("rocksdb store should open")
+        .expect("valid RocksDB configuration");
     let runtime_scope = rocksdb_runtime_scope("rocksdb-operation-metrics-test");
     assert_eq!(store.metrics(), Default::default());
 
     store
-        .put_cf(RocksDbColumnFamily::Default.name(), b"metrics-a", b"1")
+        .put_cf(
+            StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Default.name(),
+            b"metrics-a",
+            b"1",
+        )
         .expect("put should succeed");
     store
-        .get_cf(RocksDbColumnFamily::Default.name(), b"metrics-a")
+        .get_cf(StoreOperation::Read, RocksDbColumnFamily::Default.name(), b"metrics-a")
         .expect("get should succeed");
     store
-        .prefix_scan(&RocksDbScanOptions {
-            cf: RocksDbColumnFamily::Default.name().to_string(),
-            prefix: b"metrics".to_vec(),
-            limit: 10,
-        })
+        .prefix_scan(
+            StoreOperation::QueryOffset,
+            &RocksDbScanOptions {
+                cf: RocksDbColumnFamily::Default.name().to_string(),
+                prefix: b"metrics".to_vec(),
+                limit: 10,
+            },
+        )
         .expect("prefix scan should succeed");
     store
-        .range_scan(&RocksDbRangeScanOptions {
-            cf: RocksDbColumnFamily::Default.name().to_string(),
-            start: b"metrics".to_vec(),
-            end: b"metrics-z".to_vec(),
-            limit: 10,
-        })
+        .range_scan(
+            StoreOperation::QueryOffset,
+            &RocksDbRangeScanOptions {
+                cf: RocksDbColumnFamily::Default.name().to_string(),
+                start: b"metrics".to_vec(),
+                end: b"metrics-z".to_vec(),
+                limit: 10,
+            },
+        )
         .expect("range scan should succeed");
-    store.flush().expect("flush should succeed");
+    store.flush(StoreOperation::Flush).expect("flush should succeed");
     store
-        .compact_range_cf(RocksDbColumnFamily::Default.name(), None, None)
+        .compact_range_cf(StoreOperation::Admin, RocksDbColumnFamily::Default.name(), None, None)
         .expect("manual compaction should succeed");
     store
         .create_checkpoint(&runtime_scope, temp_dir.path().join("metrics-checkpoint"))
         .await
         .expect("checkpoint should succeed");
     let error = store
-        .get_cf("missing_cf", b"metrics-a")
+        .get_cf(StoreOperation::Read, "missing_cf", b"metrics-a")
         .expect_err("missing cf should be recorded as an error");
-    assert!(error.to_string().contains("column family not found"));
+    assert_eq!(error.operation(), StoreOperation::Read);
+    assert_eq!(error.component(), rocketmq_store::StoreComponent::RocksDb);
 
     let metrics = store.metrics();
     assert_eq!(metrics.write_count, 1);
@@ -3016,7 +3253,11 @@ async fn rocksdb_store_metrics_count_core_operations_and_errors() {
 #[test]
 fn rocksdb_consume_queue_dispatcher_batch_writes_java_cq_and_offset_entries() {
     let temp_dir = TempDir::new().expect("temp dir should be created");
-    let store = Arc::new(RocksDbStore::open(test_config(&temp_dir)).expect("rocksdb store should open"));
+    let store = Arc::new(
+        RocksDbStore::open(test_config(&temp_dir))
+            .expect("rocksdb store should open")
+            .expect("valid RocksDB configuration"),
+    );
     let cq_store = RocksDbConsumeQueueStore::new(Arc::clone(&store));
     let dispatcher = CommitLogDispatcherBuildRocksDbConsumeQueue::new(cq_store.clone());
     let mut requests = vec![
@@ -3547,7 +3788,7 @@ fn encode_java_cq_value(
         tag_hash_code,
         msg_store_time,
     }
-    .encode(&mut value)
+    .encode(StoreOperation::AppendDerived, &mut value)
     .expect("test cq value should encode");
     Bytes::from(value)
 }

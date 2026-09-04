@@ -34,6 +34,7 @@ use rocketmq_store_api::ReleaseCheckpointCreateRejection;
 use rocketmq_store_api::ReleaseCheckpointRestoreOutcome;
 use rocketmq_store_api::ReleaseCheckpointRestoreRejection;
 use rocketmq_store_api::ReleaseCheckpointStore;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_rocksdb::release_checkpoint::RocksDbReleaseCheckpointService;
 use rocketmq_store_rocksdb::runtime::RocksDbRuntimeScope;
 use rocketmq_store_rocksdb::store::KeyValueStore;
@@ -84,9 +85,13 @@ async fn release_checkpoint_restore_flushes_hashes_and_reopens_rocksdb_read_only
         path: database_path,
         ..RocksDbConfig::default()
     };
-    let store = Arc::new(RocksDbStore::open(config).expect("open RocksDB"));
+    let store = Arc::new(
+        RocksDbStore::open(config)
+            .expect("open RocksDB")
+            .expect("valid RocksDB configuration"),
+    );
     store
-        .put_cf("default", b"offset", b"120")
+        .put_cf(StoreOperation::Append, "default", b"offset", b"120")
         .expect("write checkpoint data");
     let runtime = rocketmq_runtime::RuntimeContext::from_current("rocksdb-release-checkpoint-test");
     let service_context = runtime.service_context("checkpoint");

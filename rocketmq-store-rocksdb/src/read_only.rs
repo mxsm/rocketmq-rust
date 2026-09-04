@@ -18,7 +18,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
 
 use crate::profile_marker::PopConsumerProfileMarker;
 use crate::profile_marker::POP_CONSUMER_PROFILE_COLUMN_FAMILY;
@@ -31,8 +31,12 @@ pub enum PopConsumerProfileState {
     LegacyAbsent,
     /// A supported marker is present and valid.
     PresentValid(PopConsumerProfileMarker),
-    /// The format was declared but its column family or marker is missing or corrupt.
-    DeclaredPresentInvalid { reason: String },
+    /// The declared column family is missing.
+    DeclaredColumnFamilyMissing,
+    /// The declared marker is missing.
+    DeclaredMarkerMissing,
+    /// The declared marker cannot be decoded or is unsupported.
+    DeclaredMarkerInvalid,
 }
 
 /// Read-only handle over an existing RocksDB database.
@@ -49,16 +53,14 @@ impl ReadOnlyRocksDb {
     ///
     /// `Ok(None)` means the RocksDB `CURRENT` marker is absent. Callers must hold the
     /// owning Store's offline lock before opening a live Broker path.
-    pub fn open_existing(path: impl AsRef<Path>) -> Result<Option<Self>, RocketMQError> {
+    pub fn open_existing(path: impl AsRef<Path>) -> Result<Option<Self>, StoreError> {
         let path = path.as_ref();
         if !path.join("CURRENT").is_file() {
             return Ok(None);
         }
         let options = ::rocksdb::Options::default();
-        let column_families = ::rocksdb::DB::list_cf(&options, path)
-            .map_err(|error| read_error(path, format!("list column families: {error}")))?;
-        let db = ::rocksdb::DB::open_cf_for_read_only(&options, path, &column_families, false)
-            .map_err(|error| read_error(path, format!("open existing column families read-only: {error}")))?;
+        let column_families = ::rocksdb::DB::list_cf(&options, path).map_err(read_error)?;
+        let db = ::rocksdb::DB::open_cf_for_read_only(&options, path, &column_families, false).map_err(read_error)?;
         Ok(Some(Self {
             db,
             path: path.to_path_buf(),
@@ -77,28 +79,26 @@ impl ReadOnlyRocksDb {
     }
 
     /// Reads one value from an existing column family.
-    pub fn get_cf(&self, column_family: &str, key: &[u8]) -> Result<Option<Bytes>, RocketMQError> {
+    pub fn get_cf(&self, column_family: &str, key: &[u8]) -> Result<Option<Bytes>, StoreError> {
         let handle = self
             .db
             .cf_handle(column_family)
-            .ok_or_else(|| read_error(&self.path, format!("column family {column_family} is not present")))?;
+            .ok_or_else(|| crate::error::state_corrupted(rocketmq_store_api::StoreOperation::Admin))?;
         self.db
             .get_cf(&handle, key)
             .map(|value| value.map(Bytes::from))
-            .map_err(|error| read_error(&self.path, format!("read {column_family}: {error}")))
+            .map_err(read_error)
     }
 
     /// Classifies the persistent POP consumer-profile marker without mutating the database.
-    pub fn inspect_pop_consumer_profile(&self, declared: bool) -> Result<PopConsumerProfileState, RocketMQError> {
+    pub fn inspect_pop_consumer_profile(&self, declared: bool) -> Result<PopConsumerProfileState, StoreError> {
         if !self
             .column_families
             .iter()
             .any(|name| name == POP_CONSUMER_PROFILE_COLUMN_FAMILY)
         {
             return Ok(if declared {
-                PopConsumerProfileState::DeclaredPresentInvalid {
-                    reason: "declared POP consumer profile column family is missing".to_owned(),
-                }
+                PopConsumerProfileState::DeclaredColumnFamilyMissing
             } else {
                 PopConsumerProfileState::LegacyAbsent
             });
@@ -106,24 +106,24 @@ impl ReadOnlyRocksDb {
 
         let Some(bytes) = self.get_cf(POP_CONSUMER_PROFILE_COLUMN_FAMILY, POP_CONSUMER_PROFILE_MARKER_KEY)? else {
             return Ok(if declared {
-                PopConsumerProfileState::DeclaredPresentInvalid {
-                    reason: "declared POP consumer profile marker is missing".to_owned(),
-                }
+                PopConsumerProfileState::DeclaredMarkerMissing
             } else {
                 PopConsumerProfileState::LegacyAbsent
             });
         };
         Ok(match PopConsumerProfileMarker::decode(&bytes) {
             Ok(marker) => PopConsumerProfileState::PresentValid(marker),
-            Err(error) => PopConsumerProfileState::DeclaredPresentInvalid {
-                reason: error.to_string(),
-            },
+            Err(_) => PopConsumerProfileState::DeclaredMarkerInvalid,
         })
     }
 }
 
-fn read_error(path: &Path, reason: String) -> RocketMQError {
-    RocketMQError::storage_read_failed(path.display().to_string(), reason)
+fn read_error(source: ::rocksdb::Error) -> StoreError {
+    crate::error::rocksdb_source_error(
+        &rocketmq_error::STORAGE_READ_FAILED,
+        rocketmq_store_api::StoreOperation::Admin,
+        source,
+    )
 }
 
 #[cfg(test)]
@@ -160,15 +160,20 @@ mod tests {
         let mut profile = RocksDbColumnFamilyConfig::consume_queue_default();
         profile.name = POP_CONSUMER_PROFILE_COLUMN_FAMILY.to_owned();
         config.column_families.push(profile);
-        let store = RocksDbStore::open(config).expect("open writable fixture");
+        let store = RocksDbStore::open(config)
+            .expect("open writable fixture")
+            .expect("valid RocksDB configuration");
         store
             .put_cf(
+                rocketmq_store_api::StoreOperation::Admin,
                 POP_CONSUMER_PROFILE_COLUMN_FAMILY,
                 POP_CONSUMER_PROFILE_MARKER_KEY,
                 &PopConsumerProfileMarker::new(7).encode().expect("encode marker"),
             )
             .expect("write marker");
-        store.flush().expect("flush fixture");
+        store
+            .flush(rocketmq_store_api::StoreOperation::Flush)
+            .expect("flush fixture");
         store.close();
         drop(store);
         let before = snapshot(&temp.path().join("db"));

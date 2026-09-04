@@ -17,18 +17,20 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 use crate::batch::RocksDbWriteBatch;
 use crate::column_family::RocksDbColumnFamily;
 use crate::config::RocksDbConfig;
-use crate::error::codec_error;
+use crate::error::codec_corrupted;
 use crate::iterator::RocksDbRangeScanOptions;
 use crate::iterator::RocksDbScanOptions;
 use crate::key::deal_time_to_hour_stamps;
 use crate::key::IndexRocksDbKey;
 use crate::key::TimerRocksDbKey;
 use crate::key::TransRocksDbKey;
+use crate::message_store::RocksDbOpenPlan;
 use crate::resource_budget::RocksDbResourceBudget;
 use crate::store::KeyValueStore;
 use crate::store::RocksDbStore;
@@ -50,28 +52,76 @@ pub struct MessageRocksDbStorage {
 }
 
 impl MessageRocksDbStorage {
-    pub fn open(config: RocksDbConfig) -> Result<Self, RocketMQError> {
+    /// Validates raw configuration and opens the message RocksDB storage.
+    ///
+    /// Returns `Ok(None)` when RocksDB is disabled or the deterministic
+    /// configuration is invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational storage error when resource validation or native
+    /// database initialization fails.
+    pub fn open(config: RocksDbConfig) -> Result<Option<Self>, StoreError> {
         Self::open_with_metrics(
             config,
             rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder::noop(),
         )
     }
 
+    /// Validates raw configuration and opens the message RocksDB storage with metrics.
+    ///
+    /// Returns `Ok(None)` when RocksDB is disabled or the deterministic
+    /// configuration is invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational storage error when resource validation or native
+    /// database initialization fails.
     pub fn open_with_metrics(
         config: RocksDbConfig,
         metrics: rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder,
-    ) -> Result<Self, RocketMQError> {
-        let resource_budget = Arc::new(RocksDbResourceBudget::from_config(&config)?);
-        Self::open_with_metrics_and_resource_budget(config, metrics, resource_budget)
+    ) -> Result<Option<Self>, StoreError> {
+        let Some(plan) = RocksDbOpenPlan::from_config(config) else {
+            return Ok(None);
+        };
+        Self::open_planned_with_metrics(plan, metrics).map(Some)
     }
 
-    pub fn open_with_metrics_and_resource_budget(
+    /// Opens the message RocksDB storage from a validated capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational storage error when resource validation or native
+    /// database initialization fails.
+    pub fn open_planned(plan: RocksDbOpenPlan) -> Result<Self, StoreError> {
+        Self::open_planned_with_metrics(
+            plan,
+            rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder::noop(),
+        )
+    }
+
+    /// Opens the message RocksDB storage from a validated capability with metrics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational storage error when resource validation or native
+    /// database initialization fails.
+    pub fn open_planned_with_metrics(
+        plan: RocksDbOpenPlan,
+        metrics: rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder,
+    ) -> Result<Self, StoreError> {
+        let RocksDbOpenPlan { config } = plan;
+        let resource_budget = Arc::new(RocksDbResourceBudget::from_config(&config)?);
+        Self::open_validated_with_metrics_and_resource_budget(config, metrics, resource_budget)
+    }
+
+    pub(crate) fn open_validated_with_metrics_and_resource_budget(
         config: RocksDbConfig,
         metrics: rocketmq_observability::metrics::rocksdb::RocksDbMetricsRecorder,
         resource_budget: Arc<RocksDbResourceBudget>,
-    ) -> Result<Self, RocketMQError> {
+    ) -> Result<Self, StoreError> {
         Ok(Self {
-            store: Arc::new(RocksDbStore::open_with_metrics_and_resource_budget(
+            store: Arc::new(RocksDbStore::open_validated_with_metrics_and_resource_budget(
                 config,
                 metrics,
                 resource_budget,
@@ -88,7 +138,7 @@ impl MessageRocksDbStorage {
         Arc::clone(&self.store)
     }
 
-    pub fn write_records_for_index(&self, records: &[IndexRocksDbRecord]) -> Result<(), RocketMQError> {
+    pub fn write_records_for_index(&self, records: &[IndexRocksDbRecord]) -> Result<(), StoreError> {
         if records.is_empty() {
             return Ok(());
         }
@@ -96,40 +146,45 @@ impl MessageRocksDbStorage {
         let cf = RocksDbColumnFamily::Default.name();
         let mut batch = RocksDbWriteBatch::with_capacity(records.len() + 2);
         for record in records {
-            let key = record.key()?;
+            let key = record.key(StoreOperation::AppendDerived)?;
             let mut encoded_key = Vec::with_capacity(key.encoded_len());
-            key.encode(&mut encoded_key)?;
+            key.encode(StoreOperation::AppendDerived, &mut encoded_key)?;
 
             let value = IndexRocksDbValue {
                 store_time: record.store_time,
             };
             let mut encoded_value = Vec::with_capacity(IndexRocksDbValue::ENCODED_LEN);
-            value.encode(&mut encoded_value)?;
+            value.encode(StoreOperation::AppendDerived, &mut encoded_value)?;
 
             batch.put_cf(cf, encoded_key, encoded_value);
         }
 
         if let Some(last_record) = records.last() {
-            let last_offset_py = self.get_last_offset_py(cf)?;
+            let last_offset_py = self.get_last_offset_py(StoreOperation::AppendDerived, cf)?;
             if last_record.offset_py > last_offset_py {
                 batch.put_cf(cf, LAST_OFFSET_PY.to_vec(), encode_i64(last_record.offset_py));
             }
 
-            let last_store_timestamp = self.get_last_store_timestamp_for_index()?;
+            let last_store_timestamp = self.get_last_store_timestamp_for_index(StoreOperation::AppendDerived)?;
             if last_record.store_time > last_store_timestamp {
                 batch.put_cf(cf, LAST_STORE_TIMESTAMP.to_vec(), encode_i64(last_record.store_time));
             }
         }
 
-        self.store.write_batch(&batch)
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)
     }
 
-    pub fn get_index_store_time(&self, key: &IndexRocksDbKey) -> Result<Option<i64>, RocketMQError> {
+    pub fn get_index_store_time(
+        &self,
+        operation: StoreOperation,
+        key: &IndexRocksDbKey,
+    ) -> Result<Option<i64>, StoreError> {
         let mut encoded_key = Vec::with_capacity(key.encoded_len());
-        key.encode(&mut encoded_key)?;
+        key.encode(operation, &mut encoded_key)?;
         self.store
-            .get_cf(RocksDbColumnFamily::Default.name(), &encoded_key)?
-            .map(|value| IndexRocksDbValue::decode(value.as_ref()).map(|value| value.store_time))
+            .get_cf(operation, RocksDbColumnFamily::Default.name(), &encoded_key)?
+            .map(|value| IndexRocksDbValue::decode(operation, value.as_ref()).map(|value| value.store_time))
             .transpose()
     }
 
@@ -142,44 +197,50 @@ impl MessageRocksDbStorage {
         end_time: i64,
         max_num: usize,
         last_key: Option<&str>,
-    ) -> Result<Vec<i64>, RocketMQError> {
+    ) -> Result<Vec<i64>, StoreError> {
         if max_num == 0 {
             return Ok(Vec::new());
         }
         let hours = index_hours(begin_time, end_time)?;
         let mut offsets = Vec::with_capacity(max_num);
-        let last_index_hour = last_key.map(IndexRocksDbKey::java_cursor_hour).transpose()?;
+        let last_index_hour = last_key
+            .map(|cursor| IndexRocksDbKey::java_cursor_hour(StoreOperation::QueryOffset, cursor))
+            .transpose()?;
         for hour in hours {
             if last_index_hour.is_some_and(|last_hour| hour < last_hour) {
                 continue;
             }
-            let prefix = IndexRocksDbKey::query_prefix(topic, index_type, key, hour)?;
+            let prefix = IndexRocksDbKey::query_prefix(StoreOperation::QueryOffset, topic, index_type, key, hour)?;
             let options = RocksDbScanOptions {
                 cf: RocksDbColumnFamily::Default.name().to_string(),
                 prefix,
                 limit: 0,
             };
             let cursor = if last_index_hour == Some(hour) {
-                last_key.map(IndexRocksDbKey::from_java_cursor).transpose()?
+                last_key
+                    .map(|cursor| IndexRocksDbKey::from_java_cursor(StoreOperation::QueryOffset, cursor))
+                    .transpose()?
             } else {
                 None
             };
             let items = match cursor.as_deref() {
-                Some(cursor) => self.store.prefix_scan_from(&options, cursor)?,
-                None => self.store.prefix_scan(&options)?,
+                Some(cursor) => self
+                    .store
+                    .prefix_scan_from(StoreOperation::QueryOffset, &options, cursor)?,
+                None => self.store.prefix_scan(StoreOperation::QueryOffset, &options)?,
             };
             for item in items {
                 if cursor.as_deref().is_some_and(|cursor| item.key.as_ref() == cursor) {
                     continue;
                 }
-                let value = IndexRocksDbValue::decode(item.value.as_ref())?;
+                let value = IndexRocksDbValue::decode(StoreOperation::QueryOffset, item.value.as_ref())?;
                 if value.store_time < begin_time || value.store_time > end_time {
                     continue;
                 }
                 if item.key.len() < 8 {
-                    return Err(codec_error("index key is too short to contain physical offset"));
+                    return Err(codec_corrupted(StoreOperation::QueryOffset));
                 }
-                let offset = decode_i64(&item.key[item.key.len() - 8..])?;
+                let offset = decode_i64(StoreOperation::QueryOffset, &item.key[item.key.len() - 8..])?;
                 offsets.push(offset);
                 if offsets.len() >= max_num {
                     return Ok(offsets);
@@ -189,29 +250,30 @@ impl MessageRocksDbStorage {
         Ok(offsets)
     }
 
-    pub fn get_last_store_timestamp_for_index(&self) -> Result<i64, RocketMQError> {
-        self.get_i64_special_key(RocksDbColumnFamily::Default.name(), LAST_STORE_TIMESTAMP)
+    pub fn get_last_store_timestamp_for_index(&self, operation: StoreOperation) -> Result<i64, StoreError> {
+        self.get_i64_special_key(operation, RocksDbColumnFamily::Default.name(), LAST_STORE_TIMESTAMP)
     }
 
-    pub fn write_records_for_timer(&self, records: &[TimerRocksDbRecord]) -> Result<(), RocketMQError> {
+    pub fn write_records_for_timer(&self, records: &[TimerRocksDbRecord]) -> Result<(), StoreError> {
         if records.is_empty() {
             return Ok(());
         }
 
         let cf = RocksDbColumnFamily::Timer.name();
         let mut batch = RocksDbWriteBatch::with_capacity(records.len());
-        let mut cache = self.timer_delete_cache.lock().map_err(|error| {
-            RocketMQError::storage_write_failed("rocksdb", format!("timer delete cache lock poisoned: {error}"))
-        })?;
+        let mut cache = self
+            .timer_delete_cache
+            .lock()
+            .map_err(|_| crate::error::internal_failure(rocketmq_store_api::StoreOperation::AppendDerived))?;
 
         for record in records {
             let key = record.key();
             let mut encoded_key = Vec::with_capacity(key.encoded_len());
-            key.encode(&mut encoded_key)?;
+            key.encode(StoreOperation::AppendDerived, &mut encoded_key)?;
 
             let value = record.value();
             let mut encoded_value = Vec::with_capacity(TimerRocksDbValue::ENCODED_LEN);
-            value.encode(&mut encoded_value)?;
+            value.encode(StoreOperation::AppendDerived, &mut encoded_value)?;
 
             match record.action {
                 TimerRocksDbAction::Put => batch.put_cf(cf, encoded_key, encoded_value),
@@ -228,15 +290,20 @@ impl MessageRocksDbStorage {
         }
         drop(cache);
 
-        self.store.write_batch(&batch)
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)
     }
 
-    pub fn get_timer_record(&self, key: &TimerRocksDbKey) -> Result<Option<TimerRocksDbRecord>, RocketMQError> {
+    pub fn get_timer_record(&self, key: &TimerRocksDbKey) -> Result<Option<TimerRocksDbRecord>, StoreError> {
         let mut encoded_key = Vec::with_capacity(key.encoded_len());
-        key.encode(&mut encoded_key)?;
+        key.encode(StoreOperation::Read, &mut encoded_key)?;
         self.store
-            .get_cf(RocksDbColumnFamily::Timer.name(), &encoded_key)?
-            .map(|value| TimerRocksDbRecord::decode(&encoded_key, value.as_ref()))
+            .get_cf(
+                rocketmq_store_api::StoreOperation::Read,
+                RocksDbColumnFamily::Timer.name(),
+                &encoded_key,
+            )?
+            .map(|value| TimerRocksDbRecord::decode(StoreOperation::Read, &encoded_key, value.as_ref()))
             .transpose()
     }
 
@@ -246,21 +313,24 @@ impl MessageRocksDbStorage {
         upper_time: i64,
         size: usize,
         start_key: Option<&[u8]>,
-    ) -> Result<Vec<TimerRocksDbRecord>, RocketMQError> {
+    ) -> Result<Vec<TimerRocksDbRecord>, StoreError> {
         if size == 0 {
             return Ok(Vec::new());
         }
-        validate_timer_range(lower_time, upper_time)?;
+        validate_timer_range(StoreOperation::Read, lower_time, upper_time)?;
 
         let start = start_key
             .map(<[u8]>::to_vec)
             .unwrap_or_else(|| lower_time.to_be_bytes().to_vec());
-        let items = self.store.range_scan(&RocksDbRangeScanOptions {
-            cf: RocksDbColumnFamily::Timer.name().to_string(),
-            start,
-            end: upper_time.to_be_bytes().to_vec(),
-            limit: if start_key.is_some() { size + 1 } else { size },
-        })?;
+        let items = self.store.range_scan(
+            rocketmq_store_api::StoreOperation::Read,
+            &RocksDbRangeScanOptions {
+                cf: RocksDbColumnFamily::Timer.name().to_string(),
+                start,
+                end: upper_time.to_be_bytes().to_vec(),
+                limit: if start_key.is_some() { size + 1 } else { size },
+            },
+        )?;
 
         let mut skip_start_key = start_key.is_some();
         let mut records = Vec::with_capacity(size);
@@ -269,7 +339,11 @@ impl MessageRocksDbStorage {
                 skip_start_key = false;
                 continue;
             }
-            records.push(TimerRocksDbRecord::decode(item.key.as_ref(), item.value.as_ref())?);
+            records.push(TimerRocksDbRecord::decode(
+                StoreOperation::Read,
+                item.key.as_ref(),
+                item.value.as_ref(),
+            )?);
             if records.len() >= size {
                 break;
             }
@@ -277,8 +351,8 @@ impl MessageRocksDbStorage {
         Ok(records)
     }
 
-    pub fn delete_records_for_timer(&self, lower_time: i64, upper_time: i64) -> Result<(), RocketMQError> {
-        validate_timer_range(lower_time, upper_time)?;
+    pub fn delete_records_for_timer(&self, lower_time: i64, upper_time: i64) -> Result<(), StoreError> {
+        validate_timer_range(StoreOperation::AppendDerived, lower_time, upper_time)?;
         let mut end_key = Vec::with_capacity(8 + END_SUFFIX_BYTES.len());
         end_key.extend_from_slice(&upper_time.to_be_bytes());
         end_key.extend_from_slice(&END_SUFFIX_BYTES);
@@ -289,45 +363,52 @@ impl MessageRocksDbStorage {
             lower_time.to_be_bytes().to_vec(),
             end_key,
         );
-        self.store.write_batch(&batch)
-    }
-
-    pub fn write_checkpoint_for_timer(&self, key: &[u8], value: i64) -> Result<(), RocketMQError> {
-        validate_timer_checkpoint_key(key)?;
-        if value < 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "rocksdb.timer.checkpoint",
-                value: value.to_string(),
-                reason: "timer checkpoint must be non-negative".to_string(),
-            });
-        }
         self.store
-            .put_cf(RocksDbColumnFamily::Timer.name(), key, &encode_i64(value))
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)
     }
 
-    pub fn write_timeline_checkpoint_for_timer(&self, value: i64) -> Result<(), RocketMQError> {
+    pub fn write_checkpoint_for_timer(&self, key: &[u8], value: i64) -> Result<(), StoreError> {
+        validate_timer_checkpoint_key(StoreOperation::AppendDerived, key)?;
+        if value < 0 {
+            return Err(crate::error::request_invalid(
+                rocketmq_store_api::StoreOperation::AppendDerived,
+            ));
+        }
+        self.store.put_cf(
+            rocketmq_store_api::StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Timer.name(),
+            key,
+            &encode_i64(value),
+        )
+    }
+
+    pub fn write_timeline_checkpoint_for_timer(&self, value: i64) -> Result<(), StoreError> {
         self.write_checkpoint_for_timer(TIMER_TIMELINE_CHECKPOINT, value)
     }
 
-    pub fn get_checkpoint_for_timer(&self, key: &[u8]) -> Result<i64, RocketMQError> {
-        validate_timer_checkpoint_key(key)?;
-        self.get_i64_special_key(RocksDbColumnFamily::Timer.name(), key)
+    pub fn get_checkpoint_for_timer(&self, operation: StoreOperation, key: &[u8]) -> Result<i64, StoreError> {
+        validate_timer_checkpoint_key(operation, key)?;
+        self.get_i64_special_key(operation, RocksDbColumnFamily::Timer.name(), key)
     }
 
-    pub fn get_timeline_checkpoint_for_timer(&self) -> Result<i64, RocketMQError> {
-        self.get_checkpoint_for_timer(TIMER_TIMELINE_CHECKPOINT)
+    pub fn get_timeline_checkpoint_for_timer(&self) -> Result<i64, StoreError> {
+        self.get_checkpoint_for_timer(StoreOperation::Read, TIMER_TIMELINE_CHECKPOINT)
     }
 
-    pub fn delete_checkpoint_for_timer(&self, key: &[u8]) -> Result<(), RocketMQError> {
-        validate_timer_checkpoint_key(key)?;
-        self.store.delete_cf(RocksDbColumnFamily::Timer.name(), key)
+    pub fn delete_checkpoint_for_timer(&self, key: &[u8]) -> Result<(), StoreError> {
+        validate_timer_checkpoint_key(StoreOperation::AppendDerived, key)?;
+        self.store.delete_cf(
+            rocketmq_store_api::StoreOperation::AppendDerived,
+            RocksDbColumnFamily::Timer.name(),
+            key,
+        )
     }
 
-    pub fn delete_timeline_checkpoint_for_timer(&self) -> Result<(), RocketMQError> {
+    pub fn delete_timeline_checkpoint_for_timer(&self) -> Result<(), StoreError> {
         self.delete_checkpoint_for_timer(TIMER_TIMELINE_CHECKPOINT)
     }
 
-    pub fn write_records_for_trans(&self, records: &[TransRocksDbRecord]) -> Result<(), RocketMQError> {
+    pub fn write_records_for_trans(&self, records: &[TransRocksDbRecord]) -> Result<(), StoreError> {
         if records.is_empty() {
             return Ok(());
         }
@@ -339,7 +420,7 @@ impl MessageRocksDbStorage {
         for record in records {
             let key = record.key();
             let mut encoded_key = Vec::with_capacity(key.encoded_len());
-            key.encode(&mut encoded_key)?;
+            key.encode(StoreOperation::AppendDerived, &mut encoded_key)?;
 
             if record.is_op {
                 batch.delete_cf(cf, encoded_key);
@@ -348,22 +429,23 @@ impl MessageRocksDbStorage {
 
             let value = record.value();
             let mut encoded_value = Vec::with_capacity(TransRocksDbValue::ENCODED_LEN);
-            value.encode(&mut encoded_value)?;
+            value.encode(StoreOperation::AppendDerived, &mut encoded_value)?;
             batch.put_cf(cf, encoded_key, encoded_value);
             last_offset_py = last_offset_py.max(record.offset_py);
         }
 
         if last_offset_py > 0 {
-            let stored_last_offset = self.get_last_offset_py(cf)?;
+            let stored_last_offset = self.get_last_offset_py(StoreOperation::AppendDerived, cf)?;
             if last_offset_py > stored_last_offset {
                 batch.put_cf(cf, LAST_OFFSET_PY.to_vec(), encode_i64(last_offset_py));
             }
         }
 
-        self.store.write_batch(&batch)
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)
     }
 
-    pub fn update_records_for_trans(&self, records: &[TransRocksDbRecord]) -> Result<(), RocketMQError> {
+    pub fn update_records_for_trans(&self, records: &[TransRocksDbRecord]) -> Result<(), StoreError> {
         if records.is_empty() {
             return Ok(());
         }
@@ -373,7 +455,7 @@ impl MessageRocksDbStorage {
         for record in records {
             let key = record.key();
             let mut encoded_key = Vec::with_capacity(key.encoded_len());
-            key.encode(&mut encoded_key)?;
+            key.encode(StoreOperation::AppendDerived, &mut encoded_key)?;
             if record.delete {
                 batch.delete_cf(cf, encoded_key);
                 continue;
@@ -381,19 +463,24 @@ impl MessageRocksDbStorage {
 
             let value = record.value();
             let mut encoded_value = Vec::with_capacity(TransRocksDbValue::ENCODED_LEN);
-            value.encode(&mut encoded_value)?;
+            value.encode(StoreOperation::AppendDerived, &mut encoded_value)?;
             batch.put_cf(cf, encoded_key, encoded_value);
         }
 
-        self.store.write_batch(&batch)
+        self.store
+            .write_batch(rocketmq_store_api::StoreOperation::AppendDerived, &batch)
     }
 
-    pub fn get_trans_record(&self, key: &TransRocksDbKey) -> Result<Option<TransRocksDbRecord>, RocketMQError> {
+    pub fn get_trans_record(&self, key: &TransRocksDbKey) -> Result<Option<TransRocksDbRecord>, StoreError> {
         let mut encoded_key = Vec::with_capacity(key.encoded_len());
-        key.encode(&mut encoded_key)?;
+        key.encode(StoreOperation::Read, &mut encoded_key)?;
         self.store
-            .get_cf(RocksDbColumnFamily::Transaction.name(), &encoded_key)?
-            .map(|value| TransRocksDbRecord::decode(&encoded_key, value.as_ref()))
+            .get_cf(
+                rocketmq_store_api::StoreOperation::Read,
+                RocksDbColumnFamily::Transaction.name(),
+                &encoded_key,
+            )?
+            .map(|value| TransRocksDbRecord::decode(StoreOperation::Read, &encoded_key, value.as_ref()))
             .transpose()
     }
 
@@ -401,17 +488,20 @@ impl MessageRocksDbStorage {
         &self,
         size: usize,
         start_key: Option<&[u8]>,
-    ) -> Result<Vec<TransRocksDbRecord>, RocketMQError> {
+    ) -> Result<Vec<TransRocksDbRecord>, StoreError> {
         if size == 0 {
             return Ok(Vec::new());
         }
 
-        let items = self.store.range_scan(&RocksDbRangeScanOptions {
-            cf: RocksDbColumnFamily::Transaction.name().to_string(),
-            start: start_key.map(<[u8]>::to_vec).unwrap_or_default(),
-            end: Vec::new(),
-            limit: 0,
-        })?;
+        let items = self.store.range_scan(
+            rocketmq_store_api::StoreOperation::Read,
+            &RocksDbRangeScanOptions {
+                cf: RocksDbColumnFamily::Transaction.name().to_string(),
+                start: start_key.map(<[u8]>::to_vec).unwrap_or_default(),
+                end: Vec::new(),
+                limit: 0,
+            },
+        )?;
 
         let mut skip_start_key = start_key.is_some();
         let mut records = Vec::with_capacity(size);
@@ -423,7 +513,11 @@ impl MessageRocksDbStorage {
             if item.key.as_ref() == LAST_OFFSET_PY {
                 continue;
             }
-            records.push(TransRocksDbRecord::decode(item.key.as_ref(), item.value.as_ref())?);
+            records.push(TransRocksDbRecord::decode(
+                StoreOperation::Read,
+                item.key.as_ref(),
+                item.value.as_ref(),
+            )?);
             if records.len() >= size {
                 break;
             }
@@ -431,14 +525,14 @@ impl MessageRocksDbStorage {
         Ok(records)
     }
 
-    pub fn get_last_offset_py(&self, cf: &str) -> Result<i64, RocketMQError> {
-        self.get_i64_special_key(cf, LAST_OFFSET_PY)
+    pub fn get_last_offset_py(&self, operation: StoreOperation, cf: &str) -> Result<i64, StoreError> {
+        self.get_i64_special_key(operation, cf, LAST_OFFSET_PY)
     }
 
-    fn get_i64_special_key(&self, cf: &str, key: &[u8]) -> Result<i64, RocketMQError> {
+    fn get_i64_special_key(&self, operation: StoreOperation, cf: &str, key: &[u8]) -> Result<i64, StoreError> {
         self.store
-            .get_cf(cf, key)?
-            .map(|value| decode_i64(value.as_ref()))
+            .get_cf(operation, cf, key)?
+            .map(|value| decode_i64(operation, value.as_ref()))
             .unwrap_or(Ok(0))
     }
 }
@@ -499,10 +593,11 @@ impl IndexRocksDbRecord {
         }
     }
 
-    fn key(&self) -> Result<IndexRocksDbKey, RocketMQError> {
+    fn key(&self, operation: StoreOperation) -> Result<IndexRocksDbKey, StoreError> {
         if let Some(key) = &self.key {
             if self.uniq_key.is_empty() {
                 return IndexRocksDbKey::normal_key_without_uniq(
+                    operation,
                     self.topic.clone(),
                     key.clone(),
                     self.store_time,
@@ -510,6 +605,7 @@ impl IndexRocksDbRecord {
                 );
             }
             return IndexRocksDbKey::normal_key(
+                operation,
                 self.topic.clone(),
                 key.clone(),
                 self.uniq_key.clone(),
@@ -520,6 +616,7 @@ impl IndexRocksDbRecord {
         if let Some(tag) = &self.tag {
             if self.uniq_key.is_empty() {
                 return IndexRocksDbKey::tag_key_without_uniq(
+                    operation,
                     self.topic.clone(),
                     tag.clone(),
                     self.store_time,
@@ -527,6 +624,7 @@ impl IndexRocksDbRecord {
                 );
             }
             return IndexRocksDbKey::tag_key(
+                operation,
                 self.topic.clone(),
                 tag.clone(),
                 self.uniq_key.clone(),
@@ -535,6 +633,7 @@ impl IndexRocksDbRecord {
             );
         }
         IndexRocksDbKey::unique_key(
+            operation,
             self.topic.clone(),
             self.uniq_key.clone(),
             self.store_time,
@@ -574,9 +673,9 @@ impl TimerRocksDbRecord {
         }
     }
 
-    pub fn decode(key: &[u8], value: &[u8]) -> Result<Self, RocketMQError> {
-        let key = TimerRocksDbKey::decode(key)?;
-        let value = TimerRocksDbValue::decode(value)?;
+    pub fn decode(operation: StoreOperation, key: &[u8], value: &[u8]) -> Result<Self, StoreError> {
+        let key = TimerRocksDbKey::decode(operation, key)?;
+        let value = TimerRocksDbValue::decode(operation, value)?;
         Ok(Self {
             delay_time: key.delay_time,
             uniq_key: key.uniq_key,
@@ -614,9 +713,9 @@ impl TransRocksDbRecord {
         }
     }
 
-    pub fn decode(key: &[u8], value: &[u8]) -> Result<Self, RocketMQError> {
-        let key = TransRocksDbKey::decode(key)?;
-        let value = TransRocksDbValue::decode(value)?;
+    pub fn decode(operation: StoreOperation, key: &[u8], value: &[u8]) -> Result<Self, StoreError> {
+        let key = TransRocksDbKey::decode(operation, key)?;
+        let value = TransRocksDbValue::decode(operation, value)?;
         Ok(Self {
             offset_py: key.offset_py,
             topic: key.topic,
@@ -663,35 +762,23 @@ impl TimerDeleteCache {
     }
 }
 
-fn validate_timer_checkpoint_key(key: &[u8]) -> Result<(), RocketMQError> {
+fn validate_timer_checkpoint_key(operation: StoreOperation, key: &[u8]) -> Result<(), StoreError> {
     if key == TIMER_SYS_TOPIC_SCAN_OFFSET_CHECKPOINT || key == TIMER_TIMELINE_CHECKPOINT {
         return Ok(());
     }
-    Err(RocketMQError::ConfigInvalidValue {
-        key: "rocksdb.timer.checkpoint_key",
-        value: String::from_utf8_lossy(key).to_string(),
-        reason: "timer checkpoint key is not one of the Java-supported keys".to_string(),
-    })
+    Err(crate::error::request_invalid(operation))
 }
 
-fn validate_timer_range(lower_time: i64, upper_time: i64) -> Result<(), RocketMQError> {
+fn validate_timer_range(operation: StoreOperation, lower_time: i64, upper_time: i64) -> Result<(), StoreError> {
     if lower_time <= 0 || upper_time <= 0 || lower_time > upper_time {
-        return Err(RocketMQError::ConfigInvalidValue {
-            key: "rocksdb.timer.range",
-            value: format!("{lower_time}..{upper_time}"),
-            reason: "lower/upper time must be positive and lower must not exceed upper".to_string(),
-        });
+        return Err(crate::error::request_invalid(operation));
     }
     Ok(())
 }
 
-fn index_hours(begin_time: i64, end_time: i64) -> Result<Vec<i64>, RocketMQError> {
+fn index_hours(begin_time: i64, end_time: i64) -> Result<Vec<i64>, StoreError> {
     if begin_time <= 0 || end_time <= 0 || begin_time > end_time {
-        return Err(RocketMQError::ConfigInvalidValue {
-            key: "rocksdb.index.query_time_range",
-            value: format!("{begin_time}..{end_time}"),
-            reason: "begin/end time must be positive and begin must not exceed end".to_string(),
-        });
+        return Err(crate::error::request_invalid(StoreOperation::QueryOffset));
     }
 
     let mut hours = Vec::new();
@@ -711,9 +798,9 @@ fn encode_i64(value: i64) -> Vec<u8> {
     value.to_be_bytes().to_vec()
 }
 
-fn decode_i64(src: &[u8]) -> Result<i64, RocketMQError> {
+fn decode_i64(operation: StoreOperation, src: &[u8]) -> Result<i64, StoreError> {
     if src.len() != 8 {
-        return Err(codec_error(format!("i64 value must be 8 bytes, got {}", src.len())));
+        return Err(codec_corrupted(operation));
     }
     let mut bytes = [0_u8; 8];
     bytes.copy_from_slice(src);
