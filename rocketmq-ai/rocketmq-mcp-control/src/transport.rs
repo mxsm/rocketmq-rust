@@ -66,6 +66,20 @@ where
     let auth = AuthState::<HttpJwksSource>::initialize(&config.oauth, metadata_url)
         .await
         .map_err(|_| ControlError::invalid_config())?;
+    serve_authenticated(config, service_context, audit, shutdown, auth).await
+}
+
+async fn serve_authenticated<F, S>(
+    config: ControlConfig,
+    service_context: ChildServiceContext,
+    audit: crate::audit::AuditTrail,
+    shutdown: F,
+    auth: AuthState<S>,
+) -> Result<(), ControlError>
+where
+    F: FutureShutdown,
+    S: JwksSource + 'static,
+{
     let tls = TlsServerRuntime::initialize_with_service_context(tls_config(&config), &service_context)
         .await
         .map_err(|_| ControlError::invalid_config())?;
@@ -2113,3 +2127,6 @@ mod tests {
     #[cfg(feature = "write-tools")]
     include!("transport/acceptance_matrix.rs");
 }
+
+#[cfg(all(test, feature = "write-tools"))]
+mod real_cluster_e2e;
