@@ -83,6 +83,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
+      - name: Install native build dependencies
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y
+          clang llvm libclang-dev cmake make ninja-build pkg-config protobuf-compiler
+
       - name: Use repository Rust 1.95 toolchain
         run: rustup show active-toolchain
 
