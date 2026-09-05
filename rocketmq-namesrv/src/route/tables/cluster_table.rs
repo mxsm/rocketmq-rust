@@ -31,7 +31,7 @@ use crate::route::types::ClusterName;
 use crate::route::types::RouteBrokerName;
 use crate::route::types::RouteClusterName;
 
-/// Cluster address table: ClusterName -> Set<BrokerName>
+/// Cluster address table: `ClusterName -> Set<BrokerName>`
 ///
 /// This table maintains the mapping of cluster names to the set of
 /// broker names that belong to each cluster. Uses DashSet for

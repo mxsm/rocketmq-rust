@@ -53,7 +53,7 @@ impl Environment {
     /// Returns true if this environment matches `other` according to rules:
     /// - if self.source_ips empty -> true
     /// - if other's source_ips empty -> false
-    /// - target = other.source_ips[0]; check if any src pattern in self matches target
+    /// - `target = other.source_ips[0]`; check if any src pattern in self matches target
     pub fn is_match(&self, other: &Environment) -> bool {
         if self.source_ips.is_empty() {
             return true;

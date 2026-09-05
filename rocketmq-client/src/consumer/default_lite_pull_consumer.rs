@@ -65,7 +65,7 @@ use crate::trace::trace_dispatcher::Type;
 /// Default implementation of a lite pull consumer.
 ///
 /// This is the main entry point for creating and using a lite pull consumer. It acts as a facade
-/// over the internal implementation ([`DefaultLitePullConsumerImpl`]) and provides:
+/// over the internal implementation (`DefaultLitePullConsumerImpl`) and provides:
 ///
 /// - Configuration management via [`DefaultLitePullConsumerBuilder`]
 /// - Namespace handling (automatic topic name wrapping/unwrapping)

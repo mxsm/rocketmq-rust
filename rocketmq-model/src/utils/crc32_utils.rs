@@ -137,13 +137,13 @@ pub fn crc32_bytes_offset(array: &[u8], offset: usize, length: usize) -> u32 {
     crc32_range(array, offset, length)
 }
 
-/// Calculate CRC32 checksum for a byte buffer (Vec<u8>).
+/// Calculate CRC32 checksum for a byte buffer (`Vec<u8>`).
 ///
 /// Equivalent to Java's `crc32(ByteBuffer byteBuffer)`
 ///
 /// # Arguments
 ///
-/// * `byte_buffer` - Reference to Vec<u8>
+/// * `byte_buffer` - Reference to `Vec<u8>`
 ///
 /// # Returns
 ///
@@ -173,7 +173,7 @@ pub fn crc32_bytebuffer(byte_buffer: &[u8]) -> u32 {
 ///
 /// # Arguments
 ///
-/// * `byte_buffers` - Slice of Vec<u8> buffers
+/// * `byte_buffers` - Slice of `Vec<u8>` buffers
 ///
 /// # Returns
 ///

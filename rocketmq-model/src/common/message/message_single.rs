@@ -107,7 +107,7 @@ impl Message {
         Self::with_details_bytes(topic, CheetahString::empty(), CheetahString::empty(), 0, body, true)
     }
 
-    /// Create a new message with topic and Vec<u8> (zero-copy conversion to Bytes)
+    /// Create a new message with topic and `Vec<u8>` (zero-copy conversion to `Bytes`)
     #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
     #[allow(deprecated)]
     #[inline]

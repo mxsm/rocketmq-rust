@@ -405,7 +405,7 @@ pub trait MessagePoll: Send + Sync {
     /// # Performance
     ///
     /// Message contents are not copied. For workloads processing messages without long-term
-    /// storage, this eliminates allocation overhead compared to [`poll()`].
+    /// storage, this eliminates allocation overhead compared to [`poll()`](Self::poll).
     ///
     /// # Examples
     ///
@@ -430,7 +430,7 @@ pub trait MessagePoll: Send + Sync {
     /// Fetches the next batch of messages without allocating owned copies, with a specified
     /// timeout.
     ///
-    /// Behaves identically to [`poll_zero_copy()`], but waits up to `timeout` milliseconds
+    /// Behaves identically to [`poll_zero_copy()`](Self::poll_zero_copy), but waits up to `timeout` milliseconds
     /// for messages to become available.
     ///
     /// # Arguments
@@ -460,7 +460,7 @@ pub trait MessagePoll: Send + Sync {
     /// each poll returning 32 messages allocates approximately 90KB. At 100 polls per second,
     /// this results in approximately 9MB/s of allocations.
     ///
-    /// For workloads that do not require owned messages, [`poll_zero_copy()`] avoids
+    /// For workloads that do not require owned messages, [`poll_zero_copy()`](Self::poll_zero_copy) avoids
     /// this allocation overhead.
     ///
     /// # Examples
@@ -476,7 +476,7 @@ pub trait MessagePoll: Send + Sync {
 
     /// Fetches the next batch of messages with a specified timeout, returning owned copies.
     ///
-    /// Behaves identically to [`poll()`], but waits up to `timeout` milliseconds for
+    /// Behaves identically to [`poll()`](Self::poll), but waits up to `timeout` milliseconds for
     /// messages to become available. All messages are deep-cloned.
     ///
     /// # Arguments

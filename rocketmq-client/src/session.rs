@@ -62,7 +62,7 @@ impl fmt::Debug for ClientSession {
 ///
 /// Publicly constructed handles always return `Some`. `None` is reserved for
 /// crate-internal bootstrap producers that are owned directly by a
-/// [`crate::runtime::ServiceContext`] instead of a public client session.
+/// [`rocketmq_runtime::ChildServiceContext`] instead of a public client session.
 pub trait ClientSessionProvider {
     #[must_use]
     fn client_session(&self) -> Option<&ClientSession>;

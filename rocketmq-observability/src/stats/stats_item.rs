@@ -58,7 +58,8 @@ impl StatsItem {
     /// Atomically adds `value_delta` to the value counter and `times_delta` to the times counter.
     ///
     /// Also records the current wall-clock millisecond as the last-update timestamp, which is
-    /// used by idle-entry eviction in [`StatsItemSet::clean_resource`].
+    /// used by idle-entry eviction in
+    /// [`StatsItemSet::clean_resource`](crate::stats::stats_item_set::StatsItemSet::clean_resource).
     #[inline]
     pub fn add(&self, value_delta: u64, times_delta: u64) {
         self.value.fetch_add(value_delta, Ordering::Relaxed);

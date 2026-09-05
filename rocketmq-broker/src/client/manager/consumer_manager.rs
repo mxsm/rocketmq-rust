@@ -126,7 +126,7 @@ pub struct ConsumerManager {
     consumer_table: Arc<DashMap<CheetahString, ConsumerGroupInfo>>,
     /// Compensation table for consumers without heartbeat
     consumer_compensation_table: Arc<DashMap<CheetahString, ConsumerGroupInfo>>,
-    /// Topic -> Set<Group> reverse index for fast topic-to-group lookup
+    /// `Topic -> Set<Group>` reverse index for fast topic-to-group lookup
     topic_group_table: Arc<DashMap<CheetahString, HashSet<CheetahString>>>,
     /// Canonical session -> all consumer groups registered by that session.
     session_to_groups: Arc<DashMap<SessionId, HashSet<CheetahString>>>,
@@ -150,7 +150,7 @@ pub struct ConsumerManager {
     /// Striped serialization for canonical client-session multi-index transitions.
     session_transition_locks: Arc<ClientSessionTransitionLocks>,
     /// Listeners notified on consumer registration/unregistration events
-    /// Uses Arc<RwLock<Vec>> to support dynamic listener registration at runtime
+    /// Uses `Arc<RwLock<Vec>>` to support dynamic listener registration at runtime
     consumer_ids_change_listener_list: Arc<RwLock<Vec<ConsumerListener>>>,
     /// Optional broker statistics manager (set once during initialization)
     broker_stats_manager: Option<Weak<BrokerStatsManager>>,
