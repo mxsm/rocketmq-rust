@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **fix(transport):** Remove the unused `RuntimeConfig` import that breaks Linux file-send benchmark compilation with warnings denied ([#10026](https://github.com/mxsm/rocketmq-rust/issues/10026))
+- **fix(transport):** Remove unused `RuntimeConfig` imports that break Linux sendfile test and benchmark compilation with warnings denied ([#10026](https://github.com/mxsm/rocketmq-rust/issues/10026))
 
 ### Added
 

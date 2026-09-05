@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_protocol::protocol::RemotingCommand;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_transport::api::file_transfer_snapshot;
 use rocketmq_transport::api::ConnectionState;
