@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Download explicit parent control generation
         if: ${{ inputs.parent_control_artifact != '' }}
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.parent_control_artifact }}
           path: ${{ runner.temp }}/parent-control
@@ -154,7 +154,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: core-release-common-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-inputs
@@ -208,11 +208,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: core-release-common-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-inputs
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: core-release-target-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/target-bundles
@@ -274,7 +274,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: core-release-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-aggregate
@@ -324,37 +324,37 @@ jobs:
       - uses: actions/checkout@v7
       - name: Download common control fallback
         continue-on-error: true
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: core-release-common-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-common
       - name: Download aggregate candidate state
         continue-on-error: true
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: core-release-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-aggregate
       - name: Download job outcomes
         continue-on-error: true
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: build-*
           path: ${{ runner.temp }}/stage-outcomes
       - name: Download prepare-common outcome
         continue-on-error: true
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: prepare-common
           path: ${{ runner.temp }}/stage-outcomes/prepare-common
       - name: Download aggregate outcome
         continue-on-error: true
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: aggregate
           path: ${{ runner.temp }}/stage-outcomes/aggregate
       - name: Download functional matrix outcome
         continue-on-error: true
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: full-matrix
           path: ${{ runner.temp }}/stage-outcomes/full-matrix
