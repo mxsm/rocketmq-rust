@@ -487,6 +487,11 @@ impl RocksDbDerivedStore {
     }
 
     pub fn flush_derived(&self) -> Result<(), StoreError> {
+        // Reject unavailable backends as a flush failure before draining pending index writes.
+        self.rocksdb_store.ensure_open(StoreOperation::Flush)?;
+        self.message_rocksdb_storage
+            .store()
+            .ensure_open(StoreOperation::Flush)?;
         self.rocksdb_index_service.flush_pending()?;
         self.rocksdb_store.flush(rocketmq_store_api::StoreOperation::Flush)?;
         self.message_rocksdb_storage.store().flush(StoreOperation::Flush)?;
