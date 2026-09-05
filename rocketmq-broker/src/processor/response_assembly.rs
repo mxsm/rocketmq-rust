@@ -33,7 +33,7 @@ use rocketmq_transport::api::FileRegionLease;
 use rocketmq_transport::api::FileRegionSequence;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingResponse;
-use rocketmq_transport::api::ResponseBuildError;
+use rocketmq_transport::api::TransportContractViolation;
 
 const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 
@@ -56,7 +56,7 @@ pub(crate) struct BrokerResponseParts {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BrokerResponseBuildError {
     #[error("invalid Broker response construction: {0}")]
-    ResponseConstruction(#[from] ResponseBuildError),
+    ResponseConstruction(#[from] TransportContractViolation),
 }
 
 impl From<BrokerResponseBuildError> for RocketMQError {
@@ -165,13 +165,13 @@ pub(crate) fn immediate_outcome_from_command_result(
 
 fn validate_head(head: &RemotingCommand) -> Result<(), BrokerResponseBuildError> {
     if head.body().is_some() {
-        return Err(ResponseBuildError::HeadHasBody.into());
+        return Err(TransportContractViolation::response_head_has_body().into());
     }
     if !head.is_response_type() {
-        return Err(ResponseBuildError::RequestHead.into());
+        return Err(TransportContractViolation::response_request_head().into());
     }
     if head.is_oneway_rpc() {
-        return Err(ResponseBuildError::OneWayHead.into());
+        return Err(TransportContractViolation::response_one_way_head().into());
     }
     Ok(())
 }
@@ -192,12 +192,13 @@ fn checked_body_len(lengths: impl IntoIterator<Item = u64>) -> Result<usize, Bro
     for len in lengths {
         body_len = body_len
             .checked_add(len)
-            .ok_or(ResponseBuildError::BodyLengthOverflow)?;
+            .ok_or_else(TransportContractViolation::response_body_length_overflow)?;
     }
     if body_len > MAX_RESPONSE_BODY_LEN {
-        return Err(ResponseBuildError::BodyTooLarge { actual: body_len }.into());
+        return Err(TransportContractViolation::response_body_too_large(body_len, MAX_RESPONSE_BODY_LEN).into());
     }
-    usize::try_from(body_len).map_err(|_| ResponseBuildError::BodyLengthNotRepresentable { actual: body_len }.into())
+    usize::try_from(body_len)
+        .map_err(|_| TransportContractViolation::response_body_length_not_representable(body_len).into())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -23,7 +23,7 @@ use std::sync::Weak;
 
 use parking_lot::Mutex;
 
-use super::DeferredRegistryErrorKind;
+use super::RegistryFailure;
 use crate::session_view::SessionId;
 
 mod sealed {
@@ -63,19 +63,15 @@ impl std::fmt::Debug for SessionCleanupEnrollment {
     }
 }
 
-/// Failure to atomically install a session-close callback.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+/// Result of atomically installing a session-close callback.
 #[cfg(test)]
-pub(crate) enum SessionCleanupInstallError<E> {
+pub(crate) enum SessionCleanupInstallOutcome<T, E> {
+    /// The callback and caller value were installed.
+    Installed(T),
     /// The canonical network session was already closing or closed.
-    #[error("session cleanup rejected a closed session")]
     SessionClosed,
-    /// The caller rejected installation and recovered its affine enrollment.
-    #[error("caller rejected session cleanup installation")]
-    Install(E),
-    /// An internal affine cleanup invariant was not satisfied.
-    #[error("session cleanup invariant was not satisfied")]
-    Invariant,
+    /// The caller rejected installation and recovered its value.
+    Rejected(E),
 }
 
 #[derive(Clone)]
@@ -94,12 +90,12 @@ impl SessionCleanupCapability {
         &self,
         cleanup: impl Fn() + Send + Sync + 'static,
         install: impl FnOnce(SessionCleanupEnrollment) -> Result<T, (E, SessionCleanupEnrollment)>,
-    ) -> Result<T, SessionCleanupInstallError<E>> {
+    ) -> Result<SessionCleanupInstallOutcome<T, E>, crate::contract::TransportContractViolation> {
         static NEXT_KEY: AtomicUsize = AtomicUsize::new(1);
 
         let key = NEXT_KEY
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
-            .map_err(|_| SessionCleanupInstallError::Invariant)?;
+            .map_err(|_| crate::contract::TransportContractViolation::SessionCleanupInvariant)?;
         let target = Arc::new(CallbackCleanupTarget {
             key,
             cleanup: Box::new(cleanup),
@@ -111,7 +107,7 @@ impl SessionCleanupCapability {
             move || target as Arc<dyn DeferredSessionCleanupTarget>,
             |slot| {
                 let Some(enrollment) = slot.take() else {
-                    return Err(DeferredRegistryErrorKind::RegistryInvariant);
+                    return Err(RegistryFailure::RegistryInvariant);
                 };
                 match install(SessionCleanupEnrollment {
                     inner: Some(enrollment),
@@ -119,23 +115,23 @@ impl SessionCleanupCapability {
                     Ok(value) => Ok(value),
                     Err((error, mut returned)) => {
                         let Some(inner) = returned.inner.take() else {
-                            return Err(DeferredRegistryErrorKind::RegistryInvariant);
+                            return Err(RegistryFailure::RegistryInvariant);
                         };
                         *slot = Some(inner);
                         install_error = Some(error);
-                        Err(DeferredRegistryErrorKind::Builder)
+                        Err(RegistryFailure::CleanupInstallerRejected)
                     }
                 }
             },
         );
         match result {
-            Ok(value) => Ok(value),
-            Err(DeferredRegistryErrorKind::SessionClosed) => Err(SessionCleanupInstallError::SessionClosed),
-            Err(DeferredRegistryErrorKind::Builder) => match install_error {
-                Some(error) => Err(SessionCleanupInstallError::Install(error)),
-                None => Err(SessionCleanupInstallError::Invariant),
+            Ok(value) => Ok(SessionCleanupInstallOutcome::Installed(value)),
+            Err(RegistryFailure::SessionClosed) => Ok(SessionCleanupInstallOutcome::SessionClosed),
+            Err(RegistryFailure::CleanupInstallerRejected) => match install_error {
+                Some(error) => Ok(SessionCleanupInstallOutcome::Rejected(error)),
+                None => Err(crate::contract::TransportContractViolation::SessionCleanupInvariant),
             },
-            Err(_) => Err(SessionCleanupInstallError::Invariant),
+            Err(_) => Err(crate::contract::TransportContractViolation::SessionCleanupInvariant),
         }
     }
 }
@@ -282,26 +278,26 @@ impl DeferredSessionCleanupRegistration {
         self.session_id
     }
 
-    pub(crate) fn enroll<T>(
+    pub(in crate::dispatch) fn enroll<T>(
         self,
         key: usize,
         make_target: impl FnOnce() -> Arc<dyn DeferredSessionCleanupTarget>,
-        insert: impl FnOnce(&mut Option<CleanupEnrollment>) -> Result<T, DeferredRegistryErrorKind>,
-    ) -> Result<T, DeferredRegistryErrorKind> {
+        insert: impl FnOnce(&mut Option<CleanupEnrollment>) -> Result<T, RegistryFailure>,
+    ) -> Result<T, RegistryFailure> {
         let mut state = self.coordinator.state.lock();
         if state.lifecycle != CleanupLifecycle::Open {
-            return Err(DeferredRegistryErrorKind::SessionClosed);
+            return Err(RegistryFailure::SessionClosed);
         }
 
         let target = match state.targets.get_mut(&key) {
             Some(record) => {
                 let Some(existing) = record.target.upgrade() else {
-                    return Err(DeferredRegistryErrorKind::RegistryInvariant);
+                    return Err(RegistryFailure::RegistryInvariant);
                 };
                 record.live_enrollments = record
                     .live_enrollments
                     .checked_add(1)
-                    .ok_or(DeferredRegistryErrorKind::RegistryInvariant)?;
+                    .ok_or(RegistryFailure::RegistryInvariant)?;
                 existing
             }
             None => {
@@ -339,7 +335,7 @@ impl DeferredSessionCleanupRegistration {
             Ok(Ok(_)) => {
                 drop(rollback);
                 drop(enrollment);
-                Err(DeferredRegistryErrorKind::RegistryInvariant)
+                Err(RegistryFailure::RegistryInvariant)
             }
             Ok(Err(error)) => {
                 drop(rollback);
@@ -615,6 +611,89 @@ mod tests {
     }
 
     #[test]
+    fn closed_capability_is_source_free_and_never_runs_the_installer() {
+        let owner = DeferredSessionCleanupOwner::new(SessionId::from_session_owner(40));
+        let capability = SessionCleanupCapability::new(owner.registration());
+        assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::Completed);
+        let cleanup_calls = Arc::new(AtomicUsize::new(0));
+        let observed_cleanup = Arc::clone(&cleanup_calls);
+        let installer_calls = Arc::new(AtomicUsize::new(0));
+        let observed_installer = Arc::clone(&installer_calls);
+
+        let outcome = capability
+            .install(
+                move || {
+                    observed_cleanup.fetch_add(1, Ordering::SeqCst);
+                },
+                move |enrollment| {
+                    observed_installer.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, ((), SessionCleanupEnrollment)>(enrollment)
+                },
+            )
+            .expect("closed cleanup installation is a normal outcome");
+
+        assert!(matches!(outcome, SessionCleanupInstallOutcome::SessionClosed));
+        assert_eq!(installer_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(cleanup_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(owner.target_counts(), (0, 0));
+    }
+
+    #[test]
+    fn installer_rejection_returns_the_value_and_rolls_back_private_authority_once() {
+        let owner = DeferredSessionCleanupOwner::new(SessionId::from_session_owner(40_001));
+        let capability = SessionCleanupCapability::new(owner.registration());
+        let cleanup_calls = Arc::new(AtomicUsize::new(0));
+        let observed_cleanup = Arc::clone(&cleanup_calls);
+
+        let outcome = capability
+            .install(
+                move || {
+                    observed_cleanup.fetch_add(1, Ordering::SeqCst);
+                },
+                |enrollment| Err::<(), _>(("installer-rejected", enrollment)),
+            )
+            .expect("installer rejection preserves a normal typed value");
+
+        let SessionCleanupInstallOutcome::Rejected(error) = outcome else {
+            panic!("installer rejection must not expose the private enrollment")
+        };
+        assert_eq!(error, "installer-rejected");
+        assert_eq!(owner.target_counts(), (0, 0));
+        assert_eq!(cleanup_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(owner.close(), DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(cleanup_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn installed_capability_transfers_one_affine_cleanup_until_the_value_drops() {
+        let owner = DeferredSessionCleanupOwner::new(SessionId::from_session_owner(40_002));
+        let capability = SessionCleanupCapability::new(owner.registration());
+        let cleanup_calls = Arc::new(AtomicUsize::new(0));
+        let observed_cleanup = Arc::clone(&cleanup_calls);
+
+        let outcome = capability
+            .install(
+                move || {
+                    observed_cleanup.fetch_add(1, Ordering::SeqCst);
+                },
+                Ok::<_, ((), SessionCleanupEnrollment)>,
+            )
+            .expect("cleanup installation contract");
+        let SessionCleanupInstallOutcome::Installed(enrollment) = outcome else {
+            panic!("open cleanup capability must install")
+        };
+        assert_eq!(owner.target_counts(), (1, 1));
+        let report = owner.close();
+        assert_eq!(report.outcome, DeferredSessionCleanupCloseOutcome::Completed);
+        assert_eq!(report.registered_waiters, 1);
+        assert_eq!(report.removed_waiters, 1);
+        assert_eq!(cleanup_calls.load(Ordering::SeqCst), 1);
+        drop(enrollment);
+        assert_eq!(owner.target_counts(), (0, 0));
+        assert_eq!(cleanup_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn same_key_is_constructed_and_called_once_while_live_counts_remain_affine() {
         let owner = DeferredSessionCleanupOwner::new(SessionId::from_session_owner(41));
         let calls = Arc::new(AtomicUsize::new(0));
@@ -813,13 +892,30 @@ mod tests {
             .with_session_cleanup(owner.registration())
             .into_responder(original);
         let response_state = Arc::clone(responder.response_state());
-        let permit = admission.try_reserve(retained).expect("cleanup panic wait permit");
-        let registration = registry
-            .register(crate::dispatch::DeferredRequest::new(
-                44,
-                crate::dispatch::DeferredParts::new(responder, permit),
-            ))
-            .expect("cleanup panic registry enrollment");
+        let permit = match admission.try_reserve(retained) {
+            crate::dispatch::DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            crate::dispatch::DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
+            | crate::dispatch::DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
+            | crate::dispatch::DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+                panic!("cleanup panic wait permit must be acquired")
+            }
+        };
+        let registration = match registry.register(crate::dispatch::DeferredRequest::new(
+            44,
+            crate::dispatch::DeferredParts::new(responder, permit),
+        )) {
+            crate::dispatch::DeferredRegistryOutcome::Registered(registration) => registration,
+            crate::dispatch::DeferredRegistryOutcome::DuplicateRequest(_)
+            | crate::dispatch::DeferredRegistryOutcome::IdentityExhausted(_)
+            | crate::dispatch::DeferredRegistryOutcome::ParentCancelled
+            | crate::dispatch::DeferredRegistryOutcome::SessionClosed
+            | crate::dispatch::DeferredRegistryOutcome::DeadlineExpired
+            | crate::dispatch::DeferredRegistryOutcome::ContractViolation { .. }
+            | crate::dispatch::DeferredRegistryOutcome::OperationalFailure { .. }
+            | crate::dispatch::DeferredRegistryOutcome::BuilderRejected { .. } => {
+                panic!("cleanup panic registry enrollment must succeed")
+            }
+        };
         registration.commit().expect("cleanup panic registry commit");
         assert_eq!(registry.test_index_counts(), (1, 1, 1));
         assert_eq!(admission.snapshot().waiting_count(), 1);

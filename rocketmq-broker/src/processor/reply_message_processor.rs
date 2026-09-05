@@ -49,7 +49,9 @@ use rocketmq_transport::api::RequestControlView;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ServerRequestCommand;
+use rocketmq_transport::api::ServerRequestOutcome;
 use rocketmq_transport::api::ServerRequestSender;
+use rocketmq_transport::api::TransportError;
 
 use crate::client::manager::producer_manager::ProducerReplySessionRegistry;
 use tracing::info;
@@ -93,8 +95,9 @@ fn push_reply_call_failed_remark(sender_id: &str) -> String {
 
 enum ReplyPushPortError {
     SessionNotFound,
+    Rejected,
     Call {
-        source: rocketmq_transport::api::ServerRequestError,
+        source: TransportError,
     },
     #[cfg(test)]
     TestCall,
@@ -134,14 +137,17 @@ impl ReplyPushPort for BrokerReplyPushPort {
         body: Option<Bytes>,
         timeout_millis: u64,
     ) -> Result<RemotingCommand, ReplyPushPortError> {
-        sender
+        match sender
             .request(
                 ServerRequestCommand::PushReplyMessageToClient { header, body },
                 Duration::from_millis(timeout_millis),
             )
             .await
-            .map(|response| response.into_command())
-            .map_err(|source| ReplyPushPortError::Call { source })
+        {
+            Ok(ServerRequestOutcome::Responded(response)) => Ok(response.into_command()),
+            Ok(_) => Err(ReplyPushPortError::Rejected),
+            Err(source) => Err(ReplyPushPortError::Call { source }),
+        }
     }
 }
 
@@ -624,6 +630,9 @@ async fn push_reply_message<P: ReplyPushPort, M: MessageTrait>(
                 sender_id
             ));
         }
+        Err(ReplyPushPortError::Rejected) => {
+            return PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()));
+        }
         Err(ReplyPushPortError::Call { .. }) => {
             return PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()));
         }
@@ -660,8 +669,11 @@ async fn push_reply_message<P: ReplyPushPort, M: MessageTrait>(
         Err(ReplyPushPortError::SessionNotFound) => {
             PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
         }
+        Err(ReplyPushPortError::Rejected) => {
+            PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
+        }
         Err(ReplyPushPortError::Call { source }) => {
-            warn!(stage = ?source.stage(), kind = ?source.kind(), "typed reply push failed");
+            warn!(code = ?source.code(), condition = ?source.condition(), "typed reply push failed");
             // Use compact error message to reduce allocation
             PushReplyResult::failure(push_reply_call_failed_remark(sender_id.as_str()))
         }

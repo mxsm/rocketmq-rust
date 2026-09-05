@@ -16,9 +16,9 @@
 
 use std::time::Duration;
 
+use crate::contract::TransportContractViolation;
 use crate::dispatch::DeferredRegistration;
 use crate::dispatch::HandlerOutcome;
-use crate::dispatch::HandlerOutcomeContractError;
 use crate::dispatch::IngressRequestView;
 use crate::dispatch::InternalFailureOrigin;
 use crate::dispatch::InternalProcessorCandidate;
@@ -28,8 +28,8 @@ use crate::dispatch::ProtocolNoResponse;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseError;
-use crate::dispatch::ResponseReceipt;
+use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseOperationalFailure;
 use crate::request_ordering::RequestOrdering;
 use crate::runtime::processor::RejectRequestDecision;
 use crate::runtime::processor::RequestProcessor;
@@ -44,14 +44,6 @@ pub(crate) enum EmbeddedResolvedOutcome {
     OneWay,
     Deferred(DeferredRegistration),
     NoReply(ProtocolNoResponse),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum EmbeddedProcessorResolveError {
-    #[error(transparent)]
-    HandlerContract(#[from] HandlerOutcomeContractError),
-    #[error("one-way requests cannot complete with {outcome}")]
-    OneWayContract { outcome: &'static str },
 }
 
 impl<P> ExplicitProcessor<P>
@@ -104,7 +96,7 @@ where
         &self,
         request: &mut RemotingRequest,
         outcome: InternalProcessorOutcome,
-    ) -> Result<EmbeddedResolvedOutcome, EmbeddedProcessorResolveError> {
+    ) -> Result<EmbeddedResolvedOutcome, TransportContractViolation> {
         let InternalProcessorOutcome::Handled(outcome) = outcome;
         if request.original_identity().is_one_way() {
             return match outcome {
@@ -115,11 +107,11 @@ where
                 }
                 HandlerOutcome::Deferred(registration) => {
                     request.consume_oneway_deferred(registration)?;
-                    Err(EmbeddedProcessorResolveError::OneWayContract { outcome: "deferred" })
+                    Err(TransportContractViolation::OneWayDeferredHandlerOutcome)
                 }
                 HandlerOutcome::NoReply(marker) => {
                     request.consume_oneway_no_reply(marker)?;
-                    Err(EmbeddedProcessorResolveError::OneWayContract { outcome: "no_reply" })
+                    Err(TransportContractViolation::OneWayNoReplyHandlerOutcome)
                 }
             };
         }
@@ -137,7 +129,7 @@ where
         body_kind: ResponseBodyKind,
         write_elapsed: Duration,
         end_to_end_elapsed: Duration,
-        result: Result<ResponseReceipt, ResponseError>,
+        result: &Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
     ) {
         self.processor.observe_response(ResponseObservation::from_write_result(
             original.request_id(),

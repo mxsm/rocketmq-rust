@@ -43,8 +43,13 @@ use super::RemotingRequest;
 use super::RemotingResponse;
 use super::RequestProcessor;
 use super::TransportServer;
+use crate::dispatch::DeferredAdmissionAcquireOutcome;
+use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredExpiryMargins;
-use crate::dispatch::DeferredTerminalReason;
+use crate::dispatch::DeferredExpiryOutcome;
+use crate::dispatch::DeferredRegistryOutcome;
+use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResumeOutcome;
 use crate::telemetry::TransportTelemetry;
 
 #[derive(Clone, Copy)]
@@ -101,29 +106,66 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
         self.state
             .saw_owner_deadline
             .store(owner_deadline.is_some(), Ordering::SeqCst);
-        let responder = request
-            .take_deferred_responder()
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let responder = match request.take_deferred_responder() {
+            DeferredResponderOutcome::Taken(responder) => responder,
+            DeferredResponderOutcome::OneWayRequest
+            | DeferredResponderOutcome::Unavailable
+            | DeferredResponderOutcome::AlreadyTaken
+            | DeferredResponderOutcome::OutcomeCompleted => {
+                return Err(RocketMQError::illegal_argument("deferred responder unavailable"));
+            }
+        };
         let retained = DeferredRegistry::<i32>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let permit = self
-            .admission
-            .try_reserve(retained)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let permit = match self.admission.try_reserve(retained) {
+            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
+            | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
+            | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+                return Err(RocketMQError::illegal_argument("deferred admission rejected"));
+            }
+        };
         let now = tokio::time::Instant::now();
         let protocol_at = now + self.policy.protocol_after;
         let scheduled_at = owner_deadline
             .and_then(|deadline| deadline.instant().checked_sub(self.policy.margins.write()))
             .and_then(|write_cutoff| write_cutoff.checked_sub(self.policy.margins.recovery()))
             .map_or(protocol_at, |owner_cutoff| owner_cutoff.min(protocol_at));
-        let parts = DeferredParts::new(responder, permit)
+        let mut parts = DeferredParts::new(responder, permit);
+        match parts
             .try_with_expiry(protocol_at, self.policy.margins)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+            .map_err(|_| RocketMQError::illegal_argument("deferred expiry contract failed"))?
+        {
+            DeferredExpiryOutcome::Attached => {}
+            DeferredExpiryOutcome::AlreadyAttached => {
+                return Err(RocketMQError::illegal_argument("deferred expiry already attached"));
+            }
+            DeferredExpiryOutcome::OwnerBudgetInsufficient => {
+                return Err(RocketMQError::illegal_argument(
+                    "deferred expiry owner budget is insufficient",
+                ));
+            }
+            DeferredExpiryOutcome::ProtocolAlreadyExpired => {
+                return Err(RocketMQError::illegal_argument("deferred protocol expiry elapsed"));
+            }
+            DeferredExpiryOutcome::OwnerAlreadyExpired => {
+                return Err(RocketMQError::illegal_argument("deferred owner deadline elapsed"));
+            }
+        }
         let opaque = request.original_identity().original_opaque();
-        let registration = self
-            .registry
-            .register(DeferredRequest::new(opaque, parts))
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let registration = match self.registry.register(DeferredRequest::new(opaque, parts)) {
+            DeferredRegistryOutcome::Registered(registration) => registration,
+            DeferredRegistryOutcome::DuplicateRequest(_)
+            | DeferredRegistryOutcome::IdentityExhausted(_)
+            | DeferredRegistryOutcome::ParentCancelled
+            | DeferredRegistryOutcome::SessionClosed
+            | DeferredRegistryOutcome::DeadlineExpired
+            | DeferredRegistryOutcome::ContractViolation { .. }
+            | DeferredRegistryOutcome::OperationalFailure { .. } => {
+                return Err(RocketMQError::illegal_argument("deferred registration rejected"));
+            }
+            DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
+        };
         self.registrations
             .send(RegistrationObservation {
                 id: registration.deferred_id(),
@@ -220,9 +262,7 @@ async fn await_commit_barrier(client: &mut crate::connection::Connection, state:
 async fn await_inflight_release(events: &mut tokio::sync::mpsc::Receiver<crate::admission::AdmissionEvent>) {
     loop {
         let event = events.recv().await.expect("admission observer remains open");
-        if event.resource == crate::admission::AdmissionResource::Inflight
-            && event.outcome == crate::admission::AdmissionOutcome::Released
-        {
+        if event.resource == crate::admission::AdmissionResource::Inflight && event.is_release() {
             break;
         }
     }
@@ -258,7 +298,7 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
     assert_eq!(claim.deferred_id(), observed.id);
     assert_eq!(claim.reason(), DeferredWakeReason::Timeout);
     let resumed = Arc::clone(&state);
-    claim
+    let outcome = claim
         .resume(
             DeferredResumeRetainedSize::default(),
             move |opaque, reason| async move {
@@ -274,6 +314,7 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
         )
         .await
         .expect("protocol timeout resumes through the canonical session executor");
+    assert!(matches!(outcome, DeferredResumeOutcome::Completed(_)));
 
     let response = client
         .receive_command()
@@ -373,10 +414,19 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
     let terminals = Arc::clone(&harness.terminals);
     let (mut client, _address, mut running) = start_server(harness.runtime, harness.server).await;
     let observed = send_deferred_request(&mut client, &mut harness.registrations, 9_003).await;
-    let claim = registry
+    let claim = match registry
         .claim(observed.id, DeferredWakeReason::ForcedRefresh)
         .await
-        .expect("claim committed request before service stop");
+        .expect("claim committed request before service stop")
+    {
+        DeferredClaimOutcome::Claimed(claim) => claim,
+        DeferredClaimOutcome::NotFound
+        | DeferredClaimOutcome::AlreadyClaimed
+        | DeferredClaimOutcome::AlreadyCompleted
+        | DeferredClaimOutcome::ParentCancelled
+        | DeferredClaimOutcome::SessionClosed
+        | DeferredClaimOutcome::DeadlineExpired => panic!("committed request is claimable before service stop"),
+    };
     let entered = Arc::new(tokio::sync::Notify::new());
     let never_release = Arc::new(tokio::sync::Notify::new());
     let handler_entered = Arc::clone(&entered);
@@ -397,14 +447,10 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
     }
 
     running.begin_shutdown();
-    let error = (&mut resume)
+    let outcome = (&mut resume)
         .await
-        .expect_err("service stop cannot write a deferred response");
-    assert_eq!(
-        error.prior_terminal_reason(),
-        Some(DeferredTerminalReason::ParentCancelled),
-        "the server task-group cancellation precedes session retirement"
-    );
+        .expect("service stop is a normal cancellation outcome");
+    assert_eq!(outcome, DeferredResumeOutcome::Cancelled);
     running.finish().await;
     let frame = client.receive_command().await;
     assert!(frame.is_none(), "service stop must not emit a response frame");

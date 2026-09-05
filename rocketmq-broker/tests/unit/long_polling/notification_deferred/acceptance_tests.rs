@@ -306,10 +306,13 @@ async fn notification_deferred_tcp_prepare_register_claim_resume_writes_one_fram
             let _ = receipt_tx.send(result);
         })
         .expect("spawn Notification resume");
-    receipt_rx
-        .await
-        .expect("Notification receipt channel")
-        .expect("canonical Notification write");
+    assert!(matches!(
+        receipt_rx
+            .await
+            .expect("Notification receipt channel")
+            .expect("canonical Notification write"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
 
     let response = client
         .receive_command()
@@ -396,10 +399,13 @@ async fn notification_deferred_filter_miss_stays_registered_then_later_match_cla
             let _ = receipt_tx.send(result);
         })
         .expect("spawn filtered Notification resume");
-    receipt_rx
-        .await
-        .expect("filtered Notification receipt channel")
-        .expect("canonical filtered Notification write");
+    assert!(matches!(
+        receipt_rx
+            .await
+            .expect("filtered Notification receipt channel")
+            .expect("canonical filtered Notification write"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
     let response = client
         .receive_command()
         .await

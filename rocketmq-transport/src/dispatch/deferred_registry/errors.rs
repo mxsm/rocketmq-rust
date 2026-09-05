@@ -13,150 +13,70 @@
 // limitations under the License.
 
 use std::convert::Infallible;
-use std::error::Error;
-use std::fmt;
 
 use super::DeferredParts;
+use super::DeferredRegistration;
 use super::DeferredRequest;
-use super::RequestId;
+use crate::contract::TransportContractViolation;
+use crate::error::TransportError;
 
-/// Stable category for transactional registry failures.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum DeferredRegistryErrorKind {
-    /// Checked retained-size accounting overflowed.
-    RetainedSizeOverflow,
-    /// The supplied permit does not cover the registry's mandatory floor.
-    RetainedSizeUnderreported,
-    /// The exact request already has a provisional or active registration.
+pub(in crate::dispatch) enum RegistryFailure {
     DuplicateRequest,
-    /// Process-local deferred identities are permanently exhausted.
     IdentityExhausted,
-    /// The parent lifecycle owner was cancelled.
     ParentCancelled,
-    /// The trusted session lifecycle was closed.
     SessionClosed,
-    /// The immutable request deadline expired at a registration checkpoint.
     DeadlineExpired,
-    /// The caller's business-index builder rejected the request.
-    Builder,
-    /// A sealed registry phase invariant was not satisfied.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "used by the test-only affine cleanup installer")
+    )]
+    CleanupInstallerRejected,
     RegistryInvariant,
 }
 
-impl DeferredRegistryErrorKind {
-    /// Returns a stable low-cardinality label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::RetainedSizeOverflow => "retained_size_overflow",
-            Self::RetainedSizeUnderreported => "retained_size_underreported",
-            Self::DuplicateRequest => "duplicate_request",
-            Self::IdentityExhausted => "identity_exhausted",
-            Self::ParentCancelled => "parent_cancelled",
-            Self::SessionClosed => "session_closed",
-            Self::DeadlineExpired => "deadline_expired",
-            Self::Builder => "builder",
-            Self::RegistryInvariant => "registry_invariant",
-        }
-    }
-}
-
-pub(super) enum RegistryRecovery<R, E> {
+/// Caller-owned state recovered from a deferred registration attempt.
+#[must_use]
+pub enum DeferredRegistryRecovery<R, F = Infallible> {
+    /// The failure consumed no recoverable caller state.
     None,
-    Request(Box<DeferredRequest<R>>),
-    Parts(Box<DeferredParts>),
-    Builder(Box<(E, DeferredParts)>),
+    /// The complete direct-registration request is returned.
+    Request(DeferredRequest<R>),
+    /// The pre-builder response ownership is returned.
+    Parts(DeferredParts),
+    /// An uninvoked builder and its response ownership are returned together.
+    Builder { builder: F, parts: DeferredParts },
 }
 
-/// Typed, redacted failure from a deferred registry transaction.
+/// Result carrier for one ownership-preserving deferred registration attempt.
 ///
-/// Preflight and index failures return the exact request or parts when the
-/// lifecycle remains usable. Builder failures preserve their typed source and
-/// return it together with the original parts. A lifecycle stop consumes all
-/// affine ownership and deliberately exposes no source or recovery value.
-pub struct DeferredRegistryError<R, E = Infallible> {
-    kind: DeferredRegistryErrorKind,
-    request_id: RequestId,
-    recovery: RegistryRecovery<R, E>,
-}
-
-impl<R, E> DeferredRegistryError<R, E> {
-    pub(super) const fn new(
-        kind: DeferredRegistryErrorKind,
-        request_id: RequestId,
-        recovery: RegistryRecovery<R, E>,
-    ) -> Self {
-        Self {
-            kind,
-            request_id,
-            recovery,
-        }
-    }
-
-    /// Returns the stable failure category.
-    #[must_use]
-    pub const fn kind(&self) -> DeferredRegistryErrorKind {
-        self.kind
-    }
-
-    /// Returns the exact request whose registration failed.
-    #[must_use]
-    pub const fn request_id(&self) -> RequestId {
-        self.request_id
-    }
-
-    /// Recovers a complete request when registration received one directly.
-    #[must_use]
-    pub fn into_request(self) -> Option<DeferredRequest<R>> {
-        match self.recovery {
-            RegistryRecovery::Request(request) => Some(*request),
-            RegistryRecovery::None | RegistryRecovery::Parts(_) | RegistryRecovery::Builder(_) => None,
-        }
-    }
-
-    /// Recovers response ownership after a pre-builder failure.
-    #[must_use]
-    pub fn into_parts(self) -> Option<DeferredParts> {
-        match self.recovery {
-            RegistryRecovery::Parts(parts) => Some(*parts),
-            RegistryRecovery::None | RegistryRecovery::Request(_) | RegistryRecovery::Builder(_) => None,
-        }
-    }
-
-    /// Recovers a typed builder failure together with response ownership.
-    #[must_use]
-    pub fn into_builder_failure(self) -> Option<(E, DeferredParts)> {
-        match self.recovery {
-            RegistryRecovery::Builder(builder) => Some(*builder),
-            RegistryRecovery::None | RegistryRecovery::Request(_) | RegistryRecovery::Parts(_) => None,
-        }
-    }
-}
-
-impl<R, E> fmt::Debug for DeferredRegistryError<R, E> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DeferredRegistryError")
-            .field("kind", &self.kind.as_str())
-            .field("request_id", &self.request_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<R, E> fmt::Display for DeferredRegistryError<R, E> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "deferred registry error: {}", self.kind.as_str())
-    }
-}
-
-impl<R, E> Error for DeferredRegistryError<R, E>
-where
-    E: Error + Send + Sync + 'static,
-{
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match &self.recovery {
-            RegistryRecovery::Builder(builder) => Some(&builder.0),
-            RegistryRecovery::None | RegistryRecovery::Request(_) | RegistryRecovery::Parts(_) => None,
-        }
-    }
+/// Normal duplicate and lifecycle branches are source-free. Contract and
+/// operational failure branches remain typed failures and carry the exact
+/// caller-owned state that can be retried or released.
+#[must_use]
+pub enum DeferredRegistryOutcome<R, E = Infallible, F = Infallible> {
+    /// The request was installed provisionally.
+    Registered(DeferredRegistration),
+    /// The request already has provisional or active ownership.
+    DuplicateRequest(DeferredRegistryRecovery<R, F>),
+    /// The bounded deferred identity namespace was exhausted.
+    IdentityExhausted(DeferredRegistryRecovery<R, F>),
+    /// The parent lifecycle ended and response ownership was terminalized.
+    ParentCancelled,
+    /// The session closed and response ownership was terminalized.
+    SessionClosed,
+    /// The immutable owner deadline elapsed and response ownership was terminalized.
+    DeadlineExpired,
+    /// The business-index builder rejected the request and returned its input ownership.
+    BuilderRejected { error: E, parts: DeferredParts },
+    /// A deterministic construction or accounting contract failed.
+    ContractViolation {
+        violation: TransportContractViolation,
+        recovery: DeferredRegistryRecovery<R, F>,
+    },
+    /// An operational registry failure occurred.
+    OperationalFailure {
+        error: TransportError,
+        recovery: DeferredRegistryRecovery<R, F>,
+    },
 }

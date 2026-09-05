@@ -374,7 +374,7 @@ impl BrokerBlockingShutdownError {
 
 async fn await_remoting_server_startup(
     listener: &'static str,
-    receiver: oneshot::Receiver<Result<SocketAddr, rocketmq_transport::api::ServerStartError>>,
+    receiver: oneshot::Receiver<Result<SocketAddr, rocketmq_transport::api::TransportError>>,
     timeout: Duration,
 ) -> Result<SocketAddr, BrokerStartupError> {
     let startup = tokio::time::timeout(timeout, receiver)

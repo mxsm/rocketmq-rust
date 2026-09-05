@@ -74,7 +74,7 @@ async fn admitted_non_oneway_deadline_response_is_observed_without_terminal_fail
     assert_eq!(state.clones.load(Ordering::SeqCst), 0);
     let mut admitted_processor = dispatcher.core.clone_explicit_processor();
 
-    let error = execute_admitted(
+    let outcome = execute_admitted(
         &dispatcher.core,
         &mut admitted_processor,
         builder,
@@ -83,8 +83,8 @@ async fn admitted_non_oneway_deadline_response_is_observed_without_terminal_fail
         false,
     )
     .await
-    .expect_err("expired local handoff must preserve the deadline stop");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::DeadlineExceeded);
+    .expect("expired local handoff is a source-free deadline outcome");
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
     assert_eq!(state.clones.load(Ordering::SeqCst), 1);
     assert_eq!(state.rejects.load(Ordering::SeqCst), 0);
     assert_eq!(state.processes.load(Ordering::SeqCst), 0);
@@ -95,8 +95,8 @@ async fn admitted_non_oneway_deadline_response_is_observed_without_terminal_fail
         assert!(matches!(
             observations[0].outcome(),
             ResponseWriteOutcome::Failed {
-                kind: crate::dispatch::ResponseErrorKind::DeadlineExceeded,
-                ..
+                completion: Some(crate::dispatch::ResponseCompletionOutcome::DeadlineExpired),
+                progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));
     }
@@ -123,11 +123,11 @@ async fn parent_cancellation_wins_an_inflight_processor_and_drains_under_the_exi
     });
     state.entered.notified().await;
     task_group.cancel();
-    let error = dispatch
+    let outcome = dispatch
         .await
         .expect("dispatch join")
-        .expect_err("cancellation must win");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::Cancelled);
+        .expect("cancellation is a normal embedded dispatch outcome");
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::Cancelled));
     assert!(state.observations.lock().expect("observation lock").is_empty());
     fixture.shutdown().await;
 }
@@ -165,8 +165,8 @@ async fn dropping_public_future_closes_terminal_and_session_while_accepted_work_
         assert!(matches!(
             observations[0].outcome(),
             ResponseWriteOutcome::Failed {
-                kind: crate::dispatch::ResponseErrorKind::SessionClosed,
-                ..
+                completion: Some(crate::dispatch::ResponseCompletionOutcome::SessionClosed),
+                progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));
     }
@@ -174,7 +174,7 @@ async fn dropping_public_future_closes_terminal_and_session_while_accepted_work_
 }
 
 #[tokio::test(start_paused = true)]
-async fn terminal_stop_priority_is_cancel_then_session_close_then_deadline_with_one_stable_kind() {
+async fn terminal_stop_priority_is_cancel_then_session_close_then_deadline() {
     let fixture = EmbeddedFixture::new("embedded-stop-priority");
     let deadline_record = EmbeddedSessionRecord::new(91);
     let deadline_meta = RequestMeta::new(Instant::now(), Some(RequestDeadline::after(Duration::from_millis(1))));
@@ -186,11 +186,11 @@ async fn terminal_stop_priority_is_cancel_then_session_close_then_deadline_with_
     let (_deadline_sender, mut deadline_receiver) = terminal();
     deadline_receiver.attach_control(deadline_control, false);
     tokio::time::advance(Duration::from_millis(1)).await;
-    let deadline_error = deadline_receiver
+    let deadline_outcome = deadline_receiver
         .receive()
         .await
-        .expect_err("deadline must stop completion");
-    assert_eq!(deadline_error.kind(), EmbeddedDispatchErrorKind::DeadlineExceeded);
+        .expect("deadline is a source-free terminal outcome");
+    assert!(matches!(deadline_outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
 
     let closed_record = EmbeddedSessionRecord::new(92);
     let closed_meta = RequestMeta::new(Instant::now(), Some(RequestDeadline::after(Duration::ZERO)));
@@ -199,11 +199,11 @@ async fn terminal_stop_priority_is_cancel_then_session_close_then_deadline_with_
     let (_closed_sender, mut closed_receiver) = terminal();
     closed_receiver.attach_control(closed_control, false);
     closed_record.close();
-    let closed_error = closed_receiver
+    let closed_outcome = closed_receiver
         .receive()
         .await
-        .expect_err("session close must beat deadline");
-    assert_eq!(closed_error.kind(), EmbeddedDispatchErrorKind::SessionClosed);
+        .expect("session close is a source-free terminal outcome");
+    assert!(matches!(closed_outcome, EmbeddedDispatchOutcome::SessionClosed));
 
     let cancelled_record = EmbeddedSessionRecord::new(93);
     let cancelled_meta = RequestMeta::new(Instant::now(), Some(RequestDeadline::after(Duration::ZERO)));
@@ -217,12 +217,11 @@ async fn terminal_stop_priority_is_cancel_then_session_close_then_deadline_with_
     cancelled_record.close();
     fixture.task_group.cancel();
 
-    let error = cancelled_receiver
+    let outcome = cancelled_receiver
         .receive()
         .await
-        .expect_err("all terminal stops are active");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::Cancelled);
-    assert_eq!(format!("{error:?}"), "EmbeddedDispatchError { kind: Cancelled, .. }");
+        .expect("parent cancellation is a source-free terminal outcome");
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::Cancelled));
     fixture.shutdown().await;
 }
 
@@ -236,19 +235,21 @@ async fn terminal_distinguishes_an_external_stop_claim_from_receiver_drop() {
     receiver.attach_control(control, false);
 
     fixture.task_group.cancel();
-    let error = receiver
+    let outcome = receiver
         .receive()
         .await
-        .expect_err("parent cancellation must claim the terminal");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::Cancelled);
-    assert!(sender.complete(Err(EmbeddedDispatchError::completion_closed())).is_ok());
+        .expect("parent cancellation must claim the terminal");
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::Cancelled));
+    assert_eq!(
+        sender.complete(Ok(EmbeddedDispatchOutcome::CompletionClosed)),
+        terminal::TerminalPublishOutcome::AlreadyCompleted
+    );
 
     let (sender, receiver) = terminal();
     drop(receiver);
-    let error = sender
-        .complete(Err(EmbeddedDispatchError::cancelled()))
-        .expect_err("receiver drop must close the sole terminal slot");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::CompletionClosed);
-    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(
+        sender.complete(Ok(EmbeddedDispatchOutcome::Cancelled)),
+        terminal::TerminalPublishOutcome::ReceiverDropped
+    );
     fixture.shutdown().await;
 }

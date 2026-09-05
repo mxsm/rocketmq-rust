@@ -42,23 +42,27 @@ fn cancel_and_close_choose_exactly_one_terminal_winner() {
         let close = close.join().expect("close thread");
         let terminal = state.terminal_state().expect("terminal winner");
 
-        assert_eq!(usize::from(cancel.is_ok()) + usize::from(close.is_ok()), 1);
+        assert_eq!(
+            usize::from(cancel == Ok(ResponseStateOutcome::Applied(())))
+                + usize::from(close == Ok(ResponseStateOutcome::Applied(()))),
+            1
+        );
         match terminal {
             ResponseTerminalState::Cancelled => {
-                assert_eq!(cancel, Ok(()));
+                assert_eq!(cancel, Ok(ResponseStateOutcome::Applied(())));
                 assert_eq!(
                     close,
-                    Err(ResponseStateError::AlreadyCompleted {
+                    Ok(ResponseStateOutcome::AlreadyCompleted {
                         state: ResponseTerminalState::Cancelled,
                         reason: Some(DeferredTerminalReason::Explicit),
                     })
                 );
             }
             ResponseTerminalState::Closed => {
-                assert_eq!(close, Ok(()));
+                assert_eq!(close, Ok(ResponseStateOutcome::Applied(())));
                 assert_eq!(
                     cancel,
-                    Err(ResponseStateError::AlreadyCompleted {
+                    Ok(ResponseStateOutcome::AlreadyCompleted {
                         state: ResponseTerminalState::Closed,
                         reason: Some(DeferredTerminalReason::SessionClosed),
                     })
@@ -96,13 +100,38 @@ fn racing_terminal_attempts_record_only_the_atomic_winner() {
         barrier.wait();
         let cancel = cancel.join().expect("cancel thread");
         let close = close.join().expect("close thread");
-        assert_eq!(usize::from(cancel.is_ok()) + usize::from(close.is_ok()), 1);
+        assert_eq!(
+            usize::from(cancel == Ok(ResponseStateOutcome::Applied(())))
+                + usize::from(close == Ok(ResponseStateOutcome::Applied(()))),
+            1
+        );
 
         let reason = state.terminal_reason().expect("one reason wins");
-        assert!(matches!(
-            reason,
-            DeferredTerminalReason::OwnerDeadline | DeferredTerminalReason::SessionClosed
-        ));
+        match reason {
+            DeferredTerminalReason::OwnerDeadline => {
+                assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Cancelled));
+                assert_eq!(cancel, Ok(ResponseStateOutcome::Applied(())));
+                assert_eq!(
+                    close,
+                    Ok(ResponseStateOutcome::AlreadyCompleted {
+                        state: ResponseTerminalState::Cancelled,
+                        reason: Some(DeferredTerminalReason::OwnerDeadline),
+                    })
+                );
+            }
+            DeferredTerminalReason::SessionClosed => {
+                assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Closed));
+                assert_eq!(close, Ok(ResponseStateOutcome::Applied(())));
+                assert_eq!(
+                    cancel,
+                    Ok(ResponseStateOutcome::AlreadyCompleted {
+                        state: ResponseTerminalState::Closed,
+                        reason: Some(DeferredTerminalReason::SessionClosed),
+                    })
+                );
+            }
+            other => panic!("unexpected terminal reason: {other:?}"),
+        }
         assert_eq!(terminals.lock().as_slice(), [("pop_message", reason.as_str())]);
     }
 }
@@ -118,7 +147,7 @@ fn stop_races_retry_across_register_and_claim_progress() {
 fn assert_stop_retries_after_lifecycle_advance(
     close: bool,
     initial: u8,
-    advance: impl FnOnce(&ResponseState) -> Result<(), ResponseStateError>,
+    advance: impl FnOnce(&ResponseState) -> Result<ResponseStateOutcome, TransportContractViolation>,
 ) {
     let state = Arc::new(ResponseState {
         state: std::sync::atomic::AtomicU8::new(initial),
@@ -148,9 +177,12 @@ fn assert_stop_retries_after_lifecycle_advance(
     });
 
     observed.wait();
-    advance(&state).expect("lifecycle state advances before the first stop CAS");
+    expect_applied(
+        advance(&state).expect("lifecycle-advance contract"),
+        "lifecycle state advance before the first stop CAS",
+    );
     resume.wait();
-    assert_eq!(stop.join().expect("stop thread"), Ok(()));
+    assert_eq!(stop.join().expect("stop thread"), Ok(ResponseStateOutcome::Applied(())));
     assert_eq!(
         state.terminal_state(),
         Some(if close {
@@ -196,16 +228,12 @@ fn begin_sending_and_stop_have_one_linearized_owner() {
             };
 
             match send {
-                Ok(claim) => {
+                Ok(ResponseStateOutcome::Applied(claim)) => {
                     assert_eq!(
                         stop,
-                        Err(ResponseStateError::InvalidTransition {
-                            transition: if close {
-                                ResponseTransition::Close
-                            } else {
-                                ResponseTransition::Cancel
-                            },
-                            state: ResponseStateSnapshot::Sending,
+                        Err(TransportContractViolation::DeferredResponseInvalidTransition {
+                            operation: if close { "close" } else { "cancel" },
+                            state: "sending",
                         })
                     );
                     drop(claim);
@@ -216,12 +244,20 @@ fn begin_sending_and_stop_have_one_linearized_owner() {
                         })
                     );
                 }
-                Err(ResponseStateError::AlreadyCompleted { state: winner, .. }) => {
+                Ok(ResponseStateOutcome::AlreadyCompleted { state: winner, reason }) => {
                     assert_eq!(winner, stop_terminal);
-                    assert_eq!(stop, Ok(()));
+                    assert_eq!(
+                        reason,
+                        Some(if close {
+                            DeferredTerminalReason::SessionClosed
+                        } else {
+                            DeferredTerminalReason::Explicit
+                        })
+                    );
+                    assert_eq!(stop, Ok(ResponseStateOutcome::Applied(())));
                     assert_eq!(state.terminal_state(), Some(stop_terminal));
                 }
-                Err(error) => panic!("unexpected begin-sending error: {error:?}"),
+                Err(_) => panic!("begin sending unexpectedly returned a contract violation"),
             }
         }
     }

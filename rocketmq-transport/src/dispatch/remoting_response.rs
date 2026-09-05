@@ -21,10 +21,10 @@ use std::fmt;
 use bytes::Bytes;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
+use crate::contract::TransportContractViolation;
 use crate::file_region::FileRegionSequence;
 
 pub(crate) use binding::BoundResponse;
-pub(crate) use binding::ResponseBindingError;
 
 const MAX_RESPONSE_BODY_LEN: u64 = i32::MAX as u64 - 4;
 
@@ -168,9 +168,9 @@ impl RemotingResponse {
     ///
     /// # Errors
     ///
-    /// Returns [`ResponseBuildError`] when `head` already owns a body, is a
+    /// Returns [`TransportContractViolation`] when `head` already owns a body, is a
     /// request command, or is marked one-way.
-    pub fn command(head: RemotingCommand) -> Result<Self, ResponseBuildError> {
+    pub fn command(head: RemotingCommand) -> Result<Self, TransportContractViolation> {
         Self::validate_head(&head)?;
         Ok(Self::new(head, ResponseBody::Empty, 0, 0))
     }
@@ -181,9 +181,9 @@ impl RemotingResponse {
     ///
     /// # Errors
     ///
-    /// Returns [`ResponseBuildError`] when the head is invalid or the body
+    /// Returns [`TransportContractViolation`] when the head is invalid or the body
     /// exceeds the protocol's absolute representable length.
-    pub fn bytes(head: RemotingCommand, body: Bytes) -> Result<Self, ResponseBuildError> {
+    pub fn bytes(head: RemotingCommand, body: Bytes) -> Result<Self, TransportContractViolation> {
         Self::validate_head(&head)?;
         let body_len = checked_body_len([body.len() as u64])?;
         if body.is_empty() {
@@ -199,9 +199,9 @@ impl RemotingResponse {
     ///
     /// # Errors
     ///
-    /// Returns [`ResponseBuildError`] when the command is not a valid response
+    /// Returns [`TransportContractViolation`] when the command is not a valid response
     /// head or its body exceeds the protocol's representable length.
-    pub fn from_command(mut command: RemotingCommand) -> Result<Self, ResponseBuildError> {
+    pub fn from_command(mut command: RemotingCommand) -> Result<Self, TransportContractViolation> {
         match command.take_body() {
             Some(body) => Self::bytes(command, body),
             None => Self::command(command),
@@ -215,9 +215,9 @@ impl RemotingResponse {
     ///
     /// # Errors
     ///
-    /// Returns [`ResponseBuildError`] when the head is invalid, segment lengths
+    /// Returns [`TransportContractViolation`] when the head is invalid, segment lengths
     /// overflow, or the aggregate body exceeds the protocol's absolute limit.
-    pub fn segments(head: RemotingCommand, body_segments: Vec<Bytes>) -> Result<Self, ResponseBuildError> {
+    pub fn segments(head: RemotingCommand, body_segments: Vec<Bytes>) -> Result<Self, TransportContractViolation> {
         Self::validate_head(&head)?;
         let body_segments = body_segments
             .into_iter()
@@ -243,10 +243,13 @@ impl RemotingResponse {
     ///
     /// # Errors
     ///
-    /// Returns [`ResponseBuildError`] when the head is invalid, the sequence
+    /// Returns [`TransportContractViolation`] when the head is invalid, the sequence
     /// length overflows, or the aggregate body exceeds the protocol's absolute
     /// limit.
-    pub fn file_regions(head: RemotingCommand, regions: FileRegionSequence) -> Result<Self, ResponseBuildError> {
+    pub fn file_regions(
+        head: RemotingCommand,
+        regions: FileRegionSequence,
+    ) -> Result<Self, TransportContractViolation> {
         Self::validate_head(&head)?;
         let body_len = checked_body_len([regions.len()])?;
         let body_part_count = regions.regions().len();
@@ -346,15 +349,15 @@ impl RemotingResponse {
         }
     }
 
-    fn validate_head(head: &RemotingCommand) -> Result<(), ResponseBuildError> {
+    fn validate_head(head: &RemotingCommand) -> Result<(), TransportContractViolation> {
         if head.body().is_some() {
-            return Err(ResponseBuildError::HeadHasBody);
+            return Err(TransportContractViolation::ResponseHeadHasBody);
         }
         if !head.is_response_type() {
-            return Err(ResponseBuildError::RequestHead);
+            return Err(TransportContractViolation::ResponseRequestHead);
         }
         if head.is_oneway_rpc() {
-            return Err(ResponseBuildError::OneWayHead);
+            return Err(TransportContractViolation::ResponseOneWayHead);
         }
         Ok(())
     }
@@ -516,36 +519,7 @@ impl ResponseBody {
     }
 }
 
-/// Failure returned while constructing a [`RemotingResponse`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum ResponseBuildError {
-    /// The supplied response head already owns a body, including an empty one.
-    #[error("remoting response head must not already own a body")]
-    HeadHasBody,
-    /// The supplied head is a request command rather than a response command.
-    #[error("remoting response head must be a response command")]
-    RequestHead,
-    /// The supplied response head is marked one-way.
-    #[error("remoting response head must not be one-way")]
-    OneWayHead,
-    /// Adding body part lengths exceeded the protocol's length representation.
-    #[error("remoting response body length overflowed u64")]
-    BodyLengthOverflow,
-    /// The body exceeds the absolute RocketMQ frame body ceiling.
-    #[error("remoting response body length {actual} exceeds the maximum {MAX_RESPONSE_BODY_LEN}")]
-    BodyTooLarge {
-        /// Aggregate byte length supplied to the constructor.
-        actual: u64,
-    },
-    /// The wire-representable body length does not fit this platform's address space.
-    #[error("remoting response body length {actual} is not representable as usize")]
-    BodyLengthNotRepresentable {
-        /// Aggregate byte length supplied to the constructor.
-        actual: u64,
-    },
-}
-
-fn checked_body_len<I>(lengths: I) -> Result<usize, ResponseBuildError>
+fn checked_body_len<I>(lengths: I) -> Result<usize, TransportContractViolation>
 where
     I: IntoIterator<Item = u64>,
 {
@@ -553,12 +527,16 @@ where
     for len in lengths {
         body_len = body_len
             .checked_add(len)
-            .ok_or(ResponseBuildError::BodyLengthOverflow)?;
+            .ok_or(TransportContractViolation::ResponseBodyLengthOverflow)?;
     }
     if body_len > MAX_RESPONSE_BODY_LEN {
-        return Err(ResponseBuildError::BodyTooLarge { actual: body_len });
+        return Err(TransportContractViolation::ResponseBodyTooLarge {
+            actual: body_len,
+            maximum: MAX_RESPONSE_BODY_LEN,
+        });
     }
-    usize::try_from(body_len).map_err(|_| ResponseBuildError::BodyLengthNotRepresentable { actual: body_len })
+    usize::try_from(body_len)
+        .map_err(|_| TransportContractViolation::ResponseBodyLengthNotRepresentable { actual: body_len })
 }
 
 #[cfg(test)]
@@ -659,7 +637,7 @@ mod tests {
 
         assert!(matches!(
             RemotingResponse::from_command(malformed),
-            Err(ResponseBuildError::RequestHead)
+            Err(TransportContractViolation::ResponseRequestHead)
         ));
     }
 
@@ -704,19 +682,19 @@ mod tests {
         let head_with_empty_body = response_head().set_body(Bytes::new());
         assert!(matches!(
             RemotingResponse::command(head_with_empty_body),
-            Err(ResponseBuildError::HeadHasBody)
+            Err(TransportContractViolation::ResponseHeadHasBody)
         ));
 
         let request_head = RemotingCommand::create_remoting_command(7);
         assert!(matches!(
             RemotingResponse::command(request_head),
-            Err(ResponseBuildError::RequestHead)
+            Err(TransportContractViolation::ResponseRequestHead)
         ));
 
         let one_way_head = response_head().mark_oneway_rpc();
         assert!(matches!(
             RemotingResponse::command(one_way_head),
-            Err(ResponseBuildError::OneWayHead)
+            Err(TransportContractViolation::ResponseOneWayHead)
         ));
     }
 
@@ -732,19 +710,19 @@ mod tests {
         let body_head = response_head().set_body(Bytes::new());
         assert!(matches!(
             RemotingResponse::bytes(body_head, Bytes::from_static(b"body")),
-            Err(ResponseBuildError::HeadHasBody)
+            Err(TransportContractViolation::ResponseHeadHasBody)
         ));
 
         let request_head = RemotingCommand::create_remoting_command(7);
         assert!(matches!(
             RemotingResponse::segments(request_head, vec![Bytes::from_static(b"segment")]),
-            Err(ResponseBuildError::RequestHead)
+            Err(TransportContractViolation::ResponseRequestHead)
         ));
 
         let one_way_head = response_head().mark_oneway_rpc();
         assert!(matches!(
             RemotingResponse::file_regions(one_way_head, file_region_sequence_with_len(1)),
-            Err(ResponseBuildError::OneWayHead)
+            Err(TransportContractViolation::ResponseOneWayHead)
         ));
     }
 
@@ -756,13 +734,14 @@ mod tests {
         );
         assert_eq!(
             checked_body_len([MAX_RESPONSE_BODY_LEN + 1]),
-            Err(ResponseBuildError::BodyTooLarge {
+            Err(TransportContractViolation::ResponseBodyTooLarge {
                 actual: MAX_RESPONSE_BODY_LEN + 1,
+                maximum: MAX_RESPONSE_BODY_LEN,
             })
         );
         assert_eq!(
             checked_body_len([u64::MAX, 1]),
-            Err(ResponseBuildError::BodyLengthOverflow)
+            Err(TransportContractViolation::ResponseBodyLengthOverflow)
         );
     }
 
@@ -773,7 +752,8 @@ mod tests {
 
         assert!(matches!(
             RemotingResponse::file_regions(response_head(), regions),
-            Err(ResponseBuildError::BodyTooLarge { actual }) if actual == body_len
+            Err(TransportContractViolation::ResponseBodyTooLarge { actual, maximum })
+                if actual == body_len && maximum == MAX_RESPONSE_BODY_LEN
         ));
     }
 

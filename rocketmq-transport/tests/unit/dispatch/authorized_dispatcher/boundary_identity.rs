@@ -89,6 +89,66 @@ async fn pre_admission_deadline_and_admission_rejection_record_one_terminal_span
 }
 
 #[tokio::test]
+async fn undelivered_boundary_responses_close_the_session_path_without_an_operational_error() {
+    let limits = AdmissionLimits {
+        queued: crate::admission::ResourceLimit { count: 1, bytes: 1 },
+        control_reserve: crate::admission::ResourceLimit { count: 0, bytes: 0 },
+        ..AdmissionLimits::default()
+    };
+    let mut saturated = DispatchHarness::new_with_limits("dispatch-boundary-response-saturated", limits).await;
+    let (telemetry, saturated_metrics) = TransportTelemetry::with_boundary_metric_capture();
+    let dispatcher = Arc::new(TestAuthorizedDispatcherCore::new_with_telemetry(
+        TestProcessor::new(Behavior::Reply).0,
+        Vec::new(),
+        telemetry,
+    ));
+    let command = request(false);
+    let (session, _) = saturated.request_session(&command);
+    let outcome = dispatcher
+        .dispatch(
+            &saturated.authorized,
+            session,
+            saturated.context(Some(RequestDeadline::after(Duration::ZERO))),
+            command,
+            256,
+            None,
+        )
+        .await
+        .expect("queue saturation is a source-free boundary-response outcome");
+    assert_eq!(outcome, DispatchOutcome::CloseSession);
+    assert_eq!(saturated_metrics.snapshot(), (1, 1, 1, 1));
+    assert_eq!(saturated.admission_controller.snapshot().queued.rejected_count, 1);
+    saturated.assert_no_response_frame().await;
+    saturated.shutdown().await;
+
+    let mut closed = DispatchHarness::new("dispatch-boundary-response-closed").await;
+    let (telemetry, closed_metrics) = TransportTelemetry::with_boundary_metric_capture();
+    let dispatcher = Arc::new(TestAuthorizedDispatcherCore::new_with_telemetry(
+        TestProcessor::new(Behavior::Reply).0,
+        Vec::new(),
+        telemetry,
+    ));
+    let command = request(false);
+    let (session, _) = closed.request_session(&command);
+    session.abort();
+    let outcome = dispatcher
+        .dispatch(
+            &closed.authorized,
+            session,
+            closed.context(Some(RequestDeadline::after(Duration::ZERO))),
+            command,
+            256,
+            None,
+        )
+        .await
+        .expect("closed response ownership is a source-free boundary outcome");
+    assert_eq!(outcome, DispatchOutcome::SessionClosed);
+    assert_eq!(closed_metrics.snapshot(), (1, 1, 1, 1));
+    closed.assert_no_response_frame().await;
+    closed.shutdown().await;
+}
+
+#[tokio::test]
 async fn authorization_denial_records_one_terminal_span_without_clone_hook_or_processor_observation() {
     let security = Arc::new(TransportSecurity::secure_enforced(None, None));
     let mut harness = DispatchHarness::new_with_security("dispatch-auth-denial", security).await;

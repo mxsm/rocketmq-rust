@@ -31,30 +31,33 @@ use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessag
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
-use rocketmq_transport::api::DeferredAdmissionAcquireError;
+use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
-use rocketmq_transport::api::DeferredClaimError;
+use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
-use rocketmq_transport::api::DeferredExpiryErrorKind;
 use rocketmq_transport::api::DeferredExpiryMargins;
+use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryErrorKind;
+use rocketmq_transport::api::DeferredRegistryOutcome;
+use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
-use rocketmq_transport::api::DeferredResumeError;
+use rocketmq_transport::api::DeferredResponderOutcome;
+use rocketmq_transport::api::DeferredResumeOutcome;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
+use rocketmq_transport::api::DeferredResumeSubmitOutcome;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestId;
 use rocketmq_transport::api::RequestOrigin;
-use rocketmq_transport::api::ResponseReceipt;
 use rocketmq_transport::api::SessionId;
-use rocketmq_transport::api::TakeDeferredResponderError;
+use rocketmq_transport::api::TransportContractViolation;
+use rocketmq_transport::api::TransportError;
 
 use super::data::PullHookMetadata;
 use super::data::PullMatchCriteria;
@@ -492,16 +495,16 @@ impl PullDeferredService {
                 drop(reservation);
                 return Err(PullDeferredPrepareError::RetainedSizeOverflow { candidate });
             }
-            Err(PullRetainedSizeError::Admission(source)) => {
+            Err(PullRetainedSizeError::Contract(source)) => {
                 drop(reservation);
-                return Err(PullDeferredPrepareError::Admission { source, candidate });
+                return Err(PullDeferredPrepareError::Contract { source, candidate });
             }
         };
         let permit = match self.admission.try_reserve(retained_size) {
-            Ok(permit) => permit,
-            Err(source) => {
+            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            outcome => {
                 drop(reservation);
-                return Err(PullDeferredPrepareError::Admission { source, candidate });
+                return Err(PullDeferredPrepareError::Admission { outcome, candidate });
             }
         };
         let prepared = PreparedPullRegistration {
@@ -540,12 +543,12 @@ impl PullDeferredService {
             ));
         }
         let responder = match request.take_deferred_responder() {
-            Ok(responder) => responder,
-            Err(source) => {
+            DeferredResponderOutcome::Taken(responder) => responder,
+            outcome => {
                 return Err(PullDeferredRegisterError::pre_take(
                     PullDeferredRegisterErrorKind::Responder,
                     prepared,
-                    Some(source),
+                    Some(outcome),
                 ));
             }
         };
@@ -563,27 +566,40 @@ impl PullDeferredService {
             retained: _,
             provenance: _,
         } = candidate;
-        let parts =
-            match DeferredParts::new(responder, permit).try_with_expiry(deadline.protocol_at(), self.expiry_margins) {
-                Ok(parts) => parts,
-                Err(source) => {
-                    let kind = source.kind();
-                    let request_id = source.request_id();
-                    drop(source.into_parts());
-                    return Err(PullDeferredRegisterError::Expiry { kind, request_id });
-                }
-            };
+        let mut parts = DeferredParts::new(responder, permit);
+        match parts.try_with_expiry(deadline.protocol_at(), self.expiry_margins) {
+            Ok(DeferredExpiryOutcome::Attached) => {}
+            Ok(outcome) => return Err(PullDeferredRegisterError::Expiry { outcome, parts }),
+            Err(violation) => return Err(PullDeferredRegisterError::Contract { violation, parts }),
+        }
         drop(fallback);
         match self.registry.register_with(parts, move |id| {
             let lease = reservation.publish(id, Arc::clone(&criteria));
             Ok::<_, Infallible>(ResumePull::new(request, criteria, deadline, lease))
         }) {
-            Ok(registration) => Ok(registration),
-            Err(source) => {
-                let kind = source.kind();
-                let request_id = source.request_id();
-                drop(source);
-                Err(PullDeferredRegisterError::Registry { kind, request_id })
+            DeferredRegistryOutcome::Registered(registration) => Ok(registration),
+            DeferredRegistryOutcome::DuplicateRequest(recovery) => {
+                release_deferred_registry_recovery(recovery);
+                Err(PullDeferredRegisterError::RegistryRejected)
+            }
+            DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+                release_deferred_registry_recovery(recovery);
+                Err(PullDeferredRegisterError::RegistryIdentityExhausted)
+            }
+            DeferredRegistryOutcome::ParentCancelled
+            | DeferredRegistryOutcome::SessionClosed
+            | DeferredRegistryOutcome::DeadlineExpired => Err(PullDeferredRegisterError::RegistryRejected),
+            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+                drop(parts);
+                match error {}
+            }
+            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+                release_deferred_registry_recovery(recovery);
+                Err(PullDeferredRegisterError::RegistryContract(violation))
+            }
+            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+                release_deferred_registry_recovery(recovery);
+                Err(PullDeferredRegisterError::RegistryOperational(error))
             }
         }
     }
@@ -842,22 +858,30 @@ impl PullDeferredService {
         &self,
         candidate: PullCandidateReservation,
         reason: DeferredWakeReason,
-    ) -> Result<ClaimedDeferred<ResumePull>, DeferredClaimError> {
+    ) -> Result<DeferredClaimOutcome<ResumePull>, TransportError> {
         let id = candidate.id();
-        let mut claimed = self.registry.claim(id, reason).await?;
-        candidate.commit();
-        drop(claimed.resume_data_mut().take_index_lease());
-        Ok(claimed)
+        match self.registry.claim(id, reason).await? {
+            DeferredClaimOutcome::Claimed(mut claimed) => {
+                candidate.commit();
+                drop(claimed.resume_data_mut().take_index_lease());
+                Ok(DeferredClaimOutcome::Claimed(claimed))
+            }
+            outcome => Ok(outcome),
+        }
     }
 
     pub(crate) async fn claim(
         &self,
         id: DeferredId,
         reason: DeferredWakeReason,
-    ) -> Result<ClaimedDeferred<ResumePull>, DeferredClaimError> {
-        let mut claimed = self.registry.claim(id, reason).await?;
-        drop(claimed.resume_data_mut().take_index_lease());
-        Ok(claimed)
+    ) -> Result<DeferredClaimOutcome<ResumePull>, TransportError> {
+        match self.registry.claim(id, reason).await? {
+            DeferredClaimOutcome::Claimed(mut claimed) => {
+                drop(claimed.resume_data_mut().take_index_lease());
+                Ok(DeferredClaimOutcome::Claimed(claimed))
+            }
+            outcome => Ok(outcome),
+        }
     }
 
     pub(crate) fn sweep_expired(&self) -> PullDeferredSweepBatch {
@@ -869,7 +893,7 @@ impl PullDeferredService {
         claimed: ClaimedDeferred<ResumePull>,
         retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<ResponseReceipt, DeferredResumeError>
+    ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
@@ -900,7 +924,7 @@ impl PullDeferredService {
         claimed: ClaimedDeferred<ResumePull>,
         retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<(), DeferredResumeError>
+    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
@@ -1081,12 +1105,12 @@ fn try_retained_size(
             .with_secondary_index_bytes(index_bytes)
             .with_metadata_bytes(candidate.retained.hook_metadata_bytes),
     )
-    .map_err(PullRetainedSizeError::Admission)
+    .map_err(PullRetainedSizeError::Contract)
 }
 
 enum PullRetainedSizeError {
     Overflow,
-    Admission(DeferredAdmissionAcquireError),
+    Contract(TransportContractViolation),
 }
 
 #[must_use]
@@ -1176,6 +1200,7 @@ pub(crate) enum PullDeferredPrepareErrorKind {
     Index,
     RetainedSizeOverflow,
     Admission,
+    Contract,
 }
 
 pub(crate) enum PullDeferredPrepareError {
@@ -1196,7 +1221,11 @@ pub(crate) enum PullDeferredPrepareError {
         candidate: PullSuspensionCandidate,
     },
     Admission {
-        source: DeferredAdmissionAcquireError,
+        outcome: DeferredAdmissionAcquireOutcome,
+        candidate: PullSuspensionCandidate,
+    },
+    Contract {
+        source: TransportContractViolation,
         candidate: PullSuspensionCandidate,
     },
 }
@@ -1218,6 +1247,7 @@ impl PullDeferredPrepareError {
             Self::Index { .. } => PullDeferredPrepareErrorKind::Index,
             Self::RetainedSizeOverflow { .. } => PullDeferredPrepareErrorKind::RetainedSizeOverflow,
             Self::Admission { .. } => PullDeferredPrepareErrorKind::Admission,
+            Self::Contract { .. } => PullDeferredPrepareErrorKind::Contract,
         }
     }
 
@@ -1228,7 +1258,8 @@ impl PullDeferredPrepareError {
             | Self::Deadline { candidate, .. }
             | Self::Index { candidate, .. }
             | Self::RetainedSizeOverflow { candidate }
-            | Self::Admission { candidate, .. } => candidate.into_fallback(),
+            | Self::Admission { candidate, .. }
+            | Self::Contract { candidate, .. } => candidate.into_fallback(),
         }
     }
 }
@@ -1254,8 +1285,8 @@ impl Error for PullDeferredPrepareError {
             Self::Build(source) => Some(source),
             Self::Deadline { source, .. } => Some(source),
             Self::Index { source, .. } => Some(source),
-            Self::Admission { source, .. } => Some(source),
-            Self::Rejected { .. } | Self::RetainedSizeOverflow { .. } => None,
+            Self::Contract { source, .. } => Some(source),
+            Self::Rejected { .. } | Self::RetainedSizeOverflow { .. } | Self::Admission { .. } => None,
         }
     }
 }
@@ -1265,31 +1296,48 @@ pub(crate) enum PullDeferredRegisterErrorKind {
     ServiceClosed,
     ProvenanceMismatch,
     Responder,
-    Expiry(DeferredExpiryErrorKind),
-    Registry(DeferredRegistryErrorKind),
+    Expiry,
+    Registry,
+    Contract,
 }
 
 pub(crate) enum PullDeferredRegisterError {
     PreTake {
         kind: PullDeferredRegisterErrorKind,
         prepared: Box<PreparedPullRegistration>,
-        source: Option<TakeDeferredResponderError>,
+        source: Option<DeferredResponderOutcome>,
     },
     Expiry {
-        kind: DeferredExpiryErrorKind,
-        request_id: RequestId,
+        outcome: DeferredExpiryOutcome,
+        parts: DeferredParts,
     },
-    Registry {
-        kind: DeferredRegistryErrorKind,
-        request_id: RequestId,
+    RegistryRejected,
+    RegistryIdentityExhausted,
+    RegistryContract(TransportContractViolation),
+    RegistryOperational(TransportError),
+    Contract {
+        violation: TransportContractViolation,
+        parts: DeferredParts,
     },
+}
+
+fn release_deferred_registry_recovery<R, F>(recovery: DeferredRegistryRecovery<R, F>) {
+    match recovery {
+        DeferredRegistryRecovery::None => {}
+        DeferredRegistryRecovery::Request(request) => drop(request),
+        DeferredRegistryRecovery::Parts(parts) => drop(parts),
+        DeferredRegistryRecovery::Builder { builder, parts } => {
+            drop(builder);
+            drop(parts);
+        }
+    }
 }
 
 impl PullDeferredRegisterError {
     fn pre_take(
         kind: PullDeferredRegisterErrorKind,
         prepared: PreparedPullRegistration,
-        source: Option<TakeDeferredResponderError>,
+        source: Option<DeferredResponderOutcome>,
     ) -> Self {
         Self::PreTake {
             kind,
@@ -1301,15 +1349,12 @@ impl PullDeferredRegisterError {
     pub(crate) const fn kind(&self) -> PullDeferredRegisterErrorKind {
         match self {
             Self::PreTake { kind, .. } => *kind,
-            Self::Expiry { kind, .. } => PullDeferredRegisterErrorKind::Expiry(*kind),
-            Self::Registry { kind, .. } => PullDeferredRegisterErrorKind::Registry(*kind),
-        }
-    }
-
-    pub(crate) const fn request_id(&self) -> Option<RequestId> {
-        match self {
-            Self::PreTake { .. } => None,
-            Self::Expiry { request_id, .. } | Self::Registry { request_id, .. } => Some(*request_id),
+            Self::Expiry { .. } => PullDeferredRegisterErrorKind::Expiry,
+            Self::RegistryRejected
+            | Self::RegistryIdentityExhausted
+            | Self::RegistryContract(_)
+            | Self::RegistryOperational(_) => PullDeferredRegisterErrorKind::Registry,
+            Self::Contract { .. } => PullDeferredRegisterErrorKind::Contract,
         }
     }
 
@@ -1344,8 +1389,12 @@ impl fmt::Display for PullDeferredRegisterError {
 impl Error for PullDeferredRegisterError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::PreTake { source, .. } => source.as_ref().map(|source| source as &(dyn Error + 'static)),
-            Self::Expiry { .. } | Self::Registry { .. } => None,
+            Self::RegistryContract(violation) => Some(violation),
+            Self::RegistryOperational(error) => Some(error),
+            Self::Contract { violation, .. } => Some(violation),
+            Self::PreTake { .. } | Self::Expiry { .. } | Self::RegistryRejected | Self::RegistryIdentityExhausted => {
+                None
+            }
         }
     }
 }

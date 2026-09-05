@@ -41,6 +41,9 @@ use super::RemotingRequest;
 use super::RemotingResponse;
 use super::RequestProcessor;
 use super::TransportServer;
+use crate::dispatch::DeferredAdmissionAcquireOutcome;
+use crate::dispatch::DeferredRegistryOutcome;
+use crate::dispatch::DeferredResponderOutcome;
 use crate::telemetry::TransportTelemetry;
 
 const REPLY_CODE: i32 = 8_201;
@@ -61,25 +64,46 @@ impl RequestProcessor for ConstructionProbeProcessor {
         match request.command().code() {
             ERROR_CODE => Err(RocketMQError::illegal_argument("mapped processor failure")),
             NO_REPLY_CODE => Ok(HandlerOutcome::NoReply(
-                request.protocol_no_response(ProtocolNoResponseReason::CallbackHandled)?,
+                request
+                    .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
+                    .map_err(|_| RocketMQError::illegal_argument("protocol no-response contract failed"))?,
             )),
             DEFERRED_CODE => {
-                let responder = request
-                    .take_deferred_responder()
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+                let responder = match request.take_deferred_responder() {
+                    DeferredResponderOutcome::Taken(responder) => responder,
+                    DeferredResponderOutcome::OneWayRequest
+                    | DeferredResponderOutcome::Unavailable
+                    | DeferredResponderOutcome::AlreadyTaken
+                    | DeferredResponderOutcome::OutcomeCompleted => {
+                        return Err(RocketMQError::illegal_argument("deferred responder unavailable"));
+                    }
+                };
                 let retained = DeferredRegistry::<i32>::try_retained_size(DeferredRetainedSizeParts::new(0))
                     .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-                let permit = self
-                    .admission
-                    .try_reserve(retained)
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-                let registration = self
-                    .registry
-                    .register(DeferredRequest::new(
-                        request.original_identity().original_opaque(),
-                        DeferredParts::new(responder, permit),
-                    ))
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+                let permit = match self.admission.try_reserve(retained) {
+                    DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+                    DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
+                    | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
+                    | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+                        return Err(RocketMQError::illegal_argument("deferred admission rejected"));
+                    }
+                };
+                let registration = match self.registry.register(DeferredRequest::new(
+                    request.original_identity().original_opaque(),
+                    DeferredParts::new(responder, permit),
+                )) {
+                    DeferredRegistryOutcome::Registered(registration) => registration,
+                    DeferredRegistryOutcome::DuplicateRequest(_)
+                    | DeferredRegistryOutcome::IdentityExhausted(_)
+                    | DeferredRegistryOutcome::ParentCancelled
+                    | DeferredRegistryOutcome::SessionClosed
+                    | DeferredRegistryOutcome::DeadlineExpired
+                    | DeferredRegistryOutcome::ContractViolation { .. }
+                    | DeferredRegistryOutcome::OperationalFailure { .. } => {
+                        return Err(RocketMQError::illegal_argument("deferred registration rejected"));
+                    }
+                    DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
+                };
                 self.registrations
                     .send(registration.deferred_id())
                     .map_err(|_| RocketMQError::illegal_argument("construction registration observer closed"))?;

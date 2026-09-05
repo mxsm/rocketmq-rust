@@ -36,6 +36,15 @@ use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_error::PROTOCOL_HEADER_INVALID;
 use rocketmq_error::PROTOCOL_VERSION_UNSUPPORTED;
 use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
+use rocketmq_error::RUNTIME_BUILD_FAILED;
+use rocketmq_error::RUNTIME_CAPACITY_EXHAUSTED;
+use rocketmq_error::RUNTIME_CONFIGURATION_FAILED;
+use rocketmq_error::RUNTIME_CONTEXT_UNAVAILABLE;
+use rocketmq_error::RUNTIME_INTERNAL_FAILURE;
+use rocketmq_error::RUNTIME_IO_FAILED;
+use rocketmq_error::RUNTIME_OPERATION_TIMED_OUT;
+use rocketmq_error::RUNTIME_OPERATION_UNSUPPORTED;
+use rocketmq_error::RUNTIME_TASK_JOIN_FAILED;
 use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
 use rocketmq_error::STORAGE_CAPACITY_EXHAUSTED;
 use rocketmq_error::STORAGE_INTERNAL_FAILURE;
@@ -50,6 +59,11 @@ use rocketmq_error::STORAGE_STATE_CORRUPTED;
 use rocketmq_error::STORAGE_WRITE_FAILED;
 use rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED;
 use rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT;
+use rocketmq_error::TRANSPORT_DISPATCH_FAILED;
+use rocketmq_error::TRANSPORT_REQUEST_TIMEOUT;
+use rocketmq_error::TRANSPORT_RESPONSE_FAILED;
+use rocketmq_error::TRANSPORT_SESSION_FAILED;
+use rocketmq_error::TRANSPORT_START_FAILED;
 
 #[derive(Debug)]
 struct ExpectedDescriptor {
@@ -157,6 +171,71 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
         grpc_status: GrpcStatusCode::DeadlineExceeded,
         http: HttpStatusCode::GATEWAY_TIMEOUT,
         cli: CliExitCode::TEMPORARY_FAILURE,
+    },
+    ExpectedDescriptor {
+        descriptor: TRANSPORT_REQUEST_TIMEOUT,
+        code: "transport.request.timeout",
+        condition: CanonicalCondition::DeadlineExceeded,
+        public_message: "Transport request timed out",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Backoff,
+        remoting: RemotingResponseCode::SystemBusy,
+        grpc_payload: GrpcPayloadCode::RequestTimeout,
+        grpc_status: GrpcStatusCode::DeadlineExceeded,
+        http: HttpStatusCode::GATEWAY_TIMEOUT,
+        cli: CliExitCode::TEMPORARY_FAILURE,
+    },
+    ExpectedDescriptor {
+        descriptor: TRANSPORT_START_FAILED,
+        code: "transport.start.failed",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Transport server could not be started",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Unavailable,
+        http: HttpStatusCode::SERVICE_UNAVAILABLE,
+        cli: CliExitCode::UNAVAILABLE,
+    },
+    ExpectedDescriptor {
+        descriptor: TRANSPORT_DISPATCH_FAILED,
+        code: "transport.dispatch.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Transport request dispatch failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Internal,
+        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+        cli: CliExitCode::SOFTWARE,
+    },
+    ExpectedDescriptor {
+        descriptor: TRANSPORT_RESPONSE_FAILED,
+        code: "transport.response.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Transport response delivery failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Internal,
+        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+        cli: CliExitCode::SOFTWARE,
+    },
+    ExpectedDescriptor {
+        descriptor: TRANSPORT_SESSION_FAILED,
+        code: "transport.session.failed",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Transport session operation failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Backoff,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Unavailable,
+        http: HttpStatusCode::SERVICE_UNAVAILABLE,
+        cli: CliExitCode::UNAVAILABLE,
     },
     ExpectedDescriptor {
         descriptor: STORAGE_LIFECYCLE_NOT_STARTED,
@@ -340,11 +419,128 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
         http: HttpStatusCode::INTERNAL_SERVER_ERROR,
         cli: CliExitCode::SOFTWARE,
     },
+    ExpectedDescriptor {
+        descriptor: RUNTIME_CONFIGURATION_FAILED,
+        code: "runtime.configuration.failed",
+        condition: CanonicalCondition::InvalidArgument,
+        public_message: "Runtime configuration is invalid",
+        severity: ErrorSeverity::Info,
+        recovery_hint: RecoveryHint::Never,
+        remoting: RemotingResponseCode::InvalidParameter,
+        grpc_payload: GrpcPayloadCode::BadRequest,
+        grpc_status: GrpcStatusCode::InvalidArgument,
+        http: HttpStatusCode::BAD_REQUEST,
+        cli: CliExitCode::USAGE,
+    },
+    ExpectedDescriptor {
+        descriptor: RUNTIME_BUILD_FAILED,
+        code: "runtime.build.failed",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Runtime could not be started",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Unavailable,
+        http: HttpStatusCode::SERVICE_UNAVAILABLE,
+        cli: CliExitCode::UNAVAILABLE,
+    },
+    ExpectedDescriptor {
+        descriptor: RUNTIME_IO_FAILED,
+        code: "runtime.io.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Runtime I/O operation failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Internal,
+        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+        cli: CliExitCode::SOFTWARE,
+    },
+    ExpectedDescriptor {
+        descriptor: RUNTIME_CONTEXT_UNAVAILABLE,
+        code: "runtime.context.unavailable",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Runtime context is unavailable",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Never,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Unavailable,
+        http: HttpStatusCode::SERVICE_UNAVAILABLE,
+        cli: CliExitCode::UNAVAILABLE,
+    },
+    ExpectedDescriptor {
+        descriptor: RUNTIME_CAPACITY_EXHAUSTED,
+        code: "runtime.capacity.exhausted",
+        condition: CanonicalCondition::ResourceExhausted,
+        public_message: "Runtime capacity is exhausted",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Backoff,
+        remoting: RemotingResponseCode::SystemBusy,
+        grpc_payload: GrpcPayloadCode::TooManyRequests,
+        grpc_status: GrpcStatusCode::ResourceExhausted,
+        http: HttpStatusCode::TOO_MANY_REQUESTS,
+        cli: CliExitCode::TEMPORARY_FAILURE,
+    },
+    ExpectedDescriptor {
+        descriptor: RUNTIME_OPERATION_TIMED_OUT,
+        code: "runtime.operation.timed_out",
+        condition: CanonicalCondition::DeadlineExceeded,
+        public_message: "Runtime operation timed out",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Backoff,
+        remoting: RemotingResponseCode::SystemBusy,
+        grpc_payload: GrpcPayloadCode::RequestTimeout,
+        grpc_status: GrpcStatusCode::DeadlineExceeded,
+        http: HttpStatusCode::GATEWAY_TIMEOUT,
+        cli: CliExitCode::TEMPORARY_FAILURE,
+    },
+    ExpectedDescriptor {
+        descriptor: RUNTIME_OPERATION_UNSUPPORTED,
+        code: "runtime.operation.unsupported",
+        condition: CanonicalCondition::Unimplemented,
+        public_message: "Runtime operation is unsupported",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Never,
+        remoting: RemotingResponseCode::RequestCodeNotSupported,
+        grpc_payload: GrpcPayloadCode::Unsupported,
+        grpc_status: GrpcStatusCode::Unimplemented,
+        http: HttpStatusCode::BAD_REQUEST,
+        cli: CliExitCode::USAGE,
+    },
+    ExpectedDescriptor {
+        descriptor: RUNTIME_TASK_JOIN_FAILED,
+        code: "runtime.task.join_failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Runtime task failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Internal,
+        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+        cli: CliExitCode::SOFTWARE,
+    },
+    ExpectedDescriptor {
+        descriptor: RUNTIME_INTERNAL_FAILURE,
+        code: "runtime.internal.failure",
+        condition: CanonicalCondition::Internal,
+        public_message: "Runtime operation failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        remoting: RemotingResponseCode::SystemError,
+        grpc_payload: GrpcPayloadCode::InternalError,
+        grpc_status: GrpcStatusCode::Internal,
+        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+        cli: CliExitCode::SOFTWARE,
+    },
 ];
 
 #[test]
 fn representative_descriptor_table_is_exact() {
-    assert_eq!(EXPECTED_DESCRIPTORS.len(), 21);
+    assert_eq!(EXPECTED_DESCRIPTORS.len(), 35);
     assert_eq!(ALL_DESCRIPTORS.len(), EXPECTED_DESCRIPTORS.len());
 
     for (actual, expected) in ALL_DESCRIPTORS.iter().zip(EXPECTED_DESCRIPTORS) {
@@ -362,6 +558,43 @@ fn representative_descriptor_table_is_exact() {
         assert_eq!(projection.http().status, expected.http, "{}", expected.code);
         assert_eq!(projection.cli().exit_code, expected.cli, "{}", expected.code);
     }
+}
+
+#[test]
+fn transport_convergence_descriptors_are_exact() {
+    let mut matched = 0;
+    for expected in EXPECTED_DESCRIPTORS.iter().filter(|expected| {
+        matches!(
+            expected.code,
+            "transport.request.timeout"
+                | "transport.start.failed"
+                | "transport.dispatch.failed"
+                | "transport.response.failed"
+                | "transport.session.failed"
+        )
+    }) {
+        matched += 1;
+        let actual = descriptor_by_code(expected.code).expect("transport descriptor");
+        assert_eq!(*actual, expected.descriptor, "{}", expected.code);
+        assert_eq!(actual.condition(), expected.condition, "{}", expected.code);
+        assert_eq!(actual.public_message(), expected.public_message, "{}", expected.code);
+        assert_eq!(actual.severity(), expected.severity, "{}", expected.code);
+        assert_eq!(actual.recovery_hint(), expected.recovery_hint, "{}", expected.code);
+
+        let projection = actual.projection();
+        assert_eq!(projection.remoting().code, expected.remoting, "{}", expected.code);
+        assert_eq!(projection.grpc().payload, expected.grpc_payload, "{}", expected.code);
+        assert_eq!(projection.grpc().status, expected.grpc_status, "{}", expected.code);
+        assert_eq!(projection.http().status, expected.http, "{}", expected.code);
+        assert_eq!(projection.cli().exit_code, expected.cli, "{}", expected.code);
+        assert_eq!(
+            actual.fields(),
+            [fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+            "{}",
+            expected.code
+        );
+    }
+    assert_eq!(matched, 5);
 }
 
 #[test]
@@ -423,6 +656,26 @@ fn representative_descriptor_field_schemas_are_exact_and_ordered() {
             vec![fields::TIMEOUT_MS.schema(), fields::REMOTE_ADDR.schema()],
         ),
         (
+            TRANSPORT_REQUEST_TIMEOUT,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (
+            TRANSPORT_START_FAILED,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (
+            TRANSPORT_DISPATCH_FAILED,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (
+            TRANSPORT_RESPONSE_FAILED,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (
+            TRANSPORT_SESSION_FAILED,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (
             STORAGE_STATE_CORRUPTED,
             vec![
                 fields::STORE_OPERATION.schema(),
@@ -434,6 +687,33 @@ fn representative_descriptor_field_schemas_are_exact_and_ordered() {
         (PROTOCOL_VERSION_UNSUPPORTED, vec![fields::ORDINAL.schema()]),
         (
             CORE_INTERNAL_FAILURE,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (
+            RUNTIME_CONFIGURATION_FAILED,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (
+            RUNTIME_BUILD_FAILED,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (
+            RUNTIME_IO_FAILED,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (RUNTIME_CONTEXT_UNAVAILABLE, vec![fields::OPERATION_DIAGNOSTIC.schema()]),
+        (RUNTIME_CAPACITY_EXHAUSTED, vec![fields::OPERATION_DIAGNOSTIC.schema()]),
+        (RUNTIME_OPERATION_TIMED_OUT, vec![fields::OPERATION_DIAGNOSTIC.schema()]),
+        (
+            RUNTIME_OPERATION_UNSUPPORTED,
+            vec![fields::OPERATION_DIAGNOSTIC.schema()],
+        ),
+        (
+            RUNTIME_TASK_JOIN_FAILED,
+            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
+        ),
+        (
+            RUNTIME_INTERNAL_FAILURE,
             vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
         ),
     ];

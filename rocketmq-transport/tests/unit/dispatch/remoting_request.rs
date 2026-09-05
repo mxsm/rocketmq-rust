@@ -33,6 +33,7 @@ use super::super::RequestContext;
 use super::super::RequestOrigin;
 use super::*;
 use crate::connection::ConnectionState;
+use crate::contract::TransportContractViolation;
 use crate::proxy_protocol::ProxyProtocolMetadata;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::session_view::SessionId;
@@ -182,7 +183,7 @@ fn builder(fixture: Fixture) -> RemotingRequestBuilder {
     )
 }
 
-fn build(fixture: Fixture) -> Result<RemotingRequest, RemotingRequestBuildError> {
+fn build(fixture: Fixture) -> Result<RemotingRequest, TransportContractViolation> {
     builder(fixture).build()
 }
 
@@ -304,7 +305,7 @@ async fn builder_rejects_response_and_every_captured_command_fact_mismatch() {
         )
         .build()
         .err(),
-        Some(RemotingRequestBuildError::ResponseCommand)
+        Some(TransportContractViolation::RequestFromResponseCommand)
     );
 
     let (fixture, _session) = network_fixture(runtime.root_group(), 52, None, false);
@@ -320,7 +321,7 @@ async fn builder_rejects_response_and_every_captured_command_fact_mismatch() {
         )
         .build()
         .err(),
-        Some(RemotingRequestBuildError::OriginalCommandMismatch)
+        Some(TransportContractViolation::OriginalCommandMismatch)
     );
 
     let (fixture, _session) = network_fixture(runtime.root_group(), 53, None, false);
@@ -336,7 +337,7 @@ async fn builder_rejects_response_and_every_captured_command_fact_mismatch() {
         )
         .build()
         .err(),
-        Some(RemotingRequestBuildError::OriginalCommandMismatch)
+        Some(TransportContractViolation::OriginalCommandMismatch)
     );
 
     let (fixture, _session) = network_fixture(runtime.root_group(), 54, None, false);
@@ -352,7 +353,7 @@ async fn builder_rejects_response_and_every_captured_command_fact_mismatch() {
         )
         .build()
         .err(),
-        Some(RemotingRequestBuildError::OriginalCommandMismatch)
+        Some(TransportContractViolation::OriginalCommandMismatch)
     );
 
     let (fixture, _session) = network_fixture(runtime.root_group(), 55, None, false);
@@ -367,7 +368,7 @@ async fn builder_rejects_response_and_every_captured_command_fact_mismatch() {
         )
         .build()
         .err(),
-        Some(RemotingRequestBuildError::OriginalCommandMismatch)
+        Some(TransportContractViolation::OriginalCommandMismatch)
     );
 
     let (fixture, _session) = network_fixture(runtime.root_group(), 56, None, false);
@@ -382,7 +383,7 @@ async fn builder_rejects_response_and_every_captured_command_fact_mismatch() {
         )
         .build()
         .err(),
-        Some(RemotingRequestBuildError::OriginalCommandMismatch)
+        Some(TransportContractViolation::OriginalCommandMismatch)
     );
 
     shutdown(runtime).await;
@@ -397,7 +398,7 @@ async fn builder_rejects_owner_and_origin_session_shape_mismatches() {
     fixture.lifecycle = decoy_session.provenance(runtime.root_group(), None);
     assert_eq!(
         build(fixture).err(),
-        Some(RemotingRequestBuildError::SessionOwnerMismatch)
+        Some(TransportContractViolation::SessionOwnerMismatch)
     );
 
     let (mut fixture, _session) = network_fixture(runtime.root_group(), 64, None, false);
@@ -405,7 +406,7 @@ async fn builder_rejects_owner_and_origin_session_shape_mismatches() {
     fixture.lifecycle = RequestLifecycleProvenance::from_embedded_session(&embedded, runtime.root_group());
     assert_eq!(
         build(fixture).err(),
-        Some(RemotingRequestBuildError::NetworkSessionMismatch)
+        Some(TransportContractViolation::NetworkSessionMismatch)
     );
 
     let (mut fixture, _session) = embedded_fixture(runtime.root_group(), 65, None);
@@ -413,7 +414,7 @@ async fn builder_rejects_owner_and_origin_session_shape_mismatches() {
     fixture.lifecycle = network.provenance(runtime.root_group(), None);
     assert_eq!(
         build(fixture).err(),
-        Some(RemotingRequestBuildError::EmbeddedSessionMismatch)
+        Some(TransportContractViolation::EmbeddedSessionMismatch)
     );
 
     shutdown(runtime).await;
@@ -443,7 +444,7 @@ async fn builder_uses_effective_proxy_peer_and_rejects_mismatched_network_peers(
     fixture.lifecycle = mismatched_session.provenance(runtime.root_group(), None);
     assert_eq!(
         build(fixture).err(),
-        Some(RemotingRequestBuildError::NetworkPeerMismatch)
+        Some(TransportContractViolation::NetworkPeerMismatch)
     );
 
     shutdown(runtime).await;
@@ -459,7 +460,7 @@ async fn builder_rejects_embedded_requests_without_authenticated_ingress() {
 
     assert_eq!(
         build(fixture).err(),
-        Some(RemotingRequestBuildError::MissingEmbeddedAuthentication)
+        Some(TransportContractViolation::MissingEmbeddedAuthentication)
     );
 
     shutdown(runtime).await;
@@ -549,7 +550,7 @@ async fn one_way_requests_cannot_reserve_deferred_response_state() {
     let (fixture, _session) = network_fixture(runtime.root_group(), 111, None, true);
     assert_eq!(
         builder(fixture).reserve_deferred_response().build().err(),
-        Some(RemotingRequestBuildError::OneWayDeferredResponse)
+        Some(TransportContractViolation::OneWayDeferredResponse)
     );
 
     let (fixture, _session) = network_fixture(runtime.root_group(), 112, None, false);
@@ -622,7 +623,7 @@ async fn protocol_no_response_factory_rejects_known_mismatches_unknown_codes_and
         let request = build(fixture).expect("ordinary request should build");
         assert!(matches!(
             request.protocol_no_response(reason),
-            Err(ProtocolNoResponseError::Unsupported {
+            Err(TransportContractViolation::ProtocolNoResponseUnsupported {
                 request_code: actual_code,
                 reason: actual_reason,
             }) if actual_code == request_code && actual_reason == reason
@@ -634,11 +635,11 @@ async fn protocol_no_response_factory_rejects_known_mismatches_unknown_codes_and
     let request = build(fixture).expect("one-way request without deferred capability should build");
     assert!(matches!(
         request.protocol_no_response(ProtocolNoResponseReason::CallbackHandled),
-        Err(ProtocolNoResponseError::OneWayRequest)
+        Err(TransportContractViolation::ProtocolNoResponseOneWayRequest)
     ));
     assert!(matches!(
         request.protocol_no_response(ProtocolNoResponseReason::NotificationHandled),
-        Err(ProtocolNoResponseError::OneWayRequest)
+        Err(TransportContractViolation::ProtocolNoResponseOneWayRequest)
     ));
 
     shutdown(runtime).await;

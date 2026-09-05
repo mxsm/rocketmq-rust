@@ -141,11 +141,14 @@ async fn notification_deferred_miss_prefix_beyond_callback_batch_continuation_cl
     service
         .spawn_continuation(running.action_context.task_group(), continuation, handle_claims)
         .expect("spawn miss-prefix continuation");
-    resumed_rx
-        .recv()
-        .await
-        .expect("continuation resumes matching waiter")
-        .expect("matching continuation writes canonically");
+    assert!(matches!(
+        resumed_rx
+            .recv()
+            .await
+            .expect("continuation resumes matching waiter")
+            .expect("matching continuation writes canonically"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
     let response = client
         .receive_command()
         .await
@@ -201,14 +204,17 @@ async fn notification_deferred_properties_absent_matches_and_one_arrival_claims_
     assert!(cursor.is_complete());
     assert_eq!(claims.len(), 2);
     for claim in claims {
-        service
-            .resume_claimed(
-                claim,
-                DeferredResumeRetainedSize::default(),
-                |_resume, _reason| async move { success_plan(true) },
-            )
-            .await
-            .expect("wildcard/exact canonical resume");
+        assert!(matches!(
+            service
+                .resume_claimed(
+                    claim,
+                    DeferredResumeRetainedSize::default(),
+                    |_resume, _reason| async move { success_plan(true) },
+                )
+                .await
+                .expect("wildcard/exact canonical resume"),
+            rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        ));
     }
     let mut opaque = BTreeSet::new();
     for _ in 0..2 {

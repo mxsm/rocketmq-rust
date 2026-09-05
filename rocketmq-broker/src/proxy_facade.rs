@@ -34,7 +34,6 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::Principal;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::api::EmbeddedDispatchErrorKind;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::RequestDeadline;
 
@@ -214,9 +213,10 @@ impl ProxyBrokerFacade {
     ///
     /// # Errors
     ///
-    /// Returns an error when the prepared dispatcher is unavailable, the
-    /// embedded request cannot be admitted or completed, or the response
-    /// deadline elapses.
+    /// Returns an error when the dispatcher is unavailable or an operational
+    /// Transport failure prevents completion. A deadline rejection preserves
+    /// the legacy Broker timeout error; other source-free terminal controls
+    /// retain the fixed response-processing failure mapping.
     pub async fn process_request(
         &self,
         request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
@@ -236,15 +236,21 @@ impl ProxyBrokerFacade {
             .runtime
             .canonical_dispatcher()
             .ok_or_else(embedded_broker_request_processor_not_ready)?;
-        dispatcher
+        let result = dispatcher
             .dispatch_embedded_wait_response(
                 &self.local_request_tasks,
                 Principal::new("broker-proxy"),
                 Some(deadline),
                 request,
             )
-            .await
-            .map_err(|error| embedded_dispatch_request_error(error, deadline.budget()))
+            .await;
+        match result {
+            Ok(outcome) => embedded_dispatch_request_outcome(outcome, deadline.budget()),
+            Err(error) => Err(rocketmq_error::RocketMQError::internal(
+                "embedded_broker_dispatch",
+                error,
+            )),
+        }
     }
 }
 
@@ -252,17 +258,32 @@ fn embedded_broker_request_processor_not_ready() -> rocketmq_error::RocketMQErro
     rocketmq_error::RocketMQError::not_initialized("embedded_broker_request_processor")
 }
 
-fn embedded_dispatch_request_error(
-    error: rocketmq_transport::api::EmbeddedDispatchError,
+fn embedded_dispatch_request_outcome(
+    outcome: EmbeddedDispatchOutcome,
     timeout: Duration,
-) -> rocketmq_error::RocketMQError {
-    if matches!(error.kind(), EmbeddedDispatchErrorKind::DeadlineExceeded) {
-        return rocketmq_error::RocketMQError::Timeout {
+) -> rocketmq_error::RocketMQResult<EmbeddedDispatchOutcome> {
+    match outcome {
+        outcome @ (EmbeddedDispatchOutcome::Reply(_)
+        | EmbeddedDispatchOutcome::OneWay { .. }
+        | EmbeddedDispatchOutcome::Deferred { .. }
+        | EmbeddedDispatchOutcome::NoReply { .. }) => Ok(outcome),
+        EmbeddedDispatchOutcome::DeadlineExceeded => Err(rocketmq_error::RocketMQError::Timeout {
             operation: "embedded_broker_response",
             timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-        };
+        }),
+        EmbeddedDispatchOutcome::AdmissionRejected
+        | EmbeddedDispatchOutcome::Cancelled
+        | EmbeddedDispatchOutcome::SessionClosed
+        | EmbeddedDispatchOutcome::CompletionClosed
+        | EmbeddedDispatchOutcome::IdentityExhausted => Err(embedded_dispatch_source_free_failure()),
+        // `EmbeddedDispatchOutcome` is non-exhaustive; retain the fixed legacy
+        // failure boundary if a future source-free control is introduced.
+        _ => Err(embedded_dispatch_source_free_failure()),
     }
-    rocketmq_error::RocketMQError::response_process_failed("embedded_broker_dispatch", error.to_string())
+}
+
+fn embedded_dispatch_source_free_failure() -> rocketmq_error::RocketMQError {
+    rocketmq_error::RocketMQError::response_process_failed("embedded_broker_dispatch", "transport dispatch failed")
 }
 
 fn build_topic_route(broker_config: &BrokerConfig, topic_config: &TopicConfig) -> TopicRouteData {
@@ -300,5 +321,42 @@ mod tests {
         let error = embedded_broker_request_processor_not_ready();
 
         assert_eq!(error.kind(), ErrorKind::NotInitialized);
+    }
+
+    #[test]
+    fn embedded_dispatch_deadline_preserves_legacy_timeout_mapping() {
+        let error =
+            embedded_dispatch_request_outcome(EmbeddedDispatchOutcome::DeadlineExceeded, Duration::from_millis(41))
+                .expect_err("deadline control must remain a Broker timeout");
+
+        assert!(matches!(
+            error,
+            rocketmq_error::RocketMQError::Timeout {
+                operation: "embedded_broker_response",
+                timeout_ms: 41,
+            }
+        ));
+    }
+
+    #[test]
+    fn embedded_dispatch_source_free_controls_keep_fixed_failure_mapping() {
+        for outcome in [
+            EmbeddedDispatchOutcome::AdmissionRejected,
+            EmbeddedDispatchOutcome::Cancelled,
+            EmbeddedDispatchOutcome::SessionClosed,
+            EmbeddedDispatchOutcome::CompletionClosed,
+            EmbeddedDispatchOutcome::IdentityExhausted,
+        ] {
+            let error = embedded_dispatch_request_outcome(outcome, Duration::ZERO)
+                .expect_err("source-free control must not become an operational error");
+
+            assert!(matches!(
+                error,
+                rocketmq_error::RocketMQError::ResponseProcessFailed {
+                    operation: "embedded_broker_dispatch",
+                    reason,
+                } if reason == "transport dispatch failed"
+            ));
+        }
     }
 }

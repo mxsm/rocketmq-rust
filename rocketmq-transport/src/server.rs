@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -168,8 +169,43 @@ struct SessionCloseCompletionGuard {
 }
 
 struct ServerOutboundAdmission {
-    accepting: AtomicBool,
+    close_cause: AtomicU8,
     active: AtomicUsize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SessionCloseCause {
+    ClientBindingRetired,
+    HeartbeatTimeout,
+    Administrative,
+    ServiceShutdown,
+    SessionEnded,
+    ClientShutdown,
+}
+
+impl SessionCloseCause {
+    const fn code(self) -> u8 {
+        match self {
+            Self::ClientBindingRetired => 1,
+            Self::HeartbeatTimeout => 2,
+            Self::Administrative => 3,
+            Self::ServiceShutdown => 4,
+            Self::SessionEnded => 5,
+            Self::ClientShutdown => 6,
+        }
+    }
+
+    fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::ClientBindingRetired,
+            2 => Self::HeartbeatTimeout,
+            3 => Self::Administrative,
+            4 => Self::ServiceShutdown,
+            5 => Self::SessionEnded,
+            6 => Self::ClientShutdown,
+            _ => unreachable!("session close winner publishes a known cause"),
+        }
+    }
 }
 
 pub(crate) struct ServerOutboundLease {
@@ -179,17 +215,17 @@ pub(crate) struct ServerOutboundLease {
 impl ServerOutboundAdmission {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            accepting: AtomicBool::new(true),
+            close_cause: AtomicU8::new(0),
             active: AtomicUsize::new(0),
         })
     }
 
     fn acquire(self: &Arc<Self>) -> Option<ServerOutboundLease> {
-        if !self.accepting.load(Ordering::Acquire) {
+        if self.close_cause.load(Ordering::Acquire) != 0 {
             return None;
         }
         self.active.fetch_add(1, Ordering::AcqRel);
-        if self.accepting.load(Ordering::Acquire) {
+        if self.close_cause.load(Ordering::Acquire) == 0 {
             Some(ServerOutboundLease {
                 admission: Arc::clone(self),
             })
@@ -199,8 +235,13 @@ impl ServerOutboundAdmission {
         }
     }
 
-    fn close(&self) {
-        self.accepting.store(false, Ordering::Release);
+    fn close(&self, cause: SessionCloseCause) -> (bool, SessionCloseCause) {
+        let initiated = self
+            .close_cause
+            .compare_exchange(0, cause.code(), Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        let winner = SessionCloseCause::from_code(self.close_cause.load(Ordering::Acquire));
+        (initiated, winner)
     }
 
     fn active(&self) -> usize {
@@ -208,7 +249,7 @@ impl ServerOutboundAdmission {
     }
 
     fn is_closed(&self) -> bool {
-        !self.accepting.load(Ordering::Acquire)
+        self.close_cause.load(Ordering::Acquire) != 0
     }
 }
 
@@ -586,7 +627,7 @@ impl SessionHandle {
     }
 
     pub(crate) fn abort(&self) {
-        self.send.server_outbound.close();
+        self.send.server_outbound.close(SessionCloseCause::SessionEnded);
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
@@ -598,7 +639,7 @@ impl SessionHandle {
     /// Cancels both socket halves and waits for the owned writer task to exit.
     /// A stuck writer is force-aborted after the normal retirement deadline.
     pub(crate) async fn terminate(&self) {
-        self.send.server_outbound.close();
+        self.send.server_outbound.close(SessionCloseCause::SessionEnded);
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
@@ -650,14 +691,15 @@ impl SessionHandle {
     /// coordinator terminates without publishing completion.
     #[allow(dead_code, reason = "exposed only through the feature-gated session harness")]
     pub async fn retire(&self) -> rocketmq_error::RocketMQResult<()> {
-        self.request_close();
+        self.request_close(SessionCloseCause::Administrative);
         self.wait_for_close_completion().await.map(|_| ())
     }
 
-    pub(crate) fn request_close(&self) {
-        self.send.server_outbound.close();
+    pub(crate) fn request_close(&self, cause: SessionCloseCause) -> (bool, SessionCloseCause) {
+        let outcome = self.send.server_outbound.close(cause);
         let _ = self.send.session_closed_tx.send(true);
         self.send.reader_cancellation.cancel();
+        outcome
     }
 
     pub(crate) fn acquire_server_outbound(&self, target: &'static str) -> RocketMQResult<ServerOutboundLease> {
@@ -862,7 +904,7 @@ where
         let ordering = self.handler.request_ordering(&command);
         let request_handler = Arc::clone(&self.handler);
         let request_session = session.clone().with_response_class(class);
-        authorized_session
+        match authorized_session
             .dispatch_handler(
                 context,
                 original,
@@ -878,7 +920,10 @@ where
                 },
             )
             .await
-            .is_ok()
+        {
+            Ok(outcome) => outcome.keeps_session_open(),
+            Err(_) => false,
+        }
     }
 
     fn close_pending(&self, _state: &Self::SessionState, _session: SessionHandle) -> DeferredSessionCleanupReport {
@@ -922,6 +967,7 @@ async fn negotiate_transport_connection(
             crate::admission::estimated_handshake_retained_bytes(),
             AdmissionClass::Data,
         )
+        .into_result()
         .ok()?;
     let negotiation =
         tls.negotiate_detected_connection_with_limits(stream, remote_addr, is_tls_handshake, frame_limits);
@@ -1142,7 +1188,7 @@ impl TransportListener {
                 ));
             };
             let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-            let Ok(connection_permit) = admission.try_acquire(
+            let crate::admission::AdmissionOutcome::Acquired(connection_permit) = admission.try_acquire(
                 AdmissionResource::Connection,
                 scope,
                 crate::admission::estimated_connection_retained_bytes(),
@@ -1485,7 +1531,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
     let mut close_completion = SessionCloseCompletionGuard::new(session.clone());
 
     let Some(route_state) = route.connected(session.clone()).await else {
-        session.request_close();
+        session.request_close(SessionCloseCause::SessionEnded);
         executor.begin_close();
         let request_deadline = task_group
             .shutdown_deadline()
@@ -1574,7 +1620,7 @@ async fn run_authorized_framed_session_with_request_sequence<R>(
     // Request dispatchers may still be draining accepted work, but the reader
     // no longer accepts frames. Publish the session-close transition now so
     // read-only views observe shutdown without closing the response writer.
-    session.request_close();
+    session.request_close(SessionCloseCause::SessionEnded);
     executor.begin_close();
     let deferred_cleanup = route.close_pending(&route_state, session.clone());
     let request_deadline = task_group
@@ -2038,12 +2084,14 @@ impl SessionTransportServer {
                     break;
                 };
                 let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
-                let Ok(connection_permit) = server.dispatch.admission_controller().try_acquire(
-                    AdmissionResource::Connection,
-                    scope,
-                    crate::admission::estimated_connection_retained_bytes(),
-                    AdmissionClass::Data,
-                ) else {
+                let crate::admission::AdmissionOutcome::Acquired(connection_permit) =
+                    server.dispatch.admission_controller().try_acquire(
+                        AdmissionResource::Connection,
+                        scope,
+                        crate::admission::estimated_connection_retained_bytes(),
+                        AdmissionClass::Data,
+                    )
+                else {
                     drop(stream);
                     continue;
                 };
@@ -2382,10 +2430,14 @@ mod retirement_tests {
                 }
                 self.release.notified().await;
                 let mut connection = session.connection();
-                connection
-                    .send_response(RemotingCommand::create_response_command_with_code(0).set_opaque(command.opaque()))
-                    .await
-                    .expect("accepted response should still reach the canonical writer");
+                assert!(matches!(
+                    connection
+                        .send_response(
+                            RemotingCommand::create_response_command_with_code(0).set_opaque(command.opaque())
+                        )
+                        .await,
+                    crate::dispatch::ResponseSendOutcome::Written
+                ));
             })
         }
     }

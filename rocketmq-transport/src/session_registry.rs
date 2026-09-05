@@ -42,6 +42,7 @@ use crate::base::pending_request_table::materialize_and_estimate_remoting_comman
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::deadline::RequestDeadline;
+use crate::error::TransportError;
 use crate::server::SessionHandle;
 use crate::session_view::SessionId;
 use crate::session_view::SessionView;
@@ -176,57 +177,38 @@ pub enum SessionCloseReason {
     ServiceShutdown,
 }
 
-/// Failure to enqueue a typed server push on its canonical session.
-#[derive(Debug, thiserror::Error)]
-#[error(" server push failed")]
-pub struct ServerPushError {
-    session_id: SessionId,
-    #[source]
-    source: RocketMQError,
+/// Result of attempting one typed server push.
+#[must_use]
+pub enum ServerPushOutcome {
+    /// The canonical socket write completed.
+    Sent(ServerPushReceipt),
+    /// The bounded writer queue rejected the command before writing.
+    QueueSaturated,
+    /// The immutable deadline elapsed before the first socket write.
+    DeadlineExpired,
+    /// The session no longer accepts server-originated work.
+    SessionClosed,
 }
 
-impl ServerPushError {
-    /// Returns the session that rejected the push.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the transport error reported by the canonical writer.
-    #[must_use]
-    pub const fn source_error(&self) -> &RocketMQError {
-        &self.source
+impl From<SessionCloseReason> for crate::server::SessionCloseCause {
+    fn from(reason: SessionCloseReason) -> Self {
+        match reason {
+            SessionCloseReason::ClientBindingRetired => Self::ClientBindingRetired,
+            SessionCloseReason::HeartbeatTimeout => Self::HeartbeatTimeout,
+            SessionCloseReason::Administrative => Self::Administrative,
+            SessionCloseReason::ServiceShutdown => Self::ServiceShutdown,
+        }
     }
 }
 
-/// Failure to gracefully retire a canonical session.
-#[derive(Debug, thiserror::Error)]
-#[error(" session retirement failed")]
-pub struct SessionCloseError {
-    session_id: SessionId,
-    reason: SessionCloseReason,
-    #[source]
-    source: RocketMQError,
-}
-
-impl SessionCloseError {
-    /// Returns the session whose graceful retirement failed.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the transport error reported by the canonical close owner.
-    #[must_use]
-    pub const fn source_error(&self) -> &RocketMQError {
-        &self.source
-    }
-
-    /// Returns the low-cardinality reason supplied by the close owner.
-    #[must_use]
-    pub const fn reason(&self) -> SessionCloseReason {
-        self.reason
-    }
+/// Result of gracefully retiring one canonical session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub enum SessionCloseOutcome {
+    /// This caller initiated and observed full close completion.
+    Closed,
+    /// A prior caller initiated close; this caller also observed full completion.
+    AlreadyClosed,
 }
 
 /// Narrow sender for explicitly typed server pushes on one canonical session.
@@ -249,25 +231,31 @@ impl ServerPushSender {
     ///
     /// # Errors
     ///
-    /// Returns [`ServerPushError`] when encoding, admission, deadline, or the
-    /// canonical session writer rejects the command.
+    /// Operational encoding and write failures retain their typed source in
+    /// [`TransportError`].
     pub async fn send(
         &self,
         command: ServerPushCommand,
         timeout: Duration,
-    ) -> Result<ServerPushReceipt, ServerPushError> {
+    ) -> Result<ServerPushOutcome, TransportError> {
         let session_id = self.session_id();
         let kind = command.kind();
-        let _outbound_lease = self
-            .session
-            .acquire_server_outbound("server-push")
-            .map_err(|source| ServerPushError { session_id, source })?;
+        let _outbound_lease = match self.session.acquire_server_outbound("server-push") {
+            Ok(lease) => lease,
+            Err(_) => return Ok(ServerPushOutcome::SessionClosed),
+        };
         let mut connection = self.session.connection();
-        connection
+        match connection
             .send_command_with_deadline(command.into_command(), RequestDeadline::after(timeout), "server-push")
             .await
-            .map_err(|source| ServerPushError { session_id, source })?;
-        Ok(ServerPushReceipt { session_id, kind })
+        {
+            Ok(()) => Ok(ServerPushOutcome::Sent(ServerPushReceipt { session_id, kind })),
+            Err(RocketMQError::Network(NetworkError::QueueFull { .. })) => Ok(ServerPushOutcome::QueueSaturated),
+            Err(RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })) => {
+                Ok(ServerPushOutcome::DeadlineExpired)
+            }
+            Err(source) => Err(TransportError::push(source)),
+        }
     }
 }
 
@@ -412,53 +400,17 @@ impl ServerRequestResponse {
     }
 }
 
-/// Low-cardinality stage at which a server request failed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ServerRequestErrorStage {
-    /// Pending-response admission or owner validation.
-    Register,
-    /// Canonical socket write.
-    Write,
-    /// Response correlation, disconnect, or absolute deadline.
-    AwaitResponse,
-}
-
-/// Failure of a typed broker-to-client request.
-#[derive(Debug, thiserror::Error)]
-#[error(" server request failed during {stage:?}")]
-pub struct ServerRequestError {
-    session_id: SessionId,
-    kind: ServerRequestKind,
-    stage: ServerRequestErrorStage,
-    #[source]
-    source: RocketMQError,
-}
-
-impl ServerRequestError {
-    /// Returns the canonical session selected for the request.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the typed request kind that failed.
-    #[must_use]
-    pub const fn kind(&self) -> ServerRequestKind {
-        self.kind
-    }
-
-    /// Returns the low-cardinality failure stage.
-    #[must_use]
-    pub const fn stage(&self) -> ServerRequestErrorStage {
-        self.stage
-    }
-
-    /// Returns the underlying transport failure.
-    #[must_use]
-    pub const fn source_error(&self) -> &RocketMQError {
-        &self.source
-    }
+/// Result of one typed broker-to-client request.
+#[must_use]
+pub enum ServerRequestOutcome {
+    /// The exactly correlated client response was received.
+    Responded(ServerRequestResponse),
+    /// Pending-response or writer capacity was exhausted before writing.
+    QueueSaturated,
+    /// The immutable deadline elapsed before the first socket write.
+    DeadlineExpired,
+    /// The session no longer accepts server-originated work.
+    SessionClosed,
 }
 
 /// Narrow request/response sender for one canonical client session.
@@ -542,39 +494,45 @@ impl ServerRequestSender {
     ///
     /// # Errors
     ///
-    /// Returns [`ServerRequestError`] when the session generation is closed,
-    /// pending admission fails, the canonical write fails, the response is
-    /// dropped, or the absolute deadline expires.
+    /// Operational registration, write, correlation, and response-timeout
+    /// failures retain their typed source in [`TransportError`].
     pub async fn request(
         &self,
         command: ServerRequestCommand,
         timeout: Duration,
-    ) -> Result<ServerRequestResponse, ServerRequestError> {
+    ) -> Result<ServerRequestOutcome, TransportError> {
         let session_id = self.session_id();
         let kind = command.kind();
-        let outbound_lease = self
-            .session
-            .acquire_server_outbound("server-request")
-            .map_err(|source| ServerRequestError {
-                session_id,
-                kind,
-                stage: ServerRequestErrorStage::Register,
-                source,
-            })?;
+        let outbound_lease = match self.session.acquire_server_outbound("server-request") {
+            Ok(lease) => lease,
+            Err(_) => return Ok(ServerRequestOutcome::SessionClosed),
+        };
         let deadline = RequestDeadline::after(timeout);
         let mut command = command.into_command();
         let opaque = command.opaque();
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut command);
         let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
-        let guard = self
-            .response_table
-            .register_for_owner_with_bytes(&self.response_owner, opaque, deadline, retained_bytes, response_tx)
-            .map_err(|source| ServerRequestError {
-                session_id,
-                kind,
-                stage: ServerRequestErrorStage::Register,
-                source,
-            })?;
+        let guard = match self.response_table.register_for_owner_with_bytes(
+            &self.response_owner,
+            opaque,
+            deadline,
+            retained_bytes,
+            response_tx,
+        ) {
+            Ok(guard) => guard,
+            Err(RocketMQError::Network(NetworkError::QueueFull { .. })) => {
+                return Ok(ServerRequestOutcome::QueueSaturated)
+            }
+            Err(RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })) => {
+                return Ok(ServerRequestOutcome::DeadlineExpired)
+            }
+            Err(source) => {
+                return Err(request_transport_error(
+                    crate::error::RequestOperation::Register,
+                    source,
+                ))
+            }
+        };
         let mut connection = self.session.connection();
         let mut fail_closed = ServerRequestFailClosedGuard::new(self);
         fail_closed.arm();
@@ -586,49 +544,53 @@ impl ServerRequestSender {
             if !write_failure_may_have_reached_socket(&source) {
                 fail_closed.complete();
             }
-            return Err(ServerRequestError {
-                session_id,
-                kind,
-                stage: ServerRequestErrorStage::Write,
-                source,
-            });
+            return match source {
+                RocketMQError::Network(NetworkError::QueueFull { .. }) => Ok(ServerRequestOutcome::QueueSaturated),
+                RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. }) => {
+                    Ok(ServerRequestOutcome::DeadlineExpired)
+                }
+                source => Err(request_transport_error(crate::error::RequestOperation::Write, source)),
+            };
         }
 
         let response = match deadline.timeout(&mut response_rx).await {
-            Ok(Ok(result)) => result.map_err(|source| ServerRequestError {
-                session_id,
-                kind,
-                stage: ServerRequestErrorStage::AwaitResponse,
-                source,
-            })?,
+            Ok(Ok(result)) => result
+                .map_err(|source| request_transport_error(crate::error::RequestOperation::AwaitResponse, source))?,
             Ok(Err(_)) => {
-                return Err(ServerRequestError {
-                    session_id,
-                    kind,
-                    stage: ServerRequestErrorStage::AwaitResponse,
-                    source: RocketMQError::network_connection_failed(
+                return Err(TransportError::request_failed(
+                    crate::error::RequestOperation::AwaitResponse,
+                    RocketMQError::network_connection_failed(
                         "server-request",
                         "response correlation owner was dropped",
                     ),
-                })
+                ))
             }
             Err(_) => {
                 let source = guard.expire("server-request");
                 self.session.terminate().await;
-                return Err(ServerRequestError {
-                    session_id,
-                    kind,
-                    stage: ServerRequestErrorStage::AwaitResponse,
+                return Err(TransportError::request_failed(
+                    crate::error::RequestOperation::AwaitResponse,
                     source,
-                });
+                ));
             }
         };
         fail_closed.complete();
-        Ok(ServerRequestResponse {
+        Ok(ServerRequestOutcome::Responded(ServerRequestResponse {
             session_id,
             kind,
             command: response,
-        })
+        }))
+    }
+}
+
+fn request_transport_error(operation: crate::error::RequestOperation, source: RocketMQError) -> TransportError {
+    if matches!(
+        source,
+        RocketMQError::Network(NetworkError::RequestTimeout { .. } | NetworkError::ConnectionTimeout { .. })
+    ) {
+        TransportError::request_timeout(operation, source)
+    } else {
+        TransportError::request_failed(operation, source)
     }
 }
 
@@ -651,22 +613,19 @@ impl SessionCloseHandle {
 
     /// Requests the server-owned ordered close and waits for its full completion.
     ///
-    /// # Errors
-    ///
-    /// Returns [`SessionCloseError`] when deferred cleanup, executor drain, disconnect handling,
-    /// or the canonical writer cannot complete healthily.
-    pub async fn close(&self, reason: SessionCloseReason) -> Result<(), SessionCloseError> {
-        let session_id = self.session_id();
-        self.session.request_close();
+    /// Operational finalization failures retain their typed source in
+    /// [`TransportError`].
+    pub async fn close(&self, reason: SessionCloseReason) -> Result<SessionCloseOutcome, TransportError> {
+        let (initiated, winning_cause) = self.session.request_close(reason.into());
         self.session
             .wait_for_close_completion()
             .await
-            .map(|_| ())
-            .map_err(|source| SessionCloseError {
-                session_id,
-                reason,
-                source,
-            })
+            .map_err(|source| TransportError::close(winning_cause, source))?;
+        Ok(if initiated {
+            SessionCloseOutcome::Closed
+        } else {
+            SessionCloseOutcome::AlreadyClosed
+        })
     }
 
     #[cfg(test)]
@@ -897,6 +856,7 @@ impl Default for SessionRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
     use std::sync::Mutex;
 
     use super::*;
@@ -946,5 +906,69 @@ mod tests {
                 ObservedEvent::Disconnected(view.id()),
             ]
         );
+    }
+
+    #[test]
+    fn request_timeout_classification_preserves_exact_sources_and_private_stages() {
+        let cases = [
+            (
+                crate::error::RequestOperation::Register,
+                "request_register",
+                NetworkError::request_timeout("private-register-endpoint", 10),
+            ),
+            (
+                crate::error::RequestOperation::Write,
+                "request_write",
+                NetworkError::ConnectionTimeout {
+                    addr: "private-write-endpoint".to_owned(),
+                    timeout_ms: 20,
+                },
+            ),
+            (
+                crate::error::RequestOperation::AwaitResponse,
+                "request_await_response",
+                NetworkError::request_timeout("private-await-endpoint", 30),
+            ),
+        ];
+
+        for (operation, expected_operation, source) in cases {
+            let error = request_transport_error(operation, RocketMQError::Network(source));
+            assert_eq!(error.code(), rocketmq_error::TRANSPORT_REQUEST_TIMEOUT.code());
+            let view = error.diagnostic_view().expect("request timeout diagnostic view");
+            assert!(view.fields().any(|field| {
+                field.name() == "operation" && field.value() == rocketmq_error::ViewValueRef::Text(expected_operation)
+            }));
+            assert!(matches!(
+                error.source().and_then(|source| source.downcast_ref::<RocketMQError>()),
+                Some(RocketMQError::Network(
+                    NetworkError::RequestTimeout { .. } | NetworkError::ConnectionTimeout { .. }
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn other_deadline_failures_do_not_widen_the_request_timeout_descriptor() {
+        let sources = [
+            NetworkError::write_timeout("private-write-endpoint", 40),
+            NetworkError::deadline_exceeded_before_send("private-before-send-endpoint"),
+            NetworkError::response_timeout("private-await-endpoint", 50),
+        ];
+
+        for source in sources {
+            let error = request_transport_error(
+                crate::error::RequestOperation::AwaitResponse,
+                RocketMQError::Network(source),
+            );
+            assert_eq!(error.code(), rocketmq_error::TRANSPORT_SESSION_FAILED.code());
+            assert!(matches!(
+                error.source().and_then(|source| source.downcast_ref::<RocketMQError>()),
+                Some(RocketMQError::Network(
+                    NetworkError::WriteTimeout { .. }
+                        | NetworkError::DeadlineExceededBeforeSend { .. }
+                        | NetworkError::ResponseTimeout { .. }
+                ))
+            ));
+        }
     }
 }

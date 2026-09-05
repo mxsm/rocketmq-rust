@@ -21,22 +21,23 @@ use std::sync::Arc;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_transport::api::DeferredAdmissionAcquireError;
-use rocketmq_transport::api::DeferredExpiryError;
-use rocketmq_transport::api::DeferredExpiryErrorKind;
+use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
+use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryError;
-use rocketmq_transport::api::DeferredRegistryErrorKind;
+use rocketmq_transport::api::DeferredRegistryOutcome;
+use rocketmq_transport::api::DeferredRegistryRecovery;
+use rocketmq_transport::api::DeferredResponderOutcome;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
 use rocketmq_transport::api::DeferredWaitPermit;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestId;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::SessionId;
-use rocketmq_transport::api::TakeDeferredResponderError;
+use rocketmq_transport::api::TransportContractViolation;
+use rocketmq_transport::api::TransportError;
 
 use super::data::PopLiteRequestData;
 use super::data::ResumePopLite;
@@ -153,15 +154,15 @@ impl PopLiteDeferredService {
             .with_secondary_index_bytes(index_bytes)
             .with_metadata_bytes(retained.metadata_bytes);
         let retained_size = DeferredRegistry::<ResumePopLite>::try_retained_size(retained_parts)
-            .map_err(PopLiteDeferredPrepareError::Admission)?;
+            .map_err(PopLiteDeferredPrepareError::Contract)?;
         let reservation = self
             .index
             .reserve(request.client_id().clone(), monotonic_now)
             .map_err(PopLiteDeferredPrepareError::Index)?;
-        let permit = self
-            .admission
-            .try_reserve(retained_size)
-            .map_err(PopLiteDeferredPrepareError::Admission)?;
+        let permit = match self.admission.try_reserve(retained_size) {
+            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            outcome => return Err(PopLiteDeferredPrepareError::Admission(outcome)),
+        };
         let prepared = PreparedPopLiteRegistration {
             request,
             deadline,
@@ -189,9 +190,10 @@ impl PopLiteDeferredService {
             return Err(PopLiteDeferredRegisterError::ServiceClosed);
         }
         let client_id = prepared.request.client_id().clone();
-        let responder = request
-            .take_deferred_responder()
-            .map_err(PopLiteDeferredRegisterError::Responder)?;
+        let responder = match request.take_deferred_responder() {
+            DeferredResponderOutcome::Taken(responder) => responder,
+            outcome => return Err(PopLiteDeferredRegisterError::Responder(outcome)),
+        };
         #[cfg(test)]
         self.wait_register_after_take_hook();
         if self.closed.load(Ordering::Acquire) {
@@ -214,16 +216,41 @@ impl PopLiteDeferredService {
         };
         #[cfg(not(test))]
         let protocol_at = deadline.protocol_at();
-        let parts = DeferredParts::new(responder, permit)
-            .try_with_expiry(protocol_at, self.expiry_margins)
-            .map_err(PopLiteDeferredRegisterError::Expiry)?;
-        let registration = self
-            .registry
-            .register_with(parts, move |id| {
-                let index_lease = reservation.publish(id, deadline);
-                Ok::<_, Infallible>(ResumePopLite::new(request, deadline, index_lease))
-            })
-            .map_err(PopLiteDeferredRegisterError::Registry)?;
+        let mut parts = DeferredParts::new(responder, permit);
+        match parts.try_with_expiry(protocol_at, self.expiry_margins) {
+            Ok(DeferredExpiryOutcome::Attached) => {}
+            Ok(outcome) => return Err(PopLiteDeferredRegisterError::Expiry { outcome, parts }),
+            Err(violation) => return Err(PopLiteDeferredRegisterError::Contract { violation, parts }),
+        }
+        let registration = match self.registry.register_with(parts, move |id| {
+            let index_lease = reservation.publish(id, deadline);
+            Ok::<_, Infallible>(ResumePopLite::new(request, deadline, index_lease))
+        }) {
+            DeferredRegistryOutcome::Registered(registration) => registration,
+            DeferredRegistryOutcome::DuplicateRequest(recovery) => {
+                release_deferred_registry_recovery(recovery);
+                return Err(PopLiteDeferredRegisterError::RegistryRejected);
+            }
+            DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+                release_deferred_registry_recovery(recovery);
+                return Err(PopLiteDeferredRegisterError::RegistryIdentityExhausted);
+            }
+            DeferredRegistryOutcome::ParentCancelled
+            | DeferredRegistryOutcome::SessionClosed
+            | DeferredRegistryOutcome::DeadlineExpired => return Err(PopLiteDeferredRegisterError::RegistryRejected),
+            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+                drop(parts);
+                match error {}
+            }
+            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+                release_deferred_registry_recovery(recovery);
+                return Err(PopLiteDeferredRegisterError::RegistryContract(violation));
+            }
+            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+                release_deferred_registry_recovery(recovery);
+                return Err(PopLiteDeferredRegisterError::RegistryOperational(error));
+            }
+        };
         drop(_observation);
         self.observe_pending_event(&client_id);
         Ok(registration)
@@ -249,6 +276,7 @@ pub(crate) enum PopLiteDeferredPrepareErrorKind {
     RetainedSizeOverflow,
     Index(PopLiteIndexErrorKind),
     Admission,
+    Contract,
 }
 
 pub(crate) enum PopLiteDeferredPrepareError {
@@ -261,7 +289,8 @@ pub(crate) enum PopLiteDeferredPrepareError {
     Deadline(PopLiteWaitDeadlineError),
     RetainedSizeOverflow,
     Index(PopLiteIndexError),
-    Admission(DeferredAdmissionAcquireError),
+    Admission(DeferredAdmissionAcquireOutcome),
+    Contract(TransportContractViolation),
 }
 
 impl PopLiteDeferredPrepareError {
@@ -277,6 +306,7 @@ impl PopLiteDeferredPrepareError {
             Self::RetainedSizeOverflow => PopLiteDeferredPrepareErrorKind::RetainedSizeOverflow,
             Self::Index(source) => PopLiteDeferredPrepareErrorKind::Index(source.kind()),
             Self::Admission(_) => PopLiteDeferredPrepareErrorKind::Admission,
+            Self::Contract(_) => PopLiteDeferredPrepareErrorKind::Contract,
         }
     }
 }
@@ -304,17 +334,40 @@ pub(crate) enum PopLiteDeferredRegisterErrorKind {
     ServiceClosedAfterTake,
     ProvenanceMismatch,
     Responder,
-    Expiry(DeferredExpiryErrorKind),
-    Registry(DeferredRegistryErrorKind),
+    Expiry,
+    Registry,
+    Contract,
 }
 
 pub(crate) enum PopLiteDeferredRegisterError {
     ServiceClosed,
     ServiceClosedAfterTake,
     ProvenanceMismatch,
-    Responder(TakeDeferredResponderError),
-    Expiry(DeferredExpiryError),
-    Registry(DeferredRegistryError<ResumePopLite, Infallible>),
+    Responder(DeferredResponderOutcome),
+    Expiry {
+        outcome: DeferredExpiryOutcome,
+        parts: DeferredParts,
+    },
+    RegistryRejected,
+    RegistryIdentityExhausted,
+    RegistryContract(TransportContractViolation),
+    RegistryOperational(TransportError),
+    Contract {
+        violation: TransportContractViolation,
+        parts: DeferredParts,
+    },
+}
+
+fn release_deferred_registry_recovery<R, F>(recovery: DeferredRegistryRecovery<R, F>) {
+    match recovery {
+        DeferredRegistryRecovery::None => {}
+        DeferredRegistryRecovery::Request(request) => drop(request),
+        DeferredRegistryRecovery::Parts(parts) => drop(parts),
+        DeferredRegistryRecovery::Builder { builder, parts } => {
+            drop(builder);
+            drop(parts);
+        }
+    }
 }
 
 impl PopLiteDeferredRegisterError {
@@ -324,8 +377,12 @@ impl PopLiteDeferredRegisterError {
             Self::ServiceClosedAfterTake => PopLiteDeferredRegisterErrorKind::ServiceClosedAfterTake,
             Self::ProvenanceMismatch => PopLiteDeferredRegisterErrorKind::ProvenanceMismatch,
             Self::Responder(_) => PopLiteDeferredRegisterErrorKind::Responder,
-            Self::Expiry(source) => PopLiteDeferredRegisterErrorKind::Expiry(source.kind()),
-            Self::Registry(source) => PopLiteDeferredRegisterErrorKind::Registry(source.kind()),
+            Self::Expiry { .. } => PopLiteDeferredRegisterErrorKind::Expiry,
+            Self::RegistryRejected
+            | Self::RegistryIdentityExhausted
+            | Self::RegistryContract(_)
+            | Self::RegistryOperational(_) => PopLiteDeferredRegisterErrorKind::Registry,
+            Self::Contract { .. } => PopLiteDeferredRegisterErrorKind::Contract,
         }
     }
 }
@@ -345,4 +402,19 @@ impl fmt::Display for PopLiteDeferredRegisterError {
     }
 }
 
-impl Error for PopLiteDeferredRegisterError {}
+impl Error for PopLiteDeferredRegisterError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::RegistryContract(violation) => Some(violation),
+            Self::RegistryOperational(error) => Some(error),
+            Self::Contract { violation, .. } => Some(violation),
+            Self::ServiceClosed
+            | Self::ServiceClosedAfterTake
+            | Self::ProvenanceMismatch
+            | Self::Responder(_)
+            | Self::Expiry { .. }
+            | Self::RegistryRejected
+            | Self::RegistryIdentityExhausted => None,
+        }
+    }
+}

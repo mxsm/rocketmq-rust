@@ -14,7 +14,6 @@
 
 //! Affine ownership of one deferred response.
 
-use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
@@ -27,36 +26,77 @@ use super::OriginalRequestIdentity;
 use super::RemotingResponse;
 use super::RequestControlView;
 use super::RequestId;
-use super::ResponseBindingError;
-use super::ResponseError;
-use super::ResponseErrorKind;
+use super::ResponseCompletionOutcome;
 use super::ResponseReceipt;
 use super::ResponseSink;
 use super::ResponseState;
-use super::ResponseStateError;
-use super::ResponseTerminalState;
+use super::ResponseStateOutcome;
 use super::WriteProgress;
 use crate::admission::AdmissionClass;
+use crate::contract::TransportContractViolation;
 use crate::request_ordering::RequestOrdering;
 use crate::session_executor::DeferredResumeExecutor;
 use crate::session_view::SessionId;
 use crate::telemetry::TransportTelemetry;
 
-/// Stable reason that a request cannot transfer its deferred response right.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum TakeDeferredResponderError {
+/// Result of transferring a request's affine deferred response right.
+#[must_use]
+pub enum DeferredResponderOutcome {
+    /// The deferred response right was transferred.
+    Taken(DeferredResponder),
     /// One-way ingress can never produce a response.
-    #[error("one-way requests cannot take a deferred responder")]
     OneWayRequest,
     /// This transport path has no durable deferred response owner.
-    #[error("a deferred responder is unavailable for this request")]
     Unavailable,
     /// The request already transferred its deferred response right.
-    #[error("the deferred responder was already taken")]
     AlreadyTaken,
     /// The handler outcome already consumed the response contract.
-    #[error("the request outcome was already completed")]
     OutcomeCompleted,
+}
+
+/// Result of consuming a deferred response capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub enum DeferredResponseOutcome {
+    /// Canonical response delivery completed.
+    Completed(ResponseReceipt),
+    /// Another terminal operation already completed the response.
+    AlreadyCompleted,
+    /// The response deadline elapsed before writing.
+    DeadlineExceeded,
+    /// The request owner cancelled the response.
+    Cancelled,
+    /// The canonical response session closed.
+    SessionClosed,
+    /// The bounded response queue rejected the response.
+    QueueSaturated,
+}
+
+/// Internal response result retaining the terminal winner needed by resume.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeferredResponseAttempt {
+    Completed(ResponseReceipt),
+    AlreadyCompleted {
+        state: super::ResponseTerminalState,
+        reason: Option<DeferredTerminalReason>,
+    },
+    DeadlineExceeded,
+    Cancelled,
+    SessionClosed,
+    QueueSaturated,
+}
+
+impl DeferredResponseAttempt {
+    const fn public_outcome(self) -> DeferredResponseOutcome {
+        match self {
+            Self::Completed(receipt) => DeferredResponseOutcome::Completed(receipt),
+            Self::AlreadyCompleted { .. } => DeferredResponseOutcome::AlreadyCompleted,
+            Self::DeadlineExceeded => DeferredResponseOutcome::DeadlineExceeded,
+            Self::Cancelled => DeferredResponseOutcome::Cancelled,
+            Self::SessionClosed => DeferredResponseOutcome::SessionClosed,
+            Self::QueueSaturated => DeferredResponseOutcome::QueueSaturated,
+        }
+    }
 }
 
 /// Caller-owned reason for cancelling a deferred response capability.
@@ -68,194 +108,6 @@ pub enum TakeDeferredResponderError {
 pub enum DeferredCancellationReason {
     /// The caller can prove that its response receiver was dropped.
     ReceiverDropped,
-}
-
-/// Stable category for a deferred response failure.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum DeferredResponseErrorKind {
-    /// A prior terminal operation already completed this response.
-    AlreadyCompleted,
-    /// The attempted operation was invalid for a non-terminal state.
-    InvalidTransition,
-    /// Immutable request binding rejected the remoting response.
-    Binding,
-    /// The immutable response deadline elapsed before completion.
-    DeadlineExceeded,
-    /// The request owner cancelled the response.
-    Cancelled,
-    /// The canonical response session closed.
-    SessionClosed,
-    /// The bounded canonical queue rejected the response.
-    QueueSaturated,
-    /// Canonical response encoding failed.
-    Encode,
-    /// The canonical response transport failed.
-    Transport,
-}
-
-impl DeferredResponseErrorKind {
-    /// Returns the stable low-cardinality category label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::AlreadyCompleted => "already_completed",
-            Self::InvalidTransition => "invalid_transition",
-            Self::Binding => "binding",
-            Self::DeadlineExceeded => "deadline_exceeded",
-            Self::Cancelled => "cancelled",
-            Self::SessionClosed => "session_closed",
-            Self::QueueSaturated => "queue_saturated",
-            Self::Encode => "encode",
-            Self::Transport => "transport",
-        }
-    }
-}
-
-enum DeferredResponseErrorSource {
-    State(ResponseStateError),
-    Binding(ResponseBindingError),
-    Response(ResponseError),
-}
-
-/// Typed, redacted failure from consuming a [`DeferredResponder`].
-///
-/// Display and Debug expose only stable lifecycle metadata. The original typed
-/// cause remains available through [`Error::source`] without formatting request
-/// bodies, commands, principals, tokens, opaque values, or session details.
-pub struct DeferredResponseError {
-    source: DeferredResponseErrorSource,
-}
-
-impl DeferredResponseError {
-    pub(crate) const fn from_state(source: ResponseStateError) -> Self {
-        Self {
-            source: DeferredResponseErrorSource::State(source),
-        }
-    }
-
-    pub(crate) const fn from_binding(source: ResponseBindingError) -> Self {
-        Self {
-            source: DeferredResponseErrorSource::Binding(source),
-        }
-    }
-
-    pub(crate) const fn from_response(source: ResponseError) -> Self {
-        Self {
-            source: DeferredResponseErrorSource::Response(source),
-        }
-    }
-
-    /// Returns this error's stable low-cardinality category.
-    #[must_use]
-    pub const fn kind(&self) -> DeferredResponseErrorKind {
-        match &self.source {
-            DeferredResponseErrorSource::State(ResponseStateError::AlreadyCompleted { .. })
-            | DeferredResponseErrorSource::Response(ResponseError::AlreadyCompleted { .. }) => {
-                DeferredResponseErrorKind::AlreadyCompleted
-            }
-            DeferredResponseErrorSource::State(ResponseStateError::InvalidTransition { .. }) => {
-                DeferredResponseErrorKind::InvalidTransition
-            }
-            DeferredResponseErrorSource::Binding(_) => DeferredResponseErrorKind::Binding,
-            DeferredResponseErrorSource::Response(error) => match error.kind() {
-                ResponseErrorKind::AlreadyCompleted => DeferredResponseErrorKind::AlreadyCompleted,
-                ResponseErrorKind::DeadlineExceeded => DeferredResponseErrorKind::DeadlineExceeded,
-                ResponseErrorKind::Cancelled => DeferredResponseErrorKind::Cancelled,
-                ResponseErrorKind::SessionClosed => DeferredResponseErrorKind::SessionClosed,
-                ResponseErrorKind::QueueSaturated => DeferredResponseErrorKind::QueueSaturated,
-                ResponseErrorKind::Encode => DeferredResponseErrorKind::Encode,
-                ResponseErrorKind::Transport => DeferredResponseErrorKind::Transport,
-            },
-        }
-    }
-
-    /// Returns the exact write progress associated with this failure.
-    #[must_use]
-    pub const fn write_progress(&self) -> Option<WriteProgress> {
-        match &self.source {
-            DeferredResponseErrorSource::State(ResponseStateError::AlreadyCompleted { .. })
-            | DeferredResponseErrorSource::Response(ResponseError::AlreadyCompleted { .. }) => None,
-            DeferredResponseErrorSource::State(ResponseStateError::InvalidTransition { .. })
-            | DeferredResponseErrorSource::Binding(_) => Some(WriteProgress::NotStarted),
-            DeferredResponseErrorSource::Response(error) => error.write_progress(),
-        }
-    }
-
-    /// Returns whether response policy may consider retrying this failure.
-    #[must_use]
-    pub const fn retryable(&self) -> bool {
-        match &self.source {
-            DeferredResponseErrorSource::Response(error) => error.retryable(),
-            DeferredResponseErrorSource::State(_) | DeferredResponseErrorSource::Binding(_) => false,
-        }
-    }
-
-    /// Returns the exact prior terminal winner reported by a duplicate operation.
-    #[must_use]
-    pub const fn prior_terminal_state(&self) -> Option<ResponseTerminalState> {
-        match &self.source {
-            DeferredResponseErrorSource::State(ResponseStateError::AlreadyCompleted { state, .. })
-            | DeferredResponseErrorSource::Response(ResponseError::AlreadyCompleted { state }) => Some(*state),
-            DeferredResponseErrorSource::State(ResponseStateError::InvalidTransition { .. })
-            | DeferredResponseErrorSource::Binding(_)
-            | DeferredResponseErrorSource::Response(_) => None,
-        }
-    }
-
-    /// Returns the exact deferred terminal reason reported by a duplicate operation.
-    #[must_use]
-    pub const fn prior_terminal_reason(&self) -> Option<DeferredTerminalReason> {
-        match &self.source {
-            DeferredResponseErrorSource::State(ResponseStateError::AlreadyCompleted { reason, .. }) => *reason,
-            DeferredResponseErrorSource::State(ResponseStateError::InvalidTransition { .. })
-            | DeferredResponseErrorSource::Binding(_)
-            | DeferredResponseErrorSource::Response(_) => None,
-        }
-    }
-}
-
-impl fmt::Debug for DeferredResponseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DeferredResponseError")
-            .field("kind", &self.kind().as_str())
-            .field("write_progress", &self.write_progress().map(WriteProgress::as_str))
-            .field(
-                "prior_terminal_state",
-                &self.prior_terminal_state().map(ResponseTerminalState::as_str),
-            )
-            .field(
-                "prior_terminal_reason",
-                &self.prior_terminal_reason().map(DeferredTerminalReason::as_str),
-            )
-            .finish()
-    }
-}
-
-impl fmt::Display for DeferredResponseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "deferred response error: {}", self.kind().as_str())?;
-        if let Some(progress) = self.write_progress() {
-            write!(formatter, " (progress={})", progress.as_str())?;
-        }
-        if let Some(state) = self.prior_terminal_state() {
-            write!(formatter, " (prior_terminal={})", state.as_str())?;
-        }
-        if let Some(reason) = self.prior_terminal_reason() {
-            write!(formatter, " (terminal_reason={})", reason.as_str())?;
-        }
-        Ok(())
-    }
-}
-
-impl Error for DeferredResponseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(match &self.source {
-            DeferredResponseErrorSource::State(source) => source,
-            DeferredResponseErrorSource::Binding(source) => source,
-            DeferredResponseErrorSource::Response(source) => source,
-        })
-    }
 }
 
 /// Trusted seed that retains the one canonical response sink and its composition telemetry.
@@ -330,7 +182,7 @@ impl DeferredResponseSeed {
             sink: Some(self.sink),
             state,
             session_id: self.session_id,
-            control: self.control,
+            control: Box::new(self.control),
             resume: self.resume,
             session_cleanup: self.session_cleanup,
             observation: self.observation,
@@ -357,7 +209,7 @@ pub struct DeferredResponder {
     sink: Option<ResponseSink>,
     state: Arc<ResponseState>,
     session_id: SessionId,
-    control: RequestControlView,
+    control: Box<RequestControlView>,
     resume: Option<DeferredResumeContext>,
     session_cleanup: Option<super::DeferredSessionCleanupRegistration>,
     observation: Option<crate::telemetry::RequestObservation>,
@@ -383,12 +235,12 @@ impl DeferredResponder {
         self.state.terminal_reason()
     }
 
-    pub(crate) fn register(&self) -> Result<(), DeferredResponseError> {
-        self.state.register().map_err(DeferredResponseError::from_state)
+    pub(crate) fn register(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+        self.state.register()
     }
 
-    pub(crate) fn claim(&self) -> Result<(), DeferredResponseError> {
-        self.state.claim().map_err(DeferredResponseError::from_state)
+    pub(crate) fn claim(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
+        self.state.claim()
     }
 
     pub(crate) const fn control(&self) -> &RequestControlView {
@@ -420,13 +272,10 @@ impl DeferredResponder {
     pub(crate) fn cleanup_close_with_reason(
         &mut self,
         reason: DeferredSystemCloseReason,
-    ) -> Result<(), DeferredResponseError> {
-        let result = self
-            .state
-            .close_with_reason(reason)
-            .map_err(DeferredResponseError::from_state);
+    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+        let result = self.state.close_with_reason(reason);
         self.active = false;
-        if result.is_ok() {
+        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(reason.terminal_reason());
             }
@@ -437,13 +286,10 @@ impl DeferredResponder {
     pub(crate) fn cleanup_cancel_with_reason(
         &mut self,
         reason: DeferredSystemCancellationReason,
-    ) -> Result<(), DeferredResponseError> {
-        let result = self
-            .state
-            .cancel_with_reason(reason)
-            .map_err(DeferredResponseError::from_state);
+    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+        let result = self.state.cancel_with_reason(reason);
         self.active = false;
-        if result.is_ok() {
+        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(reason.terminal_reason());
             }
@@ -455,13 +301,13 @@ impl DeferredResponder {
         self.original.original_opaque()
     }
 
-    pub(crate) fn close_with_reason(mut self, reason: DeferredSystemCloseReason) -> Result<(), DeferredResponseError> {
-        let result = self
-            .state
-            .close_with_reason(reason)
-            .map_err(DeferredResponseError::from_state);
+    pub(crate) fn close_with_reason(
+        mut self,
+        reason: DeferredSystemCloseReason,
+    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+        let result = self.state.close_with_reason(reason);
         self.active = false;
-        if result.is_ok() {
+        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(reason.terminal_reason());
             }
@@ -472,13 +318,10 @@ impl DeferredResponder {
     pub(crate) fn cancel_with_system_reason(
         mut self,
         reason: DeferredSystemCancellationReason,
-    ) -> Result<(), DeferredResponseError> {
-        let result = self
-            .state
-            .cancel_with_reason(reason)
-            .map_err(DeferredResponseError::from_state);
+    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+        let result = self.state.cancel_with_reason(reason);
         self.active = false;
-        if result.is_ok() {
+        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(reason.terminal_reason());
             }
@@ -490,9 +333,22 @@ impl DeferredResponder {
     ///
     /// # Errors
     ///
-    /// Returns a typed, redacted error for lifecycle, immutable binding,
-    /// encoding, queue, cancellation, deadline, session, or transport failure.
-    pub async fn respond(self, response: RemotingResponse) -> Result<ResponseReceipt, DeferredResponseError> {
+    /// Returns a typed, redacted error for immutable binding, encoding, or
+    /// transport failure. Lifecycle, deadline, and capacity rejections are
+    /// returned as source-free outcomes.
+    pub async fn respond(
+        self,
+        response: RemotingResponse,
+    ) -> Result<DeferredResponseOutcome, crate::error::TransportError> {
+        self.respond_internal(response)
+            .await
+            .map(DeferredResponseAttempt::public_outcome)
+    }
+
+    pub(super) async fn respond_internal(
+        self,
+        response: RemotingResponse,
+    ) -> Result<DeferredResponseAttempt, crate::error::TransportError> {
         let span = self.request_span();
         self.respond_in_request_span(response).instrument(span).await
     }
@@ -500,18 +356,24 @@ impl DeferredResponder {
     async fn respond_in_request_span(
         mut self,
         response: RemotingResponse,
-    ) -> Result<ResponseReceipt, DeferredResponseError> {
+    ) -> Result<DeferredResponseAttempt, crate::error::TransportError> {
         let response_code = response.response_code();
         let body_kind = response.body_kind();
         let write_started = std::time::Instant::now();
-        let mut claim = self.state.begin_sending().map_err(DeferredResponseError::from_state)?;
+        let mut claim = match self.state.begin_sending() {
+            Ok(ResponseStateOutcome::Applied(claim)) => claim,
+            Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }) => {
+                return Ok(DeferredResponseAttempt::AlreadyCompleted { state, reason })
+            }
+            Err(error) => return Err(crate::error::TransportError::response(error)),
+        };
         self.active = false;
         let bound = match response.bind(self.original) {
             Ok(bound) => bound,
             Err(source) => {
-                claim
-                    .fail(WriteProgress::NotStarted)
-                    .map_err(DeferredResponseError::from_state)?;
+                if let Some(outcome) = finish_deferred_claim(claim.fail(WriteProgress::NotStarted))? {
+                    return Ok(outcome);
+                }
                 if let Some(observation) = &self.observation {
                     observation.complete_failure_without_kind(
                         crate::runtime::processor::ResponseObservationMode::Deferred,
@@ -520,44 +382,61 @@ impl DeferredResponder {
                         Some(WriteProgress::NotStarted),
                     );
                 }
-                return Err(DeferredResponseError::from_binding(source));
+                return Err(crate::error::TransportError::response(source));
             }
         };
         let sink = self.sink.take().ok_or_else(|| {
-            DeferredResponseError::from_state(ResponseStateError::InvalidTransition {
-                transition: super::deferred_response::ResponseTransition::BeginSending,
-                state: super::ResponseStateSnapshot::Sending,
+            crate::error::TransportError::response(TransportContractViolation::DeferredResponseInvalidTransition {
+                operation: "take_sink",
+                state: "sending",
             })
         })?;
         let result = sink.send_deferred_response(bound, &mut claim).await;
         match result {
-            Ok(receipt) => {
-                claim.complete().map_err(DeferredResponseError::from_state)?;
-                if let Some(observation) = &self.observation {
-                    observation.complete_reply(
-                        crate::runtime::processor::ResponseObservationMode::Deferred,
-                        response_code,
-                        body_kind,
-                        write_started.elapsed(),
-                        Ok(receipt),
-                    );
+            Ok(response_outcome) => {
+                let progress = response_completion_progress(response_outcome);
+                let claim_result = match response_outcome {
+                    ResponseCompletionOutcome::Completed(_) => claim.complete(),
+                    _ => claim.fail(progress),
+                };
+                if let Some(outcome) = finish_deferred_claim(claim_result)? {
+                    return Ok(outcome);
                 }
-                Ok(receipt)
+                if let Some(observation) = &self.observation {
+                    match response_outcome {
+                        ResponseCompletionOutcome::Completed(receipt) => observation.complete_reply(
+                            crate::runtime::processor::ResponseObservationMode::Deferred,
+                            response_code,
+                            body_kind,
+                            write_started.elapsed(),
+                            Ok(receipt),
+                        ),
+                        outcome => observation.complete_reply(
+                            crate::runtime::processor::ResponseObservationMode::Deferred,
+                            response_code,
+                            body_kind,
+                            write_started.elapsed(),
+                            Err((Some(outcome), Some(progress))),
+                        ),
+                    }
+                }
+                Ok(deferred_response_outcome(response_outcome))
             }
             Err(error) => {
-                let progress = error.write_progress().unwrap_or(WriteProgress::NotStarted);
-                let kind = error.kind();
-                claim.fail(progress).map_err(DeferredResponseError::from_state)?;
+                let progress = error.write_progress();
+                if let Some(outcome) = finish_deferred_claim(claim.fail(progress))? {
+                    return Ok(outcome);
+                }
                 if let Some(observation) = &self.observation {
                     observation.complete_reply(
                         crate::runtime::processor::ResponseObservationMode::Deferred,
                         response_code,
                         body_kind,
                         write_started.elapsed(),
-                        Err((kind, Some(progress))),
+                        Err((None, Some(progress))),
                     );
                 }
-                Err(DeferredResponseError::from_response(error))
+                Err(crate::error::TransportError::response(error))
             }
         }
     }
@@ -566,17 +445,22 @@ impl DeferredResponder {
     ///
     /// # Errors
     ///
-    /// Returns a typed prior-terminal or invalid-transition failure when
-    /// another lifecycle owner has already won.
-    pub fn cancel(mut self) -> Result<(), DeferredResponseError> {
-        let result = self.state.cancel().map_err(DeferredResponseError::from_state);
+    /// Returns a transport error only for an invalid nonterminal transition.
+    /// A prior terminal winner is the source-free
+    /// [`DeferredResponseOutcome::AlreadyCompleted`] outcome.
+    pub fn cancel(mut self) -> Result<DeferredResponseOutcome, crate::error::TransportError> {
+        let result = self.state.cancel();
         self.active = false;
-        if result.is_ok() {
+        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(DeferredTerminalReason::Explicit);
             }
         }
-        result
+        match result {
+            Ok(ResponseStateOutcome::Applied(())) => Ok(DeferredResponseOutcome::Cancelled),
+            Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => Ok(DeferredResponseOutcome::AlreadyCompleted),
+            Err(error) => Err(crate::error::TransportError::response(error)),
+        }
     }
 
     /// Cancels this deferred response after the caller-owned receiver is dropped.
@@ -585,20 +469,63 @@ impl DeferredResponder {
     ///
     /// # Errors
     ///
-    /// Returns a typed prior-terminal or invalid-transition failure when
-    /// another lifecycle owner has already won.
-    pub fn cancel_with_reason(mut self, reason: DeferredCancellationReason) -> Result<(), DeferredResponseError> {
+    /// Returns a transport error only for an invalid nonterminal transition.
+    /// A prior terminal winner is the source-free
+    /// [`DeferredResponseOutcome::AlreadyCompleted`] outcome.
+    pub fn cancel_with_reason(
+        mut self,
+        reason: DeferredCancellationReason,
+    ) -> Result<DeferredResponseOutcome, crate::error::TransportError> {
         let result = match reason {
             DeferredCancellationReason::ReceiverDropped => self.state.cancel_receiver_dropped(),
-        }
-        .map_err(DeferredResponseError::from_state);
+        };
         self.active = false;
-        if result.is_ok() {
+        if matches!(result, Ok(ResponseStateOutcome::Applied(()))) {
             if let Some(observation) = &self.observation {
                 observation.complete_cancelled(DeferredTerminalReason::ReceiverDropped);
             }
         }
-        result
+        match result {
+            Ok(ResponseStateOutcome::Applied(())) => Ok(DeferredResponseOutcome::Cancelled),
+            Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => Ok(DeferredResponseOutcome::AlreadyCompleted),
+            Err(error) => Err(crate::error::TransportError::response(error)),
+        }
+    }
+}
+
+fn finish_deferred_claim(
+    result: Result<ResponseStateOutcome, TransportContractViolation>,
+) -> Result<Option<DeferredResponseAttempt>, crate::error::TransportError> {
+    match result {
+        Ok(ResponseStateOutcome::Applied(())) => Ok(None),
+        Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }) => {
+            Ok(Some(DeferredResponseAttempt::AlreadyCompleted { state, reason }))
+        }
+        Err(error) => Err(crate::error::TransportError::response(error)),
+    }
+}
+
+const fn response_completion_progress(outcome: ResponseCompletionOutcome) -> WriteProgress {
+    match outcome {
+        ResponseCompletionOutcome::Completed(_)
+        | ResponseCompletionOutcome::AlreadyCompleted(_)
+        | ResponseCompletionOutcome::DeadlineExpired
+        | ResponseCompletionOutcome::Cancelled
+        | ResponseCompletionOutcome::SessionClosed
+        | ResponseCompletionOutcome::QueueSaturated => WriteProgress::NotStarted,
+    }
+}
+
+const fn deferred_response_outcome(outcome: ResponseCompletionOutcome) -> DeferredResponseAttempt {
+    match outcome {
+        ResponseCompletionOutcome::Completed(receipt) => DeferredResponseAttempt::Completed(receipt),
+        ResponseCompletionOutcome::AlreadyCompleted(state) => {
+            DeferredResponseAttempt::AlreadyCompleted { state, reason: None }
+        }
+        ResponseCompletionOutcome::DeadlineExpired => DeferredResponseAttempt::DeadlineExceeded,
+        ResponseCompletionOutcome::Cancelled => DeferredResponseAttempt::Cancelled,
+        ResponseCompletionOutcome::SessionClosed => DeferredResponseAttempt::SessionClosed,
+        ResponseCompletionOutcome::QueueSaturated => DeferredResponseAttempt::QueueSaturated,
     }
 }
 

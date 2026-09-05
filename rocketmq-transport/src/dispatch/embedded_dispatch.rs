@@ -18,17 +18,12 @@ use std::fmt;
 use rocketmq_runtime::RuntimeError;
 
 use super::DeferredCommitError;
-use super::HandlerOutcomeContractError;
 use super::ProtocolNoResponseReason;
 use super::RemotingResponse;
 use super::RequestId;
-use super::ResponseBindingError;
-use super::ResponseBuildError;
-use super::ResponseError;
-use super::ResponseErrorKind;
+use super::ResponseOperationalFailure;
 use super::WriteProgress;
-use crate::admission::AdmissionError;
-use crate::dispatch::remoting_request::RemotingRequestBuildError;
+use crate::contract::TransportContractViolation;
 
 /// Terminal result of one channel-free embedded dispatch.
 ///
@@ -66,24 +61,26 @@ pub enum EmbeddedDispatchOutcome {
         /// The audited protocol reason for suppressing a response.
         reason: ProtocolNoResponseReason,
     },
-}
-
-/// Stable category for a channel-free embedded dispatch failure.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum EmbeddedDispatchErrorKind {
+    /// Bounded admission rejected the request before processor execution.
+    AdmissionRejected,
     /// The process-local session or request identity namespace was exhausted.
     IdentityExhausted,
-    /// The lifecycle owner could not create or admit the request task.
-    Runtime,
-    /// The parent task group was cancelled.
+    /// The parent lifecycle was cancelled.
     Cancelled,
     /// The embedded session closed before terminal completion.
     SessionClosed,
     /// The immutable request deadline elapsed.
     DeadlineExceeded,
-    /// The configured admission policy rejected the request without a remoting response.
-    Admission,
+    /// The sole terminal receiver closed before accepting completion.
+    CompletionClosed,
+}
+
+/// Stable category for a channel-free embedded dispatch failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub(crate) enum EmbeddedDispatchErrorKind {
+    /// The lifecycle owner could not create or admit the request task.
+    Runtime,
     /// Trusted request construction rejected inconsistent ingress facts.
     RequestConstruction,
     /// A processor error could not be converted to an owned remoting response.
@@ -96,14 +93,12 @@ pub enum EmbeddedDispatchErrorKind {
     DeferredCommit,
     /// A one-way request produced a deferred or no-reply contract.
     OneWayContract,
-    /// The caller dropped the sole terminal result receiver.
-    CompletionClosed,
     /// In-process response handoff failed with a typed response error.
     Response {
-        /// Stable response failure category.
-        kind: ResponseErrorKind,
-        /// Known response-write progress, when applicable.
-        progress: Option<WriteProgress>,
+        /// Stable response operation.
+        operation: &'static str,
+        /// Known response-write progress.
+        progress: WriteProgress,
     },
 }
 
@@ -111,7 +106,7 @@ pub enum EmbeddedDispatchErrorKind {
 ///
 /// The error preserves the concrete internal source for diagnostics without
 /// retaining the request command, body, principal, or security decision.
-pub struct EmbeddedDispatchError {
+pub(crate) struct EmbeddedDispatchError {
     kind: EmbeddedDispatchErrorKind,
     source: EmbeddedDispatchErrorSource,
 }
@@ -119,15 +114,9 @@ pub struct EmbeddedDispatchError {
 impl EmbeddedDispatchError {
     /// Returns the stable, payload-free failure category.
     #[must_use]
+    #[cfg(test)]
     pub const fn kind(&self) -> EmbeddedDispatchErrorKind {
         self.kind
-    }
-
-    pub(crate) fn identity_exhausted() -> Self {
-        Self::new(
-            EmbeddedDispatchErrorKind::IdentityExhausted,
-            EmbeddedDispatchErrorSource::IdentityExhausted(IdentityExhausted),
-        )
     }
 
     pub(crate) fn runtime(error: RuntimeError) -> Self {
@@ -137,59 +126,31 @@ impl EmbeddedDispatchError {
         )
     }
 
-    pub(crate) fn cancelled() -> Self {
-        Self::new(
-            EmbeddedDispatchErrorKind::Cancelled,
-            EmbeddedDispatchErrorSource::Stop(EmbeddedStopError::Cancelled),
-        )
-    }
-
-    pub(crate) fn session_closed() -> Self {
-        Self::new(
-            EmbeddedDispatchErrorKind::SessionClosed,
-            EmbeddedDispatchErrorSource::Stop(EmbeddedStopError::SessionClosed),
-        )
-    }
-
-    pub(crate) fn deadline_exceeded() -> Self {
-        Self::new(
-            EmbeddedDispatchErrorKind::DeadlineExceeded,
-            EmbeddedDispatchErrorSource::Stop(EmbeddedStopError::DeadlineExceeded),
-        )
-    }
-
-    pub(crate) fn admission(error: AdmissionError) -> Self {
-        Self::new(
-            EmbeddedDispatchErrorKind::Admission,
-            EmbeddedDispatchErrorSource::Admission(error),
-        )
-    }
-
-    pub(crate) fn request_construction(error: RemotingRequestBuildError) -> Self {
+    pub(crate) fn request_construction(error: TransportContractViolation) -> Self {
         Self::new(
             EmbeddedDispatchErrorKind::RequestConstruction,
-            EmbeddedDispatchErrorSource::RequestConstruction(error),
+            EmbeddedDispatchErrorSource::Contract(error),
         )
     }
 
-    pub(crate) fn response_construction(error: ResponseBuildError) -> Self {
+    pub(crate) fn response_construction(error: TransportContractViolation) -> Self {
         Self::new(
             EmbeddedDispatchErrorKind::ResponseConstruction,
-            EmbeddedDispatchErrorSource::ResponseConstruction(error),
+            EmbeddedDispatchErrorSource::Contract(error),
         )
     }
 
-    pub(crate) fn response_binding(error: ResponseBindingError) -> Self {
+    pub(crate) fn response_binding(error: TransportContractViolation) -> Self {
         Self::new(
             EmbeddedDispatchErrorKind::ResponseBinding,
-            EmbeddedDispatchErrorSource::ResponseBinding(error),
+            EmbeddedDispatchErrorSource::Contract(error),
         )
     }
 
-    pub(crate) fn handler_contract(error: HandlerOutcomeContractError) -> Self {
+    pub(crate) fn handler_contract(error: TransportContractViolation) -> Self {
         Self::new(
             EmbeddedDispatchErrorKind::HandlerContract,
-            EmbeddedDispatchErrorSource::HandlerContract(error),
+            EmbeddedDispatchErrorSource::Contract(error),
         )
     }
 
@@ -200,29 +161,17 @@ impl EmbeddedDispatchError {
         )
     }
 
-    pub(crate) fn one_way_contract(outcome: &'static str) -> Self {
+    pub(crate) fn one_way_contract(violation: TransportContractViolation) -> Self {
         Self::new(
             EmbeddedDispatchErrorKind::OneWayContract,
-            EmbeddedDispatchErrorSource::OneWayContract(OneWayContract { outcome }),
+            EmbeddedDispatchErrorSource::Contract(violation),
         )
     }
 
-    pub(crate) fn completion_closed() -> Self {
-        Self::new(
-            EmbeddedDispatchErrorKind::CompletionClosed,
-            EmbeddedDispatchErrorSource::CompletionClosed(CompletionClosed),
-        )
-    }
-
-    pub(crate) fn response(error: ResponseError) -> Self {
-        let kind = match error {
-            ResponseError::Cancelled => EmbeddedDispatchErrorKind::Cancelled,
-            ResponseError::SessionClosed => EmbeddedDispatchErrorKind::SessionClosed,
-            ResponseError::DeadlineExceeded => EmbeddedDispatchErrorKind::DeadlineExceeded,
-            ref error => EmbeddedDispatchErrorKind::Response {
-                kind: error.kind(),
-                progress: error.write_progress(),
-            },
+    pub(crate) fn response(error: ResponseOperationalFailure) -> Self {
+        let kind = EmbeddedDispatchErrorKind::Response {
+            operation: error.operation(),
+            progress: error.write_progress(),
         };
         Self::new(kind, EmbeddedDispatchErrorSource::Response(error))
     }
@@ -254,115 +203,65 @@ impl Error for EmbeddedDispatchError {
 }
 
 enum EmbeddedDispatchErrorSource {
-    IdentityExhausted(IdentityExhausted),
     Runtime(RuntimeError),
-    Stop(EmbeddedStopError),
-    Admission(AdmissionError),
-    RequestConstruction(RemotingRequestBuildError),
-    ResponseConstruction(ResponseBuildError),
-    ResponseBinding(ResponseBindingError),
-    HandlerContract(HandlerOutcomeContractError),
+    Contract(TransportContractViolation),
     DeferredCommit(DeferredCommitError),
-    OneWayContract(OneWayContract),
-    CompletionClosed(CompletionClosed),
-    Response(ResponseError),
+    Response(ResponseOperationalFailure),
 }
 
 impl EmbeddedDispatchErrorSource {
     fn as_error(&self) -> &(dyn Error + 'static) {
         match self {
-            Self::IdentityExhausted(error) => error,
             Self::Runtime(error) => error,
-            Self::Stop(error) => error,
-            Self::Admission(error) => error,
-            Self::RequestConstruction(error) => error,
-            Self::ResponseConstruction(error) => error,
-            Self::ResponseBinding(error) => error,
-            Self::HandlerContract(error) => error,
+            Self::Contract(error) => error,
             Self::DeferredCommit(error) => error,
-            Self::OneWayContract(error) => error,
-            Self::CompletionClosed(error) => error,
             Self::Response(error) => error,
         }
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error("process-local embedded request identity namespace exhausted")]
-struct IdentityExhausted;
-
-#[derive(Debug, thiserror::Error)]
-enum EmbeddedStopError {
-    #[error("embedded dispatch parent was cancelled")]
-    Cancelled,
-    #[error("embedded dispatch session closed")]
-    SessionClosed,
-    #[error("embedded dispatch deadline exceeded")]
-    DeadlineExceeded,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("one-way request completed with {outcome}")]
-struct OneWayContract {
-    outcome: &'static str,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("embedded dispatch terminal receiver closed")]
-struct CompletionClosed;
 
 #[cfg(test)]
 mod tests {
     use rocketmq_error::RocketMQError;
 
     use super::*;
-    use crate::dispatch::ResponseTerminalState;
-
     #[test]
-    fn response_completion_errors_have_one_deterministic_public_kind_and_typed_source() {
-        assert_response_kind(ResponseError::Cancelled, EmbeddedDispatchErrorKind::Cancelled);
-        assert_response_kind(ResponseError::SessionClosed, EmbeddedDispatchErrorKind::SessionClosed);
-        assert_response_kind(
-            ResponseError::DeadlineExceeded,
-            EmbeddedDispatchErrorKind::DeadlineExceeded,
-        );
-        assert_response_kind(
-            ResponseError::AlreadyCompleted {
-                state: ResponseTerminalState::Completed,
-            },
-            EmbeddedDispatchErrorKind::Response {
-                kind: ResponseErrorKind::AlreadyCompleted,
-                progress: None,
-            },
-        );
-        assert_response_kind(
-            ResponseError::QueueSaturated,
-            EmbeddedDispatchErrorKind::Response {
-                kind: ResponseErrorKind::QueueSaturated,
-                progress: Some(WriteProgress::NotStarted),
-            },
-        );
-
+    fn response_operational_failure_retains_typed_source_and_redacts_views() {
         let secret = "embedded-sensitive-transport-cause";
-        let error = EmbeddedDispatchError::response(ResponseError::Transport {
+        let error = EmbeddedDispatchError::response(ResponseOperationalFailure::Transport {
             progress: WriteProgress::PossiblyPartial,
             source: RocketMQError::network_connection_failed(secret, secret),
         });
         assert_eq!(
             error.kind(),
             EmbeddedDispatchErrorKind::Response {
-                kind: ResponseErrorKind::Transport,
-                progress: Some(WriteProgress::PossiblyPartial),
+                operation: "transport",
+                progress: WriteProgress::PossiblyPartial,
             }
         );
-        assert!(Error::source(&error).is_some_and(|source| source.downcast_ref::<ResponseError>().is_some()));
+        assert!(
+            Error::source(&error).is_some_and(|source| source.downcast_ref::<ResponseOperationalFailure>().is_some())
+        );
         assert!(!format!("{error:?}").contains(secret));
         assert!(!error.to_string().contains(secret));
     }
 
-    fn assert_response_kind(error: ResponseError, expected: EmbeddedDispatchErrorKind) {
-        let error = EmbeddedDispatchError::response(error);
-        assert_eq!(error.kind(), expected);
-        assert!(Error::source(&error).is_some_and(|source| source.downcast_ref::<ResponseError>().is_some()));
+    #[test]
+    fn one_way_contract_retains_each_closed_outcome_identity() {
+        for expected in [
+            TransportContractViolation::OneWayDeferredHandlerOutcome,
+            TransportContractViolation::OneWayNoReplyHandlerOutcome,
+            TransportContractViolation::OneWayInvalidRejection,
+        ] {
+            let error = EmbeddedDispatchError::one_way_contract(expected.clone());
+            let actual = Error::source(&error)
+                .and_then(|source| source.downcast_ref::<TransportContractViolation>())
+                .expect("one-way dispatch error retains its canonical contract source");
+            assert_eq!(actual, &expected);
+            assert_eq!(
+                actual.condition(),
+                rocketmq_error::CanonicalCondition::FailedPrecondition
+            );
+        }
     }
 }

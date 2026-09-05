@@ -26,16 +26,16 @@ use rocketmq_transport::api::RemotingSerializable;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ServerConfig;
-use rocketmq_transport::api::ServerStartError;
 use rocketmq_transport::api::TransportClient;
 use rocketmq_transport::api::TransportClientConfig;
+use rocketmq_transport::api::TransportError;
 use rocketmq_transport::api::TransportServer;
 
 fn assert_serialization_contract<T: RemotingSerializable + RemotingDeserializable>() {}
 
 fn assert_processor_contract<T: RequestProcessor>() {}
 
-fn assert_server_start_error_contract<T: Clone + std::fmt::Debug + std::error::Error>() {}
+fn assert_transport_error_contract<T: Clone + std::fmt::Debug + std::error::Error>() {}
 
 #[test]
 fn lib_rs_keeps_the_curated_public_boundary() {
@@ -70,7 +70,7 @@ fn api_reexports_capabilities_and_dtos() {
     let _: Option<TransportClient<DefaultRequestProcessor>> = None;
     let _: Option<RemotingClient<DefaultRequestProcessor>> = None;
     let _: Option<TransportServer<DefaultRequestProcessor>> = None;
-    assert_server_start_error_contract::<ServerStartError>();
+    assert_transport_error_contract::<TransportError>();
     let _: CachedConnectionState = CachedConnectionState::Absent;
     let _ = CachedConnectionState::Healthy;
     let _ = CachedConnectionState::UnhealthyRetired;

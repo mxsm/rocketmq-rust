@@ -277,25 +277,28 @@ async fn pop_lite_deferred_real_store_single_chain_writes_exact_terminal_frame()
         .expect("registered real-store client has a claim");
     let service_during_resume = Arc::clone(&service);
     let pop_lite_during_resume = Arc::clone(&pop_lite);
-    service
-        .resume_event_claim(
-            claim,
-            DeferredResumeRetainedSize::new(512),
-            move |resume, reason, events| async move {
-                assert_eq!(reason, DeferredWakeReason::MessageArrived);
-                let active = service_during_resume.resource_snapshot();
-                assert_eq!(active.event_reservations.batches, 1);
-                assert_eq!(active.event_reservations.events, 1);
-                assert_eq!(active.event_reservations.permits, 1);
-                assert!(active.event_reservations.retained_bytes > 0);
-                assert_eq!(active.active_client_gates, 1);
-                assert_eq!(active.resume_execution_count, 1);
-                assert!(active.resume_execution_bytes >= 512);
-                pop_lite_during_resume.resume_pop_lite(resume, reason, events).await
-            },
-        )
-        .await
-        .expect("write canonical real-store PopLite response");
+    assert!(matches!(
+        service
+            .resume_event_claim(
+                claim,
+                DeferredResumeRetainedSize::new(512),
+                move |resume, reason, events| async move {
+                    assert_eq!(reason, DeferredWakeReason::MessageArrived);
+                    let active = service_during_resume.resource_snapshot();
+                    assert_eq!(active.event_reservations.batches, 1);
+                    assert_eq!(active.event_reservations.events, 1);
+                    assert_eq!(active.event_reservations.permits, 1);
+                    assert!(active.event_reservations.retained_bytes > 0);
+                    assert_eq!(active.active_client_gates, 1);
+                    assert_eq!(active.resume_execution_count, 1);
+                    assert!(active.resume_execution_bytes >= 512);
+                    pop_lite_during_resume.resume_pop_lite(resume, reason, events).await
+                },
+            )
+            .await
+            .expect("write canonical real-store PopLite response"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
 
     let mut response = client
         .receive_command()
@@ -373,14 +376,17 @@ async fn pop_lite_deferred_real_store_claimed_empty_is_exact_terminal_timeout() 
         .await
         .expect("claim empty-store PopLite event")
         .expect("registered empty-store client has a claim");
-    service
-        .resume_event_claim(
-            claim,
-            DeferredResumeRetainedSize::new(128),
-            move |resume, reason, events| async move { pop_lite.resume_pop_lite(resume, reason, events).await },
-        )
-        .await
-        .expect("write canonical empty-store PopLite response");
+    assert!(matches!(
+        service
+            .resume_event_claim(
+                claim,
+                DeferredResumeRetainedSize::new(128),
+                move |resume, reason, events| async move { pop_lite.resume_pop_lite(resume, reason, events).await },
+            )
+            .await
+            .expect("write canonical empty-store PopLite response"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
 
     let mut response = client
         .receive_command()

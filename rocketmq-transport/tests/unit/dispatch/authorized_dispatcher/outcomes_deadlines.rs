@@ -14,19 +14,101 @@
 
 use super::harness::*;
 use crate::dispatch::DeferredAdmission;
+use crate::dispatch::DeferredAdmissionAcquireOutcome;
+use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredCommitErrorKind;
 use crate::dispatch::DeferredRegistration;
+use crate::dispatch::DeferredRegistryOutcome;
+use crate::dispatch::DeferredResponder;
+use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResponseOutcome;
+use crate::dispatch::DeferredResumeOutcome;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
+use crate::dispatch::ResponseCompletionOutcome;
 use crate::dispatch::ResponseSink;
 use crate::runtime::processor::ResponseObservation;
 use crate::runtime::processor::ResponseObservationMode;
 use crate::runtime::processor::ResponseObservationOutcome;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
+
+fn expect_deferred_permit(
+    outcome: DeferredAdmissionAcquireOutcome,
+    context: &str,
+) -> crate::dispatch::DeferredWaitPermit {
+    match outcome {
+        DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
+            panic!("{context}: waiter capacity exhausted")
+        }
+        DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => {
+            panic!("{context}: retained-byte capacity exhausted")
+        }
+        DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            panic!("{context}: parent capacity exhausted")
+        }
+    }
+}
+
+fn expect_registered<R>(outcome: DeferredRegistryOutcome<R>, context: &str) -> DeferredRegistration
+where
+    R: Send + 'static,
+{
+    match outcome {
+        DeferredRegistryOutcome::Registered(registration) => registration,
+        DeferredRegistryOutcome::DuplicateRequest(_) => panic!("{context}: duplicate request"),
+        DeferredRegistryOutcome::IdentityExhausted(_) => panic!("{context}: identity exhausted"),
+        DeferredRegistryOutcome::ParentCancelled => panic!("{context}: parent cancelled"),
+        DeferredRegistryOutcome::SessionClosed => panic!("{context}: session closed"),
+        DeferredRegistryOutcome::DeadlineExpired => panic!("{context}: deadline expired"),
+        DeferredRegistryOutcome::BuilderRejected { .. } => panic!("{context}: builder rejected"),
+        DeferredRegistryOutcome::ContractViolation { .. } => panic!("{context}: contract violation"),
+        DeferredRegistryOutcome::OperationalFailure { .. } => panic!("{context}: operational failure"),
+    }
+}
+
+fn expect_claimed<R>(
+    result: Result<DeferredClaimOutcome<R>, crate::error::TransportError>,
+    context: &str,
+) -> crate::dispatch::ClaimedDeferred<R>
+where
+    R: Send + 'static,
+{
+    match result {
+        Ok(DeferredClaimOutcome::Claimed(claimed)) => claimed,
+        Ok(DeferredClaimOutcome::NotFound) => panic!("{context}: request not found"),
+        Ok(DeferredClaimOutcome::AlreadyClaimed) => panic!("{context}: request already claimed"),
+        Ok(DeferredClaimOutcome::AlreadyCompleted) => panic!("{context}: request already completed"),
+        Ok(DeferredClaimOutcome::ParentCancelled) => panic!("{context}: parent cancelled"),
+        Ok(DeferredClaimOutcome::SessionClosed) => panic!("{context}: session closed"),
+        Ok(DeferredClaimOutcome::DeadlineExpired) => panic!("{context}: deadline expired"),
+        Err(_) => panic!("{context}: operational claim failure"),
+    }
+}
+
+fn expect_deferred_responder(outcome: DeferredResponderOutcome, context: &str) -> DeferredResponder {
+    match outcome {
+        DeferredResponderOutcome::Taken(responder) => responder,
+        DeferredResponderOutcome::OneWayRequest => panic!("{context}: one-way request"),
+        DeferredResponderOutcome::Unavailable => panic!("{context}: responder unavailable"),
+        DeferredResponderOutcome::AlreadyTaken => panic!("{context}: responder already taken"),
+        DeferredResponderOutcome::OutcomeCompleted => panic!("{context}: outcome already completed"),
+    }
+}
+
+fn expect_deferred_completed(outcome: DeferredResumeOutcome, context: &str) -> crate::dispatch::ResponseReceipt {
+    match outcome {
+        DeferredResumeOutcome::Completed(receipt) => receipt,
+        DeferredResumeOutcome::Cancelled => panic!("{context}: request cancelled"),
+        DeferredResumeOutcome::SessionClosed => panic!("{context}: session closed"),
+        DeferredResumeOutcome::AdmissionRejected => panic!("{context}: admission rejected"),
+    }
+}
 
 #[derive(Clone, Default)]
 struct PublicDeferredProcessor {
@@ -48,14 +130,29 @@ struct RollbackRegistrationProcessor {
     take_current: bool,
 }
 
+#[derive(Clone, Copy)]
+struct CommitFailureProcessor {
+    kind: DeferredCommitErrorKind,
+}
+
+impl RequestProcessor for CommitFailureProcessor {
+    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        request
+            .mark_deferred_response_taken()
+            .map_err(|_| RocketMQError::illegal_argument("test deferred response reservation failed"))?;
+        Ok(HandlerOutcome::Deferred(
+            DeferredRegistration::with_commit_error_for_test(request.original_identity().request_id(), self.kind),
+        ))
+    }
+}
+
 impl RequestProcessor for RollbackRegistrationProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         if self.take_current {
-            drop(
-                request
-                    .take_deferred_responder()
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?,
-            );
+            drop(expect_deferred_responder(
+                request.take_deferred_responder(),
+                "rollback responder extraction",
+            ));
         }
         let registration = self
             .registration
@@ -99,11 +196,12 @@ fn real_registration_fixture(name: &'static str, owner: u64) -> (RealRegistratio
         .into_responder(original);
     let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
         .expect("real registration retained size");
-    let permit = admission.try_reserve(retained).expect("real registration permit");
+    let permit = expect_deferred_permit(admission.try_reserve(retained), "real registration permit");
     let registry = DeferredRegistry::new();
-    let registration = registry
-        .register(DeferredRequest::new((), DeferredParts::new(responder, permit)))
-        .expect("real provisional registration");
+    let registration = expect_registered(
+        registry.register(DeferredRequest::new((), DeferredParts::new(responder, permit))),
+        "real provisional registration",
+    );
     let id = registration.deferred_id();
     (
         RealRegistrationFixture {
@@ -119,22 +217,17 @@ fn real_registration_fixture(name: &'static str, owner: u64) -> (RealRegistratio
 
 impl RequestProcessor for RegistryDeferredProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let responder = request
-            .take_deferred_responder()
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let responder = expect_deferred_responder(request.take_deferred_responder(), "registry responder extraction");
         let retained = DeferredRegistry::<String>::try_retained_size(DeferredRetainedSizeParts::new(0))
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let permit = self
-            .admission
-            .try_reserve(retained)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let mut registration = self
-            .registry
-            .register(DeferredRequest::new(
+            .map_err(|_| RocketMQError::illegal_argument("deferred responder extraction failed"))?;
+        let permit = expect_deferred_permit(self.admission.try_reserve(retained), "dispatcher deferred permit");
+        let mut registration = expect_registered(
+            self.registry.register(DeferredRequest::new(
                 "dispatcher-owned deferred resume".to_owned(),
                 DeferredParts::new(responder, permit),
-            ))
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+            )),
+            "dispatcher deferred registration",
+        );
         if let Some(checkpoint) = self.commit_checkpoint.clone() {
             registration.set_commit_checkpoint(move || checkpoint());
         }
@@ -155,13 +248,11 @@ impl RequestProcessor for PublicDeferredProcessor {
         let request_id = request.original_identity().request_id();
         let original_opaque = request.original_identity().original_opaque();
         let session_id = request.session().id();
-        let responder = request
-            .take_deferred_responder()
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let responder = expect_deferred_responder(request.take_deferred_responder(), "public responder extraction");
         assert_eq!(responder.request_id(), request_id);
         assert_eq!(responder.session_id(), session_id);
         assert!(responder.control().same_lifecycle_view(request.control()));
-        let receipt = responder
+        let receipt = match responder
             .respond(
                 RemotingResponse::bytes(
                     RemotingCommand::create_response_command_with_code(0).set_opaque(original_opaque + 1),
@@ -170,7 +261,17 @@ impl RequestProcessor for PublicDeferredProcessor {
                 .expect("deferred remoting response"),
             )
             .await
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+            .map_err(|_| RocketMQError::illegal_argument("deferred response construction failed"))?
+        {
+            DeferredResponseOutcome::Completed(receipt) => receipt,
+            DeferredResponseOutcome::AlreadyCompleted
+            | DeferredResponseOutcome::DeadlineExceeded
+            | DeferredResponseOutcome::Cancelled
+            | DeferredResponseOutcome::SessionClosed
+            | DeferredResponseOutcome::QueueSaturated => {
+                return Err(RocketMQError::illegal_argument("deferred response was rejected"));
+            }
+        };
         assert_eq!(receipt.request_id(), request_id);
         self.completed.store(true, Ordering::SeqCst);
         Ok(HandlerOutcome::Deferred(
@@ -250,10 +351,12 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
         observations.lock().expect("deferred observation lock").is_empty(),
         "durable registration is not a terminal response observation"
     );
-    let claimed = registry
-        .claim(id, crate::dispatch::DeferredWakeReason::MessageArrived)
-        .await
-        .expect("commit should publish an active claim");
+    let claimed = expect_claimed(
+        registry
+            .claim(id, crate::dispatch::DeferredWakeReason::MessageArrived)
+            .await,
+        "commit should publish an active claim",
+    );
     assert_eq!(claimed.resume_data(), "dispatcher-owned deferred resume");
     assert!(!registry.test_contains(id));
     assert_eq!(registry.test_claim_marker_count(), 1);
@@ -264,28 +367,31 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
     let handler_controller = Arc::clone(&harness.admission_controller);
     let handler_calls = Arc::new(AtomicUsize::new(0));
     let calls = Arc::clone(&handler_calls);
-    let receipt = claimed
-        .resume(
-            DeferredResumeRetainedSize::default(),
-            move |resume, reason| async move {
-                calls.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(handler_admission.snapshot().waiting_count(), 0);
-                assert_eq!(handler_admission.snapshot().retained_bytes(), 0);
-                let execution = handler_controller.snapshot();
-                assert_eq!(execution.queued.current_count, 0);
-                assert_eq!(execution.queued.current_bytes, 0);
-                assert_eq!(execution.inflight.current_count, 1);
-                assert!(execution.inflight.current_bytes > 0);
-                assert_eq!(execution.processors.current_count, 1);
-                assert!(execution.processors.current_bytes > 0);
-                assert_eq!(resume, "dispatcher-owned deferred resume");
-                assert_eq!(reason, DeferredWakeReason::MessageArrived);
-                RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
-            },
-        )
-        .await
-        .expect("resume should use the same session executor and writer");
+    let receipt = expect_deferred_completed(
+        claimed
+            .resume(
+                DeferredResumeRetainedSize::default(),
+                move |resume, reason| async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(handler_admission.snapshot().waiting_count(), 0);
+                    assert_eq!(handler_admission.snapshot().retained_bytes(), 0);
+                    let execution = handler_controller.snapshot();
+                    assert_eq!(execution.queued.current_count, 0);
+                    assert_eq!(execution.queued.current_bytes, 0);
+                    assert_eq!(execution.inflight.current_count, 1);
+                    assert!(execution.inflight.current_bytes > 0);
+                    assert_eq!(execution.processors.current_count, 1);
+                    assert!(execution.processors.current_bytes > 0);
+                    assert_eq!(resume, "dispatcher-owned deferred resume");
+                    assert_eq!(reason, DeferredWakeReason::MessageArrived);
+                    RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
+                        .map_err(|_| RocketMQError::illegal_argument("deferred response construction failed"))
+                },
+            )
+            .await
+            .expect("resume should use the same session executor and writer"),
+        "deferred resume",
+    );
     assert_eq!(receipt.request_id(), original.request_id());
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
     {
@@ -323,7 +429,7 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
 }
 
 #[tokio::test]
-async fn deferred_commit_session_close_balances_armed_metrics_without_recording_registration() {
+async fn deferred_commit_session_close_is_a_normal_terminal_race_without_recording_registration() {
     let harness = DispatchHarness::new("dispatch-deferred-commit-session-close").await;
     let admission = DeferredAdmission::try_configure(
         harness.admission_controller.as_ref(),
@@ -354,10 +460,9 @@ async fn deferred_commit_session_close_balances_armed_metrics_without_recording_
         .await
         .expect("request admission succeeds before deferred commit");
     assert!(matches!(outcome, DispatchOutcome::Accepted(_)));
-    dispatcher.wait_for_failure_report().await;
     harness.drain_requests().await;
 
-    assert_eq!(dispatcher.reported_failure_categories(), ["session_closed"]);
+    assert!(dispatcher.reported_failure_categories().is_empty());
     assert_eq!(registered_events.load(Ordering::SeqCst), 0);
     {
         let adjustments = metric_adjustments.lock();
@@ -379,6 +484,58 @@ async fn deferred_commit_session_close_balances_armed_metrics_without_recording_
     drop(dispatcher);
     drop(registry);
     harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn deferred_commit_classifies_only_invariants_as_admitted_failures() {
+    for (index, (kind, expected_failure)) in [
+        (DeferredCommitErrorKind::ParentCancelled, None),
+        (DeferredCommitErrorKind::SessionClosed, None),
+        (DeferredCommitErrorKind::DeadlineExpired, None),
+        (DeferredCommitErrorKind::ResponseState, Some("response_state")),
+        (DeferredCommitErrorKind::RegistryInvariant, Some("registry_invariant")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let name = match index {
+            0 => "dispatch-commit-parent-cancelled",
+            1 => "dispatch-commit-session-closed",
+            2 => "dispatch-commit-deadline-expired",
+            3 => "dispatch-commit-response-state",
+            4 => "dispatch-commit-registry-invariant",
+            _ => unreachable!("the exact commit-kind table has five entries"),
+        };
+        let mut harness = DispatchHarness::new(name).await;
+        let (telemetry, metric_adjustments, registered_events) = TransportTelemetry::with_deferred_metric_capture();
+        let dispatcher = Arc::new(TestAuthorizedDispatcherCore::new_with_telemetry(
+            CommitFailureProcessor { kind },
+            Vec::new(),
+            telemetry,
+        ));
+        let command = request(false);
+        let (session, _) = harness.request_session(&command);
+
+        let outcome = dispatcher
+            .dispatch(&harness.authorized, session, harness.context(None), command, 256, None)
+            .await
+            .expect("dispatch admission succeeds before the deferred commit");
+        assert!(matches!(outcome, DispatchOutcome::Accepted(_)));
+        harness.drain_requests().await;
+
+        assert_eq!(registered_events.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            dispatcher.reported_failure_categories().as_slice(),
+            expected_failure.as_slice()
+        );
+        {
+            let adjustments = metric_adjustments.lock();
+            assert_eq!(adjustments.as_slice(), &[(1, 256), (-1, -256)]);
+        }
+        harness.assert_no_response().await;
+        drop(dispatcher);
+        harness.shutdown().await;
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -422,28 +579,24 @@ async fn expired_resume_cancels_without_polling_the_handler_or_writing_a_respons
         .lock()
         .expect("registered deferred id lock")
         .expect("processor should publish deferred id");
-    let claimed = registry
-        .claim(id, DeferredWakeReason::Timeout)
-        .await
-        .expect("claim before deadline");
+    let claimed = expect_claimed(
+        registry.claim(id, DeferredWakeReason::Timeout).await,
+        "claim before deadline",
+    );
     let handler_called = Arc::new(AtomicBool::new(false));
     tokio::time::advance(Duration::from_secs(5)).await;
     let called = Arc::clone(&handler_called);
-    let error = claimed
+    let outcome = claimed
         .resume(DeferredResumeRetainedSize::default(), move |_, _| {
             called.store(true, Ordering::SeqCst);
             async move {
                 RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                    .map_err(|_| RocketMQError::illegal_argument("deferred response construction failed"))
             }
         })
         .await
-        .expect_err("owner deadline cancels instead of synthesizing a response");
-    assert_eq!(error.kind(), crate::dispatch::DeferredResumeErrorKind::Cancelled);
-    assert_eq!(
-        error.prior_terminal_reason(),
-        Some(crate::dispatch::DeferredTerminalReason::OwnerDeadline)
-    );
+        .expect("owner deadline is a normal resume outcome");
+    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
     assert!(!handler_called.load(Ordering::SeqCst));
     assert_eq!(registry.test_index_counts(), (0, 0, 0));
     assert_eq!(registry.test_claim_marker_count(), 0);
@@ -492,7 +645,7 @@ async fn real_registry_guards_rollback_on_unclaimed_wrong_and_oneway_handler_out
             .expect("submit invalid real deferred outcome");
         harness.drain_requests().await;
 
-        assert_eq!(dispatcher.reported_failure_categories(), ["handler_contract"]);
+        assert_eq!(dispatcher.reported_failure_categories(), ["contract"]);
         assert!(!fixture.registry.test_contains(fixture.id));
         assert_eq!(fixture.registry.test_index_counts(), (0, 0, 0));
         assert_eq!(fixture.registry.test_claim_marker_count(), 0);
@@ -709,7 +862,7 @@ async fn cancellation_during_processor_wait_binds_one_terminal_observer_without_
         assert!(matches!(
             observations[0].metadata().outcome(),
             ResponseObservationOutcome::Failed {
-                kind: None,
+                completion: None,
                 progress: Some(WriteProgress::NotStarted),
             }
         ));
@@ -891,7 +1044,7 @@ async fn queued_deadline_expiry_attempts_one_plan_write_and_observes_not_started
         assert!(matches!(
             observations[1].outcome(),
             ResponseWriteOutcome::Failed {
-                kind: ResponseErrorKind::DeadlineExceeded,
+                completion: Some(ResponseCompletionOutcome::DeadlineExpired),
                 progress: Some(WriteProgress::NotStarted),
             }
         ));
@@ -958,8 +1111,8 @@ async fn deferred_transfer_and_reply_after_defer_resolve_once_without_inline_wri
         if expected_error {
             assert!(matches!(
                 result,
-                Err(AuthorizedDispatchError::HandlerContract(
-                    HandlerOutcomeContractError::ReplyAfterDeferredTaken
+                Err(AuthorizedDispatchError::Contract(
+                    crate::contract::TransportContractViolation::ReplyAfterDeferredTaken
                 ))
             ));
         } else {
@@ -993,7 +1146,7 @@ async fn real_dispatch_reports_handler_contract_failure_with_fixed_category() {
     .expect("handler-contract reporter");
     harness.drain_requests().await;
 
-    assert_eq!(dispatcher.reported_failure_categories(), ["handler_contract"]);
+    assert_eq!(dispatcher.reported_failure_categories(), ["contract"]);
     assert_eq!(state.clones.load(Ordering::SeqCst), 1);
     assert_eq!(state.processes.load(Ordering::SeqCst), 1);
     assert!(state.observations.lock().expect("observation lock").is_empty());

@@ -27,6 +27,7 @@ use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::BrokerReadWriteStore;
+use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
 use rocketmq_transport::api::DeferredWakeReason;
 use tracing::warn;
@@ -539,7 +540,7 @@ where
             .task_group
             .spawn("broker.deferred.pull-arrival", TaskKind::Worker, async move {
                 let _route = route;
-                if let Ok(claimed) = service.claim_candidate(candidate, reason).await {
+                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
                     submit_pull(service, processor, claimed);
                 }
             });
@@ -560,7 +561,7 @@ where
             .task_group
             .spawn("broker.deferred.pop-arrival", TaskKind::Worker, async move {
                 let _route = route;
-                if let Ok(claimed) = service.claim_candidate(candidate, reason).await {
+                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = service.claim_candidate(candidate, reason).await {
                     submit_pop(service, processor, claimed);
                 }
             });
@@ -582,7 +583,7 @@ where
             .spawn("broker.deferred.pop-lag", TaskKind::Worker, async move {
                 let _route = route;
                 match service.claim_forced_candidate(candidate).await {
-                    Ok(claimed) => {
+                    Ok(DeferredClaimOutcome::Claimed(claimed)) => {
                         let Some(processor) = processor.upgrade() else {
                             drop(observer);
                             return;
@@ -596,7 +597,7 @@ where
                             move |resume, reason| async move { processor.resume_pop(resume, reason).await },
                         );
                     }
-                    Err(error) => observer.complete_claim_error(&error),
+                    result => observer.complete_claim_result(&result),
                 }
             });
         if let Err(error) = spawn {
@@ -615,7 +616,7 @@ where
             .task_group
             .spawn("broker.deferred.notification-arrival", TaskKind::Worker, async move {
                 let _route = route;
-                if let Ok(claimed) = service.claim_arrival_candidate(candidate).await {
+                if let Ok(DeferredClaimOutcome::Claimed(claimed)) = service.claim_arrival_candidate(candidate).await {
                     submit_notification(service, processor, claimed);
                 }
             });

@@ -36,6 +36,7 @@ use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::ServerPushCommand;
 use rocketmq_transport::api::ServerPushSender;
 use rocketmq_transport::api::ServerRequestCommand;
+use rocketmq_transport::api::ServerRequestOutcome;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -460,7 +461,7 @@ impl Broker2Client {
                     )
                     .await
                 {
-                    Ok(response) => {
+                    Ok(ServerRequestOutcome::Responded(response)) => {
                         if response.code() == ResponseCode::Success as i32 {
                             if let Some(body_bytes) = response.body() {
                                 if let Some(body) = GetConsumerStatusBody::decode(body_bytes.as_ref()) {
@@ -474,6 +475,11 @@ impl Broker2Client {
                             }
                         }
                     }
+                    Ok(
+                        ServerRequestOutcome::QueueSaturated
+                        | ServerRequestOutcome::DeadlineExpired
+                        | ServerRequestOutcome::SessionClosed,
+                    ) => {}
                     Err(e) => {
                         error!(
                             "[get-consumer-status] get consumer status exception. topic={}, group={}, error={:?}",

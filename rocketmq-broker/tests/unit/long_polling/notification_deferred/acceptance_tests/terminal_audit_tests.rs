@@ -16,8 +16,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use rocketmq_transport::api::ClaimedDeferred;
-use rocketmq_transport::api::DeferredResumeErrorKind;
-use rocketmq_transport::api::DeferredTerminalReason;
+use rocketmq_transport::api::DeferredResumeOutcome;
 use tokio::sync::Notify;
 
 use super::*;
@@ -90,20 +89,23 @@ async fn notification_deferred_execution_admission_rejects_before_handler_and_wr
 
     let handler_calls = Arc::new(AtomicUsize::new(0));
     let handler_calls_for_resume = Arc::clone(&handler_calls);
-    service
-        .resume_claimed(
-            claim,
-            DeferredResumeRetainedSize::new(AdmissionLimits::default().queued.bytes),
-            move |_resume, _reason| async move {
-                handler_calls_for_resume.fetch_add(1, Ordering::SeqCst);
-                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
-                    ResponseCode::Success,
-                ))
-                .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
-            },
-        )
-        .await
-        .expect("execution rejection writes one canonical overload response");
+    assert!(matches!(
+        service
+            .resume_claimed(
+                claim,
+                DeferredResumeRetainedSize::new(AdmissionLimits::default().queued.bytes),
+                move |_resume, _reason| async move {
+                    handler_calls_for_resume.fetch_add(1, Ordering::SeqCst);
+                    RemotingResponse::command(RemotingCommand::create_response_command_with_code(
+                        ResponseCode::Success,
+                    ))
+                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                },
+            )
+            .await
+            .expect("execution rejection writes one canonical overload response"),
+        DeferredResumeOutcome::Completed(_)
+    ));
 
     let response = client
         .receive_command()
@@ -231,16 +233,11 @@ async fn notification_deferred_service_shutdown_stops_accepted_handler_without_a
     ));
     release.notify_one();
     dropped.notified().await;
-    let error = receipt_rx
+    let outcome = receipt_rx
         .await
         .expect("service-shutdown receipt channel")
-        .expect_err("service shutdown stops an accepted Notification resume");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::Cancelled);
-    assert_eq!(
-        error.prior_terminal_reason(),
-        Some(DeferredTerminalReason::ParentCancelled)
-    );
-    assert_eq!(error.write_progress(), None);
+        .expect("service shutdown is a normal deferred resume outcome");
+    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
     assert_terminal(&service);
 
@@ -295,16 +292,11 @@ async fn notification_deferred_parent_cancel_stops_accepted_handler_without_a_fr
 
     running.begin_shutdown();
     dropped.notified().await;
-    let error = receipt_rx
+    let outcome = receipt_rx
         .await
         .expect("parent-cancel receipt channel")
-        .expect_err("parent cancellation stops accepted Notification resume");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::Cancelled);
-    assert_eq!(
-        error.prior_terminal_reason(),
-        Some(DeferredTerminalReason::ParentCancelled)
-    );
-    assert_eq!(error.write_progress(), None);
+        .expect("parent cancellation is a normal deferred resume outcome");
+    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
     assert_eq!(handler_calls.load(Ordering::SeqCst), 1);
     assert_terminal(&service);
     drop(release);

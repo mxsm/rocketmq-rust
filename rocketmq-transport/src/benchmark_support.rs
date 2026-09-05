@@ -131,10 +131,14 @@ impl AdmissionHotPathHarness {
     }
 
     pub fn registry_lookup_acquire_release(&self, bytes: usize) {
-        let permit = self
-            .controller
-            .try_acquire(AdmissionResource::Inflight, self.scope, bytes, AdmissionClass::Data)
-            .expect("registry lookup admission");
+        let permit =
+            match self
+                .controller
+                .try_acquire(AdmissionResource::Inflight, self.scope, bytes, AdmissionClass::Data)
+            {
+                crate::admission::AdmissionOutcome::Acquired(permit) => permit,
+                crate::admission::AdmissionOutcome::Rejected(_) => panic!("registry lookup admission"),
+            };
         black_box(permit);
     }
 

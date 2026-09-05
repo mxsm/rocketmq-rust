@@ -30,15 +30,18 @@ use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeOwner;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
 use tokio_util::sync::CancellationToken;
 
+use super::classify_writer_failure;
 use super::Connection;
 use super::ConnectionState;
 use super::FrameLimits;
+use super::LegacyWriterReason;
 use super::RequestStopPolicy;
 use super::SessionLifecycle;
 use crate::admission::AdmissionClass;
@@ -46,19 +49,104 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
+use crate::admission::AdmissionScopeHandle;
 use crate::admission::ResourceLimit;
-use crate::dispatch::ResponseError;
+use crate::deadline::RequestDeadline;
+use crate::dispatch::RequestControlView;
+use crate::dispatch::RequestMeta;
+use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseSendOutcome;
 use crate::dispatch::WriteProgress;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
 use crate::file_region::FileTransferMode;
+use crate::session_view::SessionStateView;
 use crate::telemetry::TransportTelemetry;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteProgress;
 use crate::writer_runtime::run_session_writer;
 use crate::writer_runtime::writer_lanes;
+use crate::writer_runtime::WriterEnqueueOutcome;
+use crate::writer_runtime::WriterLanes;
 use crate::writer_runtime::WriterQueueConfig;
+
+fn expect_writer_enqueued(outcome: WriterEnqueueOutcome) {
+    match outcome {
+        WriterEnqueueOutcome::Enqueued => {}
+        WriterEnqueueOutcome::Full(write) | WriterEnqueueOutcome::Closed(write) => {
+            drop(write);
+            panic!("writer lane accepts the blocker")
+        }
+    }
+}
+
+fn enqueue_raw_write(
+    lanes: &WriterLanes,
+    admission: &AdmissionScopeHandle,
+    deadline: Option<RequestDeadline>,
+    target: &'static str,
+) -> tokio::sync::oneshot::Receiver<crate::write_result::WriterResult> {
+    let permit = admission
+        .try_acquire(AdmissionResource::Queued, 1, AdmissionClass::Data)
+        .expect("reserve raw queued write");
+    let (completion, result) = tokio::sync::oneshot::channel();
+    expect_writer_enqueued(lanes.try_send(
+        AdmissionClass::Data,
+        QueuedWrite::data(
+            OutboundPayload::Contiguous(Bytes::from_static(b"typed")),
+            completion,
+            permit,
+            deadline,
+            target.to_string(),
+            Arc::new(QueuedWriteProgress::waiting()),
+            std::time::Instant::now(),
+        ),
+    ));
+    result
+}
+
+fn assert_operational_failure(outcome: ResponseSendOutcome, expected: WriteProgress, operation: &'static str) {
+    match outcome {
+        ResponseSendOutcome::OperationalFailure(error) => {
+            assert_eq!(error.operation(), operation);
+            assert_eq!(error.write_progress(), expected);
+            let source = Error::source(&error).expect("operational response failure source");
+            assert!(source.downcast_ref::<RocketMQError>().is_some());
+        }
+        ResponseSendOutcome::Written => panic!("{operation} unexpectedly completed"),
+        ResponseSendOutcome::Rejected(completion) => {
+            panic!("{operation} unexpectedly returned normal completion {:?}", completion)
+        }
+    }
+}
+
+fn assert_normal_rejection(outcome: ResponseSendOutcome, expected: ResponseCompletionOutcome) {
+    match outcome {
+        ResponseSendOutcome::Rejected(actual) => assert_eq!(actual, expected),
+        ResponseSendOutcome::Written => panic!("response unexpectedly completed"),
+        ResponseSendOutcome::OperationalFailure(_) => panic!("response unexpectedly failed operationally"),
+    }
+}
+
+fn assert_not_started_prewrite_operational(outcome: ResponseSendOutcome) {
+    let ResponseSendOutcome::OperationalFailure(error) = outcome else {
+        panic!("pre-write failure must remain operational")
+    };
+    assert_eq!(error.operation(), "transport");
+    assert_eq!(error.write_progress(), WriteProgress::NotStarted);
+    let source = Error::source(&error).expect("pre-write operational failure source");
+    let RocketMQError::Shared(shared) = source
+        .downcast_ref::<RocketMQError>()
+        .expect("pre-write failure retains RocketMQ error")
+    else {
+        panic!("pre-write failure retains the shared writer source")
+    };
+    assert!(matches!(
+        shared.as_error(),
+        RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })
+    ));
+}
 
 fn explicit_sendfile_payload() -> OutboundPayload {
     let mut file = tempfile::tempfile().expect("temporary file");
@@ -238,22 +326,21 @@ async fn typed_response_encode_failure_is_not_started_and_keeps_direct_writer_he
     let (transport, peer_transport) = tokio::io::duplex(4096);
     let mut connection = Connection::new_with_plaintext_stream_and_limits(transport, limits);
 
-    let error = connection
-        .send_response(RemotingCommand::create_remoting_command(1).set_body(vec![1]))
-        .await
-        .expect_err("body above the zero-byte profile must fail encoding");
-    let ResponseError::Encode { source } = &error else {
-        panic!("oversized response must retain the typed encoding failure")
-    };
-    assert_eq!(error.write_progress(), Some(WriteProgress::NotStarted));
-    let _ = source.kind();
-    assert!(Error::source(&error).is_some());
+    assert_operational_failure(
+        connection
+            .send_response(RemotingCommand::create_remoting_command(1).set_body(vec![1]))
+            .await,
+        WriteProgress::NotStarted,
+        "encode",
+    );
     assert_eq!(connection.state(), ConnectionState::Healthy);
 
-    connection
-        .send_response(RemotingCommand::create_remoting_command(2))
-        .await
-        .expect("a deterministic preflight failure must not poison the writer");
+    assert!(matches!(
+        connection
+            .send_response(RemotingCommand::create_remoting_command(2))
+            .await,
+        ResponseSendOutcome::Written
+    ));
     let mut peer = Connection::new_with_plaintext_stream_and_limits(peer_transport, limits);
     let response = peer
         .receive_command()
@@ -278,20 +365,18 @@ async fn typed_response_queue_saturation_is_not_started() {
         .try_acquire(AdmissionResource::Queued, 1, AdmissionClass::Data)
         .expect("reserve blocker");
     let (completion, _completion_result) = tokio::sync::oneshot::channel();
-    lanes
-        .try_send(
-            AdmissionClass::Data,
-            QueuedWrite::data(
-                OutboundPayload::Contiguous(Bytes::from_static(b"x")),
-                completion,
-                permit,
-                None,
-                "queued-blocker".to_string(),
-                Arc::new(QueuedWriteProgress::waiting()),
-                std::time::Instant::now(),
-            ),
-        )
-        .expect("fill data lane");
+    expect_writer_enqueued(lanes.try_send(
+        AdmissionClass::Data,
+        QueuedWrite::data(
+            OutboundPayload::Contiguous(Bytes::from_static(b"x")),
+            completion,
+            permit,
+            None,
+            "queued-blocker".to_string(),
+            Arc::new(QueuedWriteProgress::waiting()),
+            std::time::Instant::now(),
+        ),
+    ));
     let diagnostics = Arc::new(super::SessionWriterDiagnostics::new(config.total_capacity()));
     let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
     let mut connection = Connection::new_queued(
@@ -306,13 +391,12 @@ async fn typed_response_queue_saturation_is_not_started() {
         Arc::new(SessionLifecycle::new()),
         TransportTelemetry::noop(),
     );
-    let error = connection
-        .send_response(RemotingCommand::create_remoting_command(7))
-        .await
-        .expect_err("a full data lane must reject the typed response");
-
-    assert!(matches!(&error, ResponseError::QueueSaturated));
-    assert_eq!(error.write_progress(), Some(WriteProgress::NotStarted));
+    assert_normal_rejection(
+        connection
+            .send_response(RemotingCommand::create_remoting_command(7))
+            .await,
+        ResponseCompletionOutcome::QueueSaturated,
+    );
     drop(connection);
     drop(lanes);
     drop(receivers);
@@ -349,12 +433,12 @@ async fn typed_response_admission_saturation_is_not_started_before_lane_enqueue(
         TransportTelemetry::noop(),
     );
 
-    let error = connection
-        .send_response(RemotingCommand::create_remoting_command(7))
-        .await
-        .expect_err("admission exhaustion must reject before lane enqueue");
-    assert!(matches!(&error, ResponseError::QueueSaturated));
-    assert_eq!(error.write_progress(), Some(WriteProgress::NotStarted));
+    assert_normal_rejection(
+        connection
+            .send_response(RemotingCommand::create_remoting_command(7))
+            .await,
+        ResponseCompletionOutcome::QueueSaturated,
+    );
     drop(connection);
     drop(lanes);
     drop(receivers);
@@ -403,10 +487,12 @@ async fn queued_response_api_records_queue_wait_but_generic_commands_do_not() {
         .send_command(RemotingCommand::create_remoting_command(7))
         .await
         .expect("generic command write");
-    connection
-        .send_response(RemotingCommand::create_response_command_with_code(0))
-        .await
-        .expect("owned response write");
+    assert!(matches!(
+        connection
+            .send_response(RemotingCommand::create_response_command_with_code(0))
+            .await,
+        ResponseSendOutcome::Written
+    ));
 
     assert_eq!(capture.response_queue_waits(), 1);
     drop(connection);
@@ -457,13 +543,7 @@ async fn actual_dropped_queued_completion_before_start_maps_to_typed_not_started
     let response = outcome
         .expect_err("dropped completion must fail the waiting caller")
         .into_response();
-    assert!(matches!(
-        response,
-        ResponseError::Transport {
-            progress: WriteProgress::NotStarted,
-            ..
-        }
-    ));
+    assert_operational_failure(response, WriteProgress::NotStarted, "transport");
     drop(connection);
     drop(lanes);
     assert_eq!(controller.snapshot().queued.current_count, 0);
@@ -530,13 +610,7 @@ async fn actual_dropped_active_completion_maps_to_typed_possibly_partial() {
     let response = outcome
         .expect_err("dropped active completion must fail the waiting caller")
         .into_response();
-    assert!(matches!(
-        response,
-        ResponseError::Transport {
-            progress: WriteProgress::PossiblyPartial,
-            ..
-        }
-    ));
+    assert_operational_failure(response, WriteProgress::PossiblyPartial, "transport");
     assert_eq!(writes.load(Ordering::Acquire), 1);
     drop(connection);
     assert_eq!(controller.snapshot().queued.current_count, 0);
@@ -554,20 +628,13 @@ async fn typed_response_write_and_flush_failures_are_possibly_partial_with_a_typ
             writes: Arc::clone(&writes),
             phase,
         });
-        let error = connection
-            .send_response(RemotingCommand::create_remoting_command(7))
-            .await
-            .expect_err("injected transport failure");
-
-        let ResponseError::Transport { progress, source } = &error else {
-            panic!("transport failures must preserve typed response completion")
-        };
-        assert_eq!(*progress, WriteProgress::PossiblyPartial);
-        let RocketMQError::Shared(shared) = source else {
-            panic!("writer completion must preserve the shared typed source")
-        };
-        assert!(matches!(shared.as_error(), RocketMQError::IO(_)));
-        assert!(Error::source(&error).is_some());
+        assert_operational_failure(
+            connection
+                .send_response(RemotingCommand::create_remoting_command(7))
+                .await,
+            WriteProgress::PossiblyPartial,
+            "transport",
+        );
         assert_eq!(connection.state(), ConnectionState::Closed);
         assert!(writes.load(Ordering::Acquire) >= 1);
         if matches!(phase, DirectFailurePhase::PartialThenError) {
@@ -601,13 +668,7 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
         )
         .await
         .expect_err("TLS sendfile preflight must fail");
-    assert!(matches!(
-        typed.into_response(),
-        ResponseError::Transport {
-            progress: WriteProgress::NotStarted,
-            ..
-        }
-    ));
+    assert_operational_failure(typed.into_response(), WriteProgress::NotStarted, "transport");
     assert_eq!(connection.state(), ConnectionState::Healthy);
     connection
         .send_command(RemotingCommand::create_remoting_command(98))
@@ -677,14 +738,7 @@ async fn direct_preflight_deadline_is_not_started_and_keeps_the_writer_healthy()
     resume.notify_one();
     let (mut connection, outcome) = send.await.expect("direct send task");
     let response = outcome.expect_err("preflight deadline must fail").into_response();
-
-    assert!(matches!(
-        response,
-        ResponseError::Transport {
-            progress: WriteProgress::NotStarted,
-            ..
-        }
-    ));
+    assert_normal_rejection(response, ResponseCompletionOutcome::DeadlineExpired);
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
     assert_eq!(connection.state(), ConnectionState::Healthy);
@@ -803,14 +857,7 @@ async fn queued_preflight_deadline_matches_direct_not_started_classification_wit
     let response = outcome
         .expect_err("queued preflight deadline must fail")
         .into_response();
-
-    assert!(matches!(
-        response,
-        ResponseError::Transport {
-            progress: WriteProgress::NotStarted,
-            ..
-        }
-    ));
+    assert_normal_rejection(response, ResponseCompletionOutcome::DeadlineExpired);
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
     assert_eq!(queued_connection.state(), ConnectionState::Healthy);
@@ -822,6 +869,399 @@ async fn queued_preflight_deadline_matches_direct_not_started_classification_wit
     assert!(flushes.load(Ordering::Acquire) > 0);
     drop(queued_connection);
     writer.await.expect("writer must exit after queue handles drop");
+}
+
+#[tokio::test(start_paused = true)]
+async fn micro_batch_preflight_deadline_only_rejects_the_member_that_caused_the_cutoff() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let writes = Arc::new(AtomicUsize::new(0));
+    let flushes = Arc::new(AtomicUsize::new(0));
+    let checked = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let mut physical_connection = Connection::new_with_plaintext_stream(CountingTransport {
+        writes: Arc::clone(&writes),
+        flushes: Arc::clone(&flushes),
+    });
+    physical_connection.set_write_preflight_barrier(crate::write_strategy::WritePreflightBarrier::new(
+        Arc::clone(&checked),
+        Arc::clone(&resume),
+    ));
+    let (frame_writer, _reader) = physical_connection.into_session_io(admission.clone());
+    let config = WriterQueueConfig {
+        max_write_stall: std::time::Duration::from_secs(1),
+        ..WriterQueueConfig::default()
+    };
+    let diagnostics = Arc::new(super::SessionWriterDiagnostics::new(config.total_capacity()));
+    let (lanes, receivers) = writer_lanes(config);
+    let short_deadline = RequestDeadline::after(std::time::Duration::from_millis(10));
+    let late_deadline = RequestDeadline::after(std::time::Duration::from_millis(80));
+    let short_result = enqueue_raw_write(&lanes, &admission, Some(short_deadline), "short-member");
+    let late_result = enqueue_raw_write(&lanes, &admission, Some(late_deadline), "late-member");
+    let no_deadline_result = enqueue_raw_write(&lanes, &admission, None, "undeadlined-member");
+    let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let writer = tokio::spawn(run_session_writer(
+        frame_writer,
+        receivers,
+        diagnostics,
+        state_tx,
+        CancellationToken::new(),
+        TransportTelemetry::noop(),
+    ));
+
+    checked.notified().await;
+    tokio::time::advance(std::time::Duration::from_millis(10)).await;
+    tokio::task::yield_now().await;
+    let short_failure = short_result
+        .await
+        .expect("short member completion")
+        .expect_err("short deadline must fail the pre-write batch");
+    let late_failure = late_result
+        .await
+        .expect("late member completion")
+        .expect_err("late member shares the pre-write batch failure");
+    let no_deadline_failure = no_deadline_result
+        .await
+        .expect("undeadlined member completion")
+        .expect_err("undeadlined member shares the pre-write batch failure");
+    assert!(std::ptr::eq(
+        short_failure.source().as_error(),
+        late_failure.source().as_error()
+    ));
+    assert!(std::ptr::eq(
+        short_failure.source().as_error(),
+        no_deadline_failure.source().as_error()
+    ));
+
+    tokio::time::advance(std::time::Duration::from_millis(80)).await;
+    assert_normal_rejection(
+        classify_writer_failure(
+            "short-member".to_string(),
+            short_failure,
+            LegacyWriterReason::CanonicalWriter,
+            Some(short_deadline),
+        )
+        .into_response(),
+        ResponseCompletionOutcome::DeadlineExpired,
+    );
+    assert_not_started_prewrite_operational(
+        classify_writer_failure(
+            "late-member".to_string(),
+            late_failure,
+            LegacyWriterReason::CanonicalWriter,
+            Some(late_deadline),
+        )
+        .into_response(),
+    );
+    assert_not_started_prewrite_operational(
+        classify_writer_failure(
+            "undeadlined-member".to_string(),
+            no_deadline_failure,
+            LegacyWriterReason::CanonicalWriter,
+            None,
+        )
+        .into_response(),
+    );
+    assert_eq!(writes.load(Ordering::Acquire), 0);
+    assert_eq!(flushes.load(Ordering::Acquire), 0);
+    assert_eq!(*state_rx.borrow(), ConnectionState::Healthy);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+
+    let followup = enqueue_raw_write(&lanes, &admission, None, "followup-member");
+    followup
+        .await
+        .expect("follow-up completion")
+        .expect("healthy writer remains reusable");
+    assert!(writes.load(Ordering::Acquire) > 0);
+    assert!(flushes.load(Ordering::Acquire) > 0);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+    drop(lanes);
+    writer.await.expect("writer exits after queue handles drop");
+}
+
+#[tokio::test(start_paused = true)]
+async fn prewrite_stall_without_an_owner_deadline_remains_a_typed_failure() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let writes = Arc::new(AtomicUsize::new(0));
+    let flushes = Arc::new(AtomicUsize::new(0));
+    let checked = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let mut physical_connection = Connection::new_with_plaintext_stream(CountingTransport {
+        writes: Arc::clone(&writes),
+        flushes: Arc::clone(&flushes),
+    });
+    physical_connection.set_write_preflight_barrier(crate::write_strategy::WritePreflightBarrier::new(
+        Arc::clone(&checked),
+        Arc::clone(&resume),
+    ));
+    let (frame_writer, _reader) = physical_connection.into_session_io(admission.clone());
+    let config = WriterQueueConfig {
+        max_write_stall: std::time::Duration::from_millis(10),
+        ..WriterQueueConfig::default()
+    };
+    let diagnostics = Arc::new(super::SessionWriterDiagnostics::new(config.total_capacity()));
+    let (lanes, receivers) = writer_lanes(config);
+    let stalled_result = enqueue_raw_write(&lanes, &admission, None, "stalled-member");
+    let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let writer = tokio::spawn(run_session_writer(
+        frame_writer,
+        receivers,
+        diagnostics,
+        state_tx,
+        CancellationToken::new(),
+        TransportTelemetry::noop(),
+    ));
+
+    checked.notified().await;
+    tokio::time::advance(std::time::Duration::from_millis(10)).await;
+    tokio::task::yield_now().await;
+    let failure = stalled_result
+        .await
+        .expect("stalled member completion")
+        .expect_err("writer stall must fail before socket I/O");
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    assert_not_started_prewrite_operational(
+        classify_writer_failure(
+            "stalled-member".to_string(),
+            failure,
+            LegacyWriterReason::CanonicalWriter,
+            None,
+        )
+        .into_response(),
+    );
+    assert_eq!(writes.load(Ordering::Acquire), 0);
+    assert_eq!(flushes.load(Ordering::Acquire), 0);
+    assert_eq!(*state_rx.borrow(), ConnectionState::Healthy);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+
+    let followup = enqueue_raw_write(&lanes, &admission, None, "followup-member");
+    followup
+        .await
+        .expect("follow-up completion")
+        .expect("healthy writer remains reusable");
+    assert!(writes.load(Ordering::Acquire) > 0);
+    assert!(flushes.load(Ordering::Acquire) > 0);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+    drop(lanes);
+    writer.await.expect("writer exits after queue handles drop");
+}
+
+#[tokio::test(start_paused = true)]
+async fn queued_control_does_not_reclassify_a_completed_stall_after_its_later_deadline() {
+    let runtime = RuntimeContext::from_current("queued-completion-cause-test");
+    let parent = runtime
+        .service_context("queued-completion-cause-test")
+        .task_group()
+        .clone();
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let writes = Arc::new(AtomicUsize::new(0));
+    let flushes = Arc::new(AtomicUsize::new(0));
+    let checked = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let mut physical_connection = Connection::new_with_plaintext_stream(CountingTransport {
+        writes: Arc::clone(&writes),
+        flushes: Arc::clone(&flushes),
+    });
+    physical_connection.set_write_preflight_barrier(crate::write_strategy::WritePreflightBarrier::new(
+        Arc::clone(&checked),
+        Arc::clone(&resume),
+    ));
+    let (frame_writer, _reader) = physical_connection.into_session_io(admission.clone());
+    let config = WriterQueueConfig {
+        max_write_stall: std::time::Duration::from_millis(10),
+        ..WriterQueueConfig::default()
+    };
+    let diagnostics = Arc::new(super::SessionWriterDiagnostics::new(config.total_capacity()));
+    let (lanes, receivers) = writer_lanes(config);
+    let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let mut connection = Connection::new_queued(
+        lanes.clone(),
+        Arc::clone(&diagnostics),
+        admission,
+        state_tx.clone(),
+        state_rx,
+        CheetahString::from_string("queued-completion-cause-test".to_string()),
+        FrameLimits::default(),
+        Some(AdmissionClass::Data),
+        Arc::new(SessionLifecycle::new()),
+        TransportTelemetry::noop(),
+    );
+    let writer = tokio::spawn(run_session_writer(
+        frame_writer,
+        receivers,
+        Arc::clone(&diagnostics),
+        state_tx,
+        CancellationToken::new(),
+        TransportTelemetry::noop(),
+    ));
+    let owner_deadline = RequestDeadline::after(std::time::Duration::from_millis(80));
+    let (control_state_tx, control_state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
+    let control = RequestControlView::from_meta(
+        &RequestMeta::new(std::time::Instant::now(), Some(owner_deadline)),
+        SessionStateView::from_receivers(control_state_rx, closed_rx),
+        &parent,
+    );
+    let mut send = Box::pin(connection.send_payload_inner(
+        OutboundPayload::Contiguous(Bytes::from_static(b"delayed-observer")),
+        AdmissionClass::Data,
+        None,
+        Some(owner_deadline),
+        Some(&control),
+        RequestStopPolicy::All,
+        None,
+        "delayed-observer".to_string(),
+    ));
+    assert!(futures_util::poll!(&mut send).is_pending());
+
+    checked.notified().await;
+    tokio::time::advance(std::time::Duration::from_millis(10)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(diagnostics.snapshot().failed, 1);
+    tokio::time::advance(std::time::Duration::from_millis(80)).await;
+    assert!(control.deadline().is_some_and(RequestDeadline::is_expired));
+    let response = send
+        .await
+        .expect_err("the completed writer stall must remain a typed failure")
+        .into_response();
+    assert_not_started_prewrite_operational(response);
+    assert_eq!(writes.load(Ordering::Acquire), 0);
+    assert_eq!(flushes.load(Ordering::Acquire), 0);
+    assert_eq!(connection.state(), ConnectionState::Healthy);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+
+    connection
+        .send_command(RemotingCommand::create_remoting_command(13))
+        .await
+        .expect("completed stall leaves the canonical writer reusable");
+    assert!(writes.load(Ordering::Acquire) > 0);
+    assert!(flushes.load(Ordering::Acquire) > 0);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+    drop(connection);
+    drop(lanes);
+    writer.await.expect("writer exits after queue handles drop");
+    drop(control);
+    drop(control_state_tx);
+    drop(closed_tx);
+    drop(parent);
+    let shutdown = runtime.shutdown_tasks(std::time::Duration::from_secs(1)).await;
+    assert!(shutdown.is_healthy(), "{}", shutdown.to_json());
+}
+
+#[tokio::test(start_paused = true)]
+async fn queued_control_does_not_reclassify_a_dropped_completion_after_its_later_deadline() {
+    let runtime = RuntimeContext::from_current("queued-dropped-completion-cause-test");
+    let parent = runtime
+        .service_context("queued-dropped-completion-cause-test")
+        .task_group()
+        .clone();
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let writes = Arc::new(AtomicUsize::new(0));
+    let flushes = Arc::new(AtomicUsize::new(0));
+    let physical_connection = Connection::new_with_plaintext_stream(CountingTransport {
+        writes: Arc::clone(&writes),
+        flushes: Arc::clone(&flushes),
+    });
+    let (frame_writer, _reader) = physical_connection.into_session_io(admission.clone());
+    let config = WriterQueueConfig::default();
+    let diagnostics = Arc::new(super::SessionWriterDiagnostics::new(config.total_capacity()));
+    let (lanes, mut receivers) = writer_lanes(config);
+    let (state_tx, state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let mut connection = Connection::new_queued(
+        lanes.clone(),
+        Arc::clone(&diagnostics),
+        admission,
+        state_tx.clone(),
+        state_rx,
+        CheetahString::from_string("queued-dropped-completion-cause-test".to_string()),
+        FrameLimits::default(),
+        Some(AdmissionClass::Data),
+        Arc::new(SessionLifecycle::new()),
+        TransportTelemetry::noop(),
+    );
+    let owner_deadline = RequestDeadline::after(std::time::Duration::from_millis(80));
+    let (control_state_tx, control_state_rx) = tokio::sync::watch::channel(ConnectionState::Healthy);
+    let (closed_tx, closed_rx) = tokio::sync::watch::channel(false);
+    let control = RequestControlView::from_meta(
+        &RequestMeta::new(std::time::Instant::now(), Some(owner_deadline)),
+        SessionStateView::from_receivers(control_state_rx, closed_rx),
+        &parent,
+    );
+    let mut send = Box::pin(connection.send_payload_inner(
+        OutboundPayload::Contiguous(Bytes::from_static(b"dropped-observer")),
+        AdmissionClass::Data,
+        None,
+        Some(owner_deadline),
+        Some(&control),
+        RequestStopPolicy::All,
+        None,
+        "dropped-observer".to_string(),
+    ));
+    assert!(futures_util::poll!(&mut send).is_pending());
+
+    receivers.drop_next_write_for_test().await;
+    tokio::time::advance(std::time::Duration::from_millis(80)).await;
+    assert!(control.deadline().is_some_and(RequestDeadline::is_expired));
+    let response = send
+        .await
+        .expect_err("a dropped writer completion must remain a typed failure")
+        .into_response();
+    let ResponseSendOutcome::OperationalFailure(error) = response else {
+        panic!("a dropped writer completion must remain operational")
+    };
+    assert_eq!(error.operation(), "transport");
+    assert_eq!(error.write_progress(), WriteProgress::NotStarted);
+    let source = Error::source(&error).expect("dropped completion source");
+    let RocketMQError::Shared(shared) = source
+        .downcast_ref::<RocketMQError>()
+        .expect("dropped completion retains RocketMQ error")
+    else {
+        panic!("dropped completion retains the shared writer source")
+    };
+    assert!(matches!(
+        shared.as_error(),
+        RocketMQError::Network(NetworkError::ConnectionFailed { .. })
+    ));
+    assert_eq!(writes.load(Ordering::Acquire), 0);
+    assert_eq!(flushes.load(Ordering::Acquire), 0);
+    assert_eq!(connection.state(), ConnectionState::Healthy);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+
+    let writer = tokio::spawn(run_session_writer(
+        frame_writer,
+        receivers,
+        diagnostics,
+        state_tx,
+        CancellationToken::new(),
+        TransportTelemetry::noop(),
+    ));
+    connection
+        .send_command(RemotingCommand::create_remoting_command(14))
+        .await
+        .expect("dropped completion leaves the canonical writer reusable");
+    assert!(writes.load(Ordering::Acquire) > 0);
+    assert!(flushes.load(Ordering::Acquire) > 0);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+    drop(connection);
+    drop(lanes);
+    writer.await.expect("writer exits after queue handles drop");
+    drop(control);
+    drop(control_state_tx);
+    drop(closed_tx);
+    drop(parent);
+    let shutdown = runtime.shutdown_tasks(std::time::Duration::from_secs(1)).await;
+    assert!(shutdown.is_healthy(), "{}", shutdown.to_json());
 }
 
 #[tokio::test]
@@ -899,13 +1339,7 @@ async fn queued_typed_transport_failure_matches_direct_possibly_partial_classifi
         .into_response();
     writer.await.expect("poisoned writer task must exit");
 
-    assert!(matches!(
-        response,
-        ResponseError::Transport {
-            progress: WriteProgress::PossiblyPartial,
-            ..
-        }
-    ));
+    assert_operational_failure(response, WriteProgress::PossiblyPartial, "transport");
     assert_eq!(connection.state(), ConnectionState::Closed);
 }
 

@@ -35,11 +35,10 @@ use rocketmq_store::MessageFilter;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredAdmission;
-use rocketmq_transport::api::DeferredClaimErrorKind;
+use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredId;
-use rocketmq_transport::api::DeferredResumeErrorKind;
-use rocketmq_transport::api::DeferredTerminalReason;
+use rocketmq_transport::api::DeferredResumeOutcome;
 use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::HandlerOutcome;
@@ -363,11 +362,14 @@ async fn prepared_arrival_and_timeout_reexecute_then_write_one_bound_frame() {
         let mut pending_claim = Box::pin(service.claim(registered.id, wake_reason));
         tokio::select! {
             biased;
-            result = &mut pending_claim => panic!("prepared claim completed before dispatcher commit: {result:?}"),
+            _ = &mut pending_claim => panic!("prepared claim completed before dispatcher commit"),
             _ = tokio::task::yield_now() => {}
         }
         barrier.release_outcome.notify_one();
-        let claim = pending_claim.await.expect("prepared wake replays after commit");
+        let DeferredClaimOutcome::Claimed(claim) = pending_claim.await.expect("prepared wake replays after commit")
+        else {
+            panic!("prepared wake must retain the claimed POP request");
+        };
         assert_eq!(claim.reason(), wake_reason);
         assert_eq!(service.index_snapshot().live(), 0);
         assert_eq!(service.admission_snapshot().waiting_count(), 1);
@@ -416,14 +418,17 @@ async fn prepared_arrival_and_timeout_reexecute_then_write_one_bound_frame() {
         );
         tokio::select! {
             biased;
-            result = &mut completion => panic!("POP wake completion finished before canonical resume/write: {result:?}"),
+            _ = &mut completion => panic!("POP wake completion finished before canonical resume/write"),
             _ = tokio::task::yield_now() => {}
         }
         handler_release.notify_one();
-        receipt_rx
-            .await
-            .expect("resume receipt channel")
-            .expect("accepted POP resume drains through canonical writing");
+        assert!(matches!(
+            receipt_rx
+                .await
+                .expect("resume receipt channel")
+                .expect("accepted POP resume drains through canonical writing"),
+            DeferredResumeOutcome::Completed(_)
+        ));
         assert_eq!(
             completion.await.expect("POP wake completion"),
             crate::long_polling::pop_deferred::service::PopWakeupOutcome::ProcessingCompleted
@@ -516,10 +521,13 @@ async fn legacy_route_rearms_a_real_waiter_for_the_next_tick_without_a_new_arriv
         .expect("rewound tick reaches the same real waiter");
     assert_eq!(next_candidate.id(), registered.id);
     assert!(next_tick.finish_if_clean());
-    let claimed = service
+    let DeferredClaimOutcome::Claimed(claimed) = service
         .claim_candidate(next_candidate, DeferredWakeReason::MessageArrived)
         .await
-        .expect("transitioned New route can claim the retained waiter");
+        .expect("transitioned New route can claim the retained waiter")
+    else {
+        panic!("transitioned New route must retain the claimed waiter");
+    };
     drop(claimed);
 
     drop(client);
@@ -571,7 +579,7 @@ async fn provisional_oldest_claim_does_not_hide_active_second_waiter() {
     let mut pending_first = Box::pin(service.claim_message(&arrival, PopSelectionOrder::Oldest));
     tokio::select! {
         biased;
-        result = &mut pending_first => panic!("provisional oldest claim completed before commit: {result:?}"),
+        _ = &mut pending_first => panic!("provisional oldest claim completed before commit"),
         _ = tokio::task::yield_now() => {}
     }
     let second_claim = service
@@ -618,10 +626,13 @@ async fn service_shutdown_drains_accepted_resume_to_parent_cancelled_without_a_f
         .expect("send deferred POP request");
     let registered = registrations.recv().await.expect("observe POP registration");
     commit_barrier(&mut client, &barrier, 9_824).await;
-    let claim = service
+    let DeferredClaimOutcome::Claimed(claim) = service
         .claim(registered.id, DeferredWakeReason::MessageArrived)
         .await
-        .expect("claim active POP waiter");
+        .expect("claim active POP waiter")
+    else {
+        panic!("active POP waiter must be claimed");
+    };
 
     let handler_started = Arc::new(Notify::new());
     let handler_release = Arc::new(Notify::new());
@@ -660,16 +671,11 @@ async fn service_shutdown_drains_accepted_resume_to_parent_cancelled_without_a_f
         rocketmq_transport::api::DeferredRegistryShutdownOutcome::Completed(_)
     ));
     handler_release.notify_one();
-    let error = receipt_rx
+    let outcome = receipt_rx
         .await
         .expect("resume cancellation result channel")
-        .expect_err("service shutdown terminalizes the accepted resume");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::Cancelled);
-    assert_eq!(
-        error.prior_terminal_reason(),
-        Some(DeferredTerminalReason::ParentCancelled)
-    );
-    assert_eq!(error.write_progress(), None);
+        .expect("cancellation is a normal deferred resume outcome");
+    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
     assert_eq!(handler_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_released(&service);
 
@@ -786,10 +792,13 @@ async fn topic_fanout_and_forced_refresh_bypass_filter_then_cleanup() {
     let candidate = service
         .reserve_target_arrival_candidate(&target, forced_arrival, PopSelectionOrder::Oldest)
         .expect("forced target bypasses the filter");
-    let forced = service
+    let DeferredClaimOutcome::Claimed(forced) = service
         .claim_forced_candidate(candidate)
         .await
-        .expect("forced refresh claim");
+        .expect("forced refresh claim")
+    else {
+        panic!("forced refresh must retain the claimed POP request");
+    };
     assert_eq!(forced.deferred_id(), registered.id);
     assert_eq!(forced.reason(), DeferredWakeReason::ForcedRefresh);
     drop(forced);
@@ -820,17 +829,20 @@ async fn duplicate_claim_and_session_close_never_execute_or_write() {
     let registered = registrations.recv().await.expect("registration");
     commit_barrier(&mut client, &barrier, 12).await;
 
-    let first = service
+    let DeferredClaimOutcome::Claimed(first) = service
         .claim(registered.id, DeferredWakeReason::MessageArrived)
         .await
-        .expect("first claim");
+        .expect("first claim")
+    else {
+        panic!("first claim must own the deferred request");
+    };
     let duplicate = service
         .claim(registered.id, DeferredWakeReason::Timeout)
         .await
-        .expect_err("a live claim excludes every duplicate reason");
-    assert_eq!(duplicate.kind(), DeferredClaimErrorKind::AlreadyClaimed);
+        .expect("a duplicate claim is normal lifecycle control flow");
+    assert!(matches!(&duplicate, DeferredClaimOutcome::AlreadyClaimed));
     let (observer, completion) = PopDeferredWakeupObserver::new();
-    observer.complete_claim_error(&duplicate);
+    observer.complete_claim_result(&Ok(duplicate));
     assert_eq!(
         completion.await.expect("duplicate wake completion"),
         crate::long_polling::pop_deferred::service::PopWakeupOutcome::AlreadyCompleted
@@ -849,17 +861,15 @@ async fn duplicate_claim_and_session_close_never_execute_or_write() {
         service.claim(timeout_first.id, DeferredWakeReason::Timeout),
     );
     match (message, timeout) {
-        (Ok(winner), Err(loser)) => {
+        (Ok(DeferredClaimOutcome::Claimed(winner)), Ok(DeferredClaimOutcome::AlreadyClaimed)) => {
             assert_eq!(winner.reason(), DeferredWakeReason::MessageArrived);
-            assert_eq!(loser.kind(), DeferredClaimErrorKind::AlreadyClaimed);
             drop(winner);
         }
-        (Err(loser), Ok(winner)) => {
+        (Ok(DeferredClaimOutcome::AlreadyClaimed), Ok(DeferredClaimOutcome::Claimed(winner))) => {
             assert_eq!(winner.reason(), DeferredWakeReason::Timeout);
-            assert_eq!(loser.kind(), DeferredClaimErrorKind::AlreadyClaimed);
             drop(winner);
         }
-        (message, timeout) => panic!("exactly one concurrent reason must win: {message:?}, {timeout:?}"),
+        _ => panic!("exactly one concurrent reason must retain the POP claim"),
     }
     assert_released(&service);
 
@@ -881,12 +891,10 @@ async fn duplicate_claim_and_session_close_never_execute_or_write() {
     let closed_claim = service
         .claim(closed.id, DeferredWakeReason::MessageArrived)
         .await
-        .expect_err("closed session cannot execute POP recovery");
+        .expect("closed session is a normal lifecycle outcome");
     assert!(matches!(
-        closed_claim.kind(),
-        DeferredClaimErrorKind::SessionClosed
-            | DeferredClaimErrorKind::AlreadyCompleted
-            | DeferredClaimErrorKind::NotFound
+        closed_claim,
+        DeferredClaimOutcome::SessionClosed | DeferredClaimOutcome::AlreadyCompleted | DeferredClaimOutcome::NotFound
     ));
     running.finish().await;
     assert!(

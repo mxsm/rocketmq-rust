@@ -19,6 +19,7 @@ use rocketmq_runtime::TaskGroup;
 
 use super::IngressRequestView;
 use super::RemotingRequest;
+use crate::contract::TransportContractViolation;
 use crate::dispatch::DeferredResponseSeed;
 use crate::dispatch::InlineResponseSlot;
 use crate::dispatch::OriginalRequestIdentity;
@@ -29,29 +30,6 @@ use crate::dispatch::RequestOrigin;
 use crate::server::SessionHandle;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::session_view::SessionView;
-
-/// Trusted-only construction error for a request aggregate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum RemotingRequestBuildError {
-    #[error("response commands cannot build inbound remoting requests")]
-    ResponseCommand,
-    #[error("original request identity does not match the owned command")]
-    OriginalCommandMismatch,
-    #[error("request owner does not match the session owner")]
-    SessionOwnerMismatch,
-    #[error("network ingress requires a network session")]
-    NetworkSessionMismatch,
-    #[error("embedded ingress requires an embedded session")]
-    EmbeddedSessionMismatch,
-    #[error("network peer does not match the session effective peer")]
-    NetworkPeerMismatch,
-    #[error("embedded ingress requires an authenticated principal")]
-    MissingEmbeddedAuthentication,
-    #[error("one-way requests cannot reserve a deferred response")]
-    OneWayDeferredResponse,
-    #[error("deferred response seed does not match the canonical network response owner")]
-    DeferredResponseOwnerMismatch,
-}
 
 /// Sealed lifecycle facts that bind a request to its real session and owner.
 ///
@@ -203,38 +181,38 @@ impl RemotingRequestBuilder {
         &self.authentication
     }
 
-    pub(crate) fn build(self) -> Result<RemotingRequest, RemotingRequestBuildError> {
+    pub(crate) fn build(self) -> Result<RemotingRequest, TransportContractViolation> {
         if self.command.is_response_type() {
-            return Err(RemotingRequestBuildError::ResponseCommand);
+            return Err(TransportContractViolation::RequestFromResponseCommand);
         }
         if !self.original.matches_command(&self.command) {
-            return Err(RemotingRequestBuildError::OriginalCommandMismatch);
+            return Err(TransportContractViolation::OriginalCommandMismatch);
         }
         if self.original.request_id().owner_id() != self.session.id().owner_id() {
-            return Err(RemotingRequestBuildError::SessionOwnerMismatch);
+            return Err(TransportContractViolation::SessionOwnerMismatch);
         }
 
         match (&self.origin, &self.session) {
             (RequestOrigin::Network { peer }, SessionView::Network { remote_addr, .. }) => {
                 if peer.address() != *remote_addr {
-                    return Err(RemotingRequestBuildError::NetworkPeerMismatch);
+                    return Err(TransportContractViolation::NetworkPeerMismatch);
                 }
             }
             (RequestOrigin::Network { .. }, SessionView::Embedded { .. }) => {
-                return Err(RemotingRequestBuildError::NetworkSessionMismatch);
+                return Err(TransportContractViolation::NetworkSessionMismatch);
             }
             (RequestOrigin::Embedded { .. }, SessionView::Network { .. }) => {
-                return Err(RemotingRequestBuildError::EmbeddedSessionMismatch);
+                return Err(TransportContractViolation::EmbeddedSessionMismatch);
             }
             (RequestOrigin::Embedded { .. }, SessionView::Embedded { .. }) => {
                 if self.authentication.principal().is_none() {
-                    return Err(RemotingRequestBuildError::MissingEmbeddedAuthentication);
+                    return Err(TransportContractViolation::MissingEmbeddedAuthentication);
                 }
             }
         }
 
         if self.original.is_one_way() && self.inline_response.has_deferred_capability() {
-            return Err(RemotingRequestBuildError::OneWayDeferredResponse);
+            return Err(TransportContractViolation::OneWayDeferredResponse);
         }
 
         Ok(RemotingRequest {

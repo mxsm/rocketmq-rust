@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::sync::atomic::AtomicU8;
@@ -27,18 +26,17 @@ use tokio::sync::Notify;
 use super::internal::RegistryInner;
 use super::DeferredId;
 use super::DeferredRequest;
-use super::DeferredResponseError;
 use super::RequestId;
 use crate::dispatch::deferred_response::DeferredSystemCancellationReason;
 use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
-use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::RemotingResponse;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::ResponseState;
+use crate::dispatch::ResponseStateOutcome;
+use crate::dispatch::ResponseStateSnapshot;
 use crate::dispatch::ResponseTerminalState;
-use crate::dispatch::WriteProgress;
 use crate::session_view::SessionId;
 
 /// Reason that caused a deferred request to become eligible for resume.
@@ -62,6 +60,59 @@ pub struct DeferredResumeRetainedSize {
     dynamic_bytes: usize,
 }
 
+/// Result of claiming one deferred request.
+#[must_use]
+pub enum DeferredClaimOutcome<R>
+where
+    R: Send + 'static,
+{
+    /// The caller acquired the affine request claim.
+    Claimed(ClaimedDeferred<R>),
+    /// No live registry entry exists for the identity.
+    NotFound,
+    /// Another live caller owns the claim.
+    AlreadyClaimed,
+    /// The response already reached a terminal state.
+    AlreadyCompleted,
+    /// The parent lifecycle was cancelled.
+    ParentCancelled,
+    /// The session was closed.
+    SessionClosed,
+    /// The immutable ingress deadline elapsed.
+    DeadlineExpired,
+}
+
+/// Result of a deferred resume attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub enum DeferredResumeOutcome {
+    /// Canonical response delivery completed.
+    Completed(ResponseReceipt),
+    /// The request lifecycle was cancelled.
+    Cancelled,
+    /// The owning session was closed.
+    SessionClosed,
+    /// Bounded processor admission rejected the resume.
+    AdmissionRejected,
+}
+
+/// Notification result after Transport has resolved a deferred resume submission.
+///
+/// The private enqueue carrier retains the affine resume cell on rejection so
+/// Transport can complete it before returning this source-free projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub enum DeferredResumeSubmitOutcome {
+    /// The original session executor accepted the resume cell.
+    Submitted,
+    /// The request lifecycle was cancelled before submission.
+    Cancelled,
+    /// The owning session was closed before submission.
+    SessionClosed,
+    /// Bounded processor admission rejected the resume.
+    AdmissionRejected,
+}
+
 impl DeferredResumeRetainedSize {
     /// Creates a declared dynamic resume charge.
     #[must_use]
@@ -76,299 +127,30 @@ impl DeferredResumeRetainedSize {
     }
 }
 
-/// Stable category for a deferred claim failure.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum DeferredClaimErrorKind {
-    /// No live registry entry or transient claim marker exists.
+pub(super) enum DeferredClaimRejection {
     NotFound,
-    /// Another live claimant owns the request.
     AlreadyClaimed,
-    /// The response already reached a terminal state.
     AlreadyCompleted,
-    /// The request's parent lifecycle was cancelled.
     ParentCancelled,
-    /// The request's session was closed.
     SessionClosed,
-    /// The immutable ingress deadline expired.
     DeadlineExpired,
-    /// A sealed registry or response-state invariant was violated.
-    RegistryInvariant,
+    Operational(DeferredClaimOperationalFailure),
 }
 
-impl DeferredClaimErrorKind {
-    /// Returns a stable low-cardinality label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::NotFound => "not_found",
-            Self::AlreadyClaimed => "already_claimed",
-            Self::AlreadyCompleted => "already_completed",
-            Self::ParentCancelled => "parent_cancelled",
-            Self::SessionClosed => "session_closed",
-            Self::DeadlineExpired => "deadline_expired",
-            Self::RegistryInvariant => "registry_invariant",
-        }
-    }
+#[derive(Debug, thiserror::Error)]
+#[error("deferred claim registry invariant failed")]
+pub(super) struct DeferredClaimOperationalFailure {
+    #[source]
+    source: Option<crate::contract::TransportContractViolation>,
 }
 
-/// Typed, redacted failure to claim one deferred request.
-pub struct DeferredClaimError {
-    kind: DeferredClaimErrorKind,
-    deferred_id: DeferredId,
-    request_id: Option<RequestId>,
-    terminal: Option<ResponseTerminalState>,
-    terminal_reason: Option<DeferredTerminalReason>,
-    source: Option<DeferredResponseError>,
-}
-
-impl DeferredClaimError {
-    pub(super) fn new(
-        kind: DeferredClaimErrorKind,
-        deferred_id: DeferredId,
-        request_id: Option<RequestId>,
-        terminal: Option<ResponseTerminalState>,
-        source: Option<DeferredResponseError>,
-    ) -> Self {
-        let terminal_reason = source.as_ref().and_then(DeferredResponseError::prior_terminal_reason);
-        Self {
-            kind,
-            deferred_id,
-            request_id,
-            terminal,
-            terminal_reason,
-            source,
-        }
+impl DeferredClaimOperationalFailure {
+    pub(super) const fn invariant() -> Self {
+        Self { source: None }
     }
 
-    pub(super) const fn new_with_reason(
-        kind: DeferredClaimErrorKind,
-        deferred_id: DeferredId,
-        request_id: Option<RequestId>,
-        terminal: Option<ResponseTerminalState>,
-        terminal_reason: Option<DeferredTerminalReason>,
-        source: Option<DeferredResponseError>,
-    ) -> Self {
-        Self {
-            kind,
-            deferred_id,
-            request_id,
-            terminal,
-            terminal_reason,
-            source,
-        }
-    }
-
-    /// Returns the stable failure category.
-    #[must_use]
-    pub const fn kind(&self) -> DeferredClaimErrorKind {
-        self.kind
-    }
-
-    /// Returns the requested deferred identity.
-    #[must_use]
-    pub const fn deferred_id(&self) -> DeferredId {
-        self.deferred_id
-    }
-
-    /// Returns the trusted request identity when one remained observable.
-    #[must_use]
-    pub const fn request_id(&self) -> Option<RequestId> {
-        self.request_id
-    }
-
-    /// Returns the exact earlier terminal winner, when applicable.
-    #[must_use]
-    pub const fn prior_terminal_state(&self) -> Option<ResponseTerminalState> {
-        self.terminal
-    }
-
-    /// Returns the exact earlier terminal reason, when applicable.
-    #[must_use]
-    pub const fn prior_terminal_reason(&self) -> Option<DeferredTerminalReason> {
-        self.terminal_reason
-    }
-}
-
-impl fmt::Debug for DeferredClaimError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DeferredClaimError")
-            .field("kind", &self.kind.as_str())
-            .field("deferred_id", &self.deferred_id)
-            .field("request_id", &self.request_id)
-            .field("terminal", &self.terminal.map(ResponseTerminalState::as_str))
-            .field(
-                "terminal_reason",
-                &self.terminal_reason.map(DeferredTerminalReason::as_str),
-            )
-            .finish_non_exhaustive()
-    }
-}
-
-impl fmt::Display for DeferredClaimError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "deferred claim error: {}", self.kind.as_str())
-    }
-}
-
-impl Error for DeferredClaimError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.as_ref().map(|source| source as &(dyn Error + 'static))
-    }
-}
-
-/// Stable category for deferred resume execution failures.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum DeferredResumeErrorKind {
-    /// The parent lifecycle was cancelled.
-    Cancelled,
-    /// The owning session was closed.
-    SessionClosed,
-    /// The weak session executor no longer accepts work.
-    ExecutorClosing,
-    /// Accepted task ownership ended before response completion.
-    TaskTerminated,
-    /// A bounded admission resource rejected the resume.
-    Admission,
-    /// Checked resume ownership accounting overflowed.
-    RetainedSizeOverflow,
-    /// Canonical response delivery failed.
-    Response,
-    /// A handler error could not be converted into a remoting response.
-    ResponseConstruction,
-}
-
-impl DeferredResumeErrorKind {
-    /// Returns a stable low-cardinality label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Cancelled => "cancelled",
-            Self::SessionClosed => "session_closed",
-            Self::ExecutorClosing => "executor_closing",
-            Self::TaskTerminated => "task_terminated",
-            Self::Admission => "admission",
-            Self::RetainedSizeOverflow => "retained_size_overflow",
-            Self::Response => "response",
-            Self::ResponseConstruction => "response_construction",
-        }
-    }
-}
-
-/// Typed, redacted failure from one deferred resume attempt.
-pub struct DeferredResumeError {
-    kind: DeferredResumeErrorKind,
-    deferred_id: DeferredId,
-    request_id: RequestId,
-    terminal: Option<ResponseTerminalState>,
-    terminal_reason: Option<DeferredTerminalReason>,
-    progress: Option<WriteProgress>,
-    source: Option<Box<dyn Error + Send + Sync + 'static>>,
-}
-
-impl DeferredResumeError {
-    pub(crate) fn new(
-        kind: DeferredResumeErrorKind,
-        deferred_id: DeferredId,
-        request_id: RequestId,
-        terminal: Option<ResponseTerminalState>,
-        progress: Option<WriteProgress>,
-        source: Option<Box<dyn Error + Send + Sync + 'static>>,
-    ) -> Self {
-        Self {
-            kind,
-            deferred_id,
-            request_id,
-            terminal,
-            terminal_reason: None,
-            progress,
-            source,
-        }
-    }
-
-    pub(crate) fn new_with_reason(
-        kind: DeferredResumeErrorKind,
-        deferred_id: DeferredId,
-        request_id: RequestId,
-        terminal: Option<ResponseTerminalState>,
-        terminal_reason: Option<DeferredTerminalReason>,
-        progress: Option<WriteProgress>,
-        source: Option<Box<dyn Error + Send + Sync + 'static>>,
-    ) -> Self {
-        Self {
-            kind,
-            deferred_id,
-            request_id,
-            terminal,
-            terminal_reason,
-            progress,
-            source,
-        }
-    }
-
-    /// Returns the stable failure category.
-    #[must_use]
-    pub const fn kind(&self) -> DeferredResumeErrorKind {
-        self.kind
-    }
-
-    /// Returns the claimed deferred identity.
-    #[must_use]
-    pub const fn deferred_id(&self) -> DeferredId {
-        self.deferred_id
-    }
-
-    /// Returns the trusted request identity.
-    #[must_use]
-    pub const fn request_id(&self) -> RequestId {
-        self.request_id
-    }
-
-    /// Returns an exact terminal winner when one was observed.
-    #[must_use]
-    pub const fn prior_terminal_state(&self) -> Option<ResponseTerminalState> {
-        self.terminal
-    }
-
-    /// Returns the exact earlier terminal reason, when one was observed.
-    #[must_use]
-    pub const fn prior_terminal_reason(&self) -> Option<DeferredTerminalReason> {
-        self.terminal_reason
-    }
-
-    /// Returns the exact canonical write progress, when applicable.
-    #[must_use]
-    pub const fn write_progress(&self) -> Option<WriteProgress> {
-        self.progress
-    }
-}
-
-impl fmt::Debug for DeferredResumeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DeferredResumeError")
-            .field("kind", &self.kind.as_str())
-            .field("deferred_id", &self.deferred_id)
-            .field("request_id", &self.request_id)
-            .field("terminal", &self.terminal.map(ResponseTerminalState::as_str))
-            .field(
-                "terminal_reason",
-                &self.terminal_reason.map(DeferredTerminalReason::as_str),
-            )
-            .field("progress", &self.progress.map(WriteProgress::as_str))
-            .finish_non_exhaustive()
-    }
-}
-
-impl fmt::Display for DeferredResumeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "deferred resume error: {}", self.kind.as_str())
-    }
-}
-
-impl Error for DeferredResumeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.as_deref().map(|source| source as &(dyn Error + 'static))
+    pub(super) const fn response(source: crate::contract::TransportContractViolation) -> Self {
+        Self { source: Some(source) }
     }
 }
 
@@ -389,7 +171,7 @@ where
     id: DeferredId,
     request_id: RequestId,
     reason: DeferredWakeReason,
-    request: Option<DeferredRequest<R>>,
+    request: Option<Box<DeferredRequest<R>>>,
     marker: Option<Arc<ClaimMarker<R>>>,
 }
 
@@ -397,7 +179,7 @@ impl<R> ClaimedDeferred<R>
 where
     R: Send + 'static,
 {
-    pub(super) const fn new(
+    pub(super) fn new(
         id: DeferredId,
         request_id: RequestId,
         reason: DeferredWakeReason,
@@ -408,7 +190,7 @@ where
             id,
             request_id,
             reason,
-            request: Some(request),
+            request: Some(Box::new(request)),
             marker: Some(marker),
         }
     }
@@ -450,13 +232,15 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a typed failure for lifecycle stop, executor shutdown, bounded
-    /// admission, retained-size overflow, response construction, or response I/O.
+    /// Returns an operational transport error for retained-size contract
+    /// violations, residual runtime failures, response construction, or
+    /// response I/O. Lifecycle, bounded-admission, and known executor-closure
+    /// states are source-free [`DeferredResumeOutcome`] variants.
     pub async fn resume<F, Fut>(
         self,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<ResponseReceipt, DeferredResumeError>
+    ) -> Result<DeferredResumeOutcome, crate::error::TransportError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
@@ -473,24 +257,26 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a typed failure when lifecycle state, retained-size accounting,
-    /// bounded admission, or executor shutdown prevents session ownership.
+    /// Returns an operational transport error for retained-size contract
+    /// violations or residual runtime failures. Lifecycle, bounded-admission,
+    /// and known executor-closure states are source-free
+    /// [`DeferredResumeSubmitOutcome`] variants.
     pub fn submit<F, Fut, O>(
         self,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
         terminal_observer: O,
-    ) -> Result<(), DeferredResumeError>
+    ) -> Result<DeferredResumeSubmitOutcome, crate::error::TransportError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
-        O: FnOnce(&Result<ResponseReceipt, DeferredResumeError>) + Send + 'static,
+        O: FnOnce(&Result<DeferredResumeOutcome, crate::error::TransportError>) + Send + 'static,
     {
         crate::dispatch::deferred_resume::submit_claimed(self, handler_retained, handler, terminal_observer)
     }
 
     pub(crate) fn take_request(&mut self) -> DeferredRequest<R> {
-        self.request.take().expect("claimed request remains owned")
+        *self.request.take().expect("claimed request remains owned")
     }
 
     pub(crate) fn retained_bytes(&self) -> usize {
@@ -528,7 +314,7 @@ where
     }
 
     #[cfg(test)]
-    pub(super) fn response_state_for_test(&self) -> Arc<ResponseState> {
+    pub(in crate::dispatch) fn response_state_for_test(&self) -> Arc<ResponseState> {
         Arc::clone(
             self.request
                 .as_ref()
@@ -616,7 +402,7 @@ where
             let _ = marker.terminalize_release();
         }
         if let Some(request) = self.request.take() {
-            let DeferredRequest { resume, parts } = request;
+            let DeferredRequest { resume, parts } = *request;
             let super::DeferredParts {
                 mut responder,
                 permit,
@@ -637,7 +423,6 @@ where
 {
     registry: Weak<RegistryInner<R>>,
     id: DeferredId,
-    request_id: RequestId,
     session_id: SessionId,
     control: RequestControlView,
     state: Arc<ResponseState>,
@@ -652,7 +437,6 @@ where
     pub(super) fn new(
         registry: &Arc<RegistryInner<R>>,
         id: DeferredId,
-        request_id: RequestId,
         session_id: SessionId,
         control: RequestControlView,
         state: Arc<ResponseState>,
@@ -662,7 +446,6 @@ where
         Self {
             registry: Arc::downgrade(registry),
             id,
-            request_id,
             session_id,
             control,
             state,
@@ -671,28 +454,26 @@ where
         }
     }
 
-    pub(super) const fn request_id(&self) -> RequestId {
-        self.request_id
-    }
-
     pub(super) fn terminal_state(&self) -> Option<ResponseTerminalState> {
         self.state.terminal_state()
     }
 
-    pub(super) fn terminal_reason(&self) -> Option<DeferredTerminalReason> {
-        self.state.terminal_reason()
-    }
-
-    pub(super) fn close_session_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+    pub(super) fn close_session_response(
+        &self,
+    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
         self.state.close_with_reason(DeferredSystemCloseReason::SESSION_CLOSED)
     }
 
-    pub(super) fn cancel_parent_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+    pub(super) fn cancel_parent_response(
+        &self,
+    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
         self.state
             .cancel_with_reason(DeferredSystemCancellationReason::PARENT_CANCELLED)
     }
 
-    pub(super) fn cancel_owner_response(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+    pub(super) fn cancel_owner_response(
+        &self,
+    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
         self.state
             .cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE)
     }
@@ -701,7 +482,11 @@ where
         &self.control
     }
 
-    fn terminalize_release(&self) -> Result<(), crate::dispatch::ResponseStateError> {
+    pub(super) fn response_snapshot(&self) -> ResponseStateSnapshot {
+        self.state.snapshot()
+    }
+
+    fn terminalize_release(&self) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
         if self.control.parent_is_cancelled() {
             self.cancel_parent_response()
         } else if self.control.session_is_closed() {
@@ -807,37 +592,28 @@ impl ClaimTicket {
 
 pub(super) struct ClaimWaiter {
     ticket: Arc<ClaimTicket>,
-    request_id: RequestId,
 }
 
-#[allow(
-    clippy::large_enum_variant,
-    reason = "the claimed request remains affine and unboxed; an extra allocation would be outside retained accounting"
-)]
 pub(super) enum ClaimStart<R>
 where
     R: Send + 'static,
 {
     Claimed(ClaimedDeferred<R>),
     Wait(ClaimWaiter),
-    Error(DeferredClaimError),
+    Rejected(DeferredClaimRejection),
 }
 
 impl ClaimWaiter {
-    pub(super) fn try_new(ticket: Arc<ClaimTicket>, request_id: RequestId) -> Result<Self, ()> {
+    pub(super) fn try_new(ticket: Arc<ClaimTicket>) -> Result<Self, ()> {
         ticket
             .live_waiters
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| count.checked_add(1))
             .map_err(|_| ())?;
-        Ok(Self { ticket, request_id })
+        Ok(Self { ticket })
     }
 
     pub(super) fn epoch(&self) -> u64 {
         self.ticket.epoch()
-    }
-
-    pub(super) const fn request_id(&self) -> RequestId {
-        self.request_id
     }
 
     pub(super) fn same_ticket(&self, ticket: &Arc<ClaimTicket>) -> bool {

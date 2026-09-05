@@ -31,17 +31,18 @@ use parking_lot::Mutex;
 use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
-use rocketmq_transport::api::DeferredClaimError;
+use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredRegistry;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
-use rocketmq_transport::api::DeferredResumeError;
+use rocketmq_transport::api::DeferredResumeOutcome;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
+use rocketmq_transport::api::DeferredResumeSubmitOutcome;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingResponse;
-use rocketmq_transport::api::ResponseReceipt;
+use rocketmq_transport::api::TransportError;
 
 use crate::lite::lite_event_dispatcher::LiteEventBatchExecution;
 use crate::lite::lite_event_dispatcher::LiteEventBatchReservation;
@@ -203,7 +204,7 @@ impl PopLiteDeferredService {
     pub(crate) async fn claim_event(
         &self,
         client_id: &CheetahString,
-    ) -> Result<Option<PopLiteEventClaim>, DeferredClaimError> {
+    ) -> Result<Option<PopLiteEventClaim>, TransportError> {
         let _pending = ObservationGuard::new(Arc::clone(&self.observations), ObservationKind::PendingClaim);
         let Some(gate) = self.event_gate.try_reserve(client_id) else {
             return Ok(None);
@@ -218,8 +219,8 @@ impl PopLiteDeferredService {
             return Ok(None);
         };
         let id = candidate.id();
-        match self.registry.claim(id, DeferredWakeReason::MessageArrived).await {
-            Ok(mut claimed) => {
+        match self.registry.claim(id, DeferredWakeReason::MessageArrived).await? {
+            DeferredClaimOutcome::Claimed(mut claimed) => {
                 drop(claimed.resume_data_mut().take_index_lease());
                 drop(candidate);
                 Ok(Some(PopLiteEventClaim {
@@ -229,12 +230,12 @@ impl PopLiteDeferredService {
                     client_id: client_id.clone(),
                 }))
             }
-            Err(error) => {
+            _ => {
                 drop(events);
                 drop(candidate);
                 drop(gate);
                 self.observe_pending_event(client_id);
-                Err(error)
+                Ok(None)
             }
         }
     }
@@ -244,7 +245,7 @@ impl PopLiteDeferredService {
         event_claim: PopLiteEventClaim,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<ResponseReceipt, DeferredResumeError>
+    ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason, LiteEventBatchExecution) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
@@ -288,7 +289,7 @@ impl PopLiteDeferredService {
         claimed: ClaimedDeferred<ResumePopLite>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<ResponseReceipt, DeferredResumeError>
+    ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
@@ -310,7 +311,7 @@ impl PopLiteDeferredService {
         event_claim: PopLiteEventClaim,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<(), DeferredResumeError>
+    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason, LiteEventBatchExecution) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
@@ -353,7 +354,7 @@ impl PopLiteDeferredService {
         claimed: ClaimedDeferred<ResumePopLite>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<(), DeferredResumeError>
+    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,

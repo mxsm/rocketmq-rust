@@ -13,7 +13,23 @@
 // limitations under the License.
 
 use super::*;
+use crate::contract::TransportContractViolation;
+use crate::dispatch::DeferredResponseOutcome;
+use crate::dispatch::ResponseSendClaim;
 use crate::dispatch::ResponseState;
+use crate::dispatch::ResponseStateOutcome;
+
+fn expect_send_claim(
+    result: Result<ResponseStateOutcome<ResponseSendClaim>, TransportContractViolation>,
+) -> ResponseSendClaim {
+    match result {
+        Ok(ResponseStateOutcome::Applied(claim)) => claim,
+        Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }) => {
+            panic!("send claim unexpectedly observed {state:?} with reason {reason:?}")
+        }
+        Err(error) => panic!("send claim violated its state contract: {error:?}"),
+    }
+}
 
 #[tokio::test]
 async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_owner() {
@@ -47,7 +63,7 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
     let original = OriginalRequestIdentity::capture(session_id.owner_id(), &AtomicU64::new(1), &command)
         .expect("request identity");
 
-    let receipt = seed
+    let outcome = seed
         .into_responder(original)
         .respond(
             RemotingResponse::bytes(response_head(129, 7), Bytes::from_static(b"canonical-deferred"))
@@ -55,6 +71,9 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
         )
         .await
         .expect("deferred response uses the canonical writer");
+    let DeferredResponseOutcome::Completed(receipt) = outcome else {
+        panic!("canonical deferred response must complete, got {outcome:?}");
+    };
     assert_eq!(receipt.request_id(), original.request_id());
     assert_eq!(
         harness.receive().await.body().map(Bytes::as_ref),
@@ -69,9 +88,9 @@ async fn production_seed_shares_the_canonical_slot_and_rejects_another_session_o
                     .expect("duplicate binding")
             )
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Completed
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Completed
+        ))
     ));
 
     other.shutdown().await;
@@ -110,7 +129,7 @@ async fn dropping_a_waiting_deferred_send_completes_rsp_and_def_not_started() {
     let duplicate = sink.clone();
     let state = Arc::new(ResponseState::open());
     let state_for_assert = Arc::clone(&state);
-    let mut claim = state.begin_sending().expect("deferred send claim");
+    let mut claim = expect_send_claim(state.begin_sending());
     let send = tokio::spawn(async move {
         sink.send_deferred_response(
             bind(
@@ -143,11 +162,11 @@ async fn dropping_a_waiting_deferred_send_completes_rsp_and_def_not_started() {
         .await;
     assert!(matches!(
         duplicate_error,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
-        })
+        ))
     ));
     let after_duplicate = harness.session.writer_snapshot();
     assert_eq!(after_duplicate.accepted, before_duplicate.accepted);
@@ -195,7 +214,7 @@ async fn dropping_a_writer_claimed_deferred_send_completes_rsp_and_def_possibly_
     let duplicate = sink.clone();
     let state = Arc::new(ResponseState::open());
     let state_for_assert = Arc::clone(&state);
-    let mut claim = state.begin_sending().expect("deferred send claim");
+    let mut claim = expect_send_claim(state.begin_sending());
     let send = tokio::spawn(async move {
         sink.send_deferred_response(
             bind(
@@ -229,11 +248,11 @@ async fn dropping_a_writer_claimed_deferred_send_completes_rsp_and_def_possibly_
         .await;
     assert!(matches!(
         duplicate_error,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::PossiblyPartial
             }
-        })
+        ))
     ));
     let after_duplicate = harness.session.writer_snapshot();
     assert_eq!(after_duplicate.accepted, before_duplicate.accepted);
@@ -282,7 +301,7 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
     let duplicate = sink.clone();
     let state = Arc::new(ResponseState::open());
     let state_for_assert = Arc::clone(&state);
-    let mut claim = state.begin_sending().expect("deferred send claim");
+    let mut claim = expect_send_claim(state.begin_sending());
     let send = tokio::spawn(async move {
         sink.send_deferred_response(
             bind(
@@ -300,7 +319,7 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
     tokio::task::yield_now().await;
     assert!(matches!(
         send.await.expect("deferred send task"),
-        Err(ResponseError::DeadlineExceeded)
+        Ok(ResponseCompletionOutcome::DeadlineExpired)
     ));
     assert_eq!(
         state_for_assert.terminal_state(),
@@ -319,11 +338,11 @@ async fn prestart_deadline_resumes_both_outer_claims_without_a_delegated_sending
         .await;
     assert!(matches!(
         duplicate_error,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
-        })
+        ))
     ));
     let after_duplicate = harness.session.writer_snapshot();
     assert_eq!(after_duplicate.accepted, before_duplicate.accepted);

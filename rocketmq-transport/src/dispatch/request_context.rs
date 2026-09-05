@@ -16,6 +16,7 @@ use rocketmq_security_api::PeerInfo;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::SecurityBootstrapProfile;
 
+use crate::contract::TransportContractViolation;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::AuthenticationState;
 use crate::dispatch::EmbeddedCaller;
@@ -28,14 +29,6 @@ pub(crate) enum RequestTransport {
     Network,
     /// A command submitted by the Broker-owned embedded Proxy adapter.
     EmbeddedProxy,
-}
-
-/// Error returned before an entry adapter can create a trusted request context.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum RequestContextError {
-    /// Embedded dispatch is fail-closed when no trusted identity was injected.
-    #[error("embedded proxy dispatch requires an authenticated principal")]
-    MissingEmbeddedPrincipal,
 }
 
 /// Security and lifecycle metadata established by a trusted entry adapter.
@@ -79,14 +72,14 @@ impl RequestContext {
     ///
     /// # Errors
     ///
-    /// Returns [`RequestContextError::MissingEmbeddedPrincipal`] when the
-    /// composition root did not inject a trusted principal.
+    /// Returns a contract violation when the composition root did not inject a
+    /// trusted principal.
     pub(crate) fn try_embedded_with_caller(
         caller: EmbeddedCaller,
         principal: Option<Principal>,
         deadline: Option<RequestDeadline>,
-    ) -> Result<Self, RequestContextError> {
-        let principal = principal.ok_or(RequestContextError::MissingEmbeddedPrincipal)?;
+    ) -> Result<Self, TransportContractViolation> {
+        let principal = principal.ok_or(TransportContractViolation::RequestContextMissingEmbeddedAuthentication)?;
         Ok(Self {
             origin: RequestOrigin::Embedded { caller },
             deadline,
@@ -241,7 +234,7 @@ mod tests {
         assert_eq!(
             RequestContext::try_embedded_with_caller(EmbeddedCaller::BrokerProxy, None, None)
                 .expect_err("embedded context must require a trusted principal"),
-            RequestContextError::MissingEmbeddedPrincipal
+            TransportContractViolation::RequestContextMissingEmbeddedAuthentication
         );
     }
 

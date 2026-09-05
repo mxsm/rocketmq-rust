@@ -30,18 +30,18 @@ use tracing::Instrument;
 
 use super::authorized_dispatcher::admission_response;
 use super::deferred_registry::ClaimExecutionParts;
+use super::deferred_responder::DeferredResponseAttempt;
 use super::ClaimedDeferred;
-use super::DeferredResponseError;
-use super::DeferredResponseErrorKind;
-use super::DeferredResumeError;
-use super::DeferredResumeErrorKind;
+use super::DeferredResumeOutcome;
 use super::DeferredResumeRetainedSize;
+use super::DeferredResumeSubmitOutcome;
 use super::DeferredWakeReason;
 use super::RemotingResponse;
 use super::ResponseReceipt;
 use crate::admission::AdmissionClass;
-use crate::admission::AdmissionError;
+use crate::admission::AdmissionRejection;
 use crate::admission::FullPolicy;
+use crate::contract::TransportContractViolation;
 use crate::request_ordering::RequestOrdering;
 
 #[path = "deferred_resume_stop.rs"]
@@ -51,19 +51,41 @@ use stop::finish_claimed_stop;
 use stop::finish_lifecycle;
 use stop::finish_parts_admission;
 use stop::finish_parts_stop;
-use stop::resume_error_kind_for_reason;
 pub(crate) use stop::ResumeStop;
 use stop::ResumeStopView;
 
-type ResumeResult = Result<ResponseReceipt, DeferredResumeError>;
+pub(super) enum ResumeAttempt {
+    Completed(ResponseReceipt),
+    Cancelled,
+    SessionClosed,
+    AdmissionRejected,
+    Operational(ResumeOperationalFailure),
+    TransportFailure(crate::error::TransportError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ResumeOperationalFailure {
+    #[error("deferred resume executor is closing")]
+    ExecutorClosing {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    #[error("deferred resume task terminated before completion")]
+    TaskTerminated,
+    #[error(transparent)]
+    Contract(#[from] TransportContractViolation),
+}
+
+type ResumeResult = ResumeAttempt;
+type PublicResumeResult = Result<DeferredResumeOutcome, crate::error::TransportError>;
 type WorkFuture = Pin<Box<dyn Future<Output = ResumeResult> + Send + 'static>>;
-type ResumeTerminalObserver = Box<dyn FnOnce(&ResumeResult) + Send + 'static>;
+type ResumeTerminalObserver = Box<dyn FnOnce(&PublicResumeResult) + Send + 'static>;
 
 pub(crate) async fn resume_claimed<R, F, Fut>(
     claimed: ClaimedDeferred<R>,
     handler_retained: DeferredResumeRetainedSize,
     handler: F,
-) -> ResumeResult
+) -> PublicResumeResult
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
@@ -75,12 +97,12 @@ where
     if let Some(stop) = stop_view.current_before_resume() {
         let result = finish_claimed_stop(claimed, stop, None);
         drop(handler);
-        return result;
+        return converge_resume_result(result);
     }
     let Some(context) = claimed.resume_context() else {
         let result = finish_claimed_stop(claimed, ResumeStop::ProcessorUnavailable, None);
         drop(handler);
-        return result;
+        return converge_resume_result(result);
     };
     let execution_bytes =
         match execution_retained_bytes::<R, F, Fut>(claimed.retained_bytes(), handler_retained.dynamic_bytes()) {
@@ -88,13 +110,8 @@ where
             None => {
                 drop(handler);
                 drop(claimed);
-                return Err(DeferredResumeError::new(
-                    DeferredResumeErrorKind::RetainedSizeOverflow,
-                    id,
-                    request_id,
-                    None,
-                    None,
-                    None,
+                return converge_resume_result(ResumeAttempt::Operational(
+                    TransportContractViolation::DeferredRetainedSizeOverflow.into(),
                 ));
             }
         };
@@ -119,15 +136,20 @@ where
     cell.release_wait_permit();
     let submitted = context.executor.try_execute_resume(Arc::clone(&cell));
     match submitted {
-        Ok(_task_id) => drop(cell),
-        Err(DeferredResumeSubmitError::Admission { error, cell }) => {
+        DeferredResumeEnqueueOutcome::Submitted(_task_id) => drop(cell),
+        DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell } => {
             if let Some(job) = cell.take() {
                 job.reject(error).await;
             }
         }
-        Err(DeferredResumeSubmitError::Closing { source, cell }) => {
+        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => {
             if let Some(job) = cell.take() {
-                job.finish_executor_closing(source);
+                job.finish_executor_closed();
+            }
+        }
+        DeferredResumeEnqueueOutcome::OperationalFailure { source, cell } => {
+            if let Some(job) = cell.take() {
+                job.finish_executor_failure(source);
             }
         }
     }
@@ -139,28 +161,28 @@ pub(crate) fn submit_claimed<R, F, Fut, O>(
     handler_retained: DeferredResumeRetainedSize,
     handler: F,
     terminal_observer: O,
-) -> Result<(), DeferredResumeError>
+) -> Result<DeferredResumeSubmitOutcome, crate::error::TransportError>
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
     Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
-    O: FnOnce(&ResumeResult) + Send + 'static,
+    O: FnOnce(&PublicResumeResult) + Send + 'static,
 {
     let id = claimed.deferred_id();
     let request_id = claimed.request_id();
     let mut observer = Some(Box::new(terminal_observer) as ResumeTerminalObserver);
     let stop_view = ResumeStopView::new(claimed.control().clone(), claimed.expiry());
     if let Some(stop) = stop_view.current_before_resume() {
-        let result = finish_claimed_stop(claimed, stop, None);
+        let result = converge_resume_result(finish_claimed_stop(claimed, stop, None));
         drop(handler);
         observe_unsubmitted(observer.take(), &result);
-        return result.map(drop);
+        return submit_outcome(result);
     }
     let Some(context) = claimed.resume_context() else {
-        let result = finish_claimed_stop(claimed, ResumeStop::ProcessorUnavailable, None);
+        let result = converge_resume_result(finish_claimed_stop(claimed, ResumeStop::ProcessorUnavailable, None));
         drop(handler);
         observe_unsubmitted(observer.take(), &result);
-        return result.map(drop);
+        return submit_outcome(result);
     };
     let execution_bytes =
         match execution_retained_bytes::<R, F, Fut>(claimed.retained_bytes(), handler_retained.dynamic_bytes()) {
@@ -168,16 +190,11 @@ where
             None => {
                 drop(handler);
                 drop(claimed);
-                let result = Err(DeferredResumeError::new(
-                    DeferredResumeErrorKind::RetainedSizeOverflow,
-                    id,
-                    request_id,
-                    None,
-                    None,
-                    None,
+                let result = converge_resume_result(ResumeAttempt::Operational(
+                    TransportContractViolation::DeferredRetainedSizeOverflow.into(),
                 ));
                 observe_unsubmitted(observer.take(), &result);
-                return result.map(drop);
+                return submit_outcome(result);
             }
         };
     let parts = claimed.into_execution_parts();
@@ -200,28 +217,55 @@ where
 
     cell.release_wait_permit();
     match context.executor.try_execute_resume(Arc::clone(&cell)) {
-        Ok(_task_id) => {
+        DeferredResumeEnqueueOutcome::Submitted(_task_id) => {
             drop(cell);
-            Ok(())
+            Ok(DeferredResumeSubmitOutcome::Submitted)
         }
-        Err(DeferredResumeSubmitError::Admission { error, cell }) => {
+        DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell } => {
             if let Some(job) = cell.take() {
                 job.finish_admission_rejected(error);
             }
-            completion.take_finished().map(drop)
+            submit_outcome(completion.take_finished())
         }
-        Err(DeferredResumeSubmitError::Closing { source, cell }) => {
+        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => {
             if let Some(job) = cell.take() {
-                job.finish_executor_closing(source);
+                job.finish_executor_closed();
             }
-            completion.take_finished().map(drop)
+            submit_outcome(completion.take_finished())
+        }
+        DeferredResumeEnqueueOutcome::OperationalFailure { source, cell } => {
+            if let Some(job) = cell.take() {
+                job.finish_executor_failure(source);
+            }
+            submit_outcome(completion.take_finished())
         }
     }
 }
 
-fn observe_unsubmitted(observer: Option<ResumeTerminalObserver>, result: &ResumeResult) {
+fn observe_unsubmitted(observer: Option<ResumeTerminalObserver>, result: &PublicResumeResult) {
     if let Some(observer) = observer {
         let _ = std::panic::catch_unwind(AssertUnwindSafe(|| observer(result)));
+    }
+}
+
+fn converge_resume_result(result: ResumeResult) -> PublicResumeResult {
+    match result {
+        ResumeAttempt::Completed(receipt) => Ok(DeferredResumeOutcome::Completed(receipt)),
+        ResumeAttempt::Cancelled => Ok(DeferredResumeOutcome::Cancelled),
+        ResumeAttempt::SessionClosed => Ok(DeferredResumeOutcome::SessionClosed),
+        ResumeAttempt::AdmissionRejected => Ok(DeferredResumeOutcome::AdmissionRejected),
+        ResumeAttempt::Operational(error) => Err(crate::error::TransportError::resume(error)),
+        ResumeAttempt::TransportFailure(error) => Err(error),
+    }
+}
+
+fn submit_outcome(result: PublicResumeResult) -> Result<DeferredResumeSubmitOutcome, crate::error::TransportError> {
+    match result {
+        Ok(DeferredResumeOutcome::Completed(_)) => Ok(DeferredResumeSubmitOutcome::Submitted),
+        Ok(DeferredResumeOutcome::Cancelled) => Ok(DeferredResumeSubmitOutcome::Cancelled),
+        Ok(DeferredResumeOutcome::SessionClosed) => Ok(DeferredResumeSubmitOutcome::SessionClosed),
+        Ok(DeferredResumeOutcome::AdmissionRejected) => Ok(DeferredResumeSubmitOutcome::AdmissionRejected),
+        Err(error) => Err(error),
     }
 }
 
@@ -336,12 +380,16 @@ impl Drop for ResumeJobCell {
     }
 }
 
-pub(crate) enum DeferredResumeSubmitError {
-    Admission {
-        error: AdmissionError,
+pub(crate) enum DeferredResumeEnqueueOutcome {
+    Submitted(rocketmq_runtime::TaskId),
+    AdmissionRejected {
+        error: AdmissionRejection,
         cell: Arc<ResumeJobCell>,
     },
-    Closing {
+    ExecutorClosing {
+        cell: Arc<ResumeJobCell>,
+    },
+    OperationalFailure {
         source: rocketmq_runtime::RuntimeError,
         cell: Arc<ResumeJobCell>,
     },
@@ -423,14 +471,14 @@ impl DeferredResumeJob {
         self.active = false;
     }
 
-    pub(crate) async fn reject(mut self, error: AdmissionError) {
+    pub(crate) async fn reject(mut self, error: AdmissionRejection) {
         let work = self.work.take().expect("a rejected resume job owns one work item");
         let result = work.reject(error).await;
         self.completion.finish(result);
         self.active = false;
     }
 
-    fn finish_admission_rejected(mut self, error: AdmissionError) {
+    fn finish_admission_rejected(mut self, error: AdmissionRejection) {
         let work = self
             .work
             .take()
@@ -440,14 +488,31 @@ impl DeferredResumeJob {
         self.active = false;
     }
 
-    fn finish_executor_closing(mut self, source: rocketmq_runtime::RuntimeError) {
+    fn finish_executor_closed(mut self) {
         let stop = self
             .stop_view
             .current_before_resume()
             .unwrap_or(ResumeStop::ServiceStopping);
-        let work = self.work.take().expect("a closing resume job owns one work item");
-        let result = work.finish_stopped(stop, Some(Box::new(source)));
+        let work = self.work.take().expect("a closed resume job owns one work item");
+        let result = work.finish_stopped(stop, None);
         self.completion.finish(result);
+        self.active = false;
+    }
+
+    fn finish_executor_failure(mut self, source: rocketmq_runtime::RuntimeError) {
+        let stop = self
+            .stop_view
+            .current_before_resume()
+            .unwrap_or(ResumeStop::ServiceStopping);
+        let work = self.work.take().expect("a failed resume job owns one work item");
+        // Terminalize affine response ownership with the already-selected
+        // lifecycle winner, but do not let that independent race erase the
+        // executor's operational failure from this submission attempt.
+        let _terminal = work.finish_stopped(stop, None);
+        self.completion
+            .finish(ResumeAttempt::Operational(ResumeOperationalFailure::ExecutorClosing {
+                source: Box::new(source),
+            }));
         self.active = false;
     }
 }
@@ -460,16 +525,7 @@ impl Drop for DeferredResumeJob {
                 .current_before_resume()
                 .unwrap_or(ResumeStop::ServiceStopping);
             let result = self.work.take().map_or_else(
-                || {
-                    Err(DeferredResumeError::new(
-                        DeferredResumeErrorKind::TaskTerminated,
-                        self.completion.id,
-                        self.completion.request_id,
-                        None,
-                        None,
-                        None,
-                    ))
-                },
+                || ResumeAttempt::Operational(ResumeOperationalFailure::TaskTerminated),
                 |work| work.finish_stopped(stop, None),
             );
             self.completion.finish(result);
@@ -481,8 +537,8 @@ impl Drop for DeferredResumeJob {
 trait DeferredResumeWork: Send + 'static {
     fn release_wait_permit(&mut self);
     fn execute(self: Box<Self>) -> WorkFuture;
-    fn reject(self: Box<Self>, error: AdmissionError) -> WorkFuture;
-    fn finish_admission_rejected(self: Box<Self>, error: AdmissionError) -> ResumeResult;
+    fn reject(self: Box<Self>, error: AdmissionRejection) -> WorkFuture;
+    fn finish_admission_rejected(self: Box<Self>, error: AdmissionRejection) -> ResumeResult;
     fn finish_stopped(
         self: Box<Self>,
         stop: ResumeStop,
@@ -540,7 +596,7 @@ where
         )
     }
 
-    fn reject(mut self: Box<Self>, error: AdmissionError) -> WorkFuture {
+    fn reject(mut self: Box<Self>, error: AdmissionRejection) -> WorkFuture {
         Box::pin(async move {
             let parts = self.parts.take().expect("resume work owns claimed parts");
             let handler = self.handler.take();
@@ -550,7 +606,7 @@ where
         })
     }
 
-    fn finish_admission_rejected(mut self: Box<Self>, error: AdmissionError) -> ResumeResult {
+    fn finish_admission_rejected(mut self: Box<Self>, error: AdmissionRejection) -> ResumeResult {
         let parts = self
             .parts
             .take()
@@ -651,7 +707,11 @@ where
             let result = map_response(
                 id,
                 request_id,
-                responder.take().expect("response responder").respond(response).await,
+                responder
+                    .take()
+                    .expect("response responder")
+                    .respond_internal(response)
+                    .await,
             );
             drop(marker.take());
             result
@@ -662,14 +722,7 @@ where
                 Err(source) => {
                     drop(responder.take());
                     drop(marker.take());
-                    return Err(DeferredResumeError::new(
-                        DeferredResumeErrorKind::ResponseConstruction,
-                        id,
-                        request_id,
-                        None,
-                        None,
-                        Some(Box::new(source)),
-                    ));
+                    return ResumeAttempt::Operational(ResumeOperationalFailure::Contract(source));
                 }
             };
             if let Some(stop) = stop_view.current_before_write() {
@@ -688,7 +741,7 @@ where
                 responder
                     .take()
                     .expect("error response responder")
-                    .respond(response)
+                    .respond_internal(response)
                     .await,
             );
             drop(marker.take());
@@ -698,7 +751,11 @@ where
     result
 }
 
-async fn reject_work<R>(parts: ClaimExecutionParts<R>, error: AdmissionError, stop_view: ResumeStopView) -> ResumeResult
+async fn reject_work<R>(
+    parts: ClaimExecutionParts<R>,
+    error: AdmissionRejection,
+    stop_view: ResumeStopView,
+) -> ResumeResult
 where
     R: Send + 'static,
 {
@@ -722,20 +779,13 @@ where
             Err(source) => {
                 drop(responder);
                 drop(marker);
-                return Err(DeferredResumeError::new(
-                    DeferredResumeErrorKind::ResponseConstruction,
-                    id,
-                    request_id,
-                    None,
-                    None,
-                    Some(Box::new(source)),
-                ));
+                return ResumeAttempt::Operational(ResumeOperationalFailure::Contract(source));
             }
         };
         if let Some(stop) = stop_view.current_before_write() {
             return finish_lifecycle(id, request_id, responder, marker, stop, None);
         }
-        let result = map_response(id, request_id, responder.respond(response).await);
+        let result = map_response(id, request_id, responder.respond_internal(response).await);
         drop(marker);
         result
     } else {
@@ -745,7 +795,7 @@ where
             responder,
             marker,
             ResumeStop::ProcessorUnavailable,
-            Some(Box::new(error)),
+            None,
         )
     }
 }
@@ -753,53 +803,41 @@ where
 fn map_response(
     id: super::DeferredId,
     request_id: super::RequestId,
-    result: Result<ResponseReceipt, DeferredResponseError>,
+    result: Result<DeferredResponseAttempt, crate::error::TransportError>,
 ) -> ResumeResult {
-    result.map_err(|source| {
-        let fallback_kind = match source.kind() {
-            DeferredResponseErrorKind::Cancelled => DeferredResumeErrorKind::Cancelled,
-            DeferredResponseErrorKind::SessionClosed => DeferredResumeErrorKind::SessionClosed,
-            DeferredResponseErrorKind::AlreadyCompleted
-            | DeferredResponseErrorKind::InvalidTransition
-            | DeferredResponseErrorKind::Binding
-            | DeferredResponseErrorKind::DeadlineExceeded
-            | DeferredResponseErrorKind::QueueSaturated
-            | DeferredResponseErrorKind::Encode
-            | DeferredResponseErrorKind::Transport => DeferredResumeErrorKind::Response,
-        };
-        let kind = source
-            .prior_terminal_reason()
-            .map_or(fallback_kind, resume_error_kind_for_reason);
-        DeferredResumeError::new_with_reason(
-            kind,
-            id,
-            request_id,
-            source.prior_terminal_state(),
-            source.prior_terminal_reason(),
-            source.write_progress(),
-            Some(Box::new(source)),
-        )
-    })
+    let _ = (id, request_id);
+    match result {
+        Ok(DeferredResponseAttempt::Completed(receipt)) => ResumeAttempt::Completed(receipt),
+        Ok(DeferredResponseAttempt::AlreadyCompleted { state, reason }) => reason.map_or_else(
+            || match state {
+                super::ResponseTerminalState::Closed => ResumeAttempt::SessionClosed,
+                super::ResponseTerminalState::Completed
+                | super::ResponseTerminalState::Failed { .. }
+                | super::ResponseTerminalState::Cancelled => ResumeAttempt::Cancelled,
+            },
+            stop::resume_attempt_for_reason,
+        ),
+        Ok(DeferredResponseAttempt::Cancelled | DeferredResponseAttempt::DeadlineExceeded) => ResumeAttempt::Cancelled,
+        Ok(DeferredResponseAttempt::SessionClosed) => ResumeAttempt::SessionClosed,
+        Ok(DeferredResponseAttempt::QueueSaturated) => ResumeAttempt::AdmissionRejected,
+        Err(source) => ResumeAttempt::TransportFailure(source),
+    }
 }
 
 pub(in crate::dispatch) struct ResumeCompletion {
-    id: super::DeferredId,
-    request_id: super::RequestId,
     completed: AtomicBool,
-    result: Mutex<Option<ResumeResult>>,
+    result: Mutex<Option<PublicResumeResult>>,
     terminal_observer: Mutex<Option<ResumeTerminalObserver>>,
     changed: Notify,
 }
 
 impl ResumeCompletion {
     fn new(
-        id: super::DeferredId,
-        request_id: super::RequestId,
+        _id: super::DeferredId,
+        _request_id: super::RequestId,
         terminal_observer: Option<ResumeTerminalObserver>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            id,
-            request_id,
             completed: AtomicBool::new(false),
             result: Mutex::new(None),
             terminal_observer: Mutex::new(terminal_observer),
@@ -807,14 +845,14 @@ impl ResumeCompletion {
         })
     }
 
-    fn take_finished(&self) -> ResumeResult {
+    fn take_finished(&self) -> PublicResumeResult {
         self.result
             .lock()
             .take()
             .expect("a synchronously rejected resume publishes its terminal result")
     }
 
-    async fn wait(&self) -> ResumeResult {
+    async fn wait(&self) -> PublicResumeResult {
         loop {
             let notified = self.changed.notified();
             tokio::pin!(notified);
@@ -827,6 +865,7 @@ impl ResumeCompletion {
     }
 
     fn finish(&self, result: ResumeResult) {
+        let result = converge_resume_result(result);
         if self
             .completed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

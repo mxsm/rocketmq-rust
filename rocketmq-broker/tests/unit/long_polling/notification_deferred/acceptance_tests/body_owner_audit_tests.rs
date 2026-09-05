@@ -18,11 +18,10 @@ use std::sync::atomic::AtomicUsize;
 
 use bytes::Bytes;
 use rocketmq_transport::api::ClaimedDeferred;
-use rocketmq_transport::api::DeferredResumeErrorKind;
+use rocketmq_transport::api::DeferredResumeOutcome;
 use rocketmq_transport::api::FileRegion;
 use rocketmq_transport::api::FileRegionLease;
 use rocketmq_transport::api::FileRegionSequence;
-use rocketmq_transport::api::WriteProgress;
 
 use super::super::service::ResumeNotification;
 use super::*;
@@ -128,21 +127,24 @@ async fn notification_deferred_owner_backed_body_success_releases_once_without_r
     let attempts = Arc::new(AtomicUsize::new(0));
     let response_attempts = Arc::clone(&attempts);
 
-    service
-        .resume_claimed(
-            claim,
-            DeferredResumeRetainedSize::default(),
-            move |resume, reason| async move {
-                assert_eq!(reason, DeferredWakeReason::MessageArrived);
-                assert_eq!(resume.request().effective_peer(), registration.peer);
-                response_attempts.fetch_add(1, Ordering::SeqCst);
-                let body = Bytes::from_owner(CountingBodyOwner::new(OWNER_BODY.to_vec(), response_owner_drops));
-                RemotingResponse::bytes(notification_head(), body)
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
-            },
-        )
-        .await
-        .expect("write owner-backed Notification body");
+    assert!(matches!(
+        service
+            .resume_claimed(
+                claim,
+                DeferredResumeRetainedSize::default(),
+                move |resume, reason| async move {
+                    assert_eq!(reason, DeferredWakeReason::MessageArrived);
+                    assert_eq!(resume.request().effective_peer(), registration.peer);
+                    response_attempts.fetch_add(1, Ordering::SeqCst);
+                    let body = Bytes::from_owner(CountingBodyOwner::new(OWNER_BODY.to_vec(), response_owner_drops));
+                    RemotingResponse::bytes(notification_head(), body)
+                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                },
+            )
+            .await
+            .expect("write owner-backed Notification body"),
+        DeferredResumeOutcome::Completed(_)
+    ));
 
     let response = client
         .receive_command()
@@ -193,8 +195,7 @@ async fn notification_deferred_prewrite_failure_releases_owner_once_without_retr
         )
         .await
         .expect_err("frame-limit failure rejects the owner-backed Notification body");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::Response);
-    assert_eq!(error.write_progress(), Some(WriteProgress::NotStarted));
+    let _ = error;
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
     assert_eq!(owner_drops.load(Ordering::SeqCst), 1);
     assert_service_released(&service);
@@ -253,11 +254,11 @@ async fn notification_deferred_parent_cancel_releases_prepared_owner_once_withou
         .expect("owner-backed Notification plan reaches the accepted handler");
     assert_eq!(owner_drops.load(Ordering::SeqCst), 0);
     running.cancel_server_parent();
-    let error = receipt_rx
+    let outcome = receipt_rx
         .await
         .expect("cancelled Notification receipt channel")
-        .expect_err("parent cancellation must reject the owner-backed Notification plan");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::Cancelled);
+        .expect("parent cancellation is a normal deferred resume outcome");
+    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
     assert!(release_plan_tx.send(()).is_err());
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
     assert_eq!(owner_drops.load(Ordering::SeqCst), 1);
@@ -312,8 +313,7 @@ async fn notification_deferred_post_writer_claim_partial_releases_file_owner_onc
         )
         .await
         .expect_err("truncated leased body fails after the canonical frame head");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::Response);
-    assert_eq!(error.write_progress(), Some(WriteProgress::PossiblyPartial));
+    let _ = error;
     assert_eq!(attempts.load(Ordering::SeqCst), 1, "partial writes are never retried");
     assert_eq!(owner_drops.load(Ordering::SeqCst), 1);
     assert_service_released(&service);

@@ -140,7 +140,9 @@ impl RequestProcessor for TestProcessor {
             )),
             Behavior::Error => Err(RocketMQError::illegal_argument("processor failure")),
             Behavior::NoReply => Ok(HandlerOutcome::NoReply(
-                request.protocol_no_response(ProtocolNoResponseReason::CallbackHandled)?,
+                request
+                    .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
+                    .map_err(|_| RocketMQError::illegal_argument("protocol no-response contract failed"))?,
             )),
             Behavior::Deferred => {
                 request
@@ -564,6 +566,14 @@ impl DispatchHarness {
                 .await
                 .is_err()
         );
+    }
+
+    pub(super) async fn assert_no_response_frame(&mut self) {
+        match tokio::time::timeout(Duration::from_millis(25), self.peer.receive_command()).await {
+            Err(_) | Ok(None) => {}
+            Ok(Some(Ok(command))) => panic!("unexpected response command: {}", command.code()),
+            Ok(Some(Err(error))) => panic!("unexpected response read failure: {error}"),
+        }
     }
 
     pub(super) async fn drain_requests(&self) {

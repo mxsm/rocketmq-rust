@@ -392,7 +392,7 @@ mod tests {
     use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
     use rocketmq_transport::api::ServerConfig;
-    use rocketmq_transport::api::ServerStartError;
+    use rocketmq_transport::api::TransportError;
     use rocketmq_transport::api::TransportServer;
     use tokio::sync::oneshot;
     use tokio::sync::Notify;
@@ -483,7 +483,7 @@ mod tests {
     struct RunningRouteServer {
         local_addr: SocketAddr,
         shutdown: Option<oneshot::Sender<()>>,
-        result: oneshot::Receiver<Result<ShutdownReport, ServerStartError>>,
+        result: oneshot::Receiver<Result<ShutdownReport, TransportError>>,
     }
 
     impl RunningRouteServer {

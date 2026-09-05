@@ -272,7 +272,8 @@ where
         retained_bytes: usize,
         partial_frame_permit: Option<crate::admission::PartialFramePermit>,
     ) -> bool {
-        self.dispatcher
+        match self
+            .dispatcher
             .dispatch_network(
                 authorized_session,
                 state.network_endpoint.clone(),
@@ -285,7 +286,10 @@ where
                 state.deferred_cleanup.registration(),
             )
             .await
-            .is_ok()
+        {
+            Ok(outcome) => outcome.keeps_session_open(),
+            Err(_) => false,
+        }
     }
 
     fn close_pending(
@@ -803,7 +807,8 @@ impl<PR> TransportSession<PR> {
         self.accepting_requests.store(false, Ordering::Release);
         let _ = self.notify_shutdown.send(());
         let active_before = self.task_lifecycle.operation.active_task_count();
-        self.session.request_close();
+        self.session
+            .request_close(crate::server::SessionCloseCause::ClientShutdown);
         let (session_close_finished, session_close_failed) =
             match tokio::time::timeout_at(deadline, self.session.wait_for_close_completion()).await {
                 Ok(Ok(_)) => (true, false),

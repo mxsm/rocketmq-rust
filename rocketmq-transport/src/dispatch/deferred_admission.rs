@@ -15,7 +15,6 @@
 //! Retained-byte admission for deferred waits.
 
 use std::alloc::Layout;
-use std::error::Error;
 use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::AtomicUsize;
@@ -33,6 +32,7 @@ use rocketmq_runtime::RuntimeContractViolation;
 use super::DeferredResponder;
 use super::ResponseState;
 use crate::admission::AdmissionController;
+use crate::contract::TransportContractViolation;
 
 const DEFERRED_BUDGET_NAME: &str = "transport-deferred-wait";
 
@@ -147,15 +147,15 @@ impl DeferredRetainedSize {
     ///
     /// # Errors
     ///
-    /// Returns [`DeferredAdmissionAcquireErrorKind::RetainedSizeOverflow`] if
-    /// any layout or size addition exceeds `usize`.
-    pub fn try_from_parts(parts: DeferredRetainedSizeParts) -> Result<Self, DeferredAdmissionAcquireError> {
+    /// Returns a contract violation if any layout or size addition exceeds
+    /// `usize`.
+    pub fn try_from_parts(parts: DeferredRetainedSizeParts) -> Result<Self, TransportContractViolation> {
         let bytes = fixed_retained_bytes()
             .and_then(|bytes| bytes.checked_add(parts.resume_bytes))
             .and_then(|bytes| bytes.checked_add(parts.filter_bytes))
             .and_then(|bytes| bytes.checked_add(parts.secondary_index_bytes))
             .and_then(|bytes| bytes.checked_add(parts.metadata_bytes))
-            .ok_or_else(DeferredAdmissionAcquireError::retained_size_overflow)?;
+            .ok_or(TransportContractViolation::DeferredRetainedSizeOverflow)?;
         Ok(Self(bytes))
     }
 
@@ -165,185 +165,25 @@ impl DeferredRetainedSize {
         self.0
     }
 
-    pub(crate) fn checked_add(self, additional: usize) -> Result<Self, DeferredAdmissionAcquireError> {
+    pub(crate) fn checked_add(self, additional: usize) -> Result<Self, TransportContractViolation> {
         self.0
             .checked_add(additional)
             .map(Self)
-            .ok_or_else(DeferredAdmissionAcquireError::retained_size_overflow)
+            .ok_or(TransportContractViolation::DeferredRetainedSizeOverflow)
     }
 }
 
-/// Stable category for deferred admission configuration failures.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum DeferredAdmissionConfigErrorKind {
-    /// The waiter count limit is zero.
-    ZeroWaiterCapacity,
-    /// The retained-byte limit is zero.
-    ZeroRetainedByteCapacity,
-    /// A deferred child limit exceeds the injected process root.
-    ExceedsProcessCapacity,
-    /// The controller was already configured with different limits.
-    Conflict,
-    /// The established budget implementation rejected another invariant.
-    Budget,
-}
-
-impl DeferredAdmissionConfigErrorKind {
-    /// Returns a stable low-cardinality label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ZeroWaiterCapacity => "zero_waiter_capacity",
-            Self::ZeroRetainedByteCapacity => "zero_retained_byte_capacity",
-            Self::ExceedsProcessCapacity => "exceeds_process_capacity",
-            Self::Conflict => "conflict",
-            Self::Budget => "budget",
-        }
-    }
-}
-
-enum DeferredAdmissionConfigErrorSource {
-    Conflict,
-    Budget(RuntimeContractViolation),
-}
-
-/// Typed, redacted deferred admission configuration failure.
-pub struct DeferredAdmissionConfigError {
-    kind: DeferredAdmissionConfigErrorKind,
-    source: DeferredAdmissionConfigErrorSource,
-}
-
-impl DeferredAdmissionConfigError {
-    fn from_budget(kind: DeferredAdmissionConfigErrorKind, source: RuntimeContractViolation) -> Self {
-        Self {
-            kind,
-            source: DeferredAdmissionConfigErrorSource::Budget(source),
-        }
-    }
-
-    pub(crate) const fn conflict() -> Self {
-        Self {
-            kind: DeferredAdmissionConfigErrorKind::Conflict,
-            source: DeferredAdmissionConfigErrorSource::Conflict,
-        }
-    }
-
-    /// Returns the stable low-cardinality failure category.
-    #[must_use]
-    pub const fn kind(&self) -> DeferredAdmissionConfigErrorKind {
-        self.kind
-    }
-}
-
-impl fmt::Debug for DeferredAdmissionConfigError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DeferredAdmissionConfigError")
-            .field("kind", &self.kind.as_str())
-            .finish()
-    }
-}
-
-impl fmt::Display for DeferredAdmissionConfigError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "deferred admission configuration failed: {}",
-            self.kind.as_str()
-        )
-    }
-}
-
-impl Error for DeferredAdmissionConfigError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match &self.source {
-            DeferredAdmissionConfigErrorSource::Conflict => None,
-            DeferredAdmissionConfigErrorSource::Budget(source) => Some(source),
-        }
-    }
-}
-
-/// Stable category for a failed deferred wait reservation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum DeferredAdmissionAcquireErrorKind {
-    /// Checked retained-size arithmetic overflowed.
-    RetainedSizeOverflow,
-    /// This deferred owner exhausted its waiter count.
-    WaiterCapacityExhausted,
-    /// This deferred owner exhausted its retained bytes.
-    RetainedByteCapacityExhausted,
-    /// Another child exhausted the shared process/service root.
-    ParentCapacityExhausted,
-}
-
-impl DeferredAdmissionAcquireErrorKind {
-    /// Returns a stable low-cardinality label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::RetainedSizeOverflow => "retained_size_overflow",
-            Self::WaiterCapacityExhausted => "waiter_capacity_exhausted",
-            Self::RetainedByteCapacityExhausted => "retained_byte_capacity_exhausted",
-            Self::ParentCapacityExhausted => "parent_capacity_exhausted",
-        }
-    }
-}
-
-enum DeferredAdmissionAcquireErrorSource {
-    RetainedSizeOverflow,
-    Budget(BudgetRejection),
-}
-
-/// Typed, redacted failure to reserve one deferred wait.
-pub struct DeferredAdmissionAcquireError {
-    kind: DeferredAdmissionAcquireErrorKind,
-    source: DeferredAdmissionAcquireErrorSource,
-}
-
-impl DeferredAdmissionAcquireError {
-    pub(crate) const fn retained_size_overflow() -> Self {
-        Self {
-            kind: DeferredAdmissionAcquireErrorKind::RetainedSizeOverflow,
-            source: DeferredAdmissionAcquireErrorSource::RetainedSizeOverflow,
-        }
-    }
-
-    fn from_budget(kind: DeferredAdmissionAcquireErrorKind, source: BudgetRejection) -> Self {
-        Self {
-            kind,
-            source: DeferredAdmissionAcquireErrorSource::Budget(source),
-        }
-    }
-
-    /// Returns the stable low-cardinality failure category.
-    #[must_use]
-    pub const fn kind(&self) -> DeferredAdmissionAcquireErrorKind {
-        self.kind
-    }
-}
-
-impl fmt::Debug for DeferredAdmissionAcquireError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DeferredAdmissionAcquireError")
-            .field("kind", &self.kind.as_str())
-            .finish()
-    }
-}
-
-impl fmt::Display for DeferredAdmissionAcquireError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "deferred wait admission failed: {}", self.kind.as_str())
-    }
-}
-
-impl Error for DeferredAdmissionAcquireError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match &self.source {
-            DeferredAdmissionAcquireErrorSource::RetainedSizeOverflow => None,
-            DeferredAdmissionAcquireErrorSource::Budget(_source) => None,
-        }
-    }
+/// Result of reserving bounded capacity for one deferred wait.
+#[must_use]
+pub enum DeferredAdmissionAcquireOutcome {
+    /// Capacity was acquired and the affine permit is returned.
+    Acquired(DeferredWaitPermit),
+    /// The deferred owner exhausted its waiter count.
+    WaiterCapacityExhausted(BudgetRejection),
+    /// The deferred owner exhausted its retained-byte capacity.
+    RetainedByteCapacityExhausted(BudgetRejection),
+    /// Another child exhausted the shared process or service root.
+    ParentCapacityExhausted(BudgetRejection),
 }
 
 /// Independent low-cardinality view of retained deferred waits.
@@ -399,14 +239,14 @@ impl DeferredAdmission {
     pub fn try_configure(
         controller: &AdmissionController,
         limits: DeferredWaitLimits,
-    ) -> Result<Self, DeferredAdmissionConfigError> {
+    ) -> Result<Self, TransportContractViolation> {
         controller.configure_deferred_admission(limits)
     }
 
     pub(crate) fn try_new(
         process_budget: &ResourceBudget,
         limits: DeferredWaitLimits,
-    ) -> Result<Self, DeferredAdmissionConfigError> {
+    ) -> Result<Self, TransportContractViolation> {
         let path = format!("{}/{DEFERRED_BUDGET_NAME}", process_budget.path());
         validate_limits(limits, process_budget.limit(), &path)?;
         let budget = process_budget
@@ -414,7 +254,7 @@ impl DeferredAdmission {
                 DEFERRED_BUDGET_NAME,
                 BudgetLimit::new(limits.max_waiters, limits.max_retained_bytes, FullPolicy::Reject),
             )
-            .map_err(|source| DeferredAdmissionConfigError::from_budget(config_kind(&source), source))?;
+            .map_err(deferred_budget_contract)?;
         Ok(Self {
             inner: Arc::new(DeferredAdmissionInner { budget, limits }),
         })
@@ -439,34 +279,24 @@ impl DeferredAdmission {
 
     /// Attempts to reserve one already-checked retained size without waiting.
     ///
-    /// # Errors
-    ///
-    /// Returns the exact local count, local retained-byte, or shared-parent
-    /// exhaustion category. No registry or asynchronous wait is created.
-    pub fn try_reserve(
-        &self,
-        retained: DeferredRetainedSize,
-    ) -> Result<DeferredWaitPermit, DeferredAdmissionAcquireError> {
-        let permit = self
-            .inner
-            .budget
-            .try_acquire(retained.bytes(), BudgetClass::Data)
-            .map_err(|source| {
-                let kind = if source.exhausted_path() == self.inner.budget.path() {
-                    match source.dimension() {
-                        BudgetDimension::Count => DeferredAdmissionAcquireErrorKind::WaiterCapacityExhausted,
-                        BudgetDimension::Bytes => DeferredAdmissionAcquireErrorKind::RetainedByteCapacityExhausted,
-                        BudgetDimension::Rate => DeferredAdmissionAcquireErrorKind::ParentCapacityExhausted,
-                    }
-                } else {
-                    DeferredAdmissionAcquireErrorKind::ParentCapacityExhausted
-                };
-                DeferredAdmissionAcquireError::from_budget(kind, source)
-            })?;
-        Ok(DeferredWaitPermit {
-            permit: Some(permit),
-            retained_bytes: retained.bytes(),
-        })
+    /// The returned outcome distinguishes local count, local retained-byte,
+    /// and shared-parent exhaustion. No registry or asynchronous wait is
+    /// created.
+    pub fn try_reserve(&self, retained: DeferredRetainedSize) -> DeferredAdmissionAcquireOutcome {
+        match self.inner.budget.try_acquire(retained.bytes(), BudgetClass::Data) {
+            Ok(permit) => DeferredAdmissionAcquireOutcome::Acquired(DeferredWaitPermit {
+                permit: Some(permit),
+                retained_bytes: retained.bytes(),
+            }),
+            Err(rejection) if rejection.exhausted_path() != self.inner.budget.path() => {
+                DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(rejection)
+            }
+            Err(rejection) => match rejection.dimension() {
+                BudgetDimension::Count => DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(rejection),
+                BudgetDimension::Bytes => DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(rejection),
+                BudgetDimension::Rate => DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(rejection),
+            },
+        }
     }
 
     #[cfg(test)]
@@ -528,54 +358,42 @@ fn validate_limits(
     limits: DeferredWaitLimits,
     parent: BudgetLimit,
     _path: &str,
-) -> Result<(), DeferredAdmissionConfigError> {
+) -> Result<(), TransportContractViolation> {
     let failure = if limits.max_waiters == 0 {
-        Some((
-            DeferredAdmissionConfigErrorKind::ZeroWaiterCapacity,
-            RuntimeContractViolation::ZeroBudgetCapacity {
-                dimension: BudgetDimension::Count,
-            },
-        ))
+        Some(RuntimeContractViolation::ZeroBudgetCapacity {
+            dimension: BudgetDimension::Count,
+        })
     } else if limits.max_retained_bytes == 0 {
-        Some((
-            DeferredAdmissionConfigErrorKind::ZeroRetainedByteCapacity,
-            RuntimeContractViolation::ZeroBudgetCapacity {
-                dimension: BudgetDimension::Bytes,
-            },
-        ))
+        Some(RuntimeContractViolation::ZeroBudgetCapacity {
+            dimension: BudgetDimension::Bytes,
+        })
     } else if limits.max_waiters > parent.capacity.count {
-        Some((
-            DeferredAdmissionConfigErrorKind::ExceedsProcessCapacity,
-            RuntimeContractViolation::ChildBudgetExceedsParent {
-                dimension: BudgetDimension::Count,
-            },
-        ))
+        Some(RuntimeContractViolation::ChildBudgetExceedsParent {
+            dimension: BudgetDimension::Count,
+        })
     } else if limits.max_retained_bytes > parent.capacity.bytes {
-        Some((
-            DeferredAdmissionConfigErrorKind::ExceedsProcessCapacity,
-            RuntimeContractViolation::ChildBudgetExceedsParent {
-                dimension: BudgetDimension::Bytes,
-            },
-        ))
+        Some(RuntimeContractViolation::ChildBudgetExceedsParent {
+            dimension: BudgetDimension::Bytes,
+        })
     } else {
         None
     };
     match failure {
-        Some((kind, source)) => Err(DeferredAdmissionConfigError::from_budget(kind, source)),
+        Some(source) => Err(deferred_budget_contract(source)),
         None => Ok(()),
     }
 }
 
-fn config_kind(source: &RuntimeContractViolation) -> DeferredAdmissionConfigErrorKind {
+fn deferred_budget_contract(source: RuntimeContractViolation) -> TransportContractViolation {
     match source {
         RuntimeContractViolation::ZeroBudgetCapacity {
             dimension: BudgetDimension::Count,
-        } => DeferredAdmissionConfigErrorKind::ZeroWaiterCapacity,
+        } => TransportContractViolation::DeferredAdmissionZeroWaiterCapacity(source),
         RuntimeContractViolation::ZeroBudgetCapacity {
             dimension: BudgetDimension::Bytes,
-        } => DeferredAdmissionConfigErrorKind::ZeroRetainedByteCapacity,
+        } => TransportContractViolation::DeferredAdmissionZeroRetainedByteCapacity(source),
         RuntimeContractViolation::ChildBudgetExceedsParent { .. } => {
-            DeferredAdmissionConfigErrorKind::ExceedsProcessCapacity
+            TransportContractViolation::DeferredAdmissionExceedsProcessCapacity(source)
         }
         RuntimeContractViolation::ZeroBudgetCapacity {
             dimension: BudgetDimension::Rate,
@@ -591,7 +409,9 @@ fn config_kind(source: &RuntimeContractViolation) -> DeferredAdmissionConfigErro
         | RuntimeContractViolation::PermitTargetInDifferentTree
         | RuntimeContractViolation::InvalidMemoryLimit { .. }
         | RuntimeContractViolation::InvalidSchedule { .. }
-        | RuntimeContractViolation::InvalidMetadataConfiguration { .. } => DeferredAdmissionConfigErrorKind::Budget,
+        | RuntimeContractViolation::InvalidMetadataConfiguration { .. } => {
+            TransportContractViolation::DeferredAdmissionBudget(source)
+        }
     }
 }
 
@@ -599,6 +419,7 @@ fn fixed_retained_bytes() -> Option<usize> {
     let header = Layout::array::<AtomicUsize>(2).ok()?;
     let (state_allocation, _) = header.extend(Layout::new::<ResponseState>()).ok()?;
     size_of::<DeferredResponder>()
+        .checked_add(size_of::<crate::dispatch::RequestControlView>())?
         .checked_add(state_allocation.pad_to_align().size())?
         .checked_add(size_of::<DeferredWaitPermit>())
 }

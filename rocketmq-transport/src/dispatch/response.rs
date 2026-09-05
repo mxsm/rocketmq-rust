@@ -119,59 +119,12 @@ impl ResponseTerminalState {
     }
 }
 
-/// Stable category for a response completion failure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ResponseErrorKind {
-    /// A single-response owner had already reached a terminal state.
-    AlreadyCompleted,
-    /// The immutable response deadline elapsed before completion.
-    DeadlineExceeded,
-    /// The request owner cancelled the response.
-    Cancelled,
-    /// The response session closed before completion.
-    SessionClosed,
-    /// The bounded response queue could not accept the response.
-    QueueSaturated,
-    /// Encoding the response failed before a write began.
-    Encode,
-    /// The canonical response transport failed.
-    Transport,
-}
-
-impl ResponseErrorKind {
-    /// Returns the stable low-cardinality error label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::AlreadyCompleted => "already_completed",
-            Self::DeadlineExceeded => "deadline_exceeded",
-            Self::Cancelled => "cancelled",
-            Self::SessionClosed => "session_closed",
-            Self::QueueSaturated => "queue_saturated",
-            Self::Encode => "encode",
-            Self::Transport => "transport",
-        }
-    }
-}
-
-/// Typed response completion failure.
+/// Typed operational failure from canonical response delivery.
 ///
-/// Formatting this error exposes only its stable category, terminal state or write progress, and
-/// any source error's stable code. It never formats the source error itself.
-pub enum ResponseError {
-    /// The response owner had already reached the supplied terminal state.
-    AlreadyCompleted {
-        /// Terminal state that prevented another response completion.
-        state: ResponseTerminalState,
-    },
-    /// The immutable response deadline elapsed before any write began.
-    DeadlineExceeded,
-    /// The response owner was cancelled before any write began.
-    Cancelled,
-    /// The response session closed before any write began.
-    SessionClosed,
-    /// The bounded response queue rejected the response before any write began.
-    QueueSaturated,
+/// Normal lifecycle, deadline, and capacity rejections are represented by
+/// [`ResponseCompletionOutcome`] instead. Formatting this error exposes only
+/// its closed operation and the source error's stable code.
+pub(crate) enum ResponseOperationalFailure {
     /// Encoding failed deterministically before any write began.
     Encode {
         /// Typed encoding failure preserved for programmatic inspection.
@@ -186,35 +139,74 @@ pub enum ResponseError {
     },
 }
 
-impl ResponseError {
-    /// Returns this error's stable low-cardinality category.
+/// Source-free result at a canonical response completion boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[must_use]
+pub enum ResponseCompletionOutcome {
+    /// Canonical response delivery completed.
+    Completed(ResponseReceipt),
+    /// A prior terminal operation already completed the response.
+    AlreadyCompleted(ResponseTerminalState),
+    /// The immutable deadline elapsed before completion.
+    DeadlineExpired,
+    /// Request ownership was cancelled.
+    Cancelled,
+    /// The canonical session closed.
+    SessionClosed,
+    /// The bounded response queue rejected the response.
+    QueueSaturated,
+}
+
+/// Private completion carrier for a canonical writer attempt.
+#[must_use]
+pub(crate) enum ResponseSendOutcome {
+    /// The canonical writer completed the payload.
+    Written,
+    /// A source-free normal response state prevented the write.
+    Rejected(ResponseCompletionOutcome),
+    /// Encoding or transport I/O failed with a typed cause.
+    OperationalFailure(ResponseOperationalFailure),
+}
+
+impl ResponseCompletionOutcome {
+    /// Returns the stable low-cardinality outcome label.
     #[must_use]
-    pub const fn kind(&self) -> ResponseErrorKind {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Self::AlreadyCompleted { .. } => ResponseErrorKind::AlreadyCompleted,
-            Self::DeadlineExceeded => ResponseErrorKind::DeadlineExceeded,
-            Self::Cancelled => ResponseErrorKind::Cancelled,
-            Self::SessionClosed => ResponseErrorKind::SessionClosed,
-            Self::QueueSaturated => ResponseErrorKind::QueueSaturated,
-            Self::Encode { .. } => ResponseErrorKind::Encode,
-            Self::Transport { .. } => ResponseErrorKind::Transport,
+            Self::Completed(_) => "completed",
+            Self::AlreadyCompleted(_) => "already_completed",
+            Self::DeadlineExpired => "deadline_expired",
+            Self::Cancelled => "cancelled",
+            Self::SessionClosed => "session_closed",
+            Self::QueueSaturated => "queue_saturated",
+        }
+    }
+}
+
+impl ResponseOperationalFailure {
+    pub(crate) const fn encode(source: RocketMQError) -> Self {
+        Self::Encode { source }
+    }
+
+    pub(crate) const fn transport(progress: WriteProgress, source: RocketMQError) -> Self {
+        Self::Transport { progress, source }
+    }
+
+    /// Returns this failure's stable low-cardinality operation.
+    #[must_use]
+    pub const fn operation(&self) -> &'static str {
+        match self {
+            Self::Encode { .. } => "encode",
+            Self::Transport { .. } => "transport",
         }
     }
 
-    /// Returns the write progress associated with this failure.
-    ///
-    /// `None` is reserved for [`Self::AlreadyCompleted`], because it reports a prior terminal
-    /// state rather than a new write attempt.
+    /// Returns the write progress associated with this operational failure.
     #[must_use]
-    pub const fn write_progress(&self) -> Option<WriteProgress> {
+    pub const fn write_progress(&self) -> WriteProgress {
         match self {
-            Self::AlreadyCompleted { .. } => None,
-            Self::DeadlineExceeded
-            | Self::Cancelled
-            | Self::SessionClosed
-            | Self::QueueSaturated
-            | Self::Encode { .. } => Some(WriteProgress::NotStarted),
-            Self::Transport { progress, .. } => Some(*progress),
+            Self::Encode { .. } => WriteProgress::NotStarted,
+            Self::Transport { progress, .. } => *progress,
         }
     }
 
@@ -224,32 +216,23 @@ impl ResponseError {
     /// unexpired deadline, and remaining retry budget. Encoding failures are deterministic and
     /// nonretryable; a possibly partial transport write is never retryable.
     #[must_use]
+    #[cfg(test)]
     pub const fn retryable(&self) -> bool {
         matches!(
             self,
-            Self::QueueSaturated
-                | Self::Transport {
-                    progress: WriteProgress::NotStarted,
-                    ..
-                }
+            Self::Transport {
+                progress: WriteProgress::NotStarted,
+                ..
+            }
         )
     }
 }
 
-impl fmt::Debug for ResponseError {
+impl fmt::Debug for ResponseOperationalFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut debug = formatter.debug_struct("ResponseError");
-        debug.field("kind", &self.kind().as_str());
+        let mut debug = formatter.debug_struct("ResponseOperationalFailure");
+        debug.field("operation", &self.operation());
         match self {
-            Self::AlreadyCompleted { state } => {
-                debug.field("state", &state.as_str());
-                if let ResponseTerminalState::Failed { progress } = state {
-                    debug.field("progress", &progress.as_str());
-                }
-            }
-            Self::DeadlineExceeded | Self::Cancelled | Self::SessionClosed | Self::QueueSaturated => {
-                debug.field("progress", &WriteProgress::NotStarted.as_str());
-            }
             Self::Encode { source } => {
                 debug.field("progress", &WriteProgress::NotStarted.as_str());
                 debug.field("source_code", &source.kind().code().as_str());
@@ -263,19 +246,10 @@ impl fmt::Debug for ResponseError {
     }
 }
 
-impl fmt::Display for ResponseError {
+impl fmt::Display for ResponseOperationalFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "response error: {}", self.kind().as_str())?;
+        write!(formatter, "response delivery failed: {}", self.operation())?;
         match self {
-            Self::AlreadyCompleted { state } => {
-                write!(formatter, " (state={})", state.as_str())?;
-                if let ResponseTerminalState::Failed { progress } = state {
-                    write!(formatter, ", progress={}", progress.as_str())?;
-                }
-            }
-            Self::DeadlineExceeded | Self::Cancelled | Self::SessionClosed | Self::QueueSaturated => {
-                write!(formatter, " (progress={})", WriteProgress::NotStarted.as_str())?;
-            }
             Self::Encode { source } => {
                 write!(
                     formatter,
@@ -297,15 +271,10 @@ impl fmt::Display for ResponseError {
     }
 }
 
-impl Error for ResponseError {
+impl Error for ResponseOperationalFailure {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Encode { source } | Self::Transport { source, .. } => Some(source),
-            Self::AlreadyCompleted { .. }
-            | Self::DeadlineExceeded
-            | Self::Cancelled
-            | Self::SessionClosed
-            | Self::QueueSaturated => None,
         }
     }
 }
@@ -372,86 +341,39 @@ mod tests {
 
     use super::*;
 
-    fn response_error_kind_label(kind: ResponseErrorKind) -> &'static str {
-        match kind {
-            ResponseErrorKind::AlreadyCompleted => "already_completed",
-            ResponseErrorKind::DeadlineExceeded => "deadline_exceeded",
-            ResponseErrorKind::Cancelled => "cancelled",
-            ResponseErrorKind::SessionClosed => "session_closed",
-            ResponseErrorKind::QueueSaturated => "queue_saturated",
-            ResponseErrorKind::Encode => "encode",
-            ResponseErrorKind::Transport => "transport",
-        }
-    }
-
     #[test]
-    fn response_error_variants_have_stable_kind_progress_and_retry_policy() {
+    fn operational_failures_have_stable_operation_progress_and_retry_policy() {
         let cases = [
             (
-                ResponseError::AlreadyCompleted {
-                    state: ResponseTerminalState::Failed {
-                        progress: WriteProgress::PossiblyPartial,
-                    },
-                },
-                ResponseErrorKind::AlreadyCompleted,
-                None,
-                false,
-            ),
-            (
-                ResponseError::DeadlineExceeded,
-                ResponseErrorKind::DeadlineExceeded,
-                Some(WriteProgress::NotStarted),
-                false,
-            ),
-            (
-                ResponseError::Cancelled,
-                ResponseErrorKind::Cancelled,
-                Some(WriteProgress::NotStarted),
-                false,
-            ),
-            (
-                ResponseError::SessionClosed,
-                ResponseErrorKind::SessionClosed,
-                Some(WriteProgress::NotStarted),
-                false,
-            ),
-            (
-                ResponseError::QueueSaturated,
-                ResponseErrorKind::QueueSaturated,
-                Some(WriteProgress::NotStarted),
-                true,
-            ),
-            (
-                ResponseError::Encode {
+                ResponseOperationalFailure::Encode {
                     source: RocketMQError::InvalidProperty("encode-canary".to_owned()),
                 },
-                ResponseErrorKind::Encode,
-                Some(WriteProgress::NotStarted),
+                "encode",
+                WriteProgress::NotStarted,
                 false,
             ),
             (
-                ResponseError::Transport {
+                ResponseOperationalFailure::Transport {
                     progress: WriteProgress::NotStarted,
                     source: RocketMQError::InvalidProperty("transport-canary".to_owned()),
                 },
-                ResponseErrorKind::Transport,
-                Some(WriteProgress::NotStarted),
+                "transport",
+                WriteProgress::NotStarted,
                 true,
             ),
             (
-                ResponseError::Transport {
+                ResponseOperationalFailure::Transport {
                     progress: WriteProgress::PossiblyPartial,
                     source: RocketMQError::InvalidProperty("partial-canary".to_owned()),
                 },
-                ResponseErrorKind::Transport,
-                Some(WriteProgress::PossiblyPartial),
+                "transport",
+                WriteProgress::PossiblyPartial,
                 false,
             ),
         ];
 
-        for (error, kind, progress, retryable) in cases {
-            assert_eq!(error.kind(), kind);
-            assert_eq!(error.kind().as_str(), response_error_kind_label(kind));
+        for (error, operation, progress, retryable) in cases {
+            assert_eq!(error.operation(), operation);
             assert_eq!(error.write_progress(), progress);
             assert_eq!(error.retryable(), retryable);
         }
@@ -460,10 +382,10 @@ mod tests {
     #[test]
     fn source_errors_retain_their_concrete_type_and_identity() {
         let errors = [
-            ResponseError::Encode {
+            ResponseOperationalFailure::Encode {
                 source: RocketMQError::InvalidProperty("encode-source-canary".to_owned()),
             },
-            ResponseError::Transport {
+            ResponseOperationalFailure::Transport {
                 progress: WriteProgress::NotStarted,
                 source: RocketMQError::InvalidProperty("transport-source-canary".to_owned()),
             },
@@ -471,8 +393,8 @@ mod tests {
 
         for error in &errors {
             let expected = match error {
-                ResponseError::Encode { source } | ResponseError::Transport { source, .. } => source,
-                _ => unreachable!("test constructed source-carrying response errors"),
+                ResponseOperationalFailure::Encode { source }
+                | ResponseOperationalFailure::Transport { source, .. } => source,
             };
             let source = Error::source(error).expect("response error should preserve its source");
             let typed = source
@@ -482,17 +404,16 @@ mod tests {
             assert!(std::ptr::eq(typed, expected));
             assert_eq!(typed.kind(), ErrorKind::InvalidProperty);
         }
-        assert!(Error::source(&ResponseError::Cancelled).is_none());
     }
 
     #[test]
     fn response_error_formatting_does_not_expose_sensitive_source_text() {
         const CANARY: &str = "response-secret-canary";
         let errors = [
-            ResponseError::Encode {
+            ResponseOperationalFailure::Encode {
                 source: RocketMQError::InvalidProperty(CANARY.to_owned()),
             },
-            ResponseError::Transport {
+            ResponseOperationalFailure::Transport {
                 progress: WriteProgress::PossiblyPartial,
                 source: RocketMQError::InvalidProperty(CANARY.to_owned()),
             },

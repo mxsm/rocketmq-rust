@@ -397,7 +397,7 @@ async fn possibly_partial_flush_failure_is_observed_once_and_never_retried() {
         assert_eq!(
             observations[0].outcome(),
             ResponseWriteOutcome::Failed {
-                kind: ResponseErrorKind::Transport,
+                completion: None,
                 progress: Some(WriteProgress::PossiblyPartial),
             }
         );

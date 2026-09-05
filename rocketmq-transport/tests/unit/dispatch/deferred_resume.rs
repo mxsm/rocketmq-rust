@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::alloc::Layout;
+use std::error::Error;
 use std::mem::size_of;
 use std::net::IpAddr;
 use std::sync::atomic::AtomicBool;
@@ -31,9 +32,11 @@ use super::checked_resume_fixed_sum;
 use super::deferred_resume_fixed_bytes;
 use super::execution_retained_bytes;
 use super::ClaimExecutionParts;
+use super::DeferredResponseAttempt;
+use super::DeferredResumeEnqueueOutcome;
 use super::DeferredResumeJob;
-use super::DeferredResumeSubmitError;
 use super::DeferredResumeWork;
+use super::ResumeAttempt;
 use super::ResumeCompletion;
 use super::ResumeJobCell;
 use super::ResumeStopView;
@@ -45,14 +48,14 @@ use crate::admission::AdmissionScope;
 use crate::admission::ResourceLimit;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::DeferredId;
-use crate::dispatch::DeferredResumeError;
-use crate::dispatch::DeferredResumeErrorKind;
-use crate::dispatch::DeferredTerminalReason;
+use crate::dispatch::DeferredResumeOutcome;
 use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestId;
 use crate::dispatch::RequestMeta;
 use crate::request_ordering::RequestOrdering;
 use crate::request_ordering::RequestOrderingKey;
+use crate::session_executor::DeferredResumeExecutor;
+use crate::session_executor::SessionDispatchAttempt;
 use crate::session_executor::SessionExecutor;
 use crate::session_view::EmbeddedSessionRecord;
 
@@ -87,6 +90,41 @@ struct ProbeWork {
     executions: Arc<AtomicUsize>,
 }
 
+struct StoppedWork {
+    stopped: Arc<parking_lot::Mutex<Vec<super::ResumeStop>>>,
+}
+
+impl DeferredResumeWork for StoppedWork {
+    fn release_wait_permit(&mut self) {}
+
+    fn execute(self: Box<Self>) -> WorkFuture {
+        panic!("an operation-owner failure must not execute the resume work")
+    }
+
+    fn reject(self: Box<Self>, _error: crate::admission::AdmissionRejection) -> WorkFuture {
+        panic!("an operation-owner failure must not reject the resume work")
+    }
+
+    fn finish_admission_rejected(self: Box<Self>, _error: crate::admission::AdmissionRejection) -> super::ResumeResult {
+        panic!("an operation-owner failure must not become an admission rejection")
+    }
+
+    fn finish_stopped(
+        self: Box<Self>,
+        stop: super::ResumeStop,
+        _source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    ) -> super::ResumeResult {
+        self.stopped.lock().push(stop);
+        match stop {
+            super::ResumeStop::SessionClosed => ResumeAttempt::SessionClosed,
+            super::ResumeStop::ParentCancelled
+            | super::ResumeStop::OwnerDeadline
+            | super::ResumeStop::ProcessorUnavailable
+            | super::ResumeStop::ServiceStopping => ResumeAttempt::Cancelled,
+        }
+    }
+}
+
 impl DeferredResumeWork for ProbeWork {
     fn release_wait_permit(&mut self) {
         self.wait_released.store(true, Ordering::Release);
@@ -100,52 +138,36 @@ impl DeferredResumeWork for ProbeWork {
             if let Some(release) = self.release {
                 release.notified().await;
             }
-            Err(test_resume_error(DeferredResumeErrorKind::Response))
+            ResumeAttempt::Operational(super::ResumeOperationalFailure::TaskTerminated)
         })
     }
 
-    fn reject(self: Box<Self>, _error: crate::admission::AdmissionError) -> WorkFuture {
+    fn reject(self: Box<Self>, _error: crate::admission::AdmissionRejection) -> WorkFuture {
         Box::pin(async move {
             assert!(self.wait_released.load(Ordering::Acquire));
             self.entered.notify_one();
-            Err(test_resume_error(DeferredResumeErrorKind::Admission))
+            ResumeAttempt::AdmissionRejected
         })
     }
 
-    fn finish_admission_rejected(
-        self: Box<Self>,
-        _error: crate::admission::AdmissionError,
-    ) -> Result<crate::dispatch::ResponseReceipt, DeferredResumeError> {
+    fn finish_admission_rejected(self: Box<Self>, _error: crate::admission::AdmissionRejection) -> super::ResumeResult {
         assert!(self.wait_released.load(Ordering::Acquire));
-        Err(test_resume_error(DeferredResumeErrorKind::Admission))
+        ResumeAttempt::AdmissionRejected
     }
 
     fn finish_stopped(
         self: Box<Self>,
         stop: super::ResumeStop,
         _source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
-    ) -> Result<crate::dispatch::ResponseReceipt, DeferredResumeError> {
-        Err(DeferredResumeError::new_with_reason(
-            DeferredResumeErrorKind::ExecutorClosing,
-            DeferredId::for_test(9814),
-            RequestId::real(9814, 1).expect("test request id"),
-            None,
-            Some(stop.terminal_reason()),
-            None,
-            None,
-        ))
+    ) -> super::ResumeResult {
+        match stop {
+            super::ResumeStop::SessionClosed => ResumeAttempt::SessionClosed,
+            super::ResumeStop::ParentCancelled
+            | super::ResumeStop::OwnerDeadline
+            | super::ResumeStop::ProcessorUnavailable
+            | super::ResumeStop::ServiceStopping => ResumeAttempt::Cancelled,
+        }
     }
-}
-
-fn test_resume_error(kind: DeferredResumeErrorKind) -> DeferredResumeError {
-    DeferredResumeError::new(
-        kind,
-        DeferredId::for_test(9814),
-        RequestId::real(9814, 1).expect("test request id"),
-        None,
-        None,
-        None,
-    )
 }
 
 fn probe_job(
@@ -221,6 +243,46 @@ fn executor_with_limits(
     (runtime, controller, executor)
 }
 
+fn is_submitted(outcome: &DeferredResumeEnqueueOutcome) -> bool {
+    matches!(outcome, DeferredResumeEnqueueOutcome::Submitted(_))
+}
+
+#[test]
+fn response_path_preserves_closed_terminal_winners() {
+    for reason in [
+        crate::dispatch::DeferredTerminalReason::SessionClosed,
+        crate::dispatch::DeferredTerminalReason::ReceiverDropped,
+    ] {
+        let result = super::map_response(
+            DeferredId::for_test(981_400),
+            RequestId::real(9814, 400).expect("closed-winner request id"),
+            Ok(DeferredResponseAttempt::AlreadyCompleted {
+                state: reason.terminal_state(),
+                reason: Some(reason),
+            }),
+        );
+        assert!(matches!(result, ResumeAttempt::SessionClosed));
+    }
+}
+
+#[test]
+fn response_path_preserves_source_free_service_terminal_winners() {
+    for reason in [
+        crate::dispatch::DeferredTerminalReason::ProcessorUnavailable,
+        crate::dispatch::DeferredTerminalReason::ServiceStopping,
+    ] {
+        let result = super::map_response(
+            DeferredId::for_test(981_401),
+            RequestId::real(9814, 401).expect("service-winner request id"),
+            Ok(DeferredResponseAttempt::AlreadyCompleted {
+                state: reason.terminal_state(),
+                reason: Some(reason),
+            }),
+        );
+        assert!(matches!(result, ResumeAttempt::Cancelled));
+    }
+}
+
 #[test]
 fn execution_charge_counts_each_handler_component_once_and_checks_every_addition() {
     assert_eq!(checked_execution_charge(11, 13, 17, 19, 23), Some(83));
@@ -283,16 +345,21 @@ async fn real_queued_admission_rejects_the_checked_high_alignment_charge_and_ret
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell))
     {
-        Err(DeferredResumeSubmitError::Admission { cell, .. }) => cell,
-        Err(DeferredResumeSubmitError::Closing { .. }) => panic!("executor unexpectedly closed"),
-        Ok(_) => panic!("under-capacity queued budget accepted the resume job"),
+        DeferredResumeEnqueueOutcome::AdmissionRejected { cell, .. } => cell,
+        DeferredResumeEnqueueOutcome::ExecutorClosing { .. } => panic!("executor unexpectedly closed"),
+        DeferredResumeEnqueueOutcome::OperationalFailure { .. } => {
+            panic!("executor unexpectedly returned an operational failure")
+        }
+        DeferredResumeEnqueueOutcome::Submitted(_) => {
+            panic!("under-capacity queued budget accepted the resume job")
+        }
     };
     assert!(Arc::ptr_eq(&cell, &returned));
     drop(returned);
     drop(cell);
     assert_eq!(
-        completion.wait().await.expect_err("unexecuted job terminates").kind(),
-        DeferredResumeErrorKind::ExecutorClosing
+        completion.wait().await.expect("unexecuted job terminalizes normally"),
+        DeferredResumeOutcome::Cancelled
     );
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
@@ -330,9 +397,7 @@ async fn detached_submit_admission_failure_terminalizes_and_observes_exactly_onc
         Some(Box::new(move |result| {
             calls.fetch_add(1, Ordering::AcqRel);
             admission.store(
-                result
-                    .as_ref()
-                    .is_err_and(|error| error.kind() == DeferredResumeErrorKind::Admission),
+                matches!(result, Ok(DeferredResumeOutcome::AdmissionRejected)),
                 Ordering::Release,
             );
         })),
@@ -357,9 +422,14 @@ async fn detached_submit_admission_failure_terminalizes_and_observes_exactly_onc
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell))
     {
-        Err(DeferredResumeSubmitError::Admission { error, cell }) => (error, cell),
-        Err(DeferredResumeSubmitError::Closing { .. }) => panic!("executor unexpectedly closed"),
-        Ok(_) => panic!("under-capacity queued budget accepted the resume job"),
+        DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell } => (error, cell),
+        DeferredResumeEnqueueOutcome::ExecutorClosing { .. } => panic!("executor unexpectedly closed"),
+        DeferredResumeEnqueueOutcome::OperationalFailure { .. } => {
+            panic!("executor unexpectedly returned an operational failure")
+        }
+        DeferredResumeEnqueueOutcome::Submitted(_) => {
+            panic!("under-capacity queued budget accepted the resume job")
+        }
     };
     returned
         .take()
@@ -367,8 +437,8 @@ async fn detached_submit_admission_failure_terminalizes_and_observes_exactly_onc
         .finish_admission_rejected(error);
     let result = completion.take_finished();
     assert_eq!(
-        result.expect_err("admission terminal").kind(),
-        DeferredResumeErrorKind::Admission
+        result.expect("admission is a normal terminal outcome"),
+        DeferredResumeOutcome::AdmissionRejected
     );
     assert_eq!(observed.load(Ordering::Acquire), 1);
     assert!(observed_admission.load(Ordering::Acquire));
@@ -402,16 +472,21 @@ async fn inflight_admission_rejection_returns_the_exact_job_and_releases_queued_
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell))
     {
-        Err(DeferredResumeSubmitError::Admission { cell, .. }) => cell,
-        Err(DeferredResumeSubmitError::Closing { .. }) => panic!("executor unexpectedly closed"),
-        Ok(_) => panic!("under-capacity inflight budget accepted the resume job"),
+        DeferredResumeEnqueueOutcome::AdmissionRejected { cell, .. } => cell,
+        DeferredResumeEnqueueOutcome::ExecutorClosing { .. } => panic!("executor unexpectedly closed"),
+        DeferredResumeEnqueueOutcome::OperationalFailure { .. } => {
+            panic!("executor unexpectedly returned an operational failure")
+        }
+        DeferredResumeEnqueueOutcome::Submitted(_) => {
+            panic!("under-capacity inflight budget accepted the resume job")
+        }
     };
     assert!(Arc::ptr_eq(&cell, &returned));
     drop(returned);
     drop(cell);
     assert_eq!(
-        completion.wait().await.expect_err("unexecuted job terminates").kind(),
-        DeferredResumeErrorKind::ExecutorClosing
+        completion.wait().await.expect("unexecuted job terminalizes normally"),
+        DeferredResumeOutcome::Cancelled
     );
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
@@ -446,13 +521,17 @@ async fn processor_rejection_runs_inside_the_owned_task_and_releases_all_capacit
     let submitted = executor
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell));
-    assert!(submitted.is_ok(), "processor rejection happens inside an accepted task");
+    assert!(
+        is_submitted(&submitted),
+        "processor rejection happens inside an accepted task"
+    );
     drop(cell);
     rejected.notified().await;
     assert_eq!(executions.load(Ordering::Acquire), 0);
-    let error = completion.wait().await.expect_err("processor rejection result");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::Admission);
-    assert_eq!(error.prior_terminal_reason(), None);
+    assert_eq!(
+        completion.wait().await.expect("processor rejection result"),
+        DeferredResumeOutcome::AdmissionRejected
+    );
     let report = executor
         .drain_until(ShutdownDeadline::after(Duration::from_secs(1)))
         .await;
@@ -470,32 +549,234 @@ async fn processor_rejection_runs_inside_the_owned_task_and_releases_all_capacit
 }
 
 #[tokio::test]
-async fn operation_close_at_spawn_returns_the_exact_job_and_releases_both_permits() {
+async fn operation_close_at_spawn_returns_the_exact_cell_and_source_free_cancelled_outcome() {
     let (_runtime, controller, executor) =
         executor_with_limits("deferred-resume-spawn-reject", AdmissionLimits::default());
     executor.close_resume_operation_before_spawn_for_test();
-    let (job, completion, _wait_released, _entered, _executions) = probe_job(512, RequestOrdering::Concurrent, None);
+    let (job, completion, wait_released, _entered, _executions) = probe_job(512, RequestOrdering::Concurrent, None);
     let cell = Arc::new(ResumeJobCell::new(job));
     cell.release_wait_permit();
+    assert!(wait_released.load(Ordering::Acquire));
     let returned = match executor
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell))
     {
-        Err(DeferredResumeSubmitError::Closing { cell, .. }) => cell,
-        Err(DeferredResumeSubmitError::Admission { .. }) => panic!("capacity unexpectedly rejected"),
-        Ok(_) => panic!("closed operation accepted a resume task"),
+        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => cell,
+        DeferredResumeEnqueueOutcome::AdmissionRejected { .. } => panic!("capacity unexpectedly rejected"),
+        DeferredResumeEnqueueOutcome::OperationalFailure { .. } => {
+            panic!("closed operation must remain a source-free control outcome")
+        }
+        DeferredResumeEnqueueOutcome::Submitted(_) => panic!("closed operation accepted a resume task"),
     };
     assert!(Arc::ptr_eq(&cell, &returned));
+    returned
+        .take()
+        .expect("closing rejection retains the resume job")
+        .finish_executor_closed();
     drop(returned);
     drop(cell);
     assert_eq!(
-        completion.wait().await.expect_err("unspawned job terminates").kind(),
-        DeferredResumeErrorKind::ExecutorClosing
+        completion
+            .wait()
+            .await
+            .expect("unspawned job terminalizes without a source"),
+        DeferredResumeOutcome::Cancelled
     );
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
     assert_eq!(snapshot.inflight.current_count, 0);
     assert_eq!(snapshot.processors.current_count, 0);
+}
+
+#[tokio::test]
+async fn retired_resume_executor_returns_the_exact_cell_and_source_free_cancelled_outcome() {
+    let (job, completion, wait_released, _entered, _executions) = probe_job(512, RequestOrdering::Concurrent, None);
+    let cell = Arc::new(ResumeJobCell::new(job));
+    cell.release_wait_permit();
+    assert!(wait_released.load(Ordering::Acquire));
+
+    let executor = DeferredResumeExecutor::retired();
+    let returned = match executor.try_execute_resume(Arc::clone(&cell)) {
+        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => cell,
+        DeferredResumeEnqueueOutcome::AdmissionRejected { .. }
+        | DeferredResumeEnqueueOutcome::OperationalFailure { .. }
+        | DeferredResumeEnqueueOutcome::Submitted(_) => {
+            panic!("retired executor must return a source-free closing outcome")
+        }
+    };
+    assert!(Arc::ptr_eq(&cell, &returned));
+    returned
+        .take()
+        .expect("retired executor retains the resume job")
+        .finish_executor_closed();
+    drop(returned);
+    drop(cell);
+    assert_eq!(
+        completion
+            .wait()
+            .await
+            .expect("retired executor terminalizes without a source"),
+        DeferredResumeOutcome::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn preclosed_resume_executor_returns_the_exact_cell_and_source_free_cancelled_outcome() {
+    let (_runtime, controller, executor) =
+        executor_with_limits("deferred-resume-preclosed", AdmissionLimits::default());
+    let report = executor
+        .drain_until(ShutdownDeadline::after(Duration::from_secs(1)))
+        .await;
+    assert!(report.is_healthy());
+
+    let (job, completion, wait_released, _entered, _executions) = probe_job(512, RequestOrdering::Concurrent, None);
+    let cell = Arc::new(ResumeJobCell::new(job));
+    cell.release_wait_permit();
+    assert!(wait_released.load(Ordering::Acquire));
+    let returned = match executor
+        .deferred_resume_executor()
+        .try_execute_resume(Arc::clone(&cell))
+    {
+        DeferredResumeEnqueueOutcome::ExecutorClosing { cell } => cell,
+        DeferredResumeEnqueueOutcome::AdmissionRejected { .. }
+        | DeferredResumeEnqueueOutcome::OperationalFailure { .. }
+        | DeferredResumeEnqueueOutcome::Submitted(_) => {
+            panic!("preclosed executor must return a source-free closing outcome")
+        }
+    };
+    assert!(Arc::ptr_eq(&cell, &returned));
+    returned
+        .take()
+        .expect("preclosed executor retains the resume job")
+        .finish_executor_closed();
+    drop(returned);
+    drop(cell);
+    assert_eq!(
+        completion
+            .wait()
+            .await
+            .expect("preclosed executor terminalizes without a source"),
+        DeferredResumeOutcome::Cancelled
+    );
+    let snapshot = controller.snapshot();
+    assert_eq!(snapshot.queued.current_count, 0);
+    assert_eq!(snapshot.inflight.current_count, 0);
+    assert_eq!(snapshot.processors.current_count, 0);
+}
+
+#[tokio::test]
+async fn terminal_winner_does_not_mask_an_operation_owner_failure_or_leak_admission() {
+    for (name, expected_stop) in [
+        ("deferred-resume-owner-parent", super::ResumeStop::ParentCancelled),
+        ("deferred-resume-owner-session", super::ResumeStop::SessionClosed),
+        ("deferred-resume-owner-deadline", super::ResumeStop::OwnerDeadline),
+    ] {
+        let (runtime, controller, executor) = executor_with_limits(name, AdmissionLimits::default());
+        let conflicting_owner = runtime.root_context().component("deferred-resume-conflicting-owner");
+        let binding_task = conflicting_owner
+            .task_group()
+            .spawn_draining_operation(
+                executor.operation_context(),
+                "deferred-resume-conflicting-owner",
+                async {},
+            )
+            .expect("bind the resume operation to a conflicting owner");
+        assert!(
+            conflicting_owner
+                .task_group()
+                .wait_task(binding_task, Duration::from_secs(1))
+                .await,
+            "conflicting owner task must finish"
+        );
+
+        let session = Arc::new(EmbeddedSessionRecord::new(9_824));
+        let lifecycle = runtime.root_context().component("deferred-resume-terminal-winner");
+        let deadline =
+            (expected_stop == super::ResumeStop::OwnerDeadline).then(|| RequestDeadline::after(Duration::ZERO));
+        let control = RequestControlView::from_meta(
+            &RequestMeta::new(std::time::Instant::now(), deadline),
+            session.view().state().clone(),
+            lifecycle.task_group(),
+        );
+        match expected_stop {
+            super::ResumeStop::ParentCancelled => lifecycle.task_group().cancel(),
+            super::ResumeStop::SessionClosed => session.close(),
+            super::ResumeStop::OwnerDeadline => {}
+            super::ResumeStop::ProcessorUnavailable | super::ResumeStop::ServiceStopping => {
+                unreachable!("the test covers externally selected terminal winners")
+            }
+        }
+        let stop_view = ResumeStopView::new(control, None);
+        assert_eq!(stop_view.current_before_resume(), Some(expected_stop));
+
+        let completion = ResumeCompletion::new(
+            DeferredId::for_test(9824),
+            RequestId::real(9824, 1).expect("operation-owner request id"),
+            None,
+        );
+        let stopped = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let job = DeferredResumeJob::new(
+            512,
+            AdmissionClass::Data,
+            RequestOrdering::Concurrent,
+            stop_view.clone(),
+            Box::new(StoppedWork {
+                stopped: Arc::clone(&stopped),
+            }),
+            Arc::clone(&completion),
+        );
+        let cell = Arc::new(ResumeJobCell::new(job));
+        cell.release_wait_permit();
+        let (source, returned) = match executor
+            .deferred_resume_executor()
+            .try_execute_resume(Arc::clone(&cell))
+        {
+            DeferredResumeEnqueueOutcome::OperationalFailure { source, cell } => (source, cell),
+            DeferredResumeEnqueueOutcome::AdmissionRejected { .. }
+            | DeferredResumeEnqueueOutcome::ExecutorClosing { .. }
+            | DeferredResumeEnqueueOutcome::Submitted(_) => {
+                panic!("an operation-owner invariant must remain operational")
+            }
+        };
+        assert_eq!(source.operation(), rocketmq_runtime::RuntimeOperation::OperationOwner);
+        assert!(Arc::ptr_eq(&cell, &returned));
+        returned
+            .take()
+            .expect("the operational rejection retains the resume job")
+            .finish_executor_failure(source);
+        assert!(returned.take().is_none(), "the resume cell is consumed exactly once");
+        drop(returned);
+        drop(cell);
+
+        let error = completion
+            .wait()
+            .await
+            .expect_err("runtime owner mismatch remains operational");
+        let resume_failure = error
+            .source()
+            .and_then(|source| source.downcast_ref::<super::ResumeOperationalFailure>())
+            .expect("transport error retains the typed resume failure");
+        let runtime_error = resume_failure
+            .source()
+            .and_then(|source| source.downcast_ref::<rocketmq_runtime::RuntimeError>())
+            .expect("resume failure retains the typed runtime source");
+        assert_eq!(
+            runtime_error.operation(),
+            rocketmq_runtime::RuntimeOperation::OperationOwner
+        );
+        assert_eq!(stop_view.current_before_resume(), Some(expected_stop));
+        assert_eq!(stopped.lock().as_slice(), &[expected_stop]);
+
+        let snapshot = controller.snapshot();
+        assert_eq!(snapshot.queued.current_count, 0);
+        assert_eq!(snapshot.inflight.current_count, 0);
+        assert_eq!(snapshot.processors.current_count, 0);
+        runtime
+            .shutdown_tasks()
+            .await
+            .assert_no_task_leak()
+            .expect("runtime owner tasks must drain");
+    }
 }
 
 #[tokio::test]
@@ -515,7 +796,7 @@ async fn accepted_never_polled_is_service_stopped_without_leaking_admission() {
     let submitted = executor
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell));
-    assert!(submitted.is_ok(), "resume task must be accepted");
+    assert!(is_submitted(&submitted), "resume task must be accepted");
     drop(cell);
     first_poll_entered.notified().await;
     let report = executor
@@ -526,11 +807,9 @@ async fn accepted_never_polled_is_service_stopped_without_leaking_admission() {
     assert_eq!(report.remaining_inline_tasks, 0);
     assert_eq!(report.remaining_resume_tasks, 1);
     assert_eq!(report.shutdown.aborted, 1);
-    let error = completion.wait().await.expect_err("aborted owner terminalizes the job");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::ExecutorClosing);
     assert_eq!(
-        error.prior_terminal_reason(),
-        Some(DeferredTerminalReason::ServiceStopping)
+        completion.wait().await.expect("aborted owner terminalizes the job"),
+        DeferredResumeOutcome::Cancelled
     );
     let settled = executor
         .drain_report_until(ShutdownDeadline::after(Duration::from_secs(1)))
@@ -549,7 +828,7 @@ async fn dropping_the_caller_completion_after_acceptance_does_not_cancel_the_own
     let submitted = executor
         .deferred_resume_executor()
         .try_execute_resume(Arc::clone(&cell));
-    assert!(submitted.is_ok(), "resume task must be accepted");
+    assert!(is_submitted(&submitted), "resume task must be accepted");
     drop(cell);
     drop(completion);
     entered.notified().await;
@@ -568,7 +847,7 @@ async fn drain_report_separates_inline_and_resume_tasks_and_joins_both() {
     let inline_release = Arc::new(Notify::new());
     let task_inline_entered = Arc::clone(&inline_entered);
     let task_inline_release = Arc::clone(&inline_release);
-    executor
+    let inline_attempt = executor
         .try_execute(
             128,
             AdmissionClass::Data,
@@ -581,6 +860,7 @@ async fn drain_report_separates_inline_and_resume_tasks_and_joins_both() {
             move |_operation, _error| async {},
         )
         .expect("inline request accepted");
+    assert!(matches!(inline_attempt, SessionDispatchAttempt::Accepted(_)));
     inline_entered.notified().await;
 
     let resume_release = Arc::new(Notify::new());
@@ -588,13 +868,10 @@ async fn drain_report_separates_inline_and_resume_tasks_and_joins_both() {
         probe_job(128, RequestOrdering::Concurrent, Some(Arc::clone(&resume_release)));
     let cell = Arc::new(ResumeJobCell::new(job));
     cell.release_wait_permit();
-    assert!(
-        executor
-            .deferred_resume_executor()
-            .try_execute_resume(Arc::clone(&cell))
-            .is_ok(),
-        "resume accepted"
-    );
+    let submitted = executor
+        .deferred_resume_executor()
+        .try_execute_resume(Arc::clone(&cell));
+    assert!(is_submitted(&submitted), "resume accepted");
     drop(cell);
     resume_entered.notified().await;
 
@@ -613,10 +890,9 @@ async fn drain_report_separates_inline_and_resume_tasks_and_joins_both() {
     assert_eq!(report.remaining_resume_tasks, 0);
     assert_eq!(report.shutdown.completed, 2);
     assert!(report.is_healthy());
-    assert_eq!(
-        completion.wait().await.expect_err("probe response").kind(),
-        DeferredResumeErrorKind::Response
-    );
+    let error = completion.wait().await.expect_err("probe response");
+    assert_eq!(error.code(), rocketmq_error::TRANSPORT_DISPATCH_FAILED.code());
+    assert!(error.source().is_some());
     let snapshot = controller.snapshot();
     assert_eq!(snapshot.queued.current_count, 0);
     assert_eq!(snapshot.inflight.current_count, 0);
@@ -642,11 +918,11 @@ async fn same_key_resume_jobs_remain_serialized_while_the_first_job_is_running()
     second.release_wait_permit();
     let route = executor.deferred_resume_executor();
     let first_submitted = route.try_execute_resume(Arc::clone(&first));
-    assert!(first_submitted.is_ok(), "first resume must be accepted");
+    assert!(is_submitted(&first_submitted), "first resume must be accepted");
     drop(first);
     first_entered.notified().await;
     let second_submitted = route.try_execute_resume(Arc::clone(&second));
-    assert!(second_submitted.is_ok(), "second resume must be accepted");
+    assert!(is_submitted(&second_submitted), "second resume must be accepted");
     drop(second);
     second_before_ordering.notified().await;
     assert_eq!(first_executions.load(Ordering::Acquire), 1);
@@ -655,12 +931,12 @@ async fn same_key_resume_jobs_remain_serialized_while_the_first_job_is_running()
     second_entered.notified().await;
     assert_eq!(second_executions.load(Ordering::Acquire), 1);
     assert_eq!(
-        first_completion.wait().await.expect_err("probe response").kind(),
-        DeferredResumeErrorKind::Response
+        first_completion.wait().await.expect_err("probe response").code(),
+        rocketmq_error::TRANSPORT_DISPATCH_FAILED.code()
     );
     assert_eq!(
-        second_completion.wait().await.expect_err("probe response").kind(),
-        DeferredResumeErrorKind::Response
+        second_completion.wait().await.expect_err("probe response").code(),
+        rocketmq_error::TRANSPORT_DISPATCH_FAILED.code()
     );
     let report = executor
         .drain_until(ShutdownDeadline::after(Duration::from_secs(1)))

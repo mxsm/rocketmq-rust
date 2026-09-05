@@ -36,6 +36,7 @@ use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::api::AdmissionClass;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::AdmissionOutcome;
 use rocketmq_transport::api::AdmissionResource;
 use rocketmq_transport::api::AdmissionScope;
 use rocketmq_transport::api::DefaultRequestProcessor;
@@ -137,27 +138,29 @@ fn benchmark_decode_admission(c: &mut Criterion) {
             &encoded,
             |benchmark, encoded| {
                 benchmark.iter(|| {
-                    let partial = admission
-                        .try_acquire(
-                            AdmissionResource::PartialFrame,
-                            scope,
-                            encoded.len(),
-                            AdmissionClass::Data,
-                        )
-                        .expect("partial frame admission");
+                    let partial = match admission.try_acquire(
+                        AdmissionResource::PartialFrame,
+                        scope,
+                        encoded.len(),
+                        AdmissionClass::Data,
+                    ) {
+                        AdmissionOutcome::Acquired(permit) => permit,
+                        AdmissionOutcome::Rejected(_) => panic!("partial frame admission rejected"),
+                    };
                     let mut buffer = BytesMut::from(encoded.as_ref());
                     let command = RemotingCommandCodec::new()
                         .decode(&mut buffer)
                         .expect("decode frame")
                         .expect("complete frame");
-                    let inflight = admission
-                        .try_acquire(
-                            AdmissionResource::Inflight,
-                            scope,
-                            encoded.len(),
-                            AdmissionClass::for_request_code(command.code()),
-                        )
-                        .expect("inflight admission");
+                    let inflight = match admission.try_acquire(
+                        AdmissionResource::Inflight,
+                        scope,
+                        encoded.len(),
+                        AdmissionClass::for_request_code(command.code()),
+                    ) {
+                        AdmissionOutcome::Acquired(permit) => permit,
+                        AdmissionOutcome::Rejected(_) => panic!("inflight admission rejected"),
+                    };
                     drop(partial);
                     drop(inflight);
                     black_box(command);

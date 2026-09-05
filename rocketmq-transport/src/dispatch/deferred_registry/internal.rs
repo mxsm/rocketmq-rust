@@ -34,21 +34,20 @@ use super::ClaimStart;
 use super::ClaimTicket;
 use super::ClaimWaiter;
 use super::ClaimedDeferred;
-use super::DeferredClaimError;
-use super::DeferredClaimErrorKind;
+use super::DeferredClaimOperationalFailure;
+use super::DeferredClaimRejection;
 use super::DeferredExpiry;
 use super::DeferredId;
 use super::DeferredParts;
 use super::DeferredRegistry;
-use super::DeferredRegistryErrorKind;
 use super::DeferredRegistryShutdownOutcome;
 use super::DeferredRegistryShutdownStats;
 use super::DeferredRequest;
 use super::DeferredResponder;
-use super::DeferredResponseError;
 use super::DeferredRetainedSizeParts;
 use super::DeferredWaitPermit;
 use super::DeferredWakeReason;
+use super::RegistryFailure;
 use super::RequestControlView;
 use super::RequestId;
 use super::SessionId;
@@ -59,9 +58,7 @@ use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::deferred_session_cleanup::CleanupEnrollment;
 use crate::dispatch::deferred_session_cleanup::RegistryCleanupTarget;
 use crate::dispatch::deferred_session_cleanup::TargetRecord;
-use crate::dispatch::DeferredResponseErrorKind;
-use crate::dispatch::DeferredTerminalReason;
-use crate::dispatch::ResponseStateError;
+use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseStateSnapshot;
 
 const FIRST_DEFERRED_ID: u64 = 1;
@@ -110,10 +107,17 @@ where
             transaction.request_mut().parts.cleanup_lifecycle(kind);
             return Err(DeferredCommitError::lifecycle(kind));
         }
-        transaction.request().register_response().map_err(|source| {
-            commit_race_error(&control, expiry, &response_state)
-                .unwrap_or_else(|| DeferredCommitError::response(source))
-        })?;
+        match transaction.request().register_response() {
+            Ok(ResponseStateOutcome::Applied(())) => {}
+            Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {
+                return Err(commit_race_error(&control, expiry, &response_state)
+                    .unwrap_or_else(DeferredCommitError::response_state));
+            }
+            Err(source) => {
+                return Err(commit_race_error(&control, expiry, &response_state)
+                    .unwrap_or_else(|| DeferredCommitError::response(source)));
+            }
+        }
         #[cfg(test)]
         if let Some(checkpoint) = commit_checkpoint {
             checkpoint();
@@ -141,13 +145,13 @@ where
 #[cfg(test)]
 pub(super) struct TestRegistrationOwner {
     pub(super) drop_probe: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    pub(super) commit_error: Option<DeferredCommitError>,
 }
 
 #[cfg(test)]
 impl RegistrationOwner for TestRegistrationOwner {
-    fn commit(self: Box<Self>) -> Result<(), DeferredCommitError> {
-        drop(self);
-        Ok(())
+    fn commit(mut self: Box<Self>) -> Result<(), DeferredCommitError> {
+        self.commit_error.take().map_or(Ok(()), Err)
     }
 
     fn rollback(self: Box<Self>) {
@@ -171,11 +175,11 @@ impl Drop for TestRegistrationOwner {
 #[derive(Debug)]
 pub(crate) struct DeferredCommitError {
     kind: DeferredCommitErrorKind,
-    source: Option<DeferredResponseError>,
+    source: Option<crate::contract::TransportContractViolation>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DeferredCommitErrorKind {
+pub(crate) enum DeferredCommitErrorKind {
     ParentCancelled,
     SessionClosed,
     DeadlineExpired,
@@ -191,25 +195,30 @@ impl DeferredCommitError {
         }
     }
 
-    const fn lifecycle(kind: DeferredRegistryErrorKind) -> Self {
+    const fn lifecycle(kind: RegistryFailure) -> Self {
         let kind = match kind {
-            DeferredRegistryErrorKind::ParentCancelled => DeferredCommitErrorKind::ParentCancelled,
-            DeferredRegistryErrorKind::SessionClosed => DeferredCommitErrorKind::SessionClosed,
-            DeferredRegistryErrorKind::DeadlineExpired => DeferredCommitErrorKind::DeadlineExpired,
-            DeferredRegistryErrorKind::RetainedSizeOverflow
-            | DeferredRegistryErrorKind::RetainedSizeUnderreported
-            | DeferredRegistryErrorKind::DuplicateRequest
-            | DeferredRegistryErrorKind::IdentityExhausted
-            | DeferredRegistryErrorKind::Builder
-            | DeferredRegistryErrorKind::RegistryInvariant => DeferredCommitErrorKind::RegistryInvariant,
+            RegistryFailure::ParentCancelled => DeferredCommitErrorKind::ParentCancelled,
+            RegistryFailure::SessionClosed => DeferredCommitErrorKind::SessionClosed,
+            RegistryFailure::DeadlineExpired => DeferredCommitErrorKind::DeadlineExpired,
+            RegistryFailure::DuplicateRequest
+            | RegistryFailure::IdentityExhausted
+            | RegistryFailure::CleanupInstallerRejected
+            | RegistryFailure::RegistryInvariant => DeferredCommitErrorKind::RegistryInvariant,
         };
         Self { kind, source: None }
     }
 
-    const fn response(source: DeferredResponseError) -> Self {
+    const fn response(source: crate::contract::TransportContractViolation) -> Self {
         Self {
             kind: DeferredCommitErrorKind::ResponseState,
             source: Some(source),
+        }
+    }
+
+    const fn response_state() -> Self {
+        Self {
+            kind: DeferredCommitErrorKind::ResponseState,
+            source: None,
         }
     }
 
@@ -221,6 +230,15 @@ impl DeferredCommitError {
             DeferredCommitErrorKind::ResponseState => "response_state",
             DeferredCommitErrorKind::RegistryInvariant => "registry_invariant",
         }
+    }
+
+    pub(crate) const fn kind(&self) -> DeferredCommitErrorKind {
+        self.kind
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(kind: DeferredCommitErrorKind) -> Self {
+        Self { kind, source: None }
     }
 }
 
@@ -303,11 +321,11 @@ fn commit_race_error(
         .map(DeferredCommitError::lifecycle)
         .or_else(|| match response_state.terminal_state() {
             Some(crate::dispatch::ResponseTerminalState::Closed) => {
-                Some(DeferredCommitError::lifecycle(DeferredRegistryErrorKind::SessionClosed))
+                Some(DeferredCommitError::lifecycle(RegistryFailure::SessionClosed))
             }
-            Some(crate::dispatch::ResponseTerminalState::Cancelled) => Some(DeferredCommitError::lifecycle(
-                DeferredRegistryErrorKind::ParentCancelled,
-            )),
+            Some(crate::dispatch::ResponseTerminalState::Cancelled) => {
+                Some(DeferredCommitError::lifecycle(RegistryFailure::ParentCancelled))
+            }
             Some(
                 crate::dispatch::ResponseTerminalState::Completed
                 | crate::dispatch::ResponseTerminalState::Failed { .. },
@@ -398,19 +416,19 @@ where
         response_state: Arc<crate::dispatch::ResponseState>,
         expiry: Option<DeferredExpiry>,
         enrollment: &mut Option<CleanupEnrollment>,
-    ) -> Result<DeferredId, DeferredRegistryErrorKind> {
+    ) -> Result<DeferredId, RegistryFailure> {
         let mut state = self.state.lock();
         if state.lifecycle != RegistryLifecycle::Open {
-            return Err(DeferredRegistryErrorKind::ParentCancelled);
+            return Err(RegistryFailure::ParentCancelled);
         }
         if state.request_index.contains_key(&request_id) {
-            return Err(DeferredRegistryErrorKind::DuplicateRequest);
+            return Err(RegistryFailure::DuplicateRequest);
         }
         #[cfg(test)]
         let sequence = self.test_sequence.as_deref().unwrap_or(&NEXT_DEFERRED_ID);
         #[cfg(not(test))]
         let sequence = &NEXT_DEFERRED_ID;
-        let id = reserve_deferred_id(sequence).ok_or(DeferredRegistryErrorKind::IdentityExhausted)?;
+        let id = reserve_deferred_id(sequence).ok_or(RegistryFailure::IdentityExhausted)?;
         let entry_expiry = EntryExpiry::new(id, &control, expiry);
         if let Some(key) = entry_expiry.scheduled {
             state.expiry_index.insert(key);
@@ -467,7 +485,7 @@ where
         &self,
         id: DeferredId,
         expected: EntryPhaseTag,
-        request: DeferredRequest<R>,
+        mut request: DeferredRequest<R>,
     ) -> Result<(), Box<DeferredRequest<R>>> {
         let mut state = self.state.lock();
         let Some(entry) = state.primary.get_mut(&id) else {
@@ -476,6 +494,7 @@ where
         if entry.phase.tag() != expected {
             return Err(Box::new(request));
         }
+        request.parts.clear_session_cleanup();
         entry.phase = EntryPhase::Prepared(request);
         Ok(())
     }
@@ -621,14 +640,7 @@ where
         let outcome = {
             let mut state = self.state.lock();
             if state.lifecycle != RegistryLifecycle::Open {
-                return ClaimStart::Error(DeferredClaimError::new_with_reason(
-                    DeferredClaimErrorKind::ParentCancelled,
-                    id,
-                    None,
-                    None,
-                    Some(DeferredTerminalReason::ParentCancelled),
-                    None,
-                ));
+                return ClaimStart::Rejected(DeferredClaimRejection::ParentCancelled);
             }
             if !state.primary.contains_key(&id) {
                 let marker = state.claims.get(&id).and_then(Weak::upgrade);
@@ -646,31 +658,20 @@ where
                 .primary
                 .get_mut(&id)
                 .expect("the primary entry was observed while the registry lock is held");
-            let request_id = entry.request_id;
             if let Some(kind) = lifecycle_stop_with_expiry(&entry.control, entry.expiry.policy) {
                 let entry = remove_entry(&mut state, id).expect("entry was observed while the registry lock is held");
                 removed_ticket = entry.claim_ticket.upgrade();
                 removed = Some(entry);
                 removed_cause = Some(match kind {
-                    DeferredRegistryErrorKind::ParentCancelled => CleanupCause::ParentCancelled,
-                    DeferredRegistryErrorKind::SessionClosed => CleanupCause::SessionClosed,
-                    DeferredRegistryErrorKind::DeadlineExpired => CleanupCause::OwnerDeadline,
-                    DeferredRegistryErrorKind::RetainedSizeOverflow
-                    | DeferredRegistryErrorKind::RetainedSizeUnderreported
-                    | DeferredRegistryErrorKind::DuplicateRequest
-                    | DeferredRegistryErrorKind::IdentityExhausted
-                    | DeferredRegistryErrorKind::Builder
-                    | DeferredRegistryErrorKind::RegistryInvariant => CleanupCause::ParentCancelled,
+                    RegistryFailure::ParentCancelled => CleanupCause::ParentCancelled,
+                    RegistryFailure::SessionClosed => CleanupCause::SessionClosed,
+                    RegistryFailure::DeadlineExpired => CleanupCause::OwnerDeadline,
+                    RegistryFailure::DuplicateRequest
+                    | RegistryFailure::IdentityExhausted
+                    | RegistryFailure::CleanupInstallerRejected
+                    | RegistryFailure::RegistryInvariant => CleanupCause::ParentCancelled,
                 });
-                let cause = removed_cause.expect("a lifecycle stop has one terminal cause");
-                ClaimStart::Error(DeferredClaimError::new_with_reason(
-                    claim_kind_from_registry(kind),
-                    id,
-                    Some(request_id),
-                    None,
-                    Some(cause.terminal_reason()),
-                    None,
-                ))
+                ClaimStart::Rejected(claim_rejection_from_registry(kind))
             } else if matches!(entry.phase, EntryPhase::Active(_)) {
                 let expected_matches = expected.is_none_or(|waiter| {
                     entry.claim_ticket.upgrade().is_some_and(|ticket| {
@@ -685,12 +686,8 @@ where
                     removed_ticket = entry.claim_ticket.upgrade();
                     removed_ticket_resolution = Some(TicketResolution::RemovedInvariant);
                     removed = Some(entry);
-                    ClaimStart::Error(DeferredClaimError::new(
-                        DeferredClaimErrorKind::RegistryInvariant,
-                        id,
-                        Some(request_id),
-                        None,
-                        None,
+                    ClaimStart::Rejected(DeferredClaimRejection::Operational(
+                        DeferredClaimOperationalFailure::invariant(),
                     ))
                 } else {
                     let claim_result = match &entry.phase {
@@ -700,27 +697,17 @@ where
                         }
                     };
                     match claim_result {
-                        Ok(()) => ClaimStart::Claimed(take_claim_locked(self, &mut state, id, reason)),
-                        Err(source) => {
-                            let terminal = source.prior_terminal_state();
-                            let kind = match source.kind() {
-                                DeferredResponseErrorKind::AlreadyCompleted => DeferredClaimErrorKind::AlreadyCompleted,
-                                DeferredResponseErrorKind::InvalidTransition
-                                | DeferredResponseErrorKind::Binding
-                                | DeferredResponseErrorKind::DeadlineExceeded
-                                | DeferredResponseErrorKind::Cancelled
-                                | DeferredResponseErrorKind::SessionClosed
-                                | DeferredResponseErrorKind::QueueSaturated
-                                | DeferredResponseErrorKind::Encode
-                                | DeferredResponseErrorKind::Transport => DeferredClaimErrorKind::RegistryInvariant,
-                            };
+                        Ok(ResponseStateOutcome::Applied(())) => {
+                            ClaimStart::Claimed(take_claim_locked(self, &mut state, id, reason))
+                        }
+                        Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {
                             removed = remove_entry(&mut state, id);
-                            ClaimStart::Error(DeferredClaimError::new(
-                                kind,
-                                id,
-                                Some(request_id),
-                                terminal,
-                                Some(source),
+                            ClaimStart::Rejected(DeferredClaimRejection::AlreadyCompleted)
+                        }
+                        Err(source) => {
+                            removed = remove_entry(&mut state, id);
+                            ClaimStart::Rejected(DeferredClaimRejection::Operational(
+                                DeferredClaimOperationalFailure::response(source),
                             ))
                         }
                     }
@@ -751,14 +738,10 @@ where
                     },
                 };
                 match ticket {
-                    None => ClaimStart::Error(DeferredClaimError::new(
-                        DeferredClaimErrorKind::RegistryInvariant,
-                        id,
-                        Some(request_id),
-                        None,
-                        None,
+                    None => ClaimStart::Rejected(DeferredClaimRejection::Operational(
+                        DeferredClaimOperationalFailure::invariant(),
                     )),
-                    Some(ticket) => match ClaimWaiter::try_new(ticket, request_id) {
+                    Some(ticket) => match ClaimWaiter::try_new(ticket) {
                         Ok(waiter) => ClaimStart::Wait(waiter),
                         Err(()) => {
                             let entry = remove_entry(&mut state, id)
@@ -766,12 +749,8 @@ where
                             removed_ticket = entry.claim_ticket.upgrade();
                             removed_ticket_resolution = Some(TicketResolution::RemovedInvariant);
                             removed = Some(entry);
-                            ClaimStart::Error(DeferredClaimError::new(
-                                DeferredClaimErrorKind::RegistryInvariant,
-                                id,
-                                Some(request_id),
-                                None,
-                                None,
+                            ClaimStart::Rejected(DeferredClaimRejection::Operational(
+                                DeferredClaimOperationalFailure::invariant(),
                             ))
                         }
                     },
@@ -896,16 +875,6 @@ pub(super) enum CleanupCause {
     OwnerDeadline,
 }
 
-impl CleanupCause {
-    const fn terminal_reason(self) -> DeferredTerminalReason {
-        match self {
-            Self::SessionClosed => DeferredTerminalReason::SessionClosed,
-            Self::ParentCancelled => DeferredTerminalReason::ParentCancelled,
-            Self::OwnerDeadline => DeferredTerminalReason::OwnerDeadline,
-        }
-    }
-}
-
 struct RegistryShutdownCompletion<'a, R>
 where
     R: Send + 'static,
@@ -998,7 +967,8 @@ where
         }
         for (entry, entry_cause) in &mut self.entries {
             stats.record_detached_entry();
-            record_terminalization(&mut stats, entry.terminalize_response(entry_cause));
+            let result = entry.terminalize_response(entry_cause);
+            record_terminalization(&mut stats, result, entry.response_state.snapshot());
         }
         for (marker, marker_cause) in &self.markers {
             let result = match marker_cause {
@@ -1006,7 +976,7 @@ where
                 CleanupCause::ParentCancelled => marker.cancel_parent_response(),
                 CleanupCause::OwnerDeadline => marker.cancel_owner_response(),
             };
-            record_state_terminalization(&mut stats, result);
+            record_state_terminalization(&mut stats, result, marker.response_snapshot());
         }
         drop(self.markers);
         drop(self.entries);
@@ -1015,7 +985,10 @@ where
 }
 
 impl<R> Entry<R> {
-    fn terminalize_response(&mut self, cause: &CleanupCause) -> Result<(), DeferredResponseError> {
+    fn terminalize_response(
+        &mut self,
+        cause: &CleanupCause,
+    ) -> Result<ResponseStateOutcome, crate::contract::TransportContractViolation> {
         match &mut self.phase {
             EntryPhase::Prepared(request) | EntryPhase::Active(request) => match cause {
                 CleanupCause::SessionClosed => request
@@ -1034,54 +1007,41 @@ impl<R> Entry<R> {
             EntryPhase::Shell | EntryPhase::Building | EntryPhase::Activating => match cause {
                 CleanupCause::SessionClosed => self
                     .response_state
-                    .close_with_reason(DeferredSystemCloseReason::SESSION_CLOSED)
-                    .map_err(DeferredResponseError::from_state),
+                    .close_with_reason(DeferredSystemCloseReason::SESSION_CLOSED),
                 CleanupCause::ParentCancelled => self
                     .response_state
-                    .cancel_with_reason(DeferredSystemCancellationReason::PARENT_CANCELLED)
-                    .map_err(DeferredResponseError::from_state),
+                    .cancel_with_reason(DeferredSystemCancellationReason::PARENT_CANCELLED),
                 CleanupCause::OwnerDeadline => self
                     .response_state
-                    .cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE)
-                    .map_err(DeferredResponseError::from_state),
+                    .cancel_with_reason(DeferredSystemCancellationReason::OWNER_DEADLINE),
             },
         }
     }
 }
 
-fn record_terminalization(stats: &mut DeferredRegistryShutdownStats, result: Result<(), DeferredResponseError>) {
+fn record_terminalization(
+    stats: &mut DeferredRegistryShutdownStats,
+    result: Result<ResponseStateOutcome, crate::contract::TransportContractViolation>,
+    snapshot: ResponseStateSnapshot,
+) {
     match result {
-        Ok(()) => stats.record_terminalized(),
-        Err(error) if error.kind() == DeferredResponseErrorKind::InvalidTransition => {
-            if error.source().is_some_and(|source| {
-                source.downcast_ref::<ResponseStateError>().is_some_and(|error| {
-                    matches!(
-                        error,
-                        ResponseStateError::InvalidTransition {
-                            state: ResponseStateSnapshot::Sending,
-                            ..
-                        }
-                    )
-                })
-            }) {
-                stats.record_in_progress();
-            } else {
-                stats.record_invariant_failure();
-            }
-        }
-        Err(_) => {}
+        Ok(ResponseStateOutcome::Applied(())) => stats.record_terminalized(),
+        Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {}
+        Err(_) if snapshot == ResponseStateSnapshot::Sending => stats.record_in_progress(),
+        Err(_) => stats.record_invariant_failure(),
     }
 }
 
-fn record_state_terminalization(stats: &mut DeferredRegistryShutdownStats, result: Result<(), ResponseStateError>) {
+fn record_state_terminalization(
+    stats: &mut DeferredRegistryShutdownStats,
+    result: Result<ResponseStateOutcome, crate::contract::TransportContractViolation>,
+    snapshot: ResponseStateSnapshot,
+) {
     match result {
-        Ok(()) => stats.record_terminalized(),
-        Err(ResponseStateError::InvalidTransition {
-            state: ResponseStateSnapshot::Sending,
-            ..
-        }) => stats.record_in_progress(),
-        Err(ResponseStateError::InvalidTransition { .. }) => stats.record_invariant_failure(),
-        Err(ResponseStateError::AlreadyCompleted { .. }) => {}
+        Ok(ResponseStateOutcome::Applied(())) => stats.record_terminalized(),
+        Ok(ResponseStateOutcome::AlreadyCompleted { .. }) => {}
+        Err(_) if snapshot == ResponseStateSnapshot::Sending => stats.record_in_progress(),
+        Err(_) => stats.record_invariant_failure(),
     }
 }
 
@@ -1106,60 +1066,45 @@ fn remove_session_member<R: Send + 'static>(state: &mut RegistryState<R>, sessio
     }
 }
 
-fn claim_marker_outcome<R>(id: DeferredId, marker: Option<Arc<ClaimMarker<R>>>) -> ClaimStart<R>
+fn claim_marker_outcome<R>(_id: DeferredId, marker: Option<Arc<ClaimMarker<R>>>) -> ClaimStart<R>
 where
     R: Send + 'static,
 {
     let Some(marker) = marker else {
-        return ClaimStart::Error(DeferredClaimError::new(
-            DeferredClaimErrorKind::NotFound,
-            id,
-            None,
-            None,
-            None,
-        ));
+        return ClaimStart::Rejected(DeferredClaimRejection::NotFound);
     };
     let terminal = marker.terminal_state();
-    ClaimStart::Error(DeferredClaimError::new_with_reason(
-        if terminal.is_some() {
-            DeferredClaimErrorKind::AlreadyCompleted
-        } else {
-            DeferredClaimErrorKind::AlreadyClaimed
-        },
-        id,
-        Some(marker.request_id()),
-        terminal,
-        marker.terminal_reason(),
-        None,
-    ))
+    ClaimStart::Rejected(if terminal.is_some() {
+        DeferredClaimRejection::AlreadyCompleted
+    } else {
+        DeferredClaimRejection::AlreadyClaimed
+    })
 }
 
-fn claim_kind_from_registry(kind: DeferredRegistryErrorKind) -> DeferredClaimErrorKind {
+fn claim_rejection_from_registry(kind: RegistryFailure) -> DeferredClaimRejection {
     match kind {
-        DeferredRegistryErrorKind::ParentCancelled => DeferredClaimErrorKind::ParentCancelled,
-        DeferredRegistryErrorKind::SessionClosed => DeferredClaimErrorKind::SessionClosed,
-        DeferredRegistryErrorKind::DeadlineExpired => DeferredClaimErrorKind::DeadlineExpired,
-        DeferredRegistryErrorKind::RetainedSizeOverflow
-        | DeferredRegistryErrorKind::RetainedSizeUnderreported
-        | DeferredRegistryErrorKind::DuplicateRequest
-        | DeferredRegistryErrorKind::IdentityExhausted
-        | DeferredRegistryErrorKind::Builder
-        | DeferredRegistryErrorKind::RegistryInvariant => DeferredClaimErrorKind::RegistryInvariant,
+        RegistryFailure::ParentCancelled => DeferredClaimRejection::ParentCancelled,
+        RegistryFailure::SessionClosed => DeferredClaimRejection::SessionClosed,
+        RegistryFailure::DeadlineExpired => DeferredClaimRejection::DeadlineExpired,
+        RegistryFailure::DuplicateRequest
+        | RegistryFailure::IdentityExhausted
+        | RegistryFailure::CleanupInstallerRejected
+        | RegistryFailure::RegistryInvariant => {
+            DeferredClaimRejection::Operational(DeferredClaimOperationalFailure::invariant())
+        }
     }
 }
 
 fn ticket_resolution_for_entry<R>(entry: &Entry<R>) -> TicketResolution {
     match lifecycle_stop_with_expiry(&entry.control, entry.expiry.policy) {
-        Some(DeferredRegistryErrorKind::ParentCancelled) => TicketResolution::RemovedParentCancelled,
-        Some(DeferredRegistryErrorKind::SessionClosed) => TicketResolution::RemovedSessionClosed,
-        Some(DeferredRegistryErrorKind::DeadlineExpired) => TicketResolution::RemovedDeadlineExpired,
+        Some(RegistryFailure::ParentCancelled) => TicketResolution::RemovedParentCancelled,
+        Some(RegistryFailure::SessionClosed) => TicketResolution::RemovedSessionClosed,
+        Some(RegistryFailure::DeadlineExpired) => TicketResolution::RemovedDeadlineExpired,
         Some(
-            DeferredRegistryErrorKind::RetainedSizeOverflow
-            | DeferredRegistryErrorKind::RetainedSizeUnderreported
-            | DeferredRegistryErrorKind::DuplicateRequest
-            | DeferredRegistryErrorKind::IdentityExhausted
-            | DeferredRegistryErrorKind::Builder
-            | DeferredRegistryErrorKind::RegistryInvariant,
+            RegistryFailure::DuplicateRequest
+            | RegistryFailure::IdentityExhausted
+            | RegistryFailure::CleanupInstallerRejected
+            | RegistryFailure::RegistryInvariant,
         ) => TicketResolution::RemovedInvariant,
         None => TicketResolution::RemovedNotFound,
     }
@@ -1310,14 +1255,16 @@ pub(super) fn reserve_deferred_id(sequence: &AtomicU64) -> Option<DeferredId> {
         .map(DeferredId)
 }
 
-pub(super) fn validate_retained_floor<R>(retained_bytes: usize) -> Result<(), DeferredRegistryErrorKind>
+pub(super) fn validate_retained_floor<R>(
+    retained_bytes: usize,
+) -> Result<(), crate::contract::TransportContractViolation>
 where
     R: Send + 'static,
 {
     let required = DeferredRegistry::<R>::try_retained_size(DeferredRetainedSizeParts::new(0))
-        .map_err(|_| DeferredRegistryErrorKind::RetainedSizeOverflow)?;
+        .map_err(|_| crate::contract::TransportContractViolation::DeferredRetainedSizeOverflow)?;
     if retained_bytes < required.bytes() {
-        Err(DeferredRegistryErrorKind::RetainedSizeUnderreported)
+        Err(crate::contract::TransportContractViolation::DeferredRetainedSizeUnderreported)
     } else {
         Ok(())
     }
@@ -1437,7 +1384,6 @@ where
     let marker = Arc::new(ClaimMarker::new(
         registry,
         id,
-        request_id,
         entry.session_id,
         entry.control.clone(),
         Arc::clone(request.parts.responder.response_state()),
@@ -1457,17 +1403,17 @@ where
 pub(super) fn lifecycle_stop_with_expiry(
     control: &RequestControlView,
     expiry: Option<DeferredExpiry>,
-) -> Option<DeferredRegistryErrorKind> {
+) -> Option<RegistryFailure> {
     if control.parent_is_cancelled() {
-        Some(DeferredRegistryErrorKind::ParentCancelled)
+        Some(RegistryFailure::ParentCancelled)
     } else if control.session_is_closed() {
-        Some(DeferredRegistryErrorKind::SessionClosed)
+        Some(RegistryFailure::SessionClosed)
     } else if expiry
         .and_then(DeferredExpiry::resume_cutoff)
         .is_some_and(|cutoff| tokio::time::Instant::now() >= cutoff)
         || expiry.is_none() && control.deadline().is_some_and(RequestDeadline::is_expired)
     {
-        Some(DeferredRegistryErrorKind::DeadlineExpired)
+        Some(RegistryFailure::DeadlineExpired)
     } else {
         None
     }

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_transport::api::DeferredClaimOutcome;
+
 use super::*;
 
 #[tokio::test]
@@ -149,8 +151,8 @@ async fn dropped_registration_rolls_back_registry_index_lease_and_wait_permit() 
     let claim = service
         .claim(rolled_back.id, DeferredWakeReason::MessageArrived)
         .await
-        .expect_err("rolled-back identity is not claimable");
-    assert_eq!(claim.kind(), DeferredClaimErrorKind::NotFound);
+        .expect("rolled-back identity is a normal lifecycle outcome");
+    assert!(matches!(claim, DeferredClaimOutcome::NotFound));
     running.finish().await;
 }
 

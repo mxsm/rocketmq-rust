@@ -22,13 +22,12 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use super::remoting_request::RemotingRequestBuilder;
 use super::HandlerOutcome;
-use super::HandlerOutcomeContractError;
 use super::RemotingRequest;
 use super::RemotingResponse;
-use super::ResponseBuildError;
 use super::ResponseSink;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
+use crate::contract::TransportContractViolation;
 use crate::hook_registry::HookSnapshot;
 use crate::remoting::inner::run_after_rpc_hooks;
 use crate::remoting::inner::run_before_rpc_hooks;
@@ -94,7 +93,6 @@ impl<P> ExplicitProcessor<P> {
 
 #[path = "processor_adapter/embedded_processor.rs"]
 mod embedded_processor;
-pub(crate) use embedded_processor::EmbeddedProcessorResolveError;
 pub(crate) use embedded_processor::EmbeddedResolvedOutcome;
 
 impl<P> Clone for ExplicitProcessor<P>
@@ -164,9 +162,7 @@ impl InternalFailureOrigin {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DispatchProcessorError {
     #[error(transparent)]
-    ResponseConstruction(#[from] ResponseBuildError),
-    #[error(transparent)]
-    HandlerContract(#[from] HandlerOutcomeContractError),
+    Contract(#[from] TransportContractViolation),
 }
 
 pub(crate) enum DispatchMetricsGuard {
@@ -263,7 +259,7 @@ pub(crate) trait DispatchProcessor: sealed::Sealed + Clone + Send + Sync + 'stat
         retained_bytes: usize,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
         observation: Option<crate::telemetry::RequestObservation>,
-    ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError>;
+    ) -> Result<RemotingRequestBuilder, TransportContractViolation>;
 
     fn process(
         &mut self,
@@ -430,10 +426,10 @@ where
         _retained_bytes: usize,
         session_cleanup: Option<crate::dispatch::DeferredSessionCleanupRegistration>,
         observation: Option<crate::telemetry::RequestObservation>,
-    ) -> Result<RemotingRequestBuilder, super::remoting_request::RemotingRequestBuildError> {
+    ) -> Result<RemotingRequestBuilder, TransportContractViolation> {
         let mut seed = response
             .network_deferred_seed_with_resume(session, ordering, class, resume_executor)
-            .ok_or(super::remoting_request::RemotingRequestBuildError::DeferredResponseOwnerMismatch)?;
+            .ok_or(TransportContractViolation::DeferredResponseOwnerMismatch)?;
         if let Some(session_cleanup) = session_cleanup {
             seed = seed.with_session_cleanup(session_cleanup);
         }

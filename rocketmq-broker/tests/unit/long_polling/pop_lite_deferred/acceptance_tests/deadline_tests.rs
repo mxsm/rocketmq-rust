@@ -88,20 +88,23 @@ async fn pop_lite_deferred_max_age_expires_as_business_timeout_and_drains() {
     let claim = claims.pop().expect("one capped timeout claim");
     assert_eq!(claim.reason(), DeferredWakeReason::Timeout);
 
-    service
-        .resume_claimed(
-            claim,
-            DeferredResumeRetainedSize::new(43),
-            move |_resume, reason| async move {
-                assert_eq!(reason, DeferredWakeReason::Timeout);
-                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
-                    ResponseCode::PollingTimeout,
-                ))
-                .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
-            },
-        )
-        .await
-        .expect("business timeout writes canonically");
+    assert!(matches!(
+        service
+            .resume_claimed(
+                claim,
+                DeferredResumeRetainedSize::new(43),
+                move |_resume, reason| async move {
+                    assert_eq!(reason, DeferredWakeReason::Timeout);
+                    RemotingResponse::command(RemotingCommand::create_response_command_with_code(
+                        ResponseCode::PollingTimeout,
+                    ))
+                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                },
+            )
+            .await
+            .expect("business timeout writes canonically"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
     let response = client
         .receive_command()
         .await

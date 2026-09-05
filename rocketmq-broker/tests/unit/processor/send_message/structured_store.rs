@@ -43,7 +43,6 @@ use rocketmq_store_api::StoreOperation;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchErrorKind;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
@@ -558,7 +557,7 @@ async fn structured_send_one_way_completes_the_after_hook_without_a_write_observ
 async fn structured_send_parent_cancel_stops_waiting_and_suppresses_reply() {
     let state = ProbeState::new();
     let fixture = Fixture::new("structured-send-cancel", StoreBehavior::Pending, Arc::clone(&state));
-    let error = {
+    let outcome = {
         let entered = state.entered.notified();
         let dispatch = fixture.harness.dispatch(None, request(false));
         tokio::pin!(dispatch);
@@ -567,9 +566,11 @@ async fn structured_send_parent_cancel_stops_waiting_and_suppresses_reply() {
             result = &mut dispatch => panic!("pending store completed before parent cancellation: {result:?}"),
         }
         fixture.context.task_group().cancel();
-        dispatch.await.expect_err("parent cancellation stops the store await")
+        dispatch
+            .await
+            .expect("parent cancellation is a source-free dispatch outcome")
     };
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::Cancelled);
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::Cancelled));
     // Future ownership is released promptly and no reply is constructed. The
     // test deliberately makes no assertion that a real backend rolled back an
     // operation it may already have accepted.
@@ -584,12 +585,12 @@ async fn structured_send_parent_cancel_stops_waiting_and_suppresses_reply() {
 async fn structured_send_expired_deadline_suppresses_store_and_reply() {
     let state = ProbeState::new();
     let fixture = Fixture::new("structured-send-deadline", StoreBehavior::Pending, Arc::clone(&state));
-    let error = fixture
+    let outcome = fixture
         .harness
         .dispatch(Some(RequestDeadline::after(Duration::ZERO)), request(false))
         .await
-        .expect_err("deadline stops the pending store await");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::DeadlineExceeded);
+        .expect("deadline is a source-free dispatch outcome");
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
     assert_eq!(state.store_future_drops.load(Ordering::SeqCst), 0);
     assert!(state.events.lock().is_empty());
     assert!(state.built.lock().is_none());

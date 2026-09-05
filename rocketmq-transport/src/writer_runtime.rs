@@ -135,17 +135,17 @@ struct LaneSender {
     queued_bytes: Arc<AtomicUsize>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WriterEnqueueError {
-    Full,
-    Closed,
+pub(crate) enum WriterEnqueueOutcome {
+    Enqueued,
+    Full(QueuedWrite),
+    Closed(QueuedWrite),
 }
 
 impl LaneSender {
-    fn try_send(&self, write: QueuedWrite) -> Result<(), WriterEnqueueError> {
+    fn try_send(&self, write: QueuedWrite) -> WriterEnqueueOutcome {
         let bytes = write.encoded_len();
         if !try_reserve_bytes(&self.queued_bytes, self.max_bytes, bytes) {
-            return Err(WriterEnqueueError::Full);
+            return WriterEnqueueOutcome::Full(write);
         }
         self.queued_items.fetch_add(1, Ordering::AcqRel);
         let envelope = LaneEnvelope {
@@ -155,9 +155,9 @@ impl LaneSender {
             queued_bytes: Arc::clone(&self.queued_bytes),
         };
         match self.sender.try_send(envelope) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => Err(WriterEnqueueError::Full),
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(WriterEnqueueError::Closed),
+            Ok(()) => WriterEnqueueOutcome::Enqueued,
+            Err(mpsc::error::TrySendError::Full(envelope)) => WriterEnqueueOutcome::Full(envelope.into_write()),
+            Err(mpsc::error::TrySendError::Closed(envelope)) => WriterEnqueueOutcome::Closed(envelope.into_write()),
         }
     }
 }
@@ -200,7 +200,7 @@ impl WriterLanes {
         snapshot.data_queued_bytes = self.data.queued_bytes.load(Ordering::Acquire);
     }
 
-    pub(crate) fn try_send(&self, class: AdmissionClass, write: QueuedWrite) -> Result<(), WriterEnqueueError> {
+    pub(crate) fn try_send(&self, class: AdmissionClass, write: QueuedWrite) -> WriterEnqueueOutcome {
         match class {
             AdmissionClass::Control => self.control.try_send(write),
             AdmissionClass::Data => self.data.try_send(write),
@@ -492,7 +492,16 @@ pub(crate) async fn run_session_writer(
                 let mut batch = Vec::with_capacity(receivers.config.batch.max_items.get());
                 batch.push(first);
                 let close_during_batch = receivers.collect_batch(&mut batch).await;
-                match write_batch(&mut frame_writer, &diagnostics, &telemetry, receivers.config, batch).await {
+                match write_batch(
+                    &mut frame_writer,
+                    &diagnostics,
+                    &telemetry,
+                    &reader_shutdown,
+                    receivers.config,
+                    batch,
+                )
+                .await
+                {
                     BatchWriteDisposition::Continue => {}
                     BatchWriteDisposition::Poisoned => {
                         let _ = state.send(ConnectionState::Degraded);
@@ -542,6 +551,7 @@ async fn write_batch(
     frame_writer: &mut ConnectionFrameWriter,
     diagnostics: &SessionWriterDiagnostics,
     telemetry: &TransportTelemetry,
+    reader_shutdown: &tokio_util::sync::CancellationToken,
     config: WriterQueueConfig,
     batch: Vec<LaneEnvelope>,
 ) -> BatchWriteDisposition {
@@ -559,7 +569,7 @@ async fn write_batch(
                 cancellation == QueuedWriteCancellation::Deadline,
             );
             let failure = match cancellation {
-                QueuedWriteCancellation::Deadline => WriterFailure::deadline_exceeded_before_send(),
+                QueuedWriteCancellation::Deadline => WriterFailure::deadline_exceeded_before_send(None),
                 QueuedWriteCancellation::Request => WriterFailure::connection_failed(
                     crate::dispatch::WriteProgress::NotStarted,
                     "request was cancelled before writer start",
@@ -572,11 +582,13 @@ async fn write_batch(
             let _ = write.completion.send(Err(failure));
             continue;
         }
-        if write.deadline.is_some_and(RequestDeadline::is_expired) {
+        if let Some(deadline) = write.deadline.filter(|deadline| deadline.is_expired()) {
             diagnostics.finish_not_started(write.enqueued_at, write.encoded_len(), true);
             let _ = write
                 .completion
-                .send(Err(WriterFailure::deadline_exceeded_before_send()));
+                .send(Err(WriterFailure::deadline_exceeded_before_send(Some(
+                    deadline.instant(),
+                ))));
             continue;
         }
         ready.push(write);
@@ -584,6 +596,7 @@ async fn write_batch(
     if ready.is_empty() {
         return BatchWriteDisposition::Continue;
     }
+    let mut active_batch = ActiveBatchDropGuard::new(reader_shutdown, &ready);
     let stall_deadline = RequestDeadline::after(config.max_write_stall);
     let write_deadline = ready
         .iter()
@@ -645,10 +658,12 @@ async fn write_batch(
             Err(_) => Err(if write_started {
                 WriterFailure::write_timeout(write_deadline.budget_millis())
             } else {
-                WriterFailure::deadline_exceeded_before_send()
+                WriterFailure::deadline_exceeded_before_send(Some(write_deadline.instant()))
             }),
         }
     };
+    active_batch.disarm();
+    drop(active_batch);
     drop(start_data);
     let succeeded = result.is_ok();
     if succeeded {
@@ -690,6 +705,37 @@ async fn write_batch(
     }
 }
 
+struct ActiveBatchDropGuard<'a> {
+    reader_shutdown: &'a tokio_util::sync::CancellationToken,
+    ready: &'a [QueuedWrite],
+    armed: bool,
+}
+
+impl<'a> ActiveBatchDropGuard<'a> {
+    fn new(reader_shutdown: &'a tokio_util::sync::CancellationToken, ready: &'a [QueuedWrite]) -> Self {
+        Self {
+            reader_shutdown,
+            ready,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ActiveBatchDropGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed || !self.reader_shutdown.is_cancelled() {
+            return;
+        }
+        for write in self.ready {
+            write.progress.cancel_claimed_for_session_close();
+        }
+    }
+}
+
 struct ActiveWriteStart<'a> {
     progress: &'a crate::write_strategy::QueuedWriteProgress,
     enqueued_at: Option<Instant>,
@@ -717,6 +763,7 @@ mod queue_regression_tests {
     use super::writer_lanes;
     use super::LaneEnvelope;
     use super::MicroBatchConfig;
+    use super::WriterEnqueueOutcome;
     use super::WriterEvent;
     use super::WriterQueueConfig;
     use crate::admission::AdmissionClass;
@@ -746,6 +793,27 @@ mod queue_regression_tests {
             Arc::new(QueuedWriteProgress::waiting()),
             Instant::now(),
         )
+    }
+
+    fn expect_enqueued(outcome: WriterEnqueueOutcome) {
+        match outcome {
+            WriterEnqueueOutcome::Enqueued => {}
+            WriterEnqueueOutcome::Full(write) | WriterEnqueueOutcome::Closed(write) => {
+                drop(write);
+                panic!("writer queue accepts the test item")
+            }
+        }
+    }
+
+    fn expect_full(outcome: WriterEnqueueOutcome) {
+        match outcome {
+            WriterEnqueueOutcome::Full(write) => drop(write),
+            WriterEnqueueOutcome::Enqueued => panic!("full writer queue accepted the test item"),
+            WriterEnqueueOutcome::Closed(write) => {
+                drop(write);
+                panic!("writer queue closed instead of reporting capacity")
+            }
+        }
     }
 
     fn queue_config() -> WriterQueueConfig {
@@ -778,13 +846,9 @@ mod queue_regression_tests {
         let mut config = queue_config();
         config.data_capacity = NonZeroUsize::new(1).expect("non-zero");
         let (lanes, mut receivers) = writer_lanes(config);
-        assert!(lanes.try_send(AdmissionClass::Data, queued_write("data-1", 64)).is_ok());
-        assert!(lanes
-            .try_send(AdmissionClass::Data, queued_write("data-2", 64))
-            .is_err());
-        assert!(lanes
-            .try_send(AdmissionClass::Control, queued_write("control", 64))
-            .is_ok());
+        expect_enqueued(lanes.try_send(AdmissionClass::Data, queued_write("data-1", 64)));
+        expect_full(lanes.try_send(AdmissionClass::Data, queued_write("data-2", 64)));
+        expect_enqueued(lanes.try_send(AdmissionClass::Control, queued_write("control", 64)));
         let (completion, _result) = oneshot::channel();
         lanes
             .close(completion)
@@ -798,11 +862,9 @@ mod queue_regression_tests {
     fn weighted_fairness_advances_data_after_the_control_burst() {
         let (lanes, mut receivers) = writer_lanes(queue_config());
         for target in ["control-1", "control-2", "control-3"] {
-            assert!(lanes
-                .try_send(AdmissionClass::Control, queued_write(target, 16))
-                .is_ok());
+            expect_enqueued(lanes.try_send(AdmissionClass::Control, queued_write(target, 16)));
         }
-        assert!(lanes.try_send(AdmissionClass::Data, queued_write("data", 16)).is_ok());
+        expect_enqueued(lanes.try_send(AdmissionClass::Data, queued_write("data", 16)));
 
         let targets = (0..3)
             .map(|_| receivers.take_ready().expect("ready item").into_write().target)
@@ -813,9 +875,7 @@ mod queue_regression_tests {
     #[tokio::test]
     async fn closed_close_sender_does_not_drop_queued_business_work() {
         let (lanes, mut receivers) = writer_lanes(queue_config());
-        assert!(lanes
-            .try_send(AdmissionClass::Data, queued_write("queued-data", 16))
-            .is_ok());
+        expect_enqueued(lanes.try_send(AdmissionClass::Data, queued_write("queued-data", 16)));
         drop(lanes);
 
         let WriterEvent::Write(envelope) = receivers.recv().await else {
@@ -828,7 +888,7 @@ mod queue_regression_tests {
     async fn micro_batch_respects_item_and_byte_bounds_without_waiting_for_backlog() {
         let (lanes, mut receivers) = writer_lanes(queue_config());
         for target in ["first", "second", "third"] {
-            assert!(lanes.try_send(AdmissionClass::Data, queued_write(target, 64)).is_ok());
+            expect_enqueued(lanes.try_send(AdmissionClass::Data, queued_write(target, 64)));
         }
         let WriterEvent::Write(first) = receivers.recv().await else {
             panic!("first queued write");
@@ -845,9 +905,7 @@ mod queue_regression_tests {
         item_config.batch.max_bytes = NonZeroUsize::new(256).expect("non-zero");
         let (item_lanes, mut item_receivers) = writer_lanes(item_config);
         for target in ["item-first", "item-second", "item-third"] {
-            assert!(item_lanes
-                .try_send(AdmissionClass::Data, queued_write(target, 64))
-                .is_ok());
+            expect_enqueued(item_lanes.try_send(AdmissionClass::Data, queued_write(target, 64)));
         }
         let WriterEvent::Write(first) = item_receivers.recv().await else {
             panic!("first item-bounded write");

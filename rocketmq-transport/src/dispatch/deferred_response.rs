@@ -23,6 +23,7 @@ use rocketmq_protocol::code::request_code::RequestCode;
 
 use super::ResponseTerminalState;
 use super::WriteProgress;
+use crate::contract::TransportContractViolation;
 use crate::telemetry::TransportTelemetry;
 
 const OPEN: u8 = 0;
@@ -217,21 +218,42 @@ pub(crate) enum ResponseTransition {
     Close,
 }
 
-/// Failure to perform one deferred response state transition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum ResponseStateError {
+/// Result of one deferred response state transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseStateOutcome<T = ()> {
+    /// The requested transition acquired its new state or affine capability.
+    Applied(T),
     /// A previous operation already selected the terminal state.
-    #[error("deferred response already reached terminal state {state:?}")]
     AlreadyCompleted {
         state: ResponseTerminalState,
         reason: Option<DeferredTerminalReason>,
     },
-    /// The operation is not legal from the observed non-terminal state.
-    #[error("deferred response cannot perform {transition:?} from {state:?}")]
-    InvalidTransition {
-        transition: ResponseTransition,
-        state: ResponseStateSnapshot,
-    },
+}
+
+impl ResponseTransition {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Register => "register",
+            Self::Claim => "claim",
+            Self::BeginSending => "begin_sending",
+            Self::Complete => "complete",
+            Self::Fail => "fail",
+            Self::Cancel => "cancel",
+            Self::Close => "close",
+        }
+    }
+}
+
+impl ResponseStateSnapshot {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Registered => "registered",
+            Self::Claimed => "claimed",
+            Self::Sending => "sending",
+            Self::Terminal(_) => "terminal",
+        }
+    }
 }
 
 /// Affine ownership of the right to terminate `Sending`.
@@ -303,17 +325,19 @@ impl ResponseState {
     }
 
     /// Activates registry ownership of an open deferred response.
-    pub(crate) fn register(&self) -> Result<(), ResponseStateError> {
+    pub(crate) fn register(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
         self.transition_exact(OPEN, REGISTERED, ResponseTransition::Register)
     }
 
     /// Claims one registered response for resume execution.
-    pub(crate) fn claim(&self) -> Result<(), ResponseStateError> {
+    pub(crate) fn claim(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
         self.transition_exact(REGISTERED, CLAIMED, ResponseTransition::Claim)
     }
 
     /// Acquires affine ownership of response delivery.
-    pub(crate) fn begin_sending(self: &Arc<Self>) -> Result<ResponseSendClaim, ResponseStateError> {
+    pub(crate) fn begin_sending(
+        self: &Arc<Self>,
+    ) -> Result<ResponseStateOutcome<ResponseSendClaim>, TransportContractViolation> {
         let mut observed = self.state.load(Ordering::Acquire);
         loop {
             match observed {
@@ -323,44 +347,47 @@ impl ResponseState {
                         .compare_exchange(observed, SENDING, Ordering::AcqRel, Ordering::Acquire)
                     {
                         Ok(_) => {
-                            return Ok(ResponseSendClaim {
+                            return Ok(ResponseStateOutcome::Applied(ResponseSendClaim {
                                 state: Arc::clone(self),
                                 drop_progress: WriteProgress::NotStarted,
                                 delegated: None,
                                 active: true,
-                            });
+                            }));
                         }
                         Err(actual) => observed = actual,
                     }
                 }
-                actual => return Err(transition_error(ResponseTransition::BeginSending, actual)),
+                actual => return transition_rejection(ResponseTransition::BeginSending, actual),
             }
         }
     }
 
     /// Cancels a response that has not begun delivery.
-    pub(crate) fn cancel(&self) -> Result<(), ResponseStateError> {
+    pub(crate) fn cancel(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
         self.stop_with_reason(DeferredTerminalReason::Explicit, ResponseTransition::Cancel, |_| {})
     }
 
     /// Closes a response that has not begun delivery.
     #[cfg(test)]
-    pub(crate) fn close(&self) -> Result<(), ResponseStateError> {
+    pub(crate) fn close(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
         self.stop_with_reason(DeferredTerminalReason::SessionClosed, ResponseTransition::Close, |_| {})
     }
 
     pub(crate) fn cancel_with_reason(
         &self,
         reason: DeferredSystemCancellationReason,
-    ) -> Result<(), ResponseStateError> {
+    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
         self.stop_with_reason(reason.0, ResponseTransition::Cancel, |_| {})
     }
 
-    pub(crate) fn close_with_reason(&self, reason: DeferredSystemCloseReason) -> Result<(), ResponseStateError> {
+    pub(crate) fn close_with_reason(
+        &self,
+        reason: DeferredSystemCloseReason,
+    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
         self.stop_with_reason(reason.0, ResponseTransition::Close, |_| {})
     }
 
-    pub(super) fn cancel_receiver_dropped(&self) -> Result<(), ResponseStateError> {
+    pub(super) fn cancel_receiver_dropped(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
         self.stop_with_reason(
             DeferredTerminalReason::ReceiverDropped,
             ResponseTransition::Close,
@@ -368,7 +395,7 @@ impl ResponseState {
         )
     }
 
-    pub(super) fn cancel_abandoned(&self) -> Result<(), ResponseStateError> {
+    pub(super) fn cancel_abandoned(&self) -> Result<ResponseStateOutcome, TransportContractViolation> {
         self.stop_with_reason(DeferredTerminalReason::Abandoned, ResponseTransition::Cancel, |_| {})
     }
 
@@ -377,7 +404,7 @@ impl ResponseState {
         reason: DeferredTerminalReason,
         transition: ResponseTransition,
         mut before_compare: impl FnMut(u8),
-    ) -> Result<(), ResponseStateError> {
+    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
         let terminal = encode_terminal_reason(reason);
         let mut observed = self.state.load(Ordering::Acquire);
         loop {
@@ -390,12 +417,12 @@ impl ResponseState {
                     {
                         Ok(_) => {
                             self.observer.record(reason);
-                            return Ok(());
+                            return Ok(ResponseStateOutcome::Applied(()));
                         }
                         Err(actual) => observed = actual,
                     }
                 }
-                actual => return Err(transition_error(transition, actual)),
+                actual => return transition_rejection(transition, actual),
             }
         }
     }
@@ -405,14 +432,20 @@ impl ResponseState {
         expected: u8,
         target: u8,
         transition: ResponseTransition,
-    ) -> Result<(), ResponseStateError> {
-        self.state
+    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
+        match self
+            .state
             .compare_exchange(expected, target, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| ())
-            .map_err(|actual| transition_error(transition, actual))
+        {
+            Ok(_) => Ok(ResponseStateOutcome::Applied(())),
+            Err(actual) => transition_rejection(transition, actual),
+        }
     }
 
-    fn finish_sending(&self, terminal: ResponseTerminalState) -> Result<(), ResponseStateError> {
+    fn finish_sending(
+        &self,
+        terminal: ResponseTerminalState,
+    ) -> Result<ResponseStateOutcome, TransportContractViolation> {
         let transition = match terminal {
             ResponseTerminalState::Completed => ResponseTransition::Complete,
             ResponseTerminalState::Failed { .. } => ResponseTransition::Fail,
@@ -442,14 +475,14 @@ impl ResponseSendClaim {
     }
 
     /// Records successful canonical response delivery.
-    pub(crate) fn complete(mut self) -> Result<(), ResponseStateError> {
+    pub(crate) fn complete(mut self) -> Result<ResponseStateOutcome, TransportContractViolation> {
         let result = self.state.finish_sending(ResponseTerminalState::Completed);
         self.active = false;
         result
     }
 
     /// Records failed canonical response delivery without losing prior progress.
-    pub(crate) fn fail(mut self, progress: WriteProgress) -> Result<(), ResponseStateError> {
+    pub(crate) fn fail(mut self, progress: WriteProgress) -> Result<ResponseStateOutcome, TransportContractViolation> {
         let progress = match (self.drop_progress, progress) {
             (WriteProgress::PossiblyPartial, _) | (_, WriteProgress::PossiblyPartial) => WriteProgress::PossiblyPartial,
             (WriteProgress::NotStarted, WriteProgress::NotStarted) => WriteProgress::NotStarted,
@@ -479,16 +512,22 @@ impl Drop for ResponseSendClaim {
     }
 }
 
-fn transition_error(transition: ResponseTransition, actual: u8) -> ResponseStateError {
+fn transition_rejection<T>(
+    transition: ResponseTransition,
+    actual: u8,
+) -> Result<ResponseStateOutcome<T>, TransportContractViolation> {
     match snapshot(actual) {
-        ResponseStateSnapshot::Terminal(state) => ResponseStateError::AlreadyCompleted {
+        ResponseStateSnapshot::Terminal(state) => Ok(ResponseStateOutcome::AlreadyCompleted {
             state,
             reason: decode_terminal_reason(actual),
-        },
+        }),
         state @ (ResponseStateSnapshot::Open
         | ResponseStateSnapshot::Registered
         | ResponseStateSnapshot::Claimed
-        | ResponseStateSnapshot::Sending) => ResponseStateError::InvalidTransition { transition, state },
+        | ResponseStateSnapshot::Sending) => Err(TransportContractViolation::DeferredResponseInvalidTransition {
+            operation: transition.as_str(),
+            state: state.as_str(),
+        }),
     }
 }
 
