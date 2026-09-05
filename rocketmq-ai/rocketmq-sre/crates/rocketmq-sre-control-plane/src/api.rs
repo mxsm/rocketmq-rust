@@ -352,10 +352,18 @@ fn validate_semantic_registry_owners(
     configured: &[SemanticRegistryOwnerCoverage],
     manifests: &[RequiredSignalManifest],
 ) -> Result<BTreeSet<String>, ControlPlaneError> {
-    let registry_owners = registry
+    // The core-release registry excludes standalone components such as MCP.
+    // Their owners are declared by the SRE required-signal manifests instead.
+    let expected_owners = registry
         .signals
         .iter()
-        .map(|signal| signal.owner.clone())
+        .map(|signal| &signal.owner)
+        .chain(
+            manifests
+                .iter()
+                .flat_map(|manifest| manifest.signals.iter().map(|signal| &signal.owner)),
+        )
+        .cloned()
         .collect::<BTreeSet<_>>();
     let mut configured_owners = BTreeSet::new();
     for owner in configured {
@@ -398,13 +406,13 @@ fn validate_semantic_registry_owners(
         }
     }
 
-    if configured_owners != registry_owners {
-        let missing = registry_owners
+    if configured_owners != expected_owners {
+        let missing = expected_owners
             .difference(&configured_owners)
             .cloned()
             .collect::<Vec<_>>();
         let unknown = configured_owners
-            .difference(&registry_owners)
+            .difference(&expected_owners)
             .cloned()
             .collect::<Vec<_>>();
         return Err(ControlPlaneError::CapabilityDocument {
@@ -414,7 +422,7 @@ fn validate_semantic_registry_owners(
             ),
         });
     }
-    Ok(registry_owners)
+    Ok(expected_owners)
 }
 
 fn owner_has_protected_query_route(owner: &str, manifests: &[RequiredSignalManifest]) -> bool {
@@ -1569,6 +1577,53 @@ mod tests {
             error,
             ControlPlaneError::CapabilityDocument { detail }
                 if detail.contains("mapped more than once")
+        ));
+    }
+
+    #[test]
+    fn standalone_signal_owners_require_exact_coverage() {
+        let coverage: CoverageDocument =
+            serde_yaml::from_str(COVERAGE).expect("coverage YAML should match its contract");
+        let mut registry: TelemetryRegistry =
+            serde_json::from_str(TELEMETRY_REGISTRY).expect("semantic registry should match its contract");
+        registry.signals.retain(|signal| signal.owner != "mcp");
+        let manifests = required_signal_manifests().expect("required-signal manifests should parse");
+
+        let owners = validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners, &manifests)
+            .expect("standalone manifest owners must be included without a core registry entry");
+        assert_eq!(
+            owners,
+            coverage
+                .semantic_registry_owners
+                .iter()
+                .map(|owner| owner.owner.clone())
+                .collect()
+        );
+
+        let mut missing = coverage.clone();
+        missing.semantic_registry_owners.retain(|owner| owner.owner != "mcp");
+        let error = validate_semantic_registry_owners(&registry, &missing.semantic_registry_owners, &manifests)
+            .expect_err("standalone manifest owners still require a coverage mapping");
+        assert!(matches!(
+            error,
+            ControlPlaneError::CapabilityDocument { detail }
+                if detail.contains("missing=[\"mcp\"]") && detail.contains("unknown=[]")
+        ));
+
+        let mut unknown = coverage;
+        let mut owner = unknown.semantic_registry_owners[0].clone();
+        owner.owner = "unknown-component".to_owned();
+        owner.exposure = "implemented_local".to_owned();
+        for source in &mut owner.notable_sources {
+            source.exposure = "implemented_local".to_owned();
+        }
+        unknown.semantic_registry_owners.push(owner);
+        let error = validate_semantic_registry_owners(&registry, &unknown.semantic_registry_owners, &manifests)
+            .expect_err("owners absent from both the registry and manifests must be rejected");
+        assert!(matches!(
+            error,
+            ControlPlaneError::CapabilityDocument { detail }
+                if detail.contains("missing=[]") && detail.contains("unknown=[\"unknown-component\"]")
         ));
     }
 
