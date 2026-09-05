@@ -82,6 +82,11 @@ mod tests {
             .spawn_io("auth.blocking.missing", || ())
             .await
             .expect_err("missing metadata lane must fail closed");
-        assert!(error.to_string().contains("injected ChildServiceContext"));
+        assert_eq!(error.descriptor(), &rocketmq_error::RUNTIME_CONTEXT_UNAVAILABLE);
+        assert_eq!(error.operation(), RuntimeOperation::AuthMetadataIoLane);
+        assert_eq!(error.component(), "runtime");
+        assert!(std::error::Error::source(&error).is_none());
+        assert!(error.public_view().is_ok());
+        assert!(error.diagnostic_view().is_ok());
     }
 }
