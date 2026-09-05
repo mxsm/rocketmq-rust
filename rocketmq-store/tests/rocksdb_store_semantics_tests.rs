@@ -912,6 +912,42 @@ async fn restart_reput_advances_the_single_local_wal_queue_offset() {
 }
 
 #[test]
+fn rocksdb_flush_rejects_either_closed_backend_before_draining_pending_index() {
+    for closed_backend in ["consume queue", "message"] {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let store = new_owned_test_store(&temp_dir);
+        let index = store.rocksdb_index_service();
+        index
+            .build_index(&DispatchRequest {
+                topic: CheetahString::from_static_str("rocksdb-closed-flush-topic"),
+                keys: CheetahString::from_static_str("pending-key"),
+                commit_log_offset: 0,
+                msg_size: 10,
+                store_timestamp: 1_000,
+                success: true,
+                ..DispatchRequest::default()
+            })
+            .expect("enqueue index record");
+        let pending = index.pending_len();
+        assert!(pending > 0);
+
+        match closed_backend {
+            "consume queue" => store.rocksdb_store().close(),
+            "message" => store.message_rocksdb_storage().store().close(),
+            _ => unreachable!("test backend"),
+        }
+
+        let error = store.try_flush().expect_err(closed_backend);
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE);
+        assert_eq!(error.operation(), StoreOperation::Flush);
+        assert_eq!(error.component(), StoreComponent::RocksDb);
+        assert!(std::error::Error::source(&error).is_none());
+        assert_eq!(index.pending_len(), pending, "{closed_backend}");
+        assert_eq!(store.health_snapshot().last_error, Some(error.descriptor()));
+    }
+}
+
+#[test]
 fn rocksdb_time_lookup_and_closed_backend_mapping_preserve_owner_context() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let topic = CheetahString::from_static_str("rocksdb-time-topic");

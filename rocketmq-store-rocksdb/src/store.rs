@@ -839,7 +839,7 @@ impl RocksDbStore {
         result
     }
 
-    fn ensure_open(&self, operation: StoreOperation) -> Result<(), StoreError> {
+    pub(crate) fn ensure_open(&self, operation: StoreOperation) -> Result<(), StoreError> {
         match self.state() {
             RocksDbStoreState::Open => Ok(()),
             RocksDbStoreState::Reloading | RocksDbStoreState::Closed => Err(unavailable_state(operation)),
