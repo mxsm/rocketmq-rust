@@ -118,11 +118,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let acl_config = load_probe_acl_config()?;
     let operation_timeout = Duration::from_secs(u64::from(plan.max_duration_seconds));
 
-    let runtime_owner = RuntimeOwner::new(RuntimeConfig {
+    let runtime_owner = RuntimeOwner::plan(RuntimeConfig {
         thread_name: "rocketmq-sre-probe".to_owned(),
         shutdown_timeout: PROBE_SHUTDOWN_TIMEOUT,
         ..RuntimeConfig::default()
-    })?;
+    })
+    .expect("runtime configuration is valid")
+    .build()?;
     let client_runtime = ClientRuntime::try_new(
         runtime_owner.root_context().component("probe.client"),
         ClientRuntimeConfig {

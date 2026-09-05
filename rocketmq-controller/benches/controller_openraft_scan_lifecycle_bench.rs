@@ -28,12 +28,14 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 fn run_lifecycle_probe() -> ControllerOpenRaftScanLifecycleProbe {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: 2,
         max_blocking_threads: 4,
         thread_name: "rocketmq-controller-openraft-scan-bench".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("controller OpenRaft scan benchmark runtime should start");
     let context = owner.root_context().component("controller-openraft-scan-bench");
     let output = owner.block_on(run_controller_openraft_scan_lifecycle_probe(context));

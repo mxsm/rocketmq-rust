@@ -209,8 +209,14 @@ struct ControlFixture {
 
 impl ControlFixture {
     fn new(name: &'static str) -> Self {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default(name)).expect("control fixture runtime");
-        let context = owner.root_context().component(format!("{name}.request"));
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default(name))
+            .expect("test runtime configuration is valid")
+            .build()
+            .expect("control fixture runtime");
+        let context = owner.root_context().component(
+            rocketmq_runtime::ScopeId::try_new(format!("{name}.request"))
+                .expect("the request scope has a fixed nonblank suffix"),
+        );
         let (sender, receiver) = oneshot::channel();
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             ControlCaptureProcessor {
@@ -339,8 +345,10 @@ impl RequestProcessor for PendingFastFailureProcessor {
 async fn canonical_deadline_drops_post_mark_run_owner_and_releases_resources() {
     let service = fast_failure(2);
     let entered = Arc::new(tokio::sync::Notify::new());
-    let owner =
-        RuntimeOwner::new(RuntimeConfig::server_default("fast-failure-post-mark-deadline")).expect("post-mark runtime");
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("fast-failure-post-mark-deadline"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("post-mark runtime");
     let context = owner
         .root_context()
         .component("fast-failure-post-mark-deadline.request");
@@ -451,7 +459,9 @@ async fn typed_budget_rejection_is_driven_and_written_once_by_the_canonical_disp
     let business_executions = Arc::new(AtomicUsize::new(0));
     let writes = Arc::new(AtomicUsize::new(0));
     let write_observed = Arc::new(Notify::new());
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-fast-failure-rejection"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("broker-fast-failure-rejection"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("fast-failure test runtime owner");
     let server = TransportServer::new(
         Arc::new(ServerConfig {

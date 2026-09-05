@@ -200,7 +200,7 @@ impl BoundedEgress {
     }
 
     #[cfg(test)]
-    fn try_reserve(&self, retained_bytes: usize) -> Result<ResourcePermit, rocketmq_runtime::BudgetAcquireError> {
+    fn try_reserve(&self, retained_bytes: usize) -> Result<ResourcePermit, rocketmq_runtime::BudgetRejection> {
         self.budget.try_acquire_data(retained_bytes)
     }
 
@@ -300,11 +300,11 @@ mod tests {
     use super::*;
 
     fn fixture() -> (RuntimeOwner, BoundedEgress, TaskTracker, CancellationToken) {
-        let owner = RuntimeOwner::new_with_memory_limit(
-            RuntimeConfig::default(),
-            ProcessMemoryLimit::configured(64).expect("memory limit"),
-        )
-        .expect("runtime owner");
+        let owner = RuntimeOwner::plan(RuntimeConfig::default())
+            .expect("default runtime configuration is valid")
+            .with_memory_limit(ProcessMemoryLimit::configured(64).expect("memory limit"))
+            .build()
+            .expect("runtime owner");
         let tracker = TaskTracker::new();
         let cancellation = CancellationToken::new();
         let egress = BoundedEgress::new(

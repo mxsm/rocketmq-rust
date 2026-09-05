@@ -21,7 +21,6 @@ use crate::model::StorageBackend;
 use crate::persistence::TimeRange;
 use crate::persistence::error::PersistenceError;
 use crate::persistence::history_repository::HistoryQuery;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 fn sample(environment_id: EnvironmentId, bucket_ms: i64, value: f64) -> MetricSample {
@@ -37,7 +36,7 @@ fn sample(environment_id: EnvironmentId, bucket_ms: i64, value: f64) -> MetricSa
 #[test]
 fn sqlite_history_is_idempotent_conflict_checked_and_reopens() {
     let directory = tempfile::tempdir().expect("temporary directory");
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let config = StorageConfig {
             backend: StorageBackend::Sqlite,
@@ -111,7 +110,7 @@ fn sqlite_history_is_idempotent_conflict_checked_and_reopens() {
 #[test]
 fn sqlite_history_lease_rejects_stale_holder_writes() {
     let directory = tempfile::tempdir().expect("temporary directory");
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let config = StorageConfig {
             backend: StorageBackend::Sqlite,
@@ -195,7 +194,7 @@ fn sqlite_history_lease_rejects_stale_holder_writes() {
 #[test]
 fn sqlite_history_retention_reports_exact_convergence() {
     let directory = tempfile::tempdir().expect("temporary directory");
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let store = SqlPersistence::initialize(
             &StorageConfig {
@@ -304,7 +303,7 @@ fn docker_postgres_history_lease_contract() {
 }
 
 fn docker_history_lease_contract(backend: StorageBackend, database_url: String) {
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let store = SqlPersistence::initialize(
             &StorageConfig {

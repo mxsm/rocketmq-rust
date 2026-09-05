@@ -17,7 +17,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use crate::RuntimeContractViolation;
+use crate::RuntimeError;
 use crate::RuntimeHandle;
+use crate::RuntimeResult;
 use crate::ShutdownReport;
 use crate::TaskGroup;
 use tokio::sync::Notify;
@@ -32,8 +35,10 @@ use crate::schedule::task::TaskExecution;
 use crate::schedule::trigger::DelayedIntervalTrigger;
 use crate::schedule::trigger::Trigger;
 use crate::schedule::ExecutorPool;
-use crate::schedule::SchedulerError;
-use crate::schedule::SchedulerResult;
+use crate::schedule::ScheduleControlOutcome;
+use crate::schedule::ScheduleExecutionOutcome;
+use crate::schedule::ScheduleRegistrationOutcome;
+use crate::schedule::SchedulerStartOutcome;
 use crate::schedule::Task;
 use crate::DelayTrigger;
 
@@ -140,14 +145,10 @@ pub struct TaskScheduler {
     parent_task_group: Option<TaskGroup>,
 }
 
-fn current_scheduler_handle(operation: &'static str) -> SchedulerResult<RuntimeHandle> {
+fn current_scheduler_handle(operation: crate::RuntimeOperation) -> RuntimeResult<RuntimeHandle> {
     tokio::runtime::Handle::try_current()
         .map(RuntimeHandle::new)
-        .map_err(|error| SchedulerError::SystemError(format!("{operation} requires a Tokio runtime: {error}")))
-}
-
-fn scheduler_runtime_error(operation: &'static str, error: crate::RuntimeError) -> SchedulerError {
-    SchedulerError::SystemError(format!("{operation} failed: {error}"))
+        .map_err(|_error| RuntimeError::context_unavailable(operation))
 }
 
 impl Default for TaskScheduler {
@@ -198,11 +199,11 @@ impl TaskScheduler {
     }
 
     /// Start the scheduler
-    pub async fn start(&self) -> SchedulerResult<()> {
+    pub async fn start(&self) -> RuntimeResult<SchedulerStartOutcome> {
         {
             let mut running = self.running.write().await;
             if *running {
-                return Err(SchedulerError::SystemError("Scheduler is already running".to_string()));
+                return Ok(SchedulerStartOutcome::AlreadyRunning);
             }
             *running = true;
         }
@@ -211,7 +212,7 @@ impl TaskScheduler {
         let scheduler_group = if let Some(parent_task_group) = self.parent_task_group.as_ref() {
             parent_task_group.component("rocketmq.task-scheduler")
         } else {
-            let runtime = match current_scheduler_handle("TaskScheduler::start") {
+            let runtime = match current_scheduler_handle(crate::RuntimeOperation::SpawnSchedulerTask) {
                 Ok(runtime) => runtime,
                 Err(error) => {
                     *self.running.write().await = false;
@@ -229,9 +230,7 @@ impl TaskScheduler {
             if let Err(error) = scheduler_group.spawn_service(format!("task-scheduler.loop.{i}"), async move {
                 scheduler.scheduler_loop(i).await;
             }) {
-                return self
-                    .abort_failed_start(scheduler_group, scheduler_runtime_error("TaskScheduler::start", error))
-                    .await;
+                return self.abort_failed_start(scheduler_group, error).await;
             }
         }
 
@@ -241,9 +240,7 @@ impl TaskScheduler {
             if let Err(error) = scheduler_group.spawn_service("task-scheduler.cleanup", async move {
                 scheduler.cleanup_loop().await;
             }) {
-                return self
-                    .abort_failed_start(scheduler_group, scheduler_runtime_error("TaskScheduler::start", error))
-                    .await;
+                return self.abort_failed_start(scheduler_group, error).await;
             }
         }
 
@@ -251,11 +248,11 @@ impl TaskScheduler {
             "Task scheduler started with {} threads",
             self.config.max_scheduler_threads
         );
-        Ok(())
+        Ok(SchedulerStartOutcome::Started)
     }
 
     /// Stop the scheduler
-    pub async fn stop(&self) -> SchedulerResult<()> {
+    pub async fn stop(&self) -> RuntimeResult<()> {
         let was_running = {
             let mut running = self.running.write().await;
             let was_running = *running;
@@ -295,19 +292,19 @@ impl TaskScheduler {
     }
 
     /// Schedule a new job
-    pub async fn schedule_job(&self, task: Arc<Task>, trigger: Arc<dyn Trigger>) -> SchedulerResult<String> {
+    pub async fn schedule_job(&self, task: Arc<Task>, trigger: Arc<dyn Trigger>) -> ScheduleRegistrationOutcome {
         let job = ScheduledJob::new(task.clone(), trigger);
         let job_id = job.id.clone();
 
         let mut jobs = self.jobs.write().await;
-        if jobs.contains_key(&task.id) {
-            return Err(SchedulerError::TaskAlreadyExists(task.id.clone()));
+        if jobs.contains_key(&job_id) {
+            return ScheduleRegistrationOutcome::AlreadyPresent;
         }
 
         jobs.insert(job_id.clone(), job);
         info!("Job scheduled: {} ({})", task.name, job_id);
 
-        Ok(job_id)
+        ScheduleRegistrationOutcome::Scheduled(job_id)
     }
 
     /// Schedule a job with a specific ID
@@ -316,34 +313,34 @@ impl TaskScheduler {
         job_id: impl Into<String>,
         task: Arc<Task>,
         trigger: Arc<dyn Trigger>,
-    ) -> SchedulerResult<String> {
+    ) -> ScheduleRegistrationOutcome {
         let job_id = job_id.into();
         let job = ScheduledJob::new(task.clone(), trigger).with_id(job_id.clone());
 
         let mut jobs = self.jobs.write().await;
         if jobs.contains_key(&job_id) {
-            return Err(SchedulerError::TaskAlreadyExists(job_id));
+            return ScheduleRegistrationOutcome::AlreadyPresent;
         }
 
         jobs.insert(job_id.clone(), job);
         info!("Job scheduled with ID: {} ({})", task.name, job_id);
 
-        Ok(job_id)
+        ScheduleRegistrationOutcome::Scheduled(job_id)
     }
 
     /// Unschedule a job
-    pub async fn unschedule_job(&self, job_id: &str) -> SchedulerResult<()> {
+    pub async fn unschedule_job(&self, job_id: &str) -> ScheduleControlOutcome {
         let mut jobs = self.jobs.write().await;
         if jobs.remove(job_id).is_some() {
             info!("Job unscheduled: {}", job_id);
-            Ok(())
+            ScheduleControlOutcome::Applied
         } else {
-            Err(SchedulerError::TaskNotFound(job_id.to_string()))
+            ScheduleControlOutcome::NotFound
         }
     }
 
     /// Enable or disable a job
-    pub async fn set_job_enabled(&self, job_id: &str, enabled: bool) -> SchedulerResult<()> {
+    pub async fn set_job_enabled(&self, job_id: &str, enabled: bool) -> ScheduleControlOutcome {
         let mut jobs = self.jobs.write().await;
         if let Some(job) = jobs.get_mut(job_id) {
             job.enabled = enabled;
@@ -353,9 +350,9 @@ impl TaskScheduler {
                 job_id,
                 job.task.name
             );
-            Ok(())
+            ScheduleControlOutcome::Applied
         } else {
-            Err(SchedulerError::TaskNotFound(job_id.to_string()))
+            ScheduleControlOutcome::NotFound
         }
     }
 
@@ -381,7 +378,7 @@ impl TaskScheduler {
     }
 
     /// Execute a job immediately (ad-hoc execution)
-    pub async fn execute_job_now(&self, job_id: &str) -> SchedulerResult<String> {
+    pub async fn execute_job_now(&self, job_id: &str) -> RuntimeResult<ScheduleExecutionOutcome> {
         let job = {
             let jobs = self.jobs.read().await;
             jobs.get(job_id).cloned()
@@ -391,14 +388,14 @@ impl TaskScheduler {
             let executor = self.executor_pool.get_executor().await;
             let execution_id = executor.execute_task(job.task, SystemTime::now()).await?;
             info!("Job executed immediately: {} ({})", job_id, execution_id);
-            Ok(execution_id)
+            Ok(ScheduleExecutionOutcome::Started(execution_id))
         } else {
-            Err(SchedulerError::TaskNotFound(job_id.to_string()))
+            Ok(ScheduleExecutionOutcome::NotFound)
         }
     }
 
     /// Schedule a delayed job (execute once after delay)
-    pub async fn schedule_delayed_job(&self, task: Arc<Task>, delay: Duration) -> SchedulerResult<String> {
+    pub async fn schedule_delayed_job(&self, task: Arc<Task>, delay: Duration) -> ScheduleRegistrationOutcome {
         let trigger = Arc::new(DelayTrigger::new(delay));
         self.schedule_job(task, trigger).await
     }
@@ -409,32 +406,40 @@ impl TaskScheduler {
         job_id: impl Into<String>,
         task: Arc<Task>,
         delay: Duration,
-    ) -> SchedulerResult<String> {
+    ) -> ScheduleRegistrationOutcome {
         let trigger = Arc::new(DelayTrigger::new(delay));
         self.schedule_job_with_id(job_id, task, trigger).await
     }
 
     /// Schedule an interval job with initial delay
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `interval` is zero.
     pub async fn schedule_interval_job_with_delay(
         &self,
         task: Arc<Task>,
         interval: Duration,
         initial_delay: Duration,
-    ) -> SchedulerResult<String> {
-        let trigger = Arc::new(DelayedIntervalTrigger::new(interval, initial_delay));
-        self.schedule_job(task, trigger).await
+    ) -> Result<ScheduleRegistrationOutcome, RuntimeContractViolation> {
+        let trigger = Arc::new(DelayedIntervalTrigger::new(interval, initial_delay)?);
+        Ok(self.schedule_job(task, trigger).await)
     }
 
     /// Schedule an interval job with initial delay and specific ID
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `interval` is zero.
     pub async fn schedule_interval_job_with_delay_and_id(
         &self,
         job_id: impl Into<String>,
         task: Arc<Task>,
         interval: Duration,
         initial_delay: Duration,
-    ) -> SchedulerResult<String> {
-        let trigger = Arc::new(DelayedIntervalTrigger::new(interval, initial_delay));
-        self.schedule_job_with_id(job_id, task, trigger).await
+    ) -> Result<ScheduleRegistrationOutcome, RuntimeContractViolation> {
+        let trigger = Arc::new(DelayedIntervalTrigger::new(interval, initial_delay)?);
+        Ok(self.schedule_job_with_id(job_id, task, trigger).await)
     }
 
     /// Execute a job immediately with optional execution delay
@@ -442,7 +447,7 @@ impl TaskScheduler {
         &self,
         job_id: &str,
         execution_delay: Option<Duration>,
-    ) -> SchedulerResult<String> {
+    ) -> RuntimeResult<ScheduleExecutionOutcome> {
         let job = {
             let jobs = self.jobs.read().await;
             jobs.get(job_id).cloned()
@@ -454,9 +459,9 @@ impl TaskScheduler {
                 .execute_task_with_delay(job.task, SystemTime::now(), execution_delay)
                 .await?;
             info!("Job executed immediately with delay: {} ({})", job_id, execution_id);
-            Ok(execution_id)
+            Ok(ScheduleExecutionOutcome::Started(execution_id))
         } else {
-            Err(SchedulerError::TaskNotFound(job_id.to_string()))
+            Ok(ScheduleExecutionOutcome::NotFound)
         }
     }
 
@@ -473,15 +478,15 @@ impl TaskScheduler {
     }
 
     /// Cancel a running task execution
-    pub async fn cancel_execution(&self, execution_id: &str) -> SchedulerResult<()> {
+    pub async fn cancel_execution(&self, execution_id: &str) -> ScheduleControlOutcome {
         // Try to cancel in any executor
         for _ in 0..self.config.executor_pool_size {
             let executor = self.executor_pool.get_executor().await;
-            if executor.cancel_task(execution_id).await.is_ok() {
-                return Ok(());
+            if executor.cancel_task(execution_id).await {
+                return ScheduleControlOutcome::Applied;
             }
         }
-        Err(SchedulerError::TaskNotFound(execution_id.to_string()))
+        ScheduleControlOutcome::NotFound
     }
 
     /// Get scheduler status
@@ -512,7 +517,11 @@ impl TaskScheduler {
         }
     }
 
-    async fn abort_failed_start(&self, scheduler_group: TaskGroup, error: SchedulerError) -> SchedulerResult<()> {
+    async fn abort_failed_start(
+        &self,
+        scheduler_group: TaskGroup,
+        error: RuntimeError,
+    ) -> RuntimeResult<SchedulerStartOutcome> {
         *self.running.write().await = false;
         self.shutdown_notify.notify_waiters();
         self.scheduler_group.write().await.take();
@@ -672,13 +681,10 @@ mod tests {
 
     #[test]
     fn scheduler_handle_without_tokio_runtime_returns_error() {
-        let error = current_scheduler_handle("test-scheduler-start")
+        let error = current_scheduler_handle(crate::RuntimeOperation::SpawnSchedulerTask)
             .expect_err("scheduler runtime lookup should fail without an ambient Tokio runtime");
 
-        assert!(matches!(
-            error,
-            SchedulerError::SystemError(message) if message.contains("requires a Tokio runtime")
-        ));
+        assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::Unavailable);
     }
 
     #[tokio::test]
@@ -736,6 +742,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_job_id_is_an_outcome_and_keeps_the_original_job() {
+        let scheduler = TaskScheduler::new_legacy_compatibility(SchedulerConfig::default());
+        let first = Arc::new(Task::new("first", "first", |_context| async {
+            TaskResult::Success(None)
+        }));
+        let replacement = Arc::new(Task::new("replacement", "replacement", |_context| async {
+            TaskResult::Success(None)
+        }));
+
+        assert_eq!(
+            scheduler
+                .schedule_delayed_job_with_id("stable-job", first, Duration::from_secs(1))
+                .await,
+            ScheduleRegistrationOutcome::Scheduled("stable-job".to_string())
+        );
+        assert_eq!(
+            scheduler
+                .schedule_delayed_job_with_id("stable-job", replacement, Duration::from_secs(1))
+                .await,
+            ScheduleRegistrationOutcome::AlreadyPresent
+        );
+
+        let job = scheduler
+            .get_job("stable-job")
+            .await
+            .expect("original job remains registered");
+        assert_eq!(job.task.name, "first");
+        assert_eq!(scheduler.get_all_jobs().await.len(), 1);
+    }
+
+    #[tokio::test]
     async fn stop_aborts_running_executor_tasks() {
         let scheduler = TaskScheduler::new_legacy_compatibility(SchedulerConfig {
             check_interval: Duration::from_secs(60),
@@ -761,13 +798,16 @@ mod tests {
 
         scheduler
             .schedule_delayed_job_with_id("pending-job", task, Duration::from_secs(60))
-            .await
-            .expect("job should be scheduled");
+            .await;
         scheduler.start().await.expect("scheduler should start");
-        let execution_id = scheduler
+        let execution_id = match scheduler
             .execute_job_now("pending-job")
             .await
-            .expect("job should execute");
+            .expect("job should execute")
+        {
+            ScheduleExecutionOutcome::Started(execution_id) => execution_id,
+            ScheduleExecutionOutcome::NotFound => panic!("scheduled job should be found"),
+        };
         tokio::time::timeout(Duration::from_secs(1), async {
             while !started.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;

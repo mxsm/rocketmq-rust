@@ -21,14 +21,14 @@ use std::mem::size_of;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use rocketmq_runtime::BudgetAcquireError;
 use rocketmq_runtime::BudgetClass;
-use rocketmq_runtime::BudgetConfigError;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetRejection;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourcePermit;
+use rocketmq_runtime::RuntimeContractViolation;
 
 use super::DeferredResponder;
 use super::ResponseState;
@@ -204,7 +204,7 @@ impl DeferredAdmissionConfigErrorKind {
 
 enum DeferredAdmissionConfigErrorSource {
     Conflict,
-    Budget(BudgetConfigError),
+    Budget(RuntimeContractViolation),
 }
 
 /// Typed, redacted deferred admission configuration failure.
@@ -214,7 +214,7 @@ pub struct DeferredAdmissionConfigError {
 }
 
 impl DeferredAdmissionConfigError {
-    fn from_budget(kind: DeferredAdmissionConfigErrorKind, source: BudgetConfigError) -> Self {
+    fn from_budget(kind: DeferredAdmissionConfigErrorKind, source: RuntimeContractViolation) -> Self {
         Self {
             kind,
             source: DeferredAdmissionConfigErrorSource::Budget(source),
@@ -291,7 +291,7 @@ impl DeferredAdmissionAcquireErrorKind {
 
 enum DeferredAdmissionAcquireErrorSource {
     RetainedSizeOverflow,
-    Budget(BudgetAcquireError),
+    Budget(BudgetRejection),
 }
 
 /// Typed, redacted failure to reserve one deferred wait.
@@ -308,7 +308,7 @@ impl DeferredAdmissionAcquireError {
         }
     }
 
-    fn from_budget(kind: DeferredAdmissionAcquireErrorKind, source: BudgetAcquireError) -> Self {
+    fn from_budget(kind: DeferredAdmissionAcquireErrorKind, source: BudgetRejection) -> Self {
         Self {
             kind,
             source: DeferredAdmissionAcquireErrorSource::Budget(source),
@@ -341,7 +341,7 @@ impl Error for DeferredAdmissionAcquireError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.source {
             DeferredAdmissionAcquireErrorSource::RetainedSizeOverflow => None,
-            DeferredAdmissionAcquireErrorSource::Budget(source) => Some(source),
+            DeferredAdmissionAcquireErrorSource::Budget(_source) => None,
         }
     }
 }
@@ -527,37 +527,33 @@ impl fmt::Debug for DeferredWaitPermit {
 fn validate_limits(
     limits: DeferredWaitLimits,
     parent: BudgetLimit,
-    path: &str,
+    _path: &str,
 ) -> Result<(), DeferredAdmissionConfigError> {
     let failure = if limits.max_waiters == 0 {
         Some((
             DeferredAdmissionConfigErrorKind::ZeroWaiterCapacity,
-            BudgetConfigError::ZeroCapacity {
-                path: path.to_owned(),
+            RuntimeContractViolation::ZeroBudgetCapacity {
                 dimension: BudgetDimension::Count,
             },
         ))
     } else if limits.max_retained_bytes == 0 {
         Some((
             DeferredAdmissionConfigErrorKind::ZeroRetainedByteCapacity,
-            BudgetConfigError::ZeroCapacity {
-                path: path.to_owned(),
+            RuntimeContractViolation::ZeroBudgetCapacity {
                 dimension: BudgetDimension::Bytes,
             },
         ))
     } else if limits.max_waiters > parent.capacity.count {
         Some((
             DeferredAdmissionConfigErrorKind::ExceedsProcessCapacity,
-            BudgetConfigError::ChildExceedsParent {
-                path: path.to_owned(),
+            RuntimeContractViolation::ChildBudgetExceedsParent {
                 dimension: BudgetDimension::Count,
             },
         ))
     } else if limits.max_retained_bytes > parent.capacity.bytes {
         Some((
             DeferredAdmissionConfigErrorKind::ExceedsProcessCapacity,
-            BudgetConfigError::ChildExceedsParent {
-                path: path.to_owned(),
+            RuntimeContractViolation::ChildBudgetExceedsParent {
                 dimension: BudgetDimension::Bytes,
             },
         ))
@@ -570,28 +566,32 @@ fn validate_limits(
     }
 }
 
-fn config_kind(source: &BudgetConfigError) -> DeferredAdmissionConfigErrorKind {
+fn config_kind(source: &RuntimeContractViolation) -> DeferredAdmissionConfigErrorKind {
     match source {
-        BudgetConfigError::ZeroCapacity {
+        RuntimeContractViolation::ZeroBudgetCapacity {
             dimension: BudgetDimension::Count,
-            ..
         } => DeferredAdmissionConfigErrorKind::ZeroWaiterCapacity,
-        BudgetConfigError::ZeroCapacity {
+        RuntimeContractViolation::ZeroBudgetCapacity {
             dimension: BudgetDimension::Bytes,
-            ..
         } => DeferredAdmissionConfigErrorKind::ZeroRetainedByteCapacity,
-        BudgetConfigError::ChildExceedsParent { .. } => DeferredAdmissionConfigErrorKind::ExceedsProcessCapacity,
-        BudgetConfigError::EmptyName
-        | BudgetConfigError::InvalidName
-        | BudgetConfigError::ZeroCapacity {
-            dimension: BudgetDimension::Rate,
-            ..
+        RuntimeContractViolation::ChildBudgetExceedsParent { .. } => {
+            DeferredAdmissionConfigErrorKind::ExceedsProcessCapacity
         }
-        | BudgetConfigError::ZeroRate { .. }
-        | BudgetConfigError::ZeroMaxAge { .. }
-        | BudgetConfigError::ReserveExceedsCapacity { .. }
-        | BudgetConfigError::ReserveWithoutCapacity { .. }
-        | BudgetConfigError::ChildMaxAgeExceedsParent { .. } => DeferredAdmissionConfigErrorKind::Budget,
+        RuntimeContractViolation::ZeroBudgetCapacity {
+            dimension: BudgetDimension::Rate,
+        }
+        | RuntimeContractViolation::EmptyBudgetName
+        | RuntimeContractViolation::InvalidBudgetName
+        | RuntimeContractViolation::ZeroBudgetRate
+        | RuntimeContractViolation::ZeroBudgetMaxAge
+        | RuntimeContractViolation::ReserveExceedsBudgetCapacity { .. }
+        | RuntimeContractViolation::ReserveWithoutBudgetCapacity { .. }
+        | RuntimeContractViolation::ChildBudgetMaxAgeExceedsParent
+        | RuntimeContractViolation::InvalidConfiguration { .. }
+        | RuntimeContractViolation::PermitTargetInDifferentTree
+        | RuntimeContractViolation::InvalidMemoryLimit { .. }
+        | RuntimeContractViolation::InvalidSchedule { .. }
+        | RuntimeContractViolation::InvalidMetadataConfiguration { .. } => DeferredAdmissionConfigErrorKind::Budget,
     }
 }
 

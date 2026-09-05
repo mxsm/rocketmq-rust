@@ -19,6 +19,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::Duration;
 
+use rocketmq_error::RocketMQError;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetSnapshot;
@@ -29,6 +30,7 @@ use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
+use rocketmq_runtime::RuntimeError;
 
 use crate::proto::v2;
 use crate::ProxyError;
@@ -79,14 +81,14 @@ impl ExecutionGuards {
             ));
         }
         let process_limit = if config.process_memory_limit_bytes == 0 {
-            ProcessMemoryLimit::detect()
+            ProcessMemoryLimit::detect().map_err(runtime_memory_detection_error)?
         } else {
             ProcessMemoryLimit::configured(config.process_memory_limit_bytes)
-        }
-        .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
+                .map_err(|_error| ProxyError::invalid_metadata("processMemoryLimitBytes must be greater than zero"))?
+        };
         let managed_bytes = process_limit
             .fraction(1, 8)
-            .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
+            .map_err(|_error| ProxyError::invalid_metadata("process memory budget fraction is invalid"))?;
         let managed_bytes = usize::try_from(managed_bytes).unwrap_or(usize::MAX);
         let telemetry_bytes = config.telemetry_queue_bytes.min(managed_bytes.saturating_sub(1)).max(1);
         let consumer_response_bytes = config
@@ -262,10 +264,31 @@ fn execution_budget(
         .map_err(|error| ProxyError::invalid_metadata(error.to_string()))
 }
 
+fn runtime_memory_detection_error(source: RuntimeError) -> ProxyError {
+    RocketMQError::Internal {
+        operation: "detect-process-memory-limit",
+        source: Box::new(source),
+    }
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use prost::Message;
+
+    #[test]
+    fn memory_detection_mapping_keeps_the_runtime_source() {
+        let error = runtime_memory_detection_error(RuntimeError::internal(
+            rocketmq_runtime::RuntimeOperation::DetectProcessMemoryLimit,
+            std::io::Error::other("injected detection failure"),
+        ));
+
+        assert!(std::error::Error::source(&error)
+            .and_then(std::error::Error::source)
+            .and_then(|source| source.downcast_ref::<RuntimeError>())
+            .is_some());
+    }
 
     #[test]
     fn exhausted_boundary_returns_too_many_requests() {
@@ -412,11 +435,19 @@ mod tests {
             command: None,
         };
 
-        slow.try_push_control(command(), 1).expect("first slow command");
-        assert!(slow.try_push_control(command(), 1).is_err());
+        assert!(matches!(
+            slow.try_push_control(command(), 1),
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+        ));
+        assert!(matches!(
+            slow.try_push_control(command(), 1),
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+        ));
         assert!(slow.is_closed());
-        fast.try_push_control(command(), 1)
-            .expect("closing the slow client should release the shared parent permit");
+        assert!(matches!(
+            fast.try_push_control(command(), 1),
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+        ));
         assert!(!fast.is_closed());
     }
 

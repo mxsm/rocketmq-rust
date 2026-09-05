@@ -1121,7 +1121,6 @@ pub fn split_account_stat_key(account_stat_key: &str) -> Vec<&str> {
 mod tests {
     use std::sync::OnceLock;
 
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
 
     use super::*;
@@ -1129,7 +1128,7 @@ mod tests {
     fn test_task_group(name: &'static str) -> TaskGroup {
         static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
         OWNER
-            .get_or_init(|| RuntimeOwner::new(RuntimeConfig::default()).expect("test runtime owner should start"))
+            .get_or_init(|| RuntimeOwner::new().expect("test runtime owner should start"))
             .root_context()
             .component(name)
             .task_group()

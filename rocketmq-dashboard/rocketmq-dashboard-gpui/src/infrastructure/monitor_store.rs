@@ -207,11 +207,11 @@ mod tests {
     #[test]
     fn monitor_store_round_trips_without_evaluating_rules() {
         let directory = tempfile::tempdir().expect("temp directory");
-        let runtime = RuntimeOwner::new_with_memory_limit(
-            RuntimeConfig::for_parallelism("monitor-test", 1),
-            ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory"),
-        )
-        .expect("runtime");
+        let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("monitor-test", 1))
+            .expect("test runtime configuration is valid")
+            .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory"))
+            .build()
+            .expect("runtime");
         let context = runtime.root_context().component("monitor");
         let store = MonitorStore::new(directory.path().join("monitors.json"), context.clone());
         let mut lifecycle = MonitorLifecycle::start(&context, true).expect("lifecycle");

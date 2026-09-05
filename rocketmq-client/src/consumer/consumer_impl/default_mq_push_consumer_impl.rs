@@ -178,7 +178,10 @@ impl DefaultMQPushConsumerImpl {
         consumer_config: ConsumerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
-        let service_context = client_runtime.component(format!("push-consumer-{}", consumer_config.consumer_group));
+        let service_context = client_runtime.component(
+            rocketmq_runtime::ScopeId::try_new(format!("push-consumer-{}", consumer_config.consumer_group))
+                .expect("the push consumer scope has a fixed nonblank prefix"),
+        );
         let consumer_config = Arc::new(ArcSwap::from_pointee(consumer_config));
         let rebalance_consumer_config = (*consumer_config.load_full()).clone();
         let this = Self {

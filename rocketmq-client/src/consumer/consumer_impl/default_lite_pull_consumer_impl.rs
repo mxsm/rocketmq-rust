@@ -586,7 +586,10 @@ impl DefaultLitePullConsumerImpl {
         let rebalance_config = consumer_config.to_consumer_config();
 
         let this = Self {
-            service_context: client_runtime.component(format!("lite-consumer-{}", consumer_config.consumer_group)),
+            service_context: client_runtime.component(
+                rocketmq_runtime::ScopeId::try_new(format!("lite-consumer-{}", consumer_config.consumer_group))
+                    .expect("the lite consumer scope has a fixed nonblank prefix"),
+            ),
             client_pool: client_runtime.pool().clone(),
             client_pool_token: Mutex::new(None),
             nameserver_discovery,
@@ -651,10 +654,14 @@ impl DefaultLitePullConsumerImpl {
 
     fn enqueue_consume_request(&self, request: LitePullConsumeRequest) -> RocketMQResult<()> {
         let retained_bytes = request.retained_bytes();
-        self.consume_requests
-            .try_push_data(request, retained_bytes)
-            .map(|_| ())
-            .map_err(|error| crate::mq_client_err!(format!("Lite pull consume request rejected: {error}")))
+        match self.consume_requests.try_push_data(request, retained_bytes) {
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
+                Err(crate::mq_client_err!("Lite pull consume request rejected"))
+            }
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+            | rocketmq_runtime::QueuePushOutcome::Coalesced { .. }
+            | rocketmq_runtime::QueuePushOutcome::DroppedStale { .. } => Ok(()),
+        }
     }
 
     #[must_use]

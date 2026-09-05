@@ -27,6 +27,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_error::SerializationError;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoDurabilityOutcome;
 use tokio::fs;
 
 use crate::authentication::model::user::User;
@@ -83,7 +84,7 @@ impl LocalAuthenticationMetadataProvider {
             RocketMQError::Serialization(SerializationError::encode_failed("JSON", error.to_string()))
         })?;
         if let Some(metadata_io) = &self.metadata_io {
-            metadata_io
+            match metadata_io
                 .submit_next_durable(
                     "auth.authentication-users",
                     path,
@@ -91,8 +92,14 @@ impl LocalAuthenticationMetadataProvider {
                     MetadataDeadline::after(std::time::Duration::from_secs(5)),
                 )
                 .await
-                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
-            Ok(())
+                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?
+            {
+                MetadataIoDurabilityOutcome::Durable(_) => Ok(()),
+                MetadataIoDurabilityOutcome::TargetConflict(request) => Err(RocketMQError::storage_write_failed(
+                    request.target().display().to_string(),
+                    "metadata resource target conflict",
+                )),
+            }
         } else {
             write_users_snapshot(path, content).await
         }
@@ -455,11 +462,11 @@ mod tests {
             ..AuthConfig::default()
         };
         let context = rocketmq_runtime::RuntimeContext::try_from_current("auth-metadata-io-test").unwrap();
-        let actor = rocketmq_runtime::MetadataIoActor::start(
-            &context.service_context("auth"),
-            rocketmq_runtime::MetadataIoConfig::default(),
-        )
-        .unwrap();
+        let actor = rocketmq_runtime::MetadataIoConfig::default()
+            .into_plan()
+            .expect("default metadata I/O config is valid")
+            .start(&context.service_context("auth"))
+            .unwrap();
         let provider =
             LocalAuthenticationMetadataProvider::with_config_and_metadata_io(&config, Some(actor.clone())).unwrap();
 

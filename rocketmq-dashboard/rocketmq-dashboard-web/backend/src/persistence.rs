@@ -250,8 +250,8 @@ fn storage_root_for_legacy_check(config: &StorageConfig) -> Option<&Path> {
 mod tests {
     use super::*;
     use crate::config::SqlPoolConfig;
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_runtime::ScopeId;
 
     #[test]
     fn every_storage_backend_rejects_documented_interim_paths_before_initialization() {
@@ -260,7 +260,7 @@ mod tests {
         std::fs::create_dir_all(data.join("monitor")).expect("former monitor directory");
         std::fs::write(data.join("dashboard-interim-config.json"), b"{}").expect("former config");
         std::fs::write(data.join("monitor/consumer-monitor-config.json"), b"{}").expect("former monitors");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             for backend in [
                 StorageBackend::File,
@@ -279,7 +279,10 @@ mod tests {
                         database_url: None,
                         pool: SqlPoolConfig::default(),
                     },
-                    owner.root_context().component(format!("legacy-{backend:?}")),
+                    owner.root_context().component(
+                        ScopeId::try_new(format!("legacy-{backend:?}"))
+                            .expect("test scope has the fixed non-empty legacy prefix"),
+                    ),
                 )
                 .await;
                 assert!(matches!(result, Err(PersistenceError::UnsupportedLayout)));
@@ -297,7 +300,7 @@ mod tests {
             .expect("former deployed monitor file");
         let custom = directory.path().join("custom-monitor-state.json");
         std::fs::write(&custom, b"{}").expect("former custom monitor file");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             for backend in [
                 StorageBackend::File,
@@ -316,7 +319,10 @@ mod tests {
                         database_url: None,
                         pool: SqlPoolConfig::default(),
                     },
-                    owner.root_context().component(format!("deployed-legacy-{backend:?}")),
+                    owner.root_context().component(
+                        ScopeId::try_new(format!("deployed-legacy-{backend:?}"))
+                            .expect("test scope has the fixed non-empty deployed legacy prefix"),
+                    ),
                 )
                 .await;
                 assert!(matches!(deployed, Err(PersistenceError::UnsupportedLayout)));

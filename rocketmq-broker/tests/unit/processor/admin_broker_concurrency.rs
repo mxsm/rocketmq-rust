@@ -169,7 +169,10 @@ impl AdminFixture {
         };
         let mut runtime_config = RuntimeConfig::server_default("admin-concurrency-test");
         runtime_config.thread_stack_size = Some(16 * 1024 * 1024);
-        let owner = RuntimeOwner::new(runtime_config).expect("Admin concurrency test runtime");
+        let owner = RuntimeOwner::plan(runtime_config)
+            .expect("test runtime configuration is valid")
+            .build()
+            .expect("Admin concurrency test runtime");
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             Vec::new(),
@@ -269,7 +272,9 @@ fn run_admin_test(name: &'static str, body: fn(&RuntimeOwner)) {
         .name(name.to_owned())
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
-            let owner = RuntimeOwner::new(RuntimeConfig::server_default(format!("{name}-driver")))
+            let owner = RuntimeOwner::plan(RuntimeConfig::server_default(format!("{name}-driver")))
+                .expect("test runtime configuration is valid")
+                .build()
                 .expect("Admin test driver runtime");
             body(&owner);
             assert!(owner.block_on(owner.shutdown_tasks()).is_healthy());

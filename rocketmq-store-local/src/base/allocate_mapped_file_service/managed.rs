@@ -59,8 +59,8 @@ pub(crate) enum ManagedMappedFileAllocationFailure {
     QueueOutsideStoreRoot,
     #[error("managed queue path contains a non-canonical component")]
     InvalidQueuePath,
-    #[error("managed mapped-file allocation budget rejected the request: {0}")]
-    Budget(#[source] rocketmq_runtime::BudgetAcquireError),
+    #[error("managed mapped-file allocation budget rejected the request: {0:?}")]
+    Budget(rocketmq_runtime::BudgetRejection),
     #[error(transparent)]
     Store(#[from] rocketmq_store_api::StoreError),
 }

@@ -208,7 +208,10 @@ mod failure_mapping_tests {
 
     #[test]
     fn runtime_failure_maps_once_with_its_typed_cause() {
-        let error: StoreError = HAError::Runtime(RuntimeError::NoCurrentRuntime).into();
+        let error: StoreError = HAError::Runtime(RuntimeError::context_unavailable(
+            rocketmq_runtime::RuntimeOperation::HaRuntime,
+        ))
+        .into();
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
         assert_eq!(error.operation(), StoreOperation::Replicate);
@@ -289,7 +292,9 @@ mod failure_mapping_tests {
             HAError::Io(std::io::Error::other(SENTINEL)),
             HAError::StartIo(std::io::Error::other(SENTINEL)),
             HAError::Store(nested_store),
-            HAError::Runtime(RuntimeError::InvalidConfig(SENTINEL.to_owned())),
+            HAError::Runtime(RuntimeError::configuration(
+                rocketmq_runtime::RuntimeOperation::HaRuntime,
+            )),
             HAError::operation(SENTINEL, std::io::Error::other(SENTINEL)),
             HAError::budget(std::io::Error::other(SENTINEL)),
             HAError::invalid_state(SENTINEL),

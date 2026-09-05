@@ -2077,7 +2077,9 @@ mod tests {
         static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
         let service_context = OWNER
             .get_or_init(|| {
-                RuntimeOwner::new(RuntimeConfig::server_default("namesrv-route-snapshot-test"))
+                RuntimeOwner::plan(RuntimeConfig::server_default("namesrv-route-snapshot-test"))
+                    .expect("runtime configuration is valid")
+                    .build()
                     .expect("test runtime owner should build")
             })
             .root_context()

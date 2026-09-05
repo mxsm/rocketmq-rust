@@ -102,8 +102,7 @@ fn rocksdb_service_context(name: &'static str) -> rocketmq_runtime::ChildService
     static OWNER: OnceLock<rocketmq_runtime::RuntimeOwner> = OnceLock::new();
     OWNER
         .get_or_init(|| {
-            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::default())
-                .expect("RocksDB semantics-test runtime owner should start")
+            rocketmq_runtime::RuntimeOwner::new().expect("RocksDB semantics-test runtime owner should start")
         })
         .root_context()
         .component(name)

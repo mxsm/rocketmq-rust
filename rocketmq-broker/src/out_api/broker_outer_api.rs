@@ -1812,7 +1812,7 @@ mod tests {
 
     #[test]
     fn cloned_outer_api_shares_the_remoting_client() {
-        let runtime = rocketmq_runtime::RuntimeOwner::new(Default::default()).expect("test runtime");
+        let runtime = rocketmq_runtime::RuntimeOwner::new().expect("test runtime");
         let api = BrokerOuterAPI::new(
             Arc::new(TransportClientConfig::default()),
             runtime.root_context().component("broker-outer-api-test"),
@@ -1827,7 +1827,7 @@ mod tests {
 
     #[test]
     fn control_plane_requests_keep_independent_owner_defaults() {
-        let runtime = rocketmq_runtime::RuntimeOwner::new(Default::default()).expect("test runtime");
+        let runtime = rocketmq_runtime::RuntimeOwner::new().expect("test runtime");
         let json_api = BrokerOuterAPI::new_with_remoting_command_factory(
             Arc::new(TransportClientConfig::default()),
             runtime.root_context().component("broker-outer-api-json-factory-test"),

@@ -28,12 +28,14 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 fn run_lifecycle_probe() -> ControllerHeartbeatLifecycleProbe {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: 2,
         max_blocking_threads: 4,
         thread_name: "rocketmq-controller-heartbeat-bench".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("controller heartbeat benchmark runtime should start");
     let context = owner.root_context().component("controller-heartbeat-bench");
     let output = owner.block_on(run_controller_heartbeat_lifecycle_probe(context));

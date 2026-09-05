@@ -47,7 +47,10 @@ use uuid::Uuid;
 
 use crate::BlockingExecutor;
 use crate::ChildServiceContext;
+use crate::RuntimeContractPolicy;
+use crate::RuntimeContractViolation;
 use crate::RuntimeError;
+use crate::RuntimeResult;
 
 /// An immutable absolute deadline for metadata admission and durability waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,97 +160,24 @@ impl fmt::Display for MetadataIoOperation {
     }
 }
 
-/// A typed metadata persistence failure.
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum MetadataIoError {
-    #[error("invalid metadata I/O config: {0}")]
-    /// Represents the invalid config case.
-    InvalidConfig(&'static str),
-
-    #[error("metadata I/O actor is closed")]
-    /// Represents the closed case.
-    Closed,
-
-    #[error("metadata deadline elapsed during {operation}")]
-    /// Represents the deadline exceeded case.
-    DeadlineExceeded {
-        /// The operation value.
-        operation: &'static str,
-    },
-
-    #[error("metadata operation queue is full (limit {limit})")]
-    /// Represents the queue full case.
-    QueueFull {
-        /// The limit value.
-        limit: usize,
-    },
-
-    #[error(
-        "metadata snapshot bytes would exceed the limit (retained {retained}, requested {requested}, limit {limit})"
-    )]
-    /// Represents the byte limit exceeded case.
-    ByteLimitExceeded {
-        /// The struct field value.
-        retained: usize,
-        /// The struct field value.
-        requested: usize,
-        /// The struct field value.
-        limit: usize,
-    },
-
-    #[error(
-        "metadata resource {resource} changed target path from {existing} to {requested} while work was outstanding"
-    )]
-    /// Represents the resource path conflict case.
-    ResourcePathConflict {
-        /// The struct field value.
-        resource: Arc<str>,
-        /// The struct field value.
-        existing: Arc<Path>,
-        /// The struct field value.
-        requested: Arc<Path>,
-    },
-
-    #[error("metadata actor worker stopped before resource {resource} generation {generation:?} became durable")]
-    /// Represents the worker stopped case.
-    WorkerStopped {
-        /// The struct field value.
-        resource: Arc<str>,
-        /// The struct field value.
-        generation: MetadataGeneration,
-    },
-
-    #[error("metadata worker failed for resource {resource}: {source}")]
-    /// Represents the worker failed case.
-    WorkerFailed {
-        /// The struct field value.
-        resource: Arc<str>,
-        #[source]
-        /// The struct field value.
-        source: Arc<RuntimeError>,
-    },
-
-    #[error("metadata {operation} failed for {path}: {source}")]
-    /// Represents the io case.
-    Io {
-        /// The struct field value.
-        operation: MetadataIoOperation,
-        /// The struct field value.
-        path: Arc<Path>,
-        #[source]
-        /// The struct field value.
-        source: Arc<std::io::Error>,
-    },
-}
-
-impl MetadataIoError {
-    fn io(operation: MetadataIoOperation, path: &Path, source: std::io::Error) -> Self {
-        Self::Io {
-            operation,
-            path: Arc::from(path),
-            source: Arc::new(source),
+impl MetadataIoOperation {
+    /// Returns the closed runtime diagnostic operation for this filesystem step.
+    #[must_use]
+    pub const fn runtime_operation(self) -> crate::RuntimeOperation {
+        match self {
+            Self::CreateParent => crate::RuntimeOperation::MetadataCreateParent,
+            Self::CreateTemporary => crate::RuntimeOperation::MetadataCreateTemporary,
+            Self::WriteTemporary => crate::RuntimeOperation::MetadataWriteTemporary,
+            Self::SyncTemporary => crate::RuntimeOperation::MetadataSyncTemporary,
+            Self::ReplaceTarget => crate::RuntimeOperation::MetadataReplaceTarget,
+            Self::SyncParent => crate::RuntimeOperation::MetadataSyncParent,
+            Self::RemoveTemporary => crate::RuntimeOperation::MetadataRemoveTemporary,
         }
     }
+}
+
+fn metadata_io_failure(operation: MetadataIoOperation, _path: &Path, source: std::io::Error) -> RuntimeError {
+    RuntimeError::io(operation.runtime_operation(), source)
 }
 
 /// An immutable write request accepted by [`MetadataIoActor`].
@@ -320,7 +250,7 @@ pub trait MetadataFileSystem: fmt::Debug + Send + Sync + 'static {
     ///
     /// Returns a typed error that identifies the failed durability step and
     /// retains the original I/O source.
-    fn persist_atomic(&self, target: &Path, bytes: &[u8]) -> Result<(), MetadataIoError>;
+    fn persist_atomic(&self, target: &Path, bytes: &[u8]) -> RuntimeResult<()>;
 }
 
 /// The production local filesystem implementation.
@@ -328,7 +258,7 @@ pub trait MetadataFileSystem: fmt::Debug + Send + Sync + 'static {
 pub struct LocalMetadataFileSystem;
 
 impl MetadataFileSystem for LocalMetadataFileSystem {
-    fn persist_atomic(&self, target: &Path, bytes: &[u8]) -> Result<(), MetadataIoError> {
+    fn persist_atomic(&self, target: &Path, bytes: &[u8]) -> RuntimeResult<()> {
         persist_atomic_local(target, bytes)
     }
 }
@@ -348,24 +278,73 @@ pub struct MetadataIoConfig {
     pub blocking_warn_after: Duration,
 }
 
+/// Metadata actor settings that passed deterministic admission validation.
+#[derive(Debug, Clone)]
+pub struct MetadataIoPlan {
+    config: MetadataIoConfig,
+}
+
 impl MetadataIoConfig {
-    fn validate(&self) -> Result<(), MetadataIoError> {
+    /// Validates bounded metadata actor configuration before startup.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic contract violation when an admission bound or
+    /// blocking duration is invalid. This method performs no I/O.
+    pub fn validate(&self) -> Result<(), RuntimeContractViolation> {
         if self.max_pending_operations == 0 {
-            return Err(MetadataIoError::InvalidConfig(
-                "max_pending_operations must be greater than zero",
-            ));
+            return Err(RuntimeContractViolation::InvalidMetadataConfiguration {
+                policy: RuntimeContractPolicy::MetadataMaxPendingOperationsPositive,
+            });
         }
         if self.max_pending_bytes == 0 {
-            return Err(MetadataIoError::InvalidConfig(
-                "max_pending_bytes must be greater than zero",
-            ));
+            return Err(RuntimeContractViolation::InvalidMetadataConfiguration {
+                policy: RuntimeContractPolicy::MetadataMaxPendingBytesPositive,
+            });
         }
         if self.blocking_task_timeout.is_zero() {
-            return Err(MetadataIoError::InvalidConfig(
-                "blocking_task_timeout must be greater than zero",
-            ));
+            return Err(RuntimeContractViolation::InvalidMetadataConfiguration {
+                policy: RuntimeContractPolicy::MetadataBlockingTaskTimeoutPositive,
+            });
         }
         Ok(())
+    }
+
+    /// Creates a validated metadata actor startup plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic contract violation when an admission bound or
+    /// blocking duration is invalid.
+    pub fn into_plan(self) -> Result<MetadataIoPlan, RuntimeContractViolation> {
+        self.validate()?;
+        Ok(MetadataIoPlan { config: self })
+    }
+}
+
+impl MetadataIoPlan {
+    /// Starts the validated actor with the production filesystem.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational lifecycle error when the owned coordinator
+    /// cannot start.
+    pub fn start(self, service_context: &ChildServiceContext) -> RuntimeResult<MetadataIoActor> {
+        MetadataIoActor::start_validated(service_context, self.config, Arc::new(LocalMetadataFileSystem))
+    }
+
+    /// Starts the validated actor with an injected filesystem implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational lifecycle error when the owned coordinator
+    /// cannot start.
+    pub fn start_with_file_system(
+        self,
+        service_context: &ChildServiceContext,
+        file_system: Arc<dyn MetadataFileSystem>,
+    ) -> RuntimeResult<MetadataIoActor> {
+        MetadataIoActor::start_validated(service_context, self.config, file_system)
     }
 }
 
@@ -431,9 +410,30 @@ pub struct MetadataIoShutdownReport {
 /// A receipt for an accepted immutable snapshot.
 #[derive(Debug)]
 pub struct MetadataIoReceipt {
-    resource: Arc<str>,
     generation: MetadataGeneration,
-    durable: oneshot::Receiver<Result<MetadataGeneration, MetadataIoError>>,
+    durable: oneshot::Receiver<RuntimeResult<MetadataGeneration>>,
+}
+
+/// The normal admission result for one metadata write request.
+///
+/// A target conflict retains the original immutable request so the caller can
+/// retry it after reconciling the resource-to-target mapping.
+#[derive(Debug)]
+pub enum MetadataIoAdmissionOutcome {
+    /// The actor accepted the snapshot and returned its durability receipt.
+    Accepted(MetadataIoReceipt),
+    /// The resource already has pending work for a different target path.
+    TargetConflict(MetadataWriteRequest),
+}
+
+/// The normal durable-completion result for one metadata write request.
+#[derive(Debug)]
+pub enum MetadataIoDurabilityOutcome {
+    /// The accepted snapshot, or a coalesced newer snapshot, became durable.
+    Durable(MetadataGeneration),
+    /// The request was not admitted because its resource has a pending
+    /// snapshot for a different target path.
+    TargetConflict(MetadataWriteRequest),
 }
 
 impl MetadataIoReceipt {
@@ -448,23 +448,17 @@ impl MetadataIoReceipt {
     ///
     /// # Errors
     ///
-    /// Returns the typed persistence failure, a deadline error, or
-    /// [`MetadataIoError::WorkerStopped`] if the actor terminates first.
-    pub async fn wait_until(self, deadline: MetadataDeadline) -> Result<MetadataGeneration, MetadataIoError> {
+    /// Returns an operational runtime failure if persistence cannot complete.
+    pub async fn wait_until(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataGeneration> {
         if deadline.is_expired() {
-            return Err(MetadataIoError::DeadlineExceeded {
-                operation: "wait for durable metadata",
-            });
+            return Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata));
         }
         match tokio::time::timeout_at(deadline.instant(), self.durable).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_closed)) => Err(MetadataIoError::WorkerStopped {
-                resource: self.resource,
-                generation: self.generation,
-            }),
-            Err(_elapsed) => Err(MetadataIoError::DeadlineExceeded {
-                operation: "wait for durable metadata",
-            }),
+            Ok(Err(_closed)) => Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::MetadataWorkerStopped,
+            )),
+            Err(_elapsed) => Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata)),
         }
     }
 }
@@ -512,37 +506,15 @@ struct WorkMeta {
 #[derive(Debug)]
 struct GenerationWaiter {
     generation: MetadataGeneration,
-    sender: oneshot::Sender<Result<MetadataGeneration, MetadataIoError>>,
+    sender: oneshot::Sender<RuntimeResult<MetadataGeneration>>,
 }
 
 impl MetadataIoActor {
-    /// Starts an actor under the supplied service lifecycle.
-    ///
-    /// The coordinator future is owned by a component [`crate::TaskGroup`]. All
-    /// synchronous writes run through an independent single-concurrency
-    /// [`BlockingExecutor`] lane.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed configuration or runtime lifecycle error.
-    pub fn start(service_context: &ChildServiceContext, config: MetadataIoConfig) -> Result<Self, MetadataIoError> {
-        Self::start_with_file_system(service_context, config, Arc::new(LocalMetadataFileSystem))
-    }
-
-    /// Starts an actor with an injected filesystem implementation.
-    ///
-    /// This is useful for storage adapters and deterministic fault-injection
-    /// tests. The same lifecycle and blocking-lane guarantees apply.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed configuration or runtime lifecycle error.
-    pub fn start_with_file_system(
+    fn start_validated(
         service_context: &ChildServiceContext,
         config: MetadataIoConfig,
         file_system: Arc<dyn MetadataFileSystem>,
-    ) -> Result<Self, MetadataIoError> {
-        config.validate()?;
+    ) -> RuntimeResult<Self> {
         let task_group = service_context.component("metadata-io").task_group().clone();
         let blocking = service_context.metadata_io().clone();
         let (sender, receiver) = mpsc::channel(config.max_pending_operations);
@@ -573,25 +545,25 @@ impl MetadataIoActor {
         Ok(actor)
     }
 
-    /// Accepts one immutable snapshot without waiting for disk durability.
+    /// Attempts to admit one immutable snapshot without waiting for disk durability.
     ///
     /// The call is deliberately non-blocking. Queue or byte saturation is
     /// returned immediately and the absolute deadline is checked before
     /// admission.
     ///
+    /// Returns a normal [`MetadataIoAdmissionOutcome::TargetConflict`] when
+    /// the same resource already has pending work for a different target.
+    ///
     /// # Errors
     ///
-    /// Returns a typed deadline, admission, lifecycle, or resource conflict
-    /// error.
-    pub fn submit_accepted(
+    /// Returns a typed deadline, capacity, or lifecycle failure.
+    pub fn submit(
         &self,
         request: MetadataWriteRequest,
         deadline: MetadataDeadline,
-    ) -> Result<MetadataIoReceipt, MetadataIoError> {
+    ) -> RuntimeResult<MetadataIoAdmissionOutcome> {
         if deadline.is_expired() {
-            return Err(MetadataIoError::DeadlineExceeded {
-                operation: "admit metadata snapshot",
-            });
+            return Err(RuntimeError::timed_out(crate::RuntimeOperation::AdmitMetadataSnapshot));
         }
 
         let resource = request.resource.clone();
@@ -599,7 +571,9 @@ impl MetadataIoActor {
         let (waiter_sender, durable) = oneshot::channel();
         let mut state = self.inner.state.lock();
         if !state.accepting {
-            return Err(MetadataIoError::Closed);
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::MetadataIoClosed,
+            ));
         }
 
         let existing = state.resources.get(&resource);
@@ -608,53 +582,50 @@ impl MetadataIoActor {
                 if target.as_ref() != request.target.as_ref()
                     && (existing.in_flight.is_some() || existing.queued.is_some())
                 {
-                    return Err(MetadataIoError::ResourcePathConflict {
-                        resource,
-                        existing: target.clone(),
-                        requested: request.target.clone(),
-                    });
+                    return Ok(MetadataIoAdmissionOutcome::TargetConflict(request));
                 }
             }
             if let Some(durable_generation) = existing.durable_generation {
                 if generation <= durable_generation {
                     let _ = waiter_sender.send(Ok(durable_generation));
-                    return Ok(MetadataIoReceipt {
-                        resource,
+                    return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
                         generation,
                         durable,
-                    });
+                    }));
                 }
             }
             if let Some(in_flight) = &existing.in_flight {
                 if generation <= in_flight.generation {
                     let Some(resource_state) = state.resources.get_mut(&resource) else {
-                        return Err(MetadataIoError::WorkerStopped { resource, generation });
+                        return Err(RuntimeError::context_unavailable(
+                            crate::RuntimeOperation::MetadataWorkerStopped,
+                        ));
                     };
                     resource_state.waiters.push(GenerationWaiter {
                         generation,
                         sender: waiter_sender,
                     });
-                    return Ok(MetadataIoReceipt {
-                        resource,
+                    return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
                         generation,
                         durable,
-                    });
+                    }));
                 }
             }
             if let Some(queued) = &existing.queued {
                 if generation <= queued.generation {
                     let Some(resource_state) = state.resources.get_mut(&resource) else {
-                        return Err(MetadataIoError::WorkerStopped { resource, generation });
+                        return Err(RuntimeError::context_unavailable(
+                            crate::RuntimeOperation::MetadataWorkerStopped,
+                        ));
                     };
                     resource_state.waiters.push(GenerationWaiter {
                         generation,
                         sender: waiter_sender,
                     });
-                    return Ok(MetadataIoReceipt {
-                        resource,
+                    return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
                         generation,
                         durable,
-                    });
+                    }));
                 }
             }
         }
@@ -667,31 +638,22 @@ impl MetadataIoActor {
             existing.is_none_or(|resource_state| resource_state.in_flight.is_none() && resource_state.queued.is_none());
         let next_operations = state.pending_operations + usize::from(adds_operation);
         if next_operations > self.inner.config.max_pending_operations {
-            return Err(MetadataIoError::QueueFull {
-                limit: self.inner.config.max_pending_operations,
-            });
+            return Err(RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataOperation));
         }
         let retained_without_replaced = state.pending_bytes.saturating_sub(old_queued_bytes);
-        let next_bytes =
-            retained_without_replaced
-                .checked_add(request.len())
-                .ok_or(MetadataIoError::ByteLimitExceeded {
-                    retained: state.pending_bytes,
-                    requested: request.len(),
-                    limit: self.inner.config.max_pending_bytes,
-                })?;
+        let next_bytes = retained_without_replaced
+            .checked_add(request.len())
+            .ok_or_else(|| RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes))?;
         if next_bytes > self.inner.config.max_pending_bytes {
-            return Err(MetadataIoError::ByteLimitExceeded {
-                retained: retained_without_replaced,
-                requested: request.len(),
-                limit: self.inner.config.max_pending_bytes,
-            });
+            return Err(RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataBytes));
         }
 
         let queue_permit = if needs_queue_token {
-            Some(self.sender.try_reserve().map_err(|_error| MetadataIoError::QueueFull {
-                limit: self.inner.config.max_pending_operations,
-            })?)
+            Some(
+                self.sender
+                    .try_reserve()
+                    .map_err(|_error| RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataOperation))?,
+            )
         } else {
             None
         };
@@ -709,11 +671,10 @@ impl MetadataIoActor {
         if let Some(permit) = queue_permit {
             permit.send(resource.clone());
         }
-        Ok(MetadataIoReceipt {
-            resource,
+        Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
             generation,
             durable,
-        })
+        }))
     }
 
     /// Assigns the next process-lifetime generation and accepts an immutable
@@ -724,14 +685,14 @@ impl MetadataIoActor {
     ///
     /// # Errors
     ///
-    /// Returns the same typed failures as [`Self::submit_accepted`].
-    pub fn submit_next_accepted(
+    /// Returns the same normal outcome and typed failures as [`Self::submit`].
+    pub fn submit_next(
         &self,
         resource: impl Into<Arc<str>>,
         target: impl Into<PathBuf>,
         bytes: impl Into<Vec<u8>>,
         deadline: MetadataDeadline,
-    ) -> Result<MetadataIoReceipt, MetadataIoError> {
+    ) -> RuntimeResult<MetadataIoAdmissionOutcome> {
         let mut generation = self.inner.next_generation.load(Ordering::Relaxed);
         loop {
             let next = if generation == u64::MAX { 1 } else { generation + 1 };
@@ -745,11 +706,14 @@ impl MetadataIoActor {
                 Err(observed) => generation = observed,
             }
         }
-        self.submit_accepted(MetadataWriteRequest::new(resource, generation, target, bytes), deadline)
+        self.submit(MetadataWriteRequest::new(resource, generation, target, bytes), deadline)
     }
 
     /// Accepts a snapshot and waits for durable completion using the same
     /// absolute deadline.
+    ///
+    /// Returns [`MetadataIoDurabilityOutcome::TargetConflict`] without
+    /// starting I/O when a pending request owns a different target path.
     ///
     /// # Errors
     ///
@@ -758,8 +722,16 @@ impl MetadataIoActor {
         &self,
         request: MetadataWriteRequest,
         deadline: MetadataDeadline,
-    ) -> Result<MetadataGeneration, MetadataIoError> {
-        self.submit_accepted(request, deadline)?.wait_until(deadline).await
+    ) -> RuntimeResult<MetadataIoDurabilityOutcome> {
+        match self.submit(request, deadline)? {
+            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+                .wait_until(deadline)
+                .await
+                .map(MetadataIoDurabilityOutcome::Durable),
+            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+                Ok(MetadataIoDurabilityOutcome::TargetConflict(request))
+            }
+        }
     }
 
     /// Assigns the next process-lifetime generation, accepts the immutable
@@ -767,17 +739,24 @@ impl MetadataIoActor {
     ///
     /// # Errors
     ///
-    /// Returns a typed admission, persistence, worker, or deadline failure.
+    /// Returns the same normal outcome and typed failures as
+    /// [`Self::submit_durable`].
     pub async fn submit_next_durable(
         &self,
         resource: impl Into<Arc<str>>,
         target: impl Into<PathBuf>,
         bytes: impl Into<Vec<u8>>,
         deadline: MetadataDeadline,
-    ) -> Result<MetadataGeneration, MetadataIoError> {
-        self.submit_next_accepted(resource, target, bytes, deadline)?
-            .wait_until(deadline)
-            .await
+    ) -> RuntimeResult<MetadataIoDurabilityOutcome> {
+        match self.submit_next(resource, target, bytes, deadline)? {
+            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+                .wait_until(deadline)
+                .await
+                .map(MetadataIoDurabilityOutcome::Durable),
+            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+                Ok(MetadataIoDurabilityOutcome::TargetConflict(request))
+            }
+        }
     }
 
     /// Stops new admission and drains accepted work until the absolute
@@ -885,7 +864,6 @@ async fn process_resource(
     let target = request.target.clone();
     let bytes = request.bytes.clone();
     let generation = request.generation;
-    let worker_resource = resource.clone();
     let worker_file_system = file_system.clone();
     let result = match blocking
         .spawn_io(format!("metadata-io:{resource}"), move || {
@@ -894,10 +872,7 @@ async fn process_resource(
         .await
     {
         Ok(result) => result,
-        Err(source) => Err(MetadataIoError::WorkerFailed {
-            resource: worker_resource,
-            source: Arc::new(source),
-        }),
+        Err(source) => Err(source),
     };
     finish_request(inner, &resource, generation, result)
 }
@@ -917,7 +892,7 @@ fn finish_request(
     inner: &ActorInner,
     resource: &Arc<str>,
     generation: MetadataGeneration,
-    result: Result<(), MetadataIoError>,
+    result: RuntimeResult<()>,
 ) -> bool {
     let mut completed_waiters = Vec::new();
     let has_queued = {
@@ -993,11 +968,10 @@ fn finish_worker(inner: &ActorInner) {
             }
         }
     }
-    for (resource, waiter) in abandoned {
-        let _ = waiter.sender.send(Err(MetadataIoError::WorkerStopped {
-            resource,
-            generation: waiter.generation,
-        }));
+    for (_resource, waiter) in abandoned {
+        let _ = waiter.sender.send(Err(RuntimeError::context_unavailable(
+            crate::RuntimeOperation::MetadataWorkerStopped,
+        )));
     }
     inner.worker_finished.notify_waiters();
 }
@@ -1046,20 +1020,17 @@ fn resource_snapshot(resource: &Arc<str>, state: &ResourceState) -> MetadataIoRe
     }
 }
 
-fn startup_error(source: RuntimeError) -> MetadataIoError {
-    MetadataIoError::WorkerFailed {
-        resource: Arc::from("metadata-io"),
-        source: Arc::new(source),
-    }
+fn startup_error(source: RuntimeError) -> RuntimeError {
+    source
 }
 
-fn persist_atomic_local(target: &Path, bytes: &[u8]) -> Result<(), MetadataIoError> {
+fn persist_atomic_local(target: &Path, bytes: &[u8]) -> RuntimeResult<()> {
     let parent = target
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)
-        .map_err(|source| MetadataIoError::io(MetadataIoOperation::CreateParent, parent, source))?;
+        .map_err(|source| metadata_io_failure(MetadataIoOperation::CreateParent, parent, source))?;
 
     let file_name = target.file_name().and_then(|name| name.to_str()).unwrap_or("metadata");
     let temporary = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
@@ -1078,26 +1049,21 @@ fn persist_atomic_local(target: &Path, bytes: &[u8]) -> Result<(), MetadataIoErr
     result
 }
 
-fn persist_temporary_and_replace(
-    temporary: &Path,
-    target: &Path,
-    parent: &Path,
-    bytes: &[u8],
-) -> Result<(), MetadataIoError> {
+fn persist_temporary_and_replace(temporary: &Path, target: &Path, parent: &Path, bytes: &[u8]) -> RuntimeResult<()> {
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(temporary)
-        .map_err(|source| MetadataIoError::io(MetadataIoOperation::CreateTemporary, temporary, source))?;
+        .map_err(|source| metadata_io_failure(MetadataIoOperation::CreateTemporary, temporary, source))?;
     file.write_all(bytes)
-        .map_err(|source| MetadataIoError::io(MetadataIoOperation::WriteTemporary, temporary, source))?;
+        .map_err(|source| metadata_io_failure(MetadataIoOperation::WriteTemporary, temporary, source))?;
     file.sync_all()
-        .map_err(|source| MetadataIoError::io(MetadataIoOperation::SyncTemporary, temporary, source))?;
+        .map_err(|source| metadata_io_failure(MetadataIoOperation::SyncTemporary, temporary, source))?;
     drop(file);
 
     replace_file(temporary, target)
-        .map_err(|source| MetadataIoError::io(MetadataIoOperation::ReplaceTarget, target, source))?;
-    sync_directory(parent).map_err(|source| MetadataIoError::io(MetadataIoOperation::SyncParent, parent, source))
+        .map_err(|source| metadata_io_failure(MetadataIoOperation::ReplaceTarget, target, source))?;
+    sync_directory(parent).map_err(|source| metadata_io_failure(MetadataIoOperation::SyncParent, parent, source))
 }
 
 #[cfg(unix)]
@@ -1190,36 +1156,47 @@ mod tests {
             max_pending_operations: 0,
             ..MetadataIoConfig::default()
         };
-        assert!(matches!(
+        assert_eq!(
             zero_operations.validate(),
-            Err(MetadataIoError::InvalidConfig(
-                "max_pending_operations must be greater than zero"
-            ))
-        ));
+            Err(RuntimeContractViolation::InvalidMetadataConfiguration {
+                policy: RuntimeContractPolicy::MetadataMaxPendingOperationsPositive,
+            })
+        );
 
         let zero_bytes = MetadataIoConfig {
             max_pending_bytes: 0,
             ..MetadataIoConfig::default()
         };
-        assert!(matches!(
+        assert_eq!(
             zero_bytes.validate(),
-            Err(MetadataIoError::InvalidConfig(
-                "max_pending_bytes must be greater than zero"
-            ))
+            Err(RuntimeContractViolation::InvalidMetadataConfiguration {
+                policy: RuntimeContractPolicy::MetadataMaxPendingBytesPositive,
+            })
+        );
+
+        assert!(matches!(
+            MetadataIoConfig {
+                max_pending_operations: 0,
+                ..MetadataIoConfig::default()
+            }
+            .into_plan(),
+            Err(RuntimeContractViolation::InvalidMetadataConfiguration {
+                policy: RuntimeContractPolicy::MetadataMaxPendingOperationsPositive,
+            })
         ));
     }
 
     #[test]
     fn metadata_io_error_retains_the_original_io_source() {
-        let error = MetadataIoError::io(
+        let error = metadata_io_failure(
             MetadataIoOperation::WriteTemporary,
             Path::new("metadata.json"),
             std::io::Error::new(std::io::ErrorKind::WriteZero, "partial write"),
         );
         let source = error.source().expect("metadata error should retain its source");
         let source = source
-            .downcast_ref::<Arc<std::io::Error>>()
-            .expect("metadata error source should remain an owned std::io::Error");
+            .downcast_ref::<std::io::Error>()
+            .expect("metadata error source should remain a std::io::Error");
         assert_eq!(source.kind(), std::io::ErrorKind::WriteZero);
     }
 }

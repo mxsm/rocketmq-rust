@@ -32,7 +32,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
 fn runtime_owner() -> RuntimeOwner {
-    RuntimeOwner::new(RuntimeConfig::default()).expect("test runtime owner")
+    RuntimeOwner::new().expect("test runtime owner")
 }
 
 fn file_region(prefix_len: usize, body: &[u8]) -> (Arc<std::fs::File>, FileRegion) {

@@ -22,8 +22,8 @@ use crate::persistence::file_store::FilePersistence;
 use crate::persistence::history_repository::HistoryQuery;
 use crate::persistence::history_repository::page_samples;
 use crate::persistence::sql_store::SqlPersistence;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ScopeId;
 use sqlx::Row;
 use std::time::Instant;
 
@@ -51,7 +51,7 @@ fn json_field_equals(value: &serde_json::Value, field: &str, expected: &str) -> 
 fn docker_file_history_capacity_baseline() {
     let data_path = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH")
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH must be set by the storage test runner");
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let store = FilePersistence::initialize(
             &StorageConfig {
@@ -181,7 +181,7 @@ async fn run_file_capacity(store: &FilePersistence) {
 }
 
 fn run_sql_capacity(backend: StorageBackend, database_url: Option<String>, data_path: std::path::PathBuf) {
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let store = SqlPersistence::initialize(
             &StorageConfig {
@@ -190,7 +190,10 @@ fn run_sql_capacity(backend: StorageBackend, database_url: Option<String>, data_
                 database_url,
                 pool: SqlPoolConfig::default(),
             },
-            owner.root_context().component(format!("history-capacity-{backend:?}")),
+            owner.root_context().component(
+                ScopeId::try_new(format!("history-capacity-{backend:?}"))
+                    .expect("test scope has the fixed non-empty history capacity prefix"),
+            ),
         )
         .await
         .expect("SQL persistence");

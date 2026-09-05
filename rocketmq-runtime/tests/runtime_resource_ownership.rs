@@ -20,7 +20,11 @@ use rocketmq_runtime::RuntimeOwner;
 #[test]
 fn child_contexts_share_the_runtime_owners_process_budget() {
     let memory_limit = ProcessMemoryLimit::configured(1024).expect("configured memory limit");
-    let owner = RuntimeOwner::new_with_memory_limit(RuntimeConfig::default(), memory_limit).expect("runtime owner");
+    let owner = RuntimeOwner::plan(RuntimeConfig::default())
+        .expect("valid runtime configuration")
+        .with_memory_limit(memory_limit)
+        .build()
+        .expect("runtime owner");
     let producer = owner.root_context().component("producer");
     let transport = owner.root_context().component("transport");
 

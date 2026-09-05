@@ -135,10 +135,9 @@ impl SessionExecutor {
         Rejected: Future<Output = ()> + Send + 'static,
     {
         if !self.inner.accepting.load(Ordering::Acquire) {
-            return Err(SessionDispatchError::Closing(RuntimeError::TaskGroupClosing {
-                group_id: self.inner.request_group.id(),
-                group_name: self.inner.request_group.name().into(),
-            }));
+            return Err(SessionDispatchError::Closing(RuntimeError::context_unavailable(
+                rocketmq_runtime::RuntimeOperation::SessionExecutor,
+            )));
         }
         let queued = match self
             .inner
@@ -331,19 +330,17 @@ impl DeferredResumeExecutor {
     pub(crate) fn try_execute_resume(&self, cell: Arc<ResumeJobCell>) -> Result<TaskId, DeferredResumeSubmitError> {
         let Some(inner) = self.inner.upgrade() else {
             return Err(DeferredResumeSubmitError::Closing {
-                source: RuntimeError::LifecycleOperation {
-                    operation: "deferred_resume.upgrade_session_executor",
-                    message: "session executor retired".to_owned(),
-                },
+                source: RuntimeError::context_unavailable(
+                    rocketmq_runtime::RuntimeOperation::DeferredResumeSessionExecutor,
+                ),
                 cell,
             });
         };
         if !inner.accepting.load(Ordering::Acquire) {
             return Err(DeferredResumeSubmitError::Closing {
-                source: RuntimeError::TaskGroupClosing {
-                    group_id: inner.request_group.id(),
-                    group_name: inner.request_group.name().into(),
-                },
+                source: RuntimeError::context_unavailable(
+                    rocketmq_runtime::RuntimeOperation::DeferredResumeSessionExecutor,
+                ),
                 cell,
             });
         }

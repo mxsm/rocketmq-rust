@@ -589,8 +589,8 @@ mod tests {
     use crate::persistence::TimeRange;
     use crate::persistence::error::PersistenceError;
     use crate::persistence::history_repository::HistoryQuery;
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_runtime::ScopeId;
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -621,7 +621,7 @@ mod tests {
     #[test]
     fn file_history_reopens_and_deletes_only_complete_expired_days() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
                 backend: StorageBackend::File,
@@ -714,7 +714,7 @@ mod tests {
     fn docker_file_history_reopens_a_mounted_volume() {
         let data_path = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH")
             .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_FILE_PATH must be set by the storage test runner");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
                 backend: StorageBackend::File,
@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn file_history_marker_interruption_recovers_an_entire_old_or_new_batch() {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             for (stage, expect_new) in [(1, false), (2, true), (3, true)] {
                 let directory = tempfile::tempdir().expect("temporary directory");
@@ -800,7 +800,10 @@ mod tests {
                 let new = sample(environment_id.clone(), 2_000, 2.0);
                 let store = FilePersistence::initialize(
                     &config,
-                    owner.root_context().component(format!("history-file-marker-{stage}")),
+                    owner.root_context().component(
+                        ScopeId::try_new(format!("history-file-marker-{stage}"))
+                            .expect("test scope has the fixed non-empty history marker prefix"),
+                    ),
                 )
                 .await
                 .expect("file persistence");
@@ -832,9 +835,10 @@ mod tests {
 
                 let reopened = FilePersistence::initialize(
                     &config,
-                    owner
-                        .root_context()
-                        .component(format!("history-file-marker-reopen-{stage}")),
+                    owner.root_context().component(
+                        ScopeId::try_new(format!("history-file-marker-reopen-{stage}"))
+                            .expect("test scope has the fixed non-empty history marker reopen prefix"),
+                    ),
                 )
                 .await
                 .expect("reopen after interrupted publication");
@@ -853,7 +857,7 @@ mod tests {
     #[test]
     fn file_history_reopen_discards_empty_or_partial_marker_with_an_intact_target() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
                 backend: StorageBackend::File,
@@ -894,7 +898,7 @@ mod tests {
     #[test]
     fn file_history_reopen_cleans_only_sidecars_for_an_unpublished_marker() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
                 backend: StorageBackend::File,
@@ -949,7 +953,7 @@ mod tests {
     #[test]
     fn file_history_ignores_a_torn_tail_then_rewrites_and_cleans_retention_trash() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = StorageConfig {
                 backend: StorageBackend::File,

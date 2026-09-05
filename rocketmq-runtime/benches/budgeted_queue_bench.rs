@@ -23,6 +23,8 @@ use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::ResourceBudgetTree;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
@@ -36,13 +38,19 @@ fn queue(capacity: usize, policy: FullPolicy) -> BudgetedQueue<usize> {
 fn reject_batch(size: usize) {
     let queue = queue(size, FullPolicy::Reject);
     for item in 0..size {
-        black_box(queue.try_push_data(black_box(item), 1).expect("batch item should fit"));
+        let outcome = queue.try_push_data(black_box(item), 1);
+        assert!(!matches!(&outcome, QueuePushOutcome::Rejected { .. }));
+        black_box(outcome);
     }
-    black_box(
-        queue
-            .try_push_data(size, 1)
-            .expect_err("full reject queue should reject"),
-    );
+    let rejected = queue.try_push_data(size, 1);
+    assert!(matches!(
+        &rejected,
+        QueuePushOutcome::Rejected {
+            rejection: QueuePushRejection::BudgetExhausted(_),
+            ..
+        }
+    ));
+    black_box(rejected);
     for _ in 0..size {
         black_box(queue.try_pop().expect("queued item"));
     }
@@ -51,7 +59,10 @@ fn reject_batch(size: usize) {
 async fn wait_release_batch(size: usize) {
     let queue = queue(size, FullPolicy::WaitUntilDeadline);
     for item in 0..size {
-        queue.try_push_data(item, 1).expect("initial batch should fit");
+        assert!(!matches!(
+            queue.try_push_data(item, 1),
+            QueuePushOutcome::Rejected { .. }
+        ));
     }
 
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -59,10 +70,13 @@ async fn wait_release_batch(size: usize) {
     for item in size..size.saturating_mul(2) {
         let queue = queue.clone();
         producers.spawn(async move {
-            queue
-                .push_until(item, 1, BudgetClass::Data, deadline)
-                .await
-                .expect("released capacity should admit waiter");
+            assert!(
+                !matches!(
+                    queue.push_until(item, 1, BudgetClass::Data, deadline).await,
+                    QueuePushOutcome::Rejected { .. }
+                ),
+                "released capacity should admit waiter"
+            );
         });
     }
 

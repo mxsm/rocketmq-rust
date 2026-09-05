@@ -29,10 +29,12 @@ pub struct ExampleClientRuntime {
 
 impl ExampleClientRuntime {
     pub fn try_new(scope: &str) -> RocketMQResult<Self> {
-        let owner = RuntimeOwner::new(RuntimeConfig {
+        let owner = RuntimeOwner::plan(RuntimeConfig {
             thread_name: format!("rocketmq-client-example-{scope}"),
             ..Default::default()
         })
+        .expect("test runtime configuration is valid")
+        .build()
         .map_err(|source| RocketMQError::internal("create client example runtime", source))?;
         let telemetry_guard =
             rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

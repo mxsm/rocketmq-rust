@@ -15,8 +15,8 @@
 use std::time::Duration;
 
 use crate::blocking::BlockingLanePolicies;
-use crate::error::RuntimeError;
-use crate::error::RuntimeResult;
+use crate::error::RuntimeContractViolation;
+use crate::RuntimeContractPolicy;
 
 /// The min entrypoint blocking threads constant.
 pub const MIN_ENTRYPOINT_BLOCKING_THREADS: usize = 3;
@@ -76,14 +76,13 @@ impl RuntimeConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeError::InvalidConfig`] when `limit` cannot reserve one
-    /// slot for each blocking lane or exceeds the supported process bound.
-    pub fn with_max_blocking_threads(mut self, limit: usize) -> RuntimeResult<Self> {
+    /// Returns a contract violation when `limit` cannot reserve one slot for
+    /// each blocking lane or exceeds the supported process bound.
+    pub fn with_max_blocking_threads(mut self, limit: usize) -> Result<Self, RuntimeContractViolation> {
         if !(MIN_ENTRYPOINT_BLOCKING_THREADS..=MAX_ENTRYPOINT_BLOCKING_THREADS).contains(&limit) {
-            return Err(RuntimeError::InvalidConfig(format!(
-                "max_blocking_threads must be between {MIN_ENTRYPOINT_BLOCKING_THREADS} and \
-                 {MAX_ENTRYPOINT_BLOCKING_THREADS}"
-            )));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::MaxBlockingThreadsWithinSupportedRange,
+            });
         }
         self.max_blocking_threads = limit;
         self.blocking_lane_policies.cap_concurrency(limit);
@@ -120,29 +119,36 @@ impl RuntimeConfig {
     }
 
     /// Validates this value.
-    pub fn validate(&self) -> RuntimeResult<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic contract violation when a runtime setting is
+    /// structurally invalid. It performs no I/O and never creates a runtime.
+    pub fn validate(&self) -> Result<(), RuntimeContractViolation> {
         if self.worker_threads == 0 {
-            return Err(RuntimeError::InvalidConfig(
-                "worker_threads must be greater than zero".to_string(),
-            ));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::WorkerThreadsPositive,
+            });
         }
         if self.max_blocking_threads == 0 {
-            return Err(RuntimeError::InvalidConfig(
-                "max_blocking_threads must be greater than zero".to_string(),
-            ));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::MaxBlockingThreadsPositive,
+            });
         }
         if self.max_blocking_threads > MAX_ENTRYPOINT_BLOCKING_THREADS {
-            return Err(RuntimeError::InvalidConfig(format!(
-                "max_blocking_threads must not exceed {MAX_ENTRYPOINT_BLOCKING_THREADS}"
-            )));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::MaxBlockingThreadsWithinSupportedRange,
+            });
         }
         if self.thread_name.trim().is_empty() {
-            return Err(RuntimeError::InvalidConfig("thread_name must not be empty".to_string()));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::ThreadNameNotBlank,
+            });
         }
         if matches!(self.thread_stack_size, Some(0)) {
-            return Err(RuntimeError::InvalidConfig(
-                "thread_stack_size must be greater than zero when set".to_string(),
-            ));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::ThreadStackSizePositive,
+            });
         }
         self.blocking_lane_policies
             .validate_for_global_capacity(self.max_blocking_threads)?;

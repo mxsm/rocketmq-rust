@@ -45,9 +45,18 @@ pub(super) fn loopback_server_config() -> Arc<ServerConfig> {
 
 impl TestRuntime {
     pub(super) fn new(name: &'static str) -> Self {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default(name)).expect("test runtime owner");
-        let server_context = owner.root_context().component(format!("{name}.server"));
-        let runner_context = owner.root_context().component(format!("{name}.runner"));
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default(name))
+            .expect("test runtime configuration is valid")
+            .build()
+            .expect("test runtime owner");
+        let server_context = owner.root_context().component(
+            rocketmq_runtime::ScopeId::try_new(format!("{name}.server"))
+                .expect("the server scope has a fixed nonblank suffix"),
+        );
+        let runner_context = owner.root_context().component(
+            rocketmq_runtime::ScopeId::try_new(format!("{name}.runner"))
+                .expect("the runner scope has a fixed nonblank suffix"),
+        );
         Self {
             owner,
             server_context,

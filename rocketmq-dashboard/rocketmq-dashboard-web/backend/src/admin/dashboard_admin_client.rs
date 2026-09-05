@@ -1043,7 +1043,6 @@ mod tests {
 
     use rocketmq_admin_core::core::dashboard::AdminMutationResult as CoreMutationResult;
     use rocketmq_admin_core::core::dashboard::DashboardAclUser;
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
     use tokio::sync::Mutex;
     use tokio::sync::Notify;
@@ -1226,7 +1225,7 @@ mod tests {
 
     #[test]
     fn topic_owner_reclaims_a_live_guard_after_tracked_rpc_cancellation() {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         let context = owner.root_context().component("topic-owner-test");
         let shutdowns = Arc::new(AtomicUsize::new(0));
         let operation_started = Arc::new(Notify::new());
@@ -1285,7 +1284,7 @@ mod tests {
 
     #[test]
     fn topic_owner_reclaims_a_live_guard_after_configuration_recheck_cancellation() {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         let context = owner.root_context().component("topic-config-recheck-test");
         let shutdowns = Arc::new(AtomicUsize::new(0));
         let guard_built = Arc::new(Notify::new());
@@ -1350,7 +1349,7 @@ mod tests {
 
     #[test]
     fn topic_owner_handles_task_group_timeout_while_guard_construction_is_blocked() {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         let context = owner.root_context().component("topic-build-timeout-test");
         let build_started = Arc::new(Notify::new());
 
@@ -1401,7 +1400,7 @@ mod tests {
 
     #[test]
     fn topic_shutdown_drains_a_guard_completed_after_admission_closes() {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         let context = owner.root_context().component("topic-late-build-test");
         let build_started = Arc::new(Notify::new());
         let allow_build = Arc::new(Notify::new());
@@ -1758,7 +1757,7 @@ mod tests {
 
     #[test]
     fn tracked_topic_mutation_keeps_the_owned_lock_after_the_caller_receiver_drops() {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         let context = owner.root_context().component("topic-mutation-lock-test");
 
         owner.block_on(async {
@@ -1806,7 +1805,7 @@ mod tests {
 
     #[test]
     fn failed_validation_before_topic_mutation_spawn_releases_the_owned_lock() {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
 
         owner.block_on(async {
             let mutation_lock = Arc::new(Mutex::new(()));
@@ -1833,7 +1832,7 @@ mod tests {
 
     #[test]
     fn topic_owner_keeps_an_interrupted_shutdown_guard_for_retry() {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         let context = owner.root_context().component("topic-shutdown-retry-test");
         let shutdown_started = Arc::new(Notify::new());
         let allow_shutdown = Arc::new(Notify::new());

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
@@ -25,11 +26,13 @@ use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataFileSystem;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoAdmissionOutcome;
 use rocketmq_runtime::MetadataIoConfig;
-use rocketmq_runtime::MetadataIoError;
 use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::MetadataWriteRequest;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeResult;
 use tempfile::TempDir;
 use tokio::sync::Notify;
 
@@ -62,7 +65,7 @@ struct GateRecordingFileSystem {
 }
 
 impl MetadataFileSystem for GateRecordingFileSystem {
-    fn persist_atomic(&self, _target: &Path, bytes: &[u8]) -> Result<(), MetadataIoError> {
+    fn persist_atomic(&self, _target: &Path, bytes: &[u8]) -> RuntimeResult<()> {
         self.gate.wait();
         self.writes.lock().unwrap().push(bytes.to_vec());
         Ok(())
@@ -76,12 +79,11 @@ struct FailingFileSystem {
 }
 
 impl MetadataFileSystem for FailingFileSystem {
-    fn persist_atomic(&self, target: &Path, _bytes: &[u8]) -> Result<(), MetadataIoError> {
-        Err(MetadataIoError::Io {
-            operation: self.operation,
-            path: Arc::from(target),
-            source: Arc::new(io::Error::new(self.error_kind, "injected metadata I/O failure")),
-        })
+    fn persist_atomic(&self, _target: &Path, _bytes: &[u8]) -> RuntimeResult<()> {
+        Err(RuntimeError::io(
+            self.operation.runtime_operation(),
+            io::Error::new(self.error_kind, "injected metadata I/O failure"),
+        ))
     }
 }
 
@@ -89,7 +91,7 @@ impl MetadataFileSystem for FailingFileSystem {
 struct PanickingFileSystem;
 
 impl MetadataFileSystem for PanickingFileSystem {
-    fn persist_atomic(&self, _target: &Path, _bytes: &[u8]) -> Result<(), MetadataIoError> {
+    fn persist_atomic(&self, _target: &Path, _bytes: &[u8]) -> RuntimeResult<()> {
         panic!("injected metadata worker panic");
     }
 }
@@ -109,8 +111,11 @@ fn start_actor(
     config: MetadataIoConfig,
 ) -> (RuntimeContext, MetadataIoActor) {
     let context = RuntimeContext::try_from_current("metadata-io-test").unwrap();
-    let actor =
-        MetadataIoActor::start_with_file_system(&context.service_context("test-service"), config, file_system).unwrap();
+    let actor = config
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(&context.service_context("test-service"), file_system)
+        .unwrap();
     (context, actor)
 }
 
@@ -123,17 +128,29 @@ fn request(resource: &str, generation: u64, bytes: &[u8]) -> MetadataWriteReques
     )
 }
 
+fn accepted(outcome: MetadataIoAdmissionOutcome) -> rocketmq_runtime::MetadataIoReceipt {
+    match outcome {
+        MetadataIoAdmissionOutcome::Accepted(receipt) => receipt,
+        MetadataIoAdmissionOutcome::TargetConflict(_) => {
+            panic!("test request unexpectedly conflicted with another target")
+        }
+    }
+}
+
 #[tokio::test]
 async fn queue_and_retained_bytes_are_bounded_independently() {
     let file_system = Arc::new(GateRecordingFileSystem::default());
     let started = file_system.gate.started.notified();
     let (_context, actor) = start_actor(file_system.clone(), config(1, 4));
     let deadline = MetadataDeadline::after(Duration::from_secs(5));
-    let first = actor.submit_accepted(request("first", 1, b"1234"), deadline).unwrap();
+    let first = accepted(actor.submit(request("first", 1, b"1234"), deadline).unwrap());
     started.await;
 
-    let queue_error = actor.submit_accepted(request("second", 1, b"1"), deadline).unwrap_err();
-    assert!(matches!(queue_error, MetadataIoError::QueueFull { limit: 1 }));
+    let queue_error = actor.submit(request("second", 1, b"1"), deadline).unwrap_err();
+    assert_eq!(
+        queue_error.condition(),
+        rocketmq_error::CanonicalCondition::ResourceExhausted
+    );
 
     file_system.gate.release();
     assert_eq!(first.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
@@ -141,17 +158,11 @@ async fn queue_and_retained_bytes_are_bounded_independently() {
     assert!(!report.timed_out);
 
     let (_context, actor) = start_actor(Arc::new(LocalMetadataFileSystem), config(2, 3));
-    let byte_error = actor
-        .submit_accepted(request("too-large", 1, b"1234"), deadline)
-        .unwrap_err();
-    assert!(matches!(
-        byte_error,
-        MetadataIoError::ByteLimitExceeded {
-            requested: 4,
-            limit: 3,
-            ..
-        }
-    ));
+    let byte_error = actor.submit(request("too-large", 1, b"1234"), deadline).unwrap_err();
+    assert_eq!(
+        byte_error.condition(),
+        rocketmq_error::CanonicalCondition::ResourceExhausted
+    );
     assert_eq!(actor.snapshot().pending_operations, 0);
     assert!(!actor.shutdown_until(deadline).await.timed_out);
 }
@@ -162,10 +173,10 @@ async fn queued_generations_coalesce_without_losing_waiters() {
     let started = file_system.gate.started.notified();
     let (_context, actor) = start_actor(file_system.clone(), config(3, 64));
     let deadline = MetadataDeadline::after(Duration::from_secs(5));
-    let first = actor.submit_accepted(request("routes", 1, b"one"), deadline).unwrap();
+    let first = accepted(actor.submit(request("routes", 1, b"one"), deadline).unwrap());
     started.await;
-    let second = actor.submit_accepted(request("routes", 2, b"two"), deadline).unwrap();
-    let third = actor.submit_accepted(request("routes", 3, b"three"), deadline).unwrap();
+    let second = accepted(actor.submit(request("routes", 2, b"two"), deadline).unwrap());
+    let third = accepted(actor.submit(request("routes", 3, b"three"), deadline).unwrap());
 
     let snapshot = actor.snapshot();
     assert_eq!(snapshot.pending_operations, 2);
@@ -184,8 +195,42 @@ async fn queued_generations_coalesce_without_losing_waiters() {
         vec![b"one".to_vec(), b"three".to_vec()]
     );
 
-    let stale = actor.submit_accepted(request("routes", 2, b"stale"), deadline).unwrap();
+    let stale = accepted(actor.submit(request("routes", 2, b"stale"), deadline).unwrap());
     assert_eq!(stale.wait_until(deadline).await.unwrap(), MetadataGeneration::new(3));
+    assert!(!actor.shutdown_until(deadline).await.timed_out);
+}
+
+#[tokio::test]
+async fn pending_resource_target_conflict_returns_the_original_request() {
+    let file_system = Arc::new(GateRecordingFileSystem::default());
+    let started = file_system.gate.started.notified();
+    let (_context, actor) = start_actor(file_system.clone(), config(2, 64));
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+    let accepted_request = accepted(actor.submit(request("routes", 1, b"one"), deadline).unwrap());
+    started.await;
+
+    let conflicting_request =
+        MetadataWriteRequest::new("routes", 2, PathBuf::from("alternate-routes.json"), b"two".to_vec());
+    let rejected_request = match actor.submit(conflicting_request, deadline).unwrap() {
+        MetadataIoAdmissionOutcome::Accepted(_) => panic!("different pending target must not be accepted"),
+        MetadataIoAdmissionOutcome::TargetConflict(request) => request,
+    };
+    assert_eq!(rejected_request.resource(), "routes");
+    assert_eq!(rejected_request.generation(), MetadataGeneration::new(2));
+    assert_eq!(rejected_request.target(), Path::new("alternate-routes.json"));
+    assert_eq!(rejected_request.len(), b"two".len());
+
+    let snapshot = actor.snapshot();
+    assert_eq!(snapshot.pending_operations, 1);
+    assert_eq!(snapshot.pending_bytes, b"one".len());
+    assert_eq!(snapshot.resources[0].target.as_deref(), Some(Path::new("routes.json")));
+    assert_eq!(snapshot.resources[0].queued_generation, None);
+
+    file_system.gate.release();
+    assert_eq!(
+        accepted_request.wait_until(deadline).await.unwrap(),
+        MetadataGeneration::new(1)
+    );
     assert!(!actor.shutdown_until(deadline).await.timed_out);
 }
 
@@ -195,9 +240,9 @@ async fn older_generation_cannot_overwrite_a_newer_in_flight_snapshot() {
     let started = file_system.gate.started.notified();
     let (_context, actor) = start_actor(file_system.clone(), config(2, 64));
     let deadline = MetadataDeadline::after(Duration::from_secs(5));
-    let newer = actor.submit_accepted(request("routes", 3, b"three"), deadline).unwrap();
+    let newer = accepted(actor.submit(request("routes", 3, b"three"), deadline).unwrap());
     started.await;
-    let stale = actor.submit_accepted(request("routes", 2, b"two"), deadline).unwrap();
+    let stale = accepted(actor.submit(request("routes", 2, b"two"), deadline).unwrap());
 
     let snapshot = actor.snapshot();
     assert_eq!(snapshot.pending_operations, 1);
@@ -217,12 +262,10 @@ async fn hot_resource_yields_to_other_pending_resources() {
     let started = file_system.gate.started.notified();
     let (_context, actor) = start_actor(file_system.clone(), config(3, 64));
     let deadline = MetadataDeadline::after(Duration::from_secs(5));
-    let first = actor.submit_accepted(request("hot", 1, b"hot-1"), deadline).unwrap();
+    let first = accepted(actor.submit(request("hot", 1, b"hot-1"), deadline).unwrap());
     started.await;
-    let other = actor
-        .submit_accepted(request("other", 1, b"other-1"), deadline)
-        .unwrap();
-    let second = actor.submit_accepted(request("hot", 2, b"hot-2"), deadline).unwrap();
+    let other = accepted(actor.submit(request("other", 1, b"other-1"), deadline).unwrap());
+    let second = accepted(actor.submit(request("hot", 2, b"hot-2"), deadline).unwrap());
 
     file_system.gate.release();
     first.wait_until(deadline).await.unwrap();
@@ -249,13 +292,9 @@ async fn write_rename_and_disk_failures_do_not_publish_generation() {
             .submit_durable(request("acl", 7, b"snapshot"), deadline)
             .await
             .unwrap_err();
-        assert!(matches!(
-            error,
-            MetadataIoError::Io {
-                operation: actual,
-                ..
-            } if actual == operation
-        ));
+        assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::Internal);
+        assert_eq!(error.operation(), operation.runtime_operation());
+        assert!(error.source().is_some());
         let resource = &actor.snapshot().resources[0];
         assert_eq!(resource.durable_generation, None);
         assert_eq!(resource.in_flight_generation, None);
@@ -272,7 +311,7 @@ async fn worker_panic_is_typed_and_does_not_leak_capacity() {
         .submit_durable(request("topics", 1, b"snapshot"), deadline)
         .await
         .unwrap_err();
-    assert!(matches!(error, MetadataIoError::WorkerFailed { .. }));
+    assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::Internal);
     let snapshot = actor.snapshot();
     assert_eq!(snapshot.pending_operations, 0);
     assert_eq!(snapshot.pending_bytes, 0);
@@ -286,16 +325,21 @@ async fn shutdown_stops_admission_and_reports_unfinished_generations() {
     let started = file_system.gate.started.notified();
     let (_context, actor) = start_actor(file_system.clone(), config(2, 64));
     let initial_deadline = MetadataDeadline::after(Duration::from_secs(30));
-    let receipt = actor
-        .submit_accepted(request("offsets", 9, b"snapshot"), initial_deadline)
-        .unwrap();
+    let receipt = accepted(
+        actor
+            .submit(request("offsets", 9, b"snapshot"), initial_deadline)
+            .unwrap(),
+    );
     started.await;
 
     actor.stop_admission();
-    assert!(matches!(
-        actor.submit_accepted(request("late", 1, b"x"), initial_deadline),
-        Err(MetadataIoError::Closed)
-    ));
+    assert_eq!(
+        actor
+            .submit(request("late", 1, b"x"), initial_deadline)
+            .expect_err("stopped actor must reject admission")
+            .condition(),
+        rocketmq_error::CanonicalCondition::Unavailable
+    );
 
     let shutdown_deadline = MetadataDeadline::after(Duration::from_secs(1));
     let shutdown = actor.shutdown_until(shutdown_deadline);
@@ -324,15 +368,12 @@ async fn expired_absolute_deadline_rejects_admission_without_side_effects() {
     let (_context, actor) = start_actor(Arc::new(LocalMetadataFileSystem), config(1, 64));
     let deadline = MetadataDeadline::after(Duration::from_secs(1));
     tokio::time::advance(Duration::from_secs(1)).await;
-    let error = actor
-        .submit_accepted(request("expired", 1, b"snapshot"), deadline)
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        MetadataIoError::DeadlineExceeded {
-            operation: "admit metadata snapshot"
-        }
-    ));
+    let error = actor.submit(request("expired", 1, b"snapshot"), deadline).unwrap_err();
+    assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::DeadlineExceeded);
+    assert_eq!(
+        error.operation(),
+        rocketmq_runtime::RuntimeOperation::AdmitMetadataSnapshot
+    );
     assert_eq!(actor.snapshot().pending_operations, 0);
     actor.stop_admission();
     tokio::task::yield_now().await;

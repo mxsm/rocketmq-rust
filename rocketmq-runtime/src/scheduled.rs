@@ -53,6 +53,18 @@ pub enum ScheduledTaskControl {
     Stop,
 }
 
+/// Describes the result of registering a scheduled task.
+///
+/// A duplicate schedule name is a normal outcome. The existing registration,
+/// its driver, and its metrics remain unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduledTaskRegistrationOutcome {
+    /// The task was registered and its driver was started.
+    Scheduled(TaskId),
+    /// A task with the requested name was already registered.
+    AlreadyPresent,
+}
+
 #[derive(Debug, Clone)]
 /// Represents scheduled task config.
 pub struct ScheduledTaskConfig {
@@ -163,7 +175,15 @@ impl ScheduledTaskGroup {
     }
 
     /// Returns the schedule fixed delay.
-    pub fn schedule_fixed_delay<F, Fut>(&self, config: ScheduledTaskConfig, mut task: F) -> RuntimeResult<TaskId>
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when the task driver cannot be spawned.
+    pub fn schedule_fixed_delay<F, Fut>(
+        &self,
+        config: ScheduledTaskConfig,
+        mut task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -182,12 +202,17 @@ impl ScheduledTaskGroup {
     /// The driver is registered directly with this group's fixed component
     /// owner and stops when the operation is cancelled or reaches its
     /// deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when the bounded task driver cannot be
+    /// spawned.
     pub fn schedule_fixed_delay_operation<F, Fut>(
         &self,
         operation: &OperationContext,
         config: ScheduledTaskConfig,
         mut task: F,
-    ) -> RuntimeResult<TaskId>
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -202,12 +227,17 @@ impl ScheduledTaskGroup {
     }
 
     /// Schedules controlled fixed-delay work as part of a bounded operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when the bounded task driver cannot be
+    /// spawned.
     pub fn schedule_fixed_delay_controlled_operation<F, Fut>(
         &self,
         operation: &OperationContext,
         mut config: ScheduledTaskConfig,
         mut task: F,
-    ) -> RuntimeResult<TaskId>
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
@@ -215,7 +245,9 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedDelay;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let metrics = self.register(name.clone(), config.clone())?;
+        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
+        };
         let token = operation.cancellation_token();
         let driver = operation.with_task_kind(TaskKind::ScheduledDriver);
         let spawn_result = self
@@ -246,16 +278,21 @@ impl ScheduledTaskGroup {
         if spawn_result.is_err() {
             self.schedules.remove(&name_for_cleanup);
         }
-        spawn_result
+        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
     }
 
     /// Schedules fixed-rate, non-overlapping work as part of a bounded operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when the bounded task driver cannot be
+    /// spawned.
     pub fn schedule_fixed_rate_no_overlap_operation<F, Fut>(
         &self,
         operation: &OperationContext,
         mut config: ScheduledTaskConfig,
         task: F,
-    ) -> RuntimeResult<TaskId>
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -263,7 +300,9 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedRateNoOverlap;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let metrics = self.register(name.clone(), config.clone())?;
+        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
+        };
         let token = operation.cancellation_token();
         let driver = operation.with_task_kind(TaskKind::ScheduledDriver);
         let run_operation = operation.with_task_kind(TaskKind::ScheduledRun);
@@ -309,15 +348,19 @@ impl ScheduledTaskGroup {
         if spawn_result.is_err() {
             self.schedules.remove(&name_for_cleanup);
         }
-        spawn_result
+        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
     }
 
     /// Returns the schedule fixed delay controlled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when the task driver cannot be spawned.
     pub fn schedule_fixed_delay_controlled<F, Fut>(
         &self,
         mut config: ScheduledTaskConfig,
         mut task: F,
-    ) -> RuntimeResult<TaskId>
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
@@ -325,7 +368,9 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedDelay;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let metrics = self.register(name.clone(), config.clone())?;
+        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
+        };
         let token = self.group.cancellation_token();
         let spawn_result = self.group.spawn(
             format!("scheduled-driver:{name}"),
@@ -357,15 +402,19 @@ impl ScheduledTaskGroup {
         if spawn_result.is_err() {
             self.schedules.remove(&name_for_cleanup);
         }
-        spawn_result
+        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
     }
 
     /// Returns the schedule fixed rate no overlap.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when the task driver cannot be spawned.
     pub fn schedule_fixed_rate_no_overlap<F, Fut>(
         &self,
         mut config: ScheduledTaskConfig,
         task: F,
-    ) -> RuntimeResult<TaskId>
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -373,7 +422,9 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedRateNoOverlap;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let metrics = self.register(name.clone(), config.clone())?;
+        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
+        };
         let token = self.group.cancellation_token();
         let run_group = self.group.clone();
         let task = Arc::new(task);
@@ -419,11 +470,19 @@ impl ScheduledTaskGroup {
         if spawn_result.is_err() {
             self.schedules.remove(&name_for_cleanup);
         }
-        spawn_result
+        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
     }
 
     /// Returns the schedule fixed rate.
-    pub fn schedule_fixed_rate<F, Fut>(&self, mut config: ScheduledTaskConfig, task: F) -> RuntimeResult<TaskId>
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when the task driver cannot be spawned.
+    pub fn schedule_fixed_rate<F, Fut>(
+        &self,
+        mut config: ScheduledTaskConfig,
+        task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -431,7 +490,9 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedRateAllowOverlap;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let metrics = self.register(name.clone(), config.clone())?;
+        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
+        };
         let token = self.group.cancellation_token();
         let run_group = self.group.clone();
         let task = Arc::new(task);
@@ -474,15 +535,19 @@ impl ScheduledTaskGroup {
         if spawn_result.is_err() {
             self.schedules.remove(&name_for_cleanup);
         }
-        spawn_result
+        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
     }
 
     /// Returns the schedule fixed rate allow overlap.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when the task driver cannot be spawned.
     pub fn schedule_fixed_rate_allow_overlap<F, Fut>(
         &self,
         config: ScheduledTaskConfig,
         task: F,
-    ) -> RuntimeResult<TaskId>
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -503,10 +568,9 @@ impl ScheduledTaskGroup {
     /// Returns an error while the component group still has active tasks.
     pub fn clear_completed(&self) -> RuntimeResult<()> {
         if self.group.task_count() != 0 {
-            return Err(RuntimeError::LifecycleOperation {
-                operation: "clear_completed_schedules",
-                message: "scheduled component still owns active tasks".to_string(),
-            });
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::ClearCompletedSchedules,
+            ));
         }
         self.schedules.clear();
         Ok(())
@@ -517,7 +581,7 @@ impl ScheduledTaskGroup {
         self.group.shutdown(timeout).await
     }
 
-    fn register(&self, name: Arc<str>, config: ScheduledTaskConfig) -> RuntimeResult<Arc<ScheduledTaskMetrics>> {
+    fn register(&self, name: Arc<str>, config: ScheduledTaskConfig) -> Option<Arc<ScheduledTaskMetrics>> {
         let metrics = Arc::new(ScheduledTaskMetrics {
             config,
             running: AtomicBool::new(false),
@@ -532,10 +596,10 @@ impl ScheduledTaskGroup {
         });
 
         match self.schedules.entry(name.clone()) {
-            Entry::Occupied(_) => Err(RuntimeError::ScheduledTaskExists { name }),
+            Entry::Occupied(_) => None,
             Entry::Vacant(entry) => {
                 entry.insert(metrics.clone());
-                Ok(metrics)
+                Some(metrics)
             }
         }
     }

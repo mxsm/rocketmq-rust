@@ -921,7 +921,7 @@ impl FilePersistence {
             .await
         {
             Ok(()) => FileMutationDispatch::Completed(Self::await_mutation_receipt(receipt).await),
-            Err(error @ RuntimeError::BlockingTaskTimeoutStillRunning { .. }) => {
+            Err(error) if error.condition() == rocketmq_error::CanonicalCondition::DeadlineExceeded => {
                 FileMutationDispatch::TimedOut { error, receipt }
             }
             Err(error) => FileMutationDispatch::Rejected(error),
@@ -969,8 +969,8 @@ impl FilePersistence {
 
 fn is_pre_admission_rejection(error: &RuntimeError) -> bool {
     matches!(
-        error,
-        RuntimeError::BlockingQueueTimeout { .. } | RuntimeError::BlockingQueueFull { .. }
+        error.condition(),
+        rocketmq_error::CanonicalCondition::DeadlineExceeded | rocketmq_error::CanonicalCondition::ResourceExhausted
     )
 }
 
@@ -1674,11 +1674,19 @@ mod tests {
     use crate::persistence::audit_repository::AuditQuery;
     use crate::persistence::session_repository::SessionQuery;
     use crate::service::readiness_status_from_storage;
+    use rocketmq_error::CanonicalCondition;
     use rocketmq_runtime::BlockingPoolPolicy;
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
     use serde_json::json;
     use std::time::Duration;
+
+    fn runtime_condition(error: PersistenceError) -> CanonicalCondition {
+        match error {
+            PersistenceError::Runtime(error) => error.condition(),
+            error => panic!("expected runtime persistence error, got {error}"),
+        }
+    }
 
     fn file_config(root: PathBuf) -> StorageConfig {
         StorageConfig {
@@ -1812,7 +1820,10 @@ mod tests {
     #[test]
     fn cancelled_cas_request_leaves_the_owned_mutation_to_complete_and_release_its_gate() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(cancellation_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(directory.path().join("dashboard")),
@@ -1856,7 +1867,10 @@ mod tests {
     #[test]
     fn cancelled_multi_collection_delete_request_keeps_its_owned_gate_and_receipt() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(cancellation_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(directory.path().join("dashboard")),
@@ -1928,7 +1942,10 @@ mod tests {
     #[test]
     fn post_dispatch_join_failure_poisons_the_active_file_store() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(timeout_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(directory.path().join("dashboard")),
@@ -1948,10 +1965,10 @@ mod tests {
                     release.send(()).expect("release mutation hook");
                 },
             );
-            assert!(matches!(
-                result,
-                Err(PersistenceError::Runtime(RuntimeError::BlockingJoin { .. }))
-            ));
+            assert_eq!(
+                runtime_condition(result.expect_err("mutation panic must surface as a runtime failure")),
+                CanonicalCondition::Internal
+            );
             store.mutation_blocker.clear();
             assert!(matches!(
                 store.load_latest_snapshot("config").await,
@@ -1966,7 +1983,10 @@ mod tests {
     fn cas_timeout_waits_for_rollback_before_exposing_or_reopening_file_state() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(timeout_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -1983,12 +2003,10 @@ mod tests {
                 store.compare_and_write_snapshot("config", 1, json!({"value": "late"})),
                 release_mutation_after_storage_timeout(started, release),
             );
-            assert!(matches!(
-                result,
-                Err(PersistenceError::Runtime(
-                    RuntimeError::BlockingTaskTimeoutStillRunning { .. }
-                ))
-            ));
+            assert_eq!(
+                runtime_condition(result.expect_err("mutation must time out")),
+                CanonicalCondition::DeadlineExceeded
+            );
             store.mutation_blocker.clear();
             let snapshot = store
                 .load_latest_snapshot("config")
@@ -2022,7 +2040,10 @@ mod tests {
     fn multi_collection_delete_timeout_rolls_back_before_active_or_reopened_reads() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(timeout_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -2058,12 +2079,10 @@ mod tests {
                 ),
                 release_mutation_after_storage_timeout(started, release),
             );
-            assert!(matches!(
-                result,
-                Err(PersistenceError::Runtime(
-                    RuntimeError::BlockingTaskTimeoutStillRunning { .. }
-                ))
-            ));
+            assert_eq!(
+                runtime_condition(result.expect_err("mutation must time out")),
+                CanonicalCondition::DeadlineExceeded
+            );
             store.mutation_blocker.clear();
             assert_eq!(
                 store
@@ -2107,7 +2126,10 @@ mod tests {
     #[test]
     fn committed_cleanup_timeout_waits_for_completion_without_poisoning_the_active_store() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(timeout_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(directory.path().join("dashboard")),
@@ -2148,7 +2170,7 @@ mod tests {
     fn committed_cleanup_failure_retains_marker_and_reopen_keeps_the_new_aggregate() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -2219,7 +2241,10 @@ mod tests {
     fn single_snapshot_timeout_with_failed_compensation_poisoning_recovers_on_reopen() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(timeout_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -2236,12 +2261,10 @@ mod tests {
                 store.compare_and_write_snapshot("config", 1, json!({"value": "staged"})),
                 release_mutation_after_storage_timeout(started, release),
             );
-            assert!(matches!(
-                result,
-                Err(PersistenceError::Runtime(
-                    RuntimeError::BlockingTaskTimeoutStillRunning { .. }
-                ))
-            ));
+            assert_eq!(
+                runtime_condition(result.expect_err("mutation must time out")),
+                CanonicalCondition::DeadlineExceeded
+            );
             store.mutation_blocker.clear();
             assert!(matches!(
                 store.load_latest_snapshot("config").await,
@@ -2279,7 +2302,10 @@ mod tests {
     fn multi_snapshot_timeout_with_failed_compensation_poisoning_recovers_on_reopen() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(timeout_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -2315,12 +2341,10 @@ mod tests {
                 ),
                 release_mutation_after_storage_timeout(started, release),
             );
-            assert!(matches!(
-                result,
-                Err(PersistenceError::Runtime(
-                    RuntimeError::BlockingTaskTimeoutStillRunning { .. }
-                ))
-            ));
+            assert_eq!(
+                runtime_condition(result.expect_err("mutation must time out")),
+                CanonicalCondition::DeadlineExceeded
+            );
             store.mutation_blocker.clear();
             assert!(matches!(
                 store.load_latest_snapshot("environments/compensation").await,
@@ -2360,7 +2384,7 @@ mod tests {
     fn prepared_single_and_multi_snapshot_intents_roll_back_after_interruption() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -2453,7 +2477,7 @@ mod tests {
     fn snapshot_audit_transactions_commit_or_recover_with_one_durable_decision() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -2636,7 +2660,7 @@ mod tests {
     fn injected_prepared_snapshot_audit_failure_reopens_with_neither_side_committed() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -2674,10 +2698,10 @@ mod tests {
                     release.send(()).expect("release injected failure");
                 },
             );
-            assert!(matches!(
-                result,
-                Err(PersistenceError::Runtime(RuntimeError::BlockingJoin { .. }))
-            ));
+            assert_eq!(
+                runtime_condition(result.expect_err("mutation panic must surface as a runtime failure")),
+                CanonicalCondition::Internal
+            );
             store.mutation_blocker.clear();
             drop(store);
 
@@ -2720,7 +2744,10 @@ mod tests {
     #[test]
     fn cancelled_session_cleanup_request_keeps_the_owned_mutation_alive_until_commit() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(cancellation_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(directory.path().join("dashboard")),
@@ -2760,7 +2787,10 @@ mod tests {
     fn timed_out_session_cleanup_rolls_back_before_active_or_reopened_reads() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(timeout_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -2778,12 +2808,10 @@ mod tests {
                 store.delete_sessions_before(3, 10),
                 release_mutation_after_storage_timeout(started, release),
             );
-            assert!(matches!(
-                result,
-                Err(PersistenceError::Runtime(
-                    RuntimeError::BlockingTaskTimeoutStillRunning { .. }
-                ))
-            ));
+            assert_eq!(
+                runtime_condition(result.expect_err("mutation must time out")),
+                CanonicalCondition::DeadlineExceeded
+            );
             store.mutation_blocker.clear();
             assert!(
                 store
@@ -2816,7 +2844,10 @@ mod tests {
     #[test]
     fn session_cleanup_serializes_a_concurrent_session_writer() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(cancellation_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(directory.path().join("dashboard")),
@@ -2874,7 +2905,7 @@ mod tests {
     #[test]
     fn session_touch_reopen_recovers_prepared_old_or_committed_new_decisions() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             for (name, token_hash, committed, expected_last_seen) in [
                 ("prepared", SessionTokenHash([51; 32]), false, 1),
@@ -2922,7 +2953,10 @@ mod tests {
     #[test]
     fn cancelled_session_touch_request_keeps_the_owned_mutation_until_commit() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(cancellation_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(directory.path().join("dashboard")),
@@ -2964,7 +2998,10 @@ mod tests {
     fn timed_out_session_touch_rolls_back_before_active_or_reopened_reads() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(timeout_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(timeout_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -2982,12 +3019,10 @@ mod tests {
                 store.touch_session(&token_hash, 2),
                 release_mutation_after_storage_timeout(started, release),
             );
-            assert!(matches!(
-                result,
-                Err(PersistenceError::Runtime(
-                    RuntimeError::BlockingTaskTimeoutStillRunning { .. }
-                ))
-            ));
+            assert_eq!(
+                runtime_condition(result.expect_err("mutation must time out")),
+                CanonicalCondition::DeadlineExceeded
+            );
             store.mutation_blocker.clear();
             assert_eq!(
                 store
@@ -3025,7 +3060,7 @@ mod tests {
     fn failed_session_touch_cleanup_reopens_the_committed_record_and_removes_its_marker() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),
@@ -3085,7 +3120,10 @@ mod tests {
     #[test]
     fn session_touch_serializes_cleanup_listing_and_login_cap_scan() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(cancellation_runtime_config()).expect("runtime owner");
+        let owner = RuntimeOwner::plan(cancellation_runtime_config())
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(directory.path().join("dashboard")),
@@ -3175,7 +3213,7 @@ mod tests {
     #[test]
     fn exclusive_lock_prevents_a_second_open() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = file_config(directory.path().join("dashboard"));
             let first = FilePersistence::initialize(&config, owner.root_context().component("first-file-store"))
@@ -3197,7 +3235,7 @@ mod tests {
         std::fs::write(data.join("dashboard-interim-config.json"), b"{}").expect("seed former config path");
         std::fs::write(data.join("monitor/consumer-monitor-config.json"), b"{}").expect("seed former monitor path");
 
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let result = FilePersistence::initialize(
                 &file_config(data.join("dashboard")),
@@ -3212,7 +3250,7 @@ mod tests {
     #[test]
     fn snapshots_recover_after_reinitialization_and_jsonl_discards_an_incomplete_tail() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let root = directory.path().join("dashboard");
             let store =
@@ -3282,7 +3320,7 @@ mod tests {
     #[test]
     fn corrupt_manifest_rebuilds_from_the_latest_valid_snapshot_per_collection() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let root = directory.path().join("dashboard");
             let config = file_config(root.clone());
@@ -3359,7 +3397,7 @@ mod tests {
     #[test]
     fn missing_manifest_with_mixed_snapshots_recovers_and_stays_ready() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let root = directory.path().join("dashboard");
             let config = file_config(root.clone());
@@ -3401,7 +3439,7 @@ mod tests {
     #[test]
     fn corrupt_manifest_with_only_corrupt_snapshots_is_rejected_at_startup() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let root = directory.path().join("dashboard");
             let config = file_config(root.clone());
@@ -3431,7 +3469,7 @@ mod tests {
             std::process::id(),
             Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &file_config(root.clone()),

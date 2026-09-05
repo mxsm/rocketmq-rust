@@ -14,7 +14,7 @@
 
 //! Adapters from the legacy authorization model to layered decisions.
 
-use rocketmq_runtime::MetadataIoError;
+use rocketmq_error::CanonicalCondition;
 use rocketmq_security_api::DetailedDecision;
 use rocketmq_security_api::LayerEvaluation;
 use rocketmq_security_api::LayerFailureKind;
@@ -45,24 +45,18 @@ pub const fn project_authorization_error(error: &AuthorizationError) -> LayerFai
         AuthorizationError::ConfigurationError(_)
         | AuthorizationError::NotInitialized(_)
         | AuthorizationError::StorageReadFailed { .. }
-        | AuthorizationError::StorageLockFailed(_)
-        | AuthorizationError::MetadataIo(
-            MetadataIoError::InvalidConfig(_) | MetadataIoError::Closed | MetadataIoError::WorkerStopped { .. },
-        ) => LayerFailureKind::Unavailable,
-        AuthorizationError::MetadataIo(MetadataIoError::DeadlineExceeded { .. }) => LayerFailureKind::Timeout,
+        | AuthorizationError::StorageLockFailed(_) => LayerFailureKind::Unavailable,
+        AuthorizationError::MetadataIo(error) => match error.condition() {
+            CanonicalCondition::DeadlineExceeded => LayerFailureKind::Timeout,
+            CanonicalCondition::Unavailable => LayerFailureKind::Unavailable,
+            _ => LayerFailureKind::Error,
+        },
         AuthorizationError::PermissionDenied { .. }
         | AuthorizationError::PolicyEvaluationFailed(_)
         | AuthorizationError::SubjectNotFound(_)
         | AuthorizationError::ResourceNotFound(_)
         | AuthorizationError::ProviderRuntimeFailed(_)
         | AuthorizationError::StorageWriteFailed { .. }
-        | AuthorizationError::MetadataIo(
-            MetadataIoError::QueueFull { .. }
-            | MetadataIoError::ByteLimitExceeded { .. }
-            | MetadataIoError::ResourcePathConflict { .. }
-            | MetadataIoError::WorkerFailed { .. }
-            | MetadataIoError::Io { .. },
-        )
         | AuthorizationError::SerializationFailed { .. }
         | AuthorizationError::InvalidContext(_) => LayerFailureKind::Error,
     }
@@ -86,6 +80,8 @@ pub fn project_authorization_result(result: Result<(), AuthorizationError>) -> L
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_runtime::RuntimeError;
+
     use super::*;
 
     #[test]
@@ -120,30 +116,27 @@ mod tests {
     #[test]
     fn metadata_io_errors_keep_timeout_unavailable_and_error_distinct() {
         assert_eq!(
-            project_authorization_error(&AuthorizationError::MetadataIo(MetadataIoError::DeadlineExceeded {
-                operation: "persist",
-            })),
+            project_authorization_error(&AuthorizationError::MetadataIo(RuntimeError::timed_out(
+                rocketmq_runtime::RuntimeOperation::PersistMetadata
+            ))),
             LayerFailureKind::Timeout
         );
         assert_eq!(
-            project_authorization_error(&AuthorizationError::MetadataIo(MetadataIoError::InvalidConfig(
-                "metadata path",
+            project_authorization_error(&AuthorizationError::MetadataIo(RuntimeError::context_unavailable(
+                rocketmq_runtime::RuntimeOperation::MetadataIo
             ))),
             LayerFailureKind::Unavailable
         );
         assert_eq!(
-            project_authorization_error(&AuthorizationError::MetadataIo(MetadataIoError::Closed)),
+            project_authorization_error(&AuthorizationError::MetadataIo(RuntimeError::context_unavailable(
+                rocketmq_runtime::RuntimeOperation::MetadataIo
+            ))),
             LayerFailureKind::Unavailable
         );
         assert_eq!(
-            project_authorization_error(&AuthorizationError::MetadataIo(MetadataIoError::WorkerStopped {
-                resource: std::sync::Arc::<str>::from("authorization"),
-                generation: rocketmq_runtime::MetadataGeneration::new(1),
-            })),
-            LayerFailureKind::Unavailable
-        );
-        assert_eq!(
-            project_authorization_error(&AuthorizationError::MetadataIo(MetadataIoError::QueueFull { limit: 1 })),
+            project_authorization_error(&AuthorizationError::MetadataIo(RuntimeError::capacity(
+                rocketmq_runtime::RuntimeOperation::MetadataIo,
+            ))),
             LayerFailureKind::Error
         );
     }

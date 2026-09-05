@@ -30,10 +30,12 @@ fn client_runtime_rejects_invalid_remoting_serialization_before_pool_admission()
         std::env::set_var(SERIALIZE_TYPE_PROPERTY, "CBOR");
     }
 
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         thread_name: "remoting-defaults-startup-test".to_string(),
         ..Default::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("test runtime owner should start");
     let error = match ClientRuntime::try_new(
         owner.root_context().component("client"),

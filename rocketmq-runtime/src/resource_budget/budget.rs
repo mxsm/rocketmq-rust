@@ -23,7 +23,6 @@ use tokio::sync::Notify;
 use super::clock::MonotonicClock;
 use super::clock::SystemMonotonicClock;
 use super::limit::BudgetClass;
-use super::limit::BudgetConfigError;
 use super::limit::BudgetDimension;
 use super::limit::BudgetLimit;
 use super::limit::FullPolicy;
@@ -54,17 +53,16 @@ pub struct BudgetSnapshot {
     pub closed_slow_consumer_count: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("resource budget {path} exhausted its {dimension:?} capacity at {exhausted_path} ({policy:?})")]
-/// Represents budget acquire error.
-pub struct BudgetAcquireError {
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// A normal resource-budget admission rejection.
+pub struct BudgetRejection {
     path: Arc<str>,
     exhausted_path: Arc<str>,
     dimension: BudgetDimension,
     policy: FullPolicy,
 }
 
-impl BudgetAcquireError {
+impl BudgetRejection {
     #[must_use]
     /// Returns the path.
     pub fn path(&self) -> &str {
@@ -90,20 +88,15 @@ impl BudgetAcquireError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-/// Error returned when a resource permit cannot move to another budget.
-pub enum PermitRebindError {
-    #[error("cannot rebind resource permit from {source_path} to a different budget tree at {target_path}")]
-    /// The target does not share the permit's root budget.
-    DifferentTree {
-        /// The current permit budget path.
-        source_path: Arc<str>,
-        /// The requested target budget path.
-        target_path: Arc<str>,
-    },
-    #[error(transparent)]
-    /// The target budget cannot admit the reservation.
-    Budget(#[from] BudgetAcquireError),
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// The result of an attempted permit rebind.
+pub enum PermitRebindOutcome {
+    /// The permit now owns the target budget chain.
+    Rebound,
+    /// The permit was already bound to the requested target.
+    Unchanged,
+    /// The target rejected the permit and the source permit is unchanged.
+    Rejected(BudgetRejection),
 }
 
 /// Represents resource budget tree.
@@ -122,16 +115,26 @@ impl fmt::Debug for ResourceBudgetTree {
 
 impl ResourceBudgetTree {
     /// Creates a new `ResourceBudgetTree`.
-    pub fn new(name: impl Into<String>, limit: BudgetLimit) -> Result<Self, BudgetConfigError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when the root name is blank or malformed,
+    /// or when its budget limit is invalid.
+    pub fn new(name: impl Into<String>, limit: BudgetLimit) -> Result<Self, crate::RuntimeContractViolation> {
         Self::with_clock(name, limit, Arc::new(SystemMonotonicClock::new()))
     }
 
-    /// Sets clock and returns the updated value.
+    /// Creates a tree with an injected monotonic clock.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when the root name is blank or malformed,
+    /// or when its budget limit is invalid.
     pub fn with_clock(
         name: impl Into<String>,
         limit: BudgetLimit,
         clock: Arc<dyn MonotonicClock>,
-    ) -> Result<Self, BudgetConfigError> {
+    ) -> Result<Self, crate::RuntimeContractViolation> {
         let name = validated_name(name.into())?;
         limit.validate(&name)?;
         let node = Arc::new(BudgetNode::new(Arc::from(name.as_str()), limit, clock));
@@ -172,7 +175,12 @@ impl fmt::Debug for ResourceBudget {
 
 impl ResourceBudget {
     /// Returns the child.
-    pub fn child(&self, name: impl Into<String>, limit: BudgetLimit) -> Result<Self, BudgetConfigError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when the child name is blank or malformed,
+    /// its limit is invalid, or its limit exceeds its parent.
+    pub fn child(&self, name: impl Into<String>, limit: BudgetLimit) -> Result<Self, crate::RuntimeContractViolation> {
         let name = validated_name(name.into())?;
         let path: Arc<str> = Arc::from(format!("{}/{}", self.node.path, name));
         limit.validate_child(self.node.limit, &path)?;
@@ -188,7 +196,10 @@ impl ResourceBudget {
     }
 
     /// Attempts to acquire.
-    pub fn try_acquire(&self, bytes: usize, class: BudgetClass) -> Result<ResourcePermit, BudgetAcquireError> {
+    ///
+    /// A [`BudgetRejection`] is a normal bounded outcome when the requested
+    /// capacity is unavailable; it is not an operational runtime failure.
+    pub fn try_acquire(&self, bytes: usize, class: BudgetClass) -> Result<ResourcePermit, BudgetRejection> {
         self.try_acquire_internal(bytes, class, true)
     }
 
@@ -196,7 +207,7 @@ impl ResourceBudget {
         &self,
         bytes: usize,
         class: BudgetClass,
-    ) -> Result<ResourcePermit, BudgetAcquireError> {
+    ) -> Result<ResourcePermit, BudgetRejection> {
         self.try_acquire_internal(bytes, class, false)
     }
 
@@ -205,16 +216,16 @@ impl ResourceBudget {
         bytes: usize,
         class: BudgetClass,
         record_failure: bool,
-    ) -> Result<ResourcePermit, BudgetAcquireError> {
+    ) -> Result<ResourcePermit, BudgetRejection> {
         let mut reservations = SmallVec::<[NodeReservation; 4]>::with_capacity(self.chain.len());
         for node in self.chain.iter() {
             match node.try_reserve(bytes, class) {
                 Ok(reservation) => reservations.push(reservation),
                 Err(dimension) => {
                     if record_failure {
-                        self.record_rejection(node, dimension);
+                        self.record_node_rejection(node, dimension);
                     }
-                    return Err(BudgetAcquireError {
+                    return Err(BudgetRejection {
                         path: Arc::clone(&self.node.path),
                         exhausted_path: Arc::clone(&node.path),
                         dimension,
@@ -234,11 +245,11 @@ impl ResourceBudget {
         })
     }
 
-    pub(crate) fn permanent_acquire_error(&self, bytes: usize, class: BudgetClass) -> Option<BudgetAcquireError> {
+    pub(crate) fn permanent_acquire_rejection(&self, bytes: usize, class: BudgetClass) -> Option<BudgetRejection> {
         self.chain.iter().find_map(|node| {
             let dimension = node.permanent_exhaustion_dimension(bytes, class)?;
-            self.record_rejection(node, dimension);
-            Some(BudgetAcquireError {
+            self.record_node_rejection(node, dimension);
+            Some(BudgetRejection {
                 path: Arc::clone(&self.node.path),
                 exhausted_path: Arc::clone(&node.path),
                 dimension,
@@ -247,17 +258,17 @@ impl ResourceBudget {
         })
     }
 
-    pub(crate) fn record_acquire_error(&self, error: &BudgetAcquireError) {
+    pub(crate) fn record_budget_rejection(&self, error: &BudgetRejection) {
         if let Some(node) = self
             .chain
             .iter()
             .find(|node| node.path.as_ref() == error.exhausted_path())
         {
-            self.record_rejection(node, error.dimension());
+            self.record_node_rejection(node, error.dimension());
         }
     }
 
-    fn record_rejection(&self, exhausted_node: &Arc<BudgetNode>, dimension: BudgetDimension) {
+    fn record_node_rejection(&self, exhausted_node: &Arc<BudgetNode>, dimension: BudgetDimension) {
         exhausted_node.record_rejection(dimension);
         if !Arc::ptr_eq(exhausted_node, &self.node) {
             self.node.record_rejection(dimension);
@@ -269,12 +280,18 @@ impl ResourceBudget {
     }
 
     /// Attempts to acquire data.
-    pub fn try_acquire_data(&self, bytes: usize) -> Result<ResourcePermit, BudgetAcquireError> {
+    ///
+    /// A [`BudgetRejection`] is a normal bounded outcome when data capacity is
+    /// unavailable; it is not an operational runtime failure.
+    pub fn try_acquire_data(&self, bytes: usize) -> Result<ResourcePermit, BudgetRejection> {
         self.try_acquire(bytes, BudgetClass::Data)
     }
 
     /// Attempts to acquire control.
-    pub fn try_acquire_control(&self, bytes: usize) -> Result<ResourcePermit, BudgetAcquireError> {
+    ///
+    /// A [`BudgetRejection`] is a normal bounded outcome when control capacity
+    /// is unavailable; it is not an operational runtime failure.
+    pub fn try_acquire_control(&self, bytes: usize) -> Result<ResourcePermit, BudgetRejection> {
         self.try_acquire(bytes, BudgetClass::Control)
     }
 
@@ -318,13 +335,13 @@ impl ResourceBudget {
     }
 }
 
-fn validated_name(name: String) -> Result<String, BudgetConfigError> {
+fn validated_name(name: String) -> Result<String, crate::RuntimeContractViolation> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(BudgetConfigError::EmptyName);
+        return Err(crate::RuntimeContractViolation::EmptyBudgetName);
     }
     if name.contains('/') {
-        return Err(BudgetConfigError::InvalidName);
+        return Err(crate::RuntimeContractViolation::InvalidBudgetName);
     }
     Ok(name.to_owned())
 }
@@ -394,12 +411,17 @@ impl ResourcePermit {
     /// reservations are released, so the payload is always covered without
     /// charging common ancestors twice.
     ///
+    /// Returns a normal rejection when the target is full. Contract failures
+    /// and rejections leave this permit unchanged and valid for its source.
+    ///
     /// # Errors
     ///
-    /// Returns [`PermitRebindError::DifferentTree`] for an unrelated target.
-    /// Returns [`PermitRebindError::Budget`] when the target is full. On every
-    /// error, this permit remains unchanged and valid for its source budget.
-    pub fn try_rebind(&mut self, target: &ResourceBudget) -> Result<(), PermitRebindError> {
+    /// Returns [`crate::RuntimeContractViolation::PermitTargetInDifferentTree`]
+    /// when `target` is outside this permit's resource-budget tree.
+    pub fn try_rebind(
+        &mut self,
+        target: &ResourceBudget,
+    ) -> Result<PermitRebindOutcome, crate::RuntimeContractViolation> {
         let common_ancestors = self
             .reservations
             .iter()
@@ -407,20 +429,10 @@ impl ResourcePermit {
             .take_while(|(reservation, target_node)| Arc::ptr_eq(&reservation.node, target_node))
             .count();
         if common_ancestors == 0 {
-            return Err(PermitRebindError::DifferentTree {
-                source_path: Arc::clone(
-                    &self
-                        .reservations
-                        .last()
-                        .expect("resource permit always owns its root reservation")
-                        .node
-                        .path,
-                ),
-                target_path: Arc::clone(&target.node.path),
-            });
+            return Err(crate::RuntimeContractViolation::PermitTargetInDifferentTree);
         }
         if common_ancestors == self.reservations.len() && common_ancestors == target.chain.len() {
-            return Ok(());
+            return Ok(PermitRebindOutcome::Unchanged);
         }
 
         let mut target_reservations =
@@ -429,8 +441,8 @@ impl ResourcePermit {
             match node.try_reserve(self.bytes, self.class) {
                 Ok(reservation) => target_reservations.push(reservation),
                 Err(dimension) => {
-                    target.record_rejection(node, dimension);
-                    return Err(PermitRebindError::Budget(BudgetAcquireError {
+                    target.record_node_rejection(node, dimension);
+                    return Ok(PermitRebindOutcome::Rejected(BudgetRejection {
                         path: Arc::clone(&target.node.path),
                         exhausted_path: Arc::clone(&node.path),
                         dimension,
@@ -446,7 +458,7 @@ impl ResourcePermit {
         self.reservations.truncate(common_ancestors);
         self.reservations.extend(target_reservations);
         self.capacity_notify.notify_waiters();
-        Ok(())
+        Ok(PermitRebindOutcome::Rebound)
     }
 }
 

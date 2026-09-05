@@ -54,7 +54,9 @@ fn service_context() -> ChildServiceContext {
     static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
     OWNER
         .get_or_init(|| {
-            RuntimeOwner::new(RuntimeConfig::server_default("timer-extended-delivery"))
+            RuntimeOwner::plan(RuntimeConfig::server_default("timer-extended-delivery"))
+                .expect("test runtime configuration is valid")
+                .build()
                 .expect("timer delivery test runtime")
         })
         .root_context()

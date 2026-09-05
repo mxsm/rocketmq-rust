@@ -120,12 +120,12 @@ fn zero_and_parent_exceeding_configuration_preserve_budget_sources_and_leave_slo
         assert_eq!(error.kind(), kind);
         let source = error
             .source()
-            .and_then(|source| source.downcast_ref::<BudgetConfigError>())
+            .and_then(|source| source.downcast_ref::<rocketmq_runtime::RuntimeContractViolation>())
             .expect("budget configuration source");
         assert!(matches!(
             source,
-            BudgetConfigError::ZeroCapacity { dimension: actual, .. }
-                | BudgetConfigError::ChildExceedsParent { dimension: actual, .. }
+            rocketmq_runtime::RuntimeContractViolation::ZeroBudgetCapacity { dimension: actual }
+                | rocketmq_runtime::RuntimeContractViolation::ChildBudgetExceedsParent { dimension: actual }
                 if *actual == dimension
         ));
         for rendered in [format!("{error}"), format!("{error:?}")] {
@@ -321,7 +321,9 @@ fn concurrent_reservations_stop_at_the_shared_cap_and_finish_at_zero() {
 
 #[tokio::test]
 async fn deferred_permit_is_independent_from_real_session_execution_and_baseline_snapshots() {
-    let runtime = RuntimeOwner::new(RuntimeConfig::server_default("deferred-independence-runtime"))
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("deferred-independence-runtime"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("deferred independence runtime owner");
     let service = runtime.root_context().component("deferred-independence-session");
     let limits = AdmissionLimits {

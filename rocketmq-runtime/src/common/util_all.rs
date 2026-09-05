@@ -381,10 +381,7 @@ pub fn get_ip() -> RuntimeResult<Vec<u8>> {
                 IpAddr::V4(ip) => Ok(ip.octets().to_vec()),
                 IpAddr::V6(ip) => Ok(ip.octets().to_vec()),
             },
-            Err(value) => Err(RuntimeError::LifecycleOperation {
-                operation: "resolve-local-ip",
-                message: value.to_string(),
-            }),
+            Err(value) => Err(RuntimeError::internal(crate::RuntimeOperation::ResolveLocalIp, value)),
         },
     }
 }

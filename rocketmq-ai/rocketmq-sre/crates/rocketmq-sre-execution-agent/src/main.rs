@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = ExecutionAgentConfig::from_env()?;
     let mut runtime_config = RuntimeConfig::server_default("rocketmq-sre-execution-agent");
     runtime_config.shutdown_timeout = config.shutdown_timeout();
-    let runtime_owner = RuntimeOwner::new(runtime_config)?;
+    let runtime_owner = RuntimeOwner::plan(runtime_config)?.build()?;
     let service_context = runtime_owner
         .root_context()
         .component("rocketmq-sre-execution-agent.http");

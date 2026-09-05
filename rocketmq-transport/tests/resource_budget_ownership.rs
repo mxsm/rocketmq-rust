@@ -28,7 +28,11 @@ use rocketmq_transport::api::ResourceLimit;
 #[test]
 fn transport_controllers_share_the_injected_process_ceiling() {
     let memory_limit = ProcessMemoryLimit::configured(12).expect("configured memory limit");
-    let owner = RuntimeOwner::new_with_memory_limit(RuntimeConfig::default(), memory_limit).expect("runtime owner");
+    let owner = RuntimeOwner::plan(RuntimeConfig::default())
+        .expect("default runtime configuration is valid")
+        .with_memory_limit(memory_limit)
+        .build()
+        .expect("runtime owner");
     let process_budget = owner.root_context().component("transport").process_budget();
     let limits = AdmissionLimits {
         inflight: ResourceLimit { count: 4, bytes: 12 },

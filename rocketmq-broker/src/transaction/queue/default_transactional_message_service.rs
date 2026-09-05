@@ -114,21 +114,25 @@ pub struct DefaultTransactionalMessageService<MS: BrokerWriteStore + BrokerMaste
 
 fn standalone_transaction_resource_budget(broker_config: &BrokerConfig) -> RocketMQResult<ResourceBudget> {
     let process_limit = if broker_config.process_memory_limit_bytes == 0 {
-        ProcessMemoryLimit::detect()
+        ProcessMemoryLimit::detect().map_err(|source| RocketMQError::Internal {
+            operation: "detect-process-memory-limit",
+            source: Box::new(source),
+        })?
     } else {
-        ProcessMemoryLimit::configured(broker_config.process_memory_limit_bytes)
-    }
-    .map_err(|error| RocketMQError::ConfigInvalidValue {
-        key: "broker.processMemoryLimitBytes",
-        value: broker_config.process_memory_limit_bytes.to_string(),
-        reason: error.to_string(),
-    })?;
+        ProcessMemoryLimit::configured(broker_config.process_memory_limit_bytes).map_err(|_error| {
+            RocketMQError::ConfigInvalidValue {
+                key: "broker.processMemoryLimitBytes",
+                value: broker_config.process_memory_limit_bytes.to_string(),
+                reason: "must be greater than zero".to_string(),
+            }
+        })?
+    };
     let managed_bytes = process_limit
         .fraction(1, 4)
-        .map_err(|error| RocketMQError::ConfigInvalidValue {
+        .map_err(|_error| RocketMQError::ConfigInvalidValue {
             key: "broker.processMemoryLimitBytes",
             value: process_limit.bytes().to_string(),
-            reason: error.to_string(),
+            reason: "must produce a positive bounded managed-memory fraction".to_string(),
         })?;
     let managed_bytes = usize::try_from(managed_bytes).unwrap_or(usize::MAX).max(1);
     ResourceBudgetTree::new("broker", BudgetLimit::new(20_000, managed_bytes, FullPolicy::Reject))

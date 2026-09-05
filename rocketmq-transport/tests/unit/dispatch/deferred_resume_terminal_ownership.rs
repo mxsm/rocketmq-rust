@@ -138,8 +138,10 @@ fn remoting_response() -> RocketMQResult<RemotingResponse> {
 
 #[tokio::test]
 async fn claimed_resume_handler_reenters_the_original_request_span() {
-    let runtime =
-        RuntimeOwner::new(RuntimeConfig::server_default("deferred-resume-request-span")).expect("request span runtime");
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("deferred-resume-request-span"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("request span runtime");
     let parent = runtime.root_context().component("request-span").task_group().clone();
     let session = EmbeddedSessionRecord::new(98_332);
     let control = RequestControlView::from_meta(
@@ -229,7 +231,9 @@ impl Drop for ReadyRetainedFuture {
 
 #[tokio::test]
 async fn completed_handler_future_is_retained_until_canonical_response_handoff_terminal() {
-    let runtime = RuntimeOwner::new(RuntimeConfig::server_default("deferred-resume-handler-owner"))
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("deferred-resume-handler-owner"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("handler-owner runtime");
     let parent = runtime.root_context().component("handler-owner").task_group().clone();
     let session = EmbeddedSessionRecord::new(98_330);
@@ -300,7 +304,9 @@ async fn completed_handler_future_is_retained_until_canonical_response_handoff_t
 
 #[tokio::test]
 async fn blocked_writer_is_owned_by_session_after_producer_submit_and_observer_runs_once_at_terminal() {
-    let runtime = RuntimeOwner::new(RuntimeConfig::server_default("deferred-submit-terminal-owner"))
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("deferred-submit-terminal-owner"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("submit terminal runtime");
     let component = runtime.root_context().component("submit-terminal-owner");
     let producer_group = component
@@ -376,7 +382,9 @@ async fn blocked_writer_is_owned_by_session_after_producer_submit_and_observer_r
 
 #[tokio::test]
 async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_sync_rejection() {
-    let runtime = RuntimeOwner::new(RuntimeConfig::server_default("deferred-submit-terminal-failures"))
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("deferred-submit-terminal-failures"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("submit failure runtime");
     let component = runtime.root_context().component("submit-terminal-failures");
     let controller = AdmissionController::new(AdmissionLimits::default());

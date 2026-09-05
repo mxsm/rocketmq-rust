@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::RuntimeError;
-use crate::error::RuntimeResult;
 use crate::resource_budget::BudgetLimit;
 use crate::resource_budget::FullPolicy;
 use crate::resource_budget::ProcessMemoryLimit;
@@ -32,18 +30,18 @@ pub struct RuntimeResources {
 }
 
 impl RuntimeResources {
-    pub(crate) fn from_memory_limit(memory_limit: ProcessMemoryLimit) -> RuntimeResult<Self> {
+    pub(crate) fn from_memory_limit(memory_limit: ProcessMemoryLimit) -> Self {
         let managed_bytes = usize::try_from(memory_limit.bytes()).unwrap_or(usize::MAX);
         let process_budget = ResourceBudgetTree::new(
             "process",
             BudgetLimit::new(usize::MAX, managed_bytes, FullPolicy::Reject),
         )
-        .map_err(|error| RuntimeError::InvalidConfig(format!("invalid process resource budget: {error}")))?
+        .expect("a positive ProcessMemoryLimit must create the process budget")
         .root();
-        Ok(Self {
+        Self {
             memory_limit,
             process_budget,
-        })
+        }
     }
 
     /// Returns the detected or explicitly configured process memory limit.

@@ -21,7 +21,7 @@ use crate::blocking::BlockingLanePolicies;
 use crate::blocking::GlobalBlockingBudget;
 use crate::diagnostics::RuntimeDiagnostics;
 use crate::diagnostics::RuntimeDiagnosticsSnapshot;
-use crate::error::RuntimeError;
+use crate::error::RuntimeContractViolation;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
 use crate::resource_budget::ResourceBudget;
@@ -31,6 +31,7 @@ use crate::task_group::TaskGroup;
 use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
 use crate::task_spawner::TaskSpawner;
+use crate::RuntimeContractPolicy;
 
 /// A validated, named position in the service ownership tree.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -41,14 +42,14 @@ impl ScopeId {
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeError::InvalidConfig`] when `name` is empty or only
-    /// contains whitespace.
-    pub fn new(name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
+    /// Returns a deterministic contract violation when `name` is empty or
+    /// only contains whitespace.
+    pub fn try_new(name: impl Into<Arc<str>>) -> Result<Self, RuntimeContractViolation> {
         let name = name.into();
         if name.trim().is_empty() {
-            return Err(RuntimeError::InvalidConfig(
-                "service context scope name must not be empty".to_string(),
-            ));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::ServiceContextScopeNotBlank,
+            });
         }
         Ok(Self(name))
     }
@@ -60,7 +61,7 @@ impl ScopeId {
     /// Panics when `name` is empty or only contains whitespace. Static scope
     /// names are programmer-owned lifecycle invariants.
     pub fn from_static(name: &'static str) -> Self {
-        Self::new(Arc::<str>::from(name)).expect("static service context scope name must be valid")
+        Self::try_new(Arc::<str>::from(name)).expect("static service context scope name must be valid")
     }
 
     /// Borrows this value as str.
@@ -79,15 +80,35 @@ impl From<&'static str> for ScopeId {
     }
 }
 
-impl From<String> for ScopeId {
-    fn from(value: String) -> Self {
-        Self::new(Arc::<str>::from(value)).expect("service context scope name must be valid")
+impl TryFrom<String> for ScopeId {
+    type Error = RuntimeContractViolation;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_new(Arc::<str>::from(value))
     }
 }
 
-impl From<Arc<str>> for ScopeId {
-    fn from(value: Arc<str>) -> Self {
-        Self::new(value).expect("service context scope name must be valid")
+impl TryFrom<Arc<str>> for ScopeId {
+    type Error = RuntimeContractViolation;
+
+    fn try_from(value: Arc<str>) -> Result<Self, Self::Error> {
+        Self::try_new(value)
+    }
+}
+
+#[cfg(test)]
+mod scope_id_tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_scope_ids_return_contract_violations() {
+        assert_eq!(
+            ScopeId::try_new(Arc::<str>::from("  ")),
+            Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::ServiceContextScopeNotBlank,
+            })
+        );
+        assert!(ScopeId::try_from(String::new()).is_err());
     }
 }
 
@@ -99,13 +120,16 @@ struct BlockingLanes {
 }
 
 impl BlockingLanes {
-    fn new(policies: BlockingLanePolicies, global_capacity: usize) -> RuntimeResult<Self> {
-        let budget = GlobalBlockingBudget::managed(global_capacity, &policies)?;
-        Ok(Self {
-            storage_io: BlockingExecutor::new_managed(policies.storage_io, BlockingLane::StorageIo, budget.clone())?,
-            metadata_io: BlockingExecutor::new_managed(policies.metadata_io, BlockingLane::MetadataIo, budget.clone())?,
-            cpu_crypto: BlockingExecutor::new_managed(policies.cpu_crypto, BlockingLane::CpuCrypto, budget)?,
-        })
+    fn new(policies: BlockingLanePolicies, global_capacity: usize) -> Self {
+        let budget = GlobalBlockingBudget::managed(global_capacity, &policies);
+        Self {
+            storage_io: BlockingExecutor::new_managed(policies.storage_io, BlockingLane::StorageIo, budget.clone())
+                .expect("RuntimeConfig validates storage blocking policy before root context construction"),
+            metadata_io: BlockingExecutor::new_managed(policies.metadata_io, BlockingLane::MetadataIo, budget.clone())
+                .expect("RuntimeConfig validates metadata blocking policy before root context construction"),
+            cpu_crypto: BlockingExecutor::new_managed(policies.cpu_crypto, BlockingLane::CpuCrypto, budget)
+                .expect("RuntimeConfig validates CPU blocking policy before root context construction"),
+        }
     }
 
     fn get(&self, lane: BlockingLane) -> &BlockingExecutor {
@@ -152,9 +176,9 @@ impl RootServiceContext {
         global_blocking_capacity: usize,
         diagnostics: RuntimeDiagnostics,
         resources: RuntimeResources,
-    ) -> RuntimeResult<Self> {
-        let blocking_lanes = BlockingLanes::new(blocking_policies, global_blocking_capacity)?;
-        Ok(Self {
+    ) -> Self {
+        let blocking_lanes = BlockingLanes::new(blocking_policies, global_blocking_capacity);
+        Self {
             name,
             runtime,
             task_group,
@@ -162,7 +186,7 @@ impl RootServiceContext {
             diagnostics,
             resources,
             _sealed: RootContextSeal,
-        })
+        }
     }
 
     /// Returns the name.
@@ -171,6 +195,10 @@ impl RootServiceContext {
     }
 
     /// Creates a long-lived component context owned by this process root.
+    ///
+    /// Dynamically supplied names must be validated with [`ScopeId::try_new`]
+    /// before they reach this boundary. Static literals may use the constrained
+    /// `From<&'static str>` conversion.
     pub fn component(&self, scope: impl Into<ScopeId>) -> ChildServiceContext {
         ChildServiceContext::new(
             scope.into(),
@@ -348,6 +376,10 @@ impl ChildServiceContext {
     }
 
     /// Creates a long-lived component context owned by this service.
+    ///
+    /// Dynamically supplied names must be validated with [`ScopeId::try_new`]
+    /// before they reach this boundary. Static literals may use the constrained
+    /// `From<&'static str>` conversion.
     pub fn component(&self, scope: impl Into<ScopeId>) -> Self {
         Self::new(
             scope.into(),
@@ -365,8 +397,9 @@ impl ChildServiceContext {
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeError::TaskGroupClosing`] after this service starts
-    /// shutting down or becomes poisoned.
+    /// Returns an unavailable runtime failure after this service starts
+    /// shutting down or becomes poisoned. Dynamically supplied names must be
+    /// validated with [`ScopeId::try_new`] before this call.
     pub fn try_component(&self, scope: impl Into<ScopeId>) -> RuntimeResult<Self> {
         Self::try_new(
             scope.into(),

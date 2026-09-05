@@ -14,6 +14,8 @@
 
 use std::time::Duration;
 
+use crate::RuntimeContractViolation;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Identifies the full policy state.
 pub enum FullPolicy {
@@ -151,30 +153,26 @@ impl BudgetLimit {
         self
     }
 
-    pub(crate) fn validate(self, path: &str) -> Result<(), BudgetConfigError> {
+    pub(crate) fn validate(self, path: &str) -> Result<(), RuntimeContractViolation> {
         if self.capacity.count == 0 {
-            return Err(BudgetConfigError::ZeroCapacity {
-                path: path.to_owned(),
+            return Err(RuntimeContractViolation::ZeroBudgetCapacity {
                 dimension: BudgetDimension::Count,
             });
         }
         if self.capacity.bytes == 0 {
-            return Err(BudgetConfigError::ZeroCapacity {
-                path: path.to_owned(),
+            return Err(RuntimeContractViolation::ZeroBudgetCapacity {
                 dimension: BudgetDimension::Bytes,
             });
         }
         validate_rate(path, self.capacity.rate)?;
         validate_rate(path, self.control_reserve.rate)?;
         if self.control_reserve.count > self.capacity.count {
-            return Err(BudgetConfigError::ReserveExceedsCapacity {
-                path: path.to_owned(),
+            return Err(RuntimeContractViolation::ReserveExceedsBudgetCapacity {
                 dimension: BudgetDimension::Count,
             });
         }
         if self.control_reserve.bytes > self.capacity.bytes {
-            return Err(BudgetConfigError::ReserveExceedsCapacity {
-                path: path.to_owned(),
+            return Err(RuntimeContractViolation::ReserveExceedsBudgetCapacity {
                 dimension: BudgetDimension::Bytes,
             });
         }
@@ -182,31 +180,27 @@ impl BudgetLimit {
             (Some(capacity), Some(reserve))
                 if reserve.permits_per_second > capacity.permits_per_second || reserve.burst > capacity.burst =>
             {
-                Err(BudgetConfigError::ReserveExceedsCapacity {
-                    path: path.to_owned(),
+                Err(RuntimeContractViolation::ReserveExceedsBudgetCapacity {
                     dimension: BudgetDimension::Rate,
                 })
             }
-            (None, Some(_)) => Err(BudgetConfigError::ReserveWithoutCapacity {
-                path: path.to_owned(),
+            (None, Some(_)) => Err(RuntimeContractViolation::ReserveWithoutBudgetCapacity {
                 dimension: BudgetDimension::Rate,
             }),
-            _ if self.max_age == Some(Duration::ZERO) => Err(BudgetConfigError::ZeroMaxAge { path: path.to_owned() }),
+            _ if self.max_age == Some(Duration::ZERO) => Err(RuntimeContractViolation::ZeroBudgetMaxAge),
             _ => Ok(()),
         }
     }
 
-    pub(crate) fn validate_child(self, parent: Self, path: &str) -> Result<(), BudgetConfigError> {
+    pub(crate) fn validate_child(self, parent: Self, path: &str) -> Result<(), RuntimeContractViolation> {
         self.validate(path)?;
         if self.capacity.count > parent.capacity.count {
-            return Err(BudgetConfigError::ChildExceedsParent {
-                path: path.to_owned(),
+            return Err(RuntimeContractViolation::ChildBudgetExceedsParent {
                 dimension: BudgetDimension::Count,
             });
         }
         if self.capacity.bytes > parent.capacity.bytes {
-            return Err(BudgetConfigError::ChildExceedsParent {
-                path: path.to_owned(),
+            return Err(RuntimeContractViolation::ChildBudgetExceedsParent {
                 dimension: BudgetDimension::Bytes,
             });
         }
@@ -214,14 +208,12 @@ impl BudgetLimit {
             (Some(child), Some(parent))
                 if child.permits_per_second > parent.permits_per_second || child.burst > parent.burst =>
             {
-                return Err(BudgetConfigError::ChildExceedsParent {
-                    path: path.to_owned(),
+                return Err(RuntimeContractViolation::ChildBudgetExceedsParent {
                     dimension: BudgetDimension::Rate,
                 });
             }
             (None, Some(_)) => {
-                return Err(BudgetConfigError::ChildExceedsParent {
-                    path: path.to_owned(),
+                return Err(RuntimeContractViolation::ChildBudgetExceedsParent {
                     dimension: BudgetDimension::Rate,
                 });
             }
@@ -229,80 +221,19 @@ impl BudgetLimit {
         }
         match (self.max_age, parent.max_age) {
             (Some(child), Some(parent)) if child > parent => {
-                Err(BudgetConfigError::ChildMaxAgeExceedsParent { path: path.to_owned() })
+                Err(RuntimeContractViolation::ChildBudgetMaxAgeExceedsParent)
             }
-            (None, Some(_)) => Err(BudgetConfigError::ChildMaxAgeExceedsParent { path: path.to_owned() }),
+            (None, Some(_)) => Err(RuntimeContractViolation::ChildBudgetMaxAgeExceedsParent),
             _ => Ok(()),
         }
     }
 }
 
-fn validate_rate(path: &str, rate: Option<RateLimit>) -> Result<(), BudgetConfigError> {
+fn validate_rate(_path: &str, rate: Option<RateLimit>) -> Result<(), RuntimeContractViolation> {
     if let Some(rate) = rate {
         if rate.permits_per_second == 0 || rate.burst == 0 {
-            return Err(BudgetConfigError::ZeroRate { path: path.to_owned() });
+            return Err(RuntimeContractViolation::ZeroBudgetRate);
         }
     }
     Ok(())
-}
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-/// Identifies the budget config error state.
-pub enum BudgetConfigError {
-    #[error("resource budget name must not be blank")]
-    /// Represents the empty name case.
-    EmptyName,
-    #[error("resource budget name must not contain '/'")]
-    /// Represents the invalid name case.
-    InvalidName,
-    #[error("resource budget {path} has zero {dimension:?} capacity")]
-    /// Represents the zero capacity case.
-    ZeroCapacity {
-        /// The path value.
-        path: String,
-        /// The dimension value.
-        dimension: BudgetDimension,
-    },
-    #[error("resource budget {path} has a zero rate or burst")]
-    /// Represents the zero rate case.
-    ZeroRate {
-        /// The path value.
-        path: String,
-    },
-    #[error("resource budget {path} has zero maximum age")]
-    /// Represents the zero max age case.
-    ZeroMaxAge {
-        /// The path value.
-        path: String,
-    },
-    #[error("resource budget {path} {dimension:?} reserve exceeds its capacity")]
-    /// Represents the reserve exceeds capacity case.
-    ReserveExceedsCapacity {
-        /// The path value.
-        path: String,
-        /// The dimension value.
-        dimension: BudgetDimension,
-    },
-    #[error("resource budget {path} defines a {dimension:?} reserve without a parent capacity")]
-    /// Represents the reserve without capacity case.
-    ReserveWithoutCapacity {
-        /// The path value.
-        path: String,
-        /// The dimension value.
-        dimension: BudgetDimension,
-    },
-    #[error("resource budget {path} {dimension:?} capacity exceeds its parent")]
-    /// Represents the child exceeds parent case.
-    ChildExceedsParent {
-        /// The path value.
-        path: String,
-        /// The dimension value.
-        dimension: BudgetDimension,
-    },
-    #[error("resource budget {path} maximum age exceeds its parent")]
-    /// Represents the child max age exceeds parent case.
-    ChildMaxAgeExceedsParent {
-        /// The path value.
-        path: String,
-    },
 }

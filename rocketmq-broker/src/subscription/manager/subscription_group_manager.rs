@@ -40,6 +40,7 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoAdmissionOutcome;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::StateMachineVersionView;
 use serde::Deserialize;
@@ -211,13 +212,22 @@ impl SubscriptionGroupManager {
         if content.is_empty() {
             return;
         }
-        if let Err(error) = metadata_io.submit_next_accepted(
+        match metadata_io.submit_next(
             "broker.subscription-group",
             self.config_file_path(),
             content.into_bytes(),
             MetadataDeadline::after(Duration::from_secs(5)),
         ) {
-            error!(%error, operation, "Failed to admit subscription group metadata snapshot");
+            Ok(MetadataIoAdmissionOutcome::Accepted(_)) => {}
+            Ok(MetadataIoAdmissionOutcome::TargetConflict(_request)) => {
+                warn!(
+                    operation,
+                    "Metadata target conflict rejected subscription group snapshot"
+                );
+            }
+            Err(error) => {
+                error!(%error, operation, "Failed to admit subscription group metadata snapshot");
+            }
         }
     }
 
@@ -245,7 +255,7 @@ impl SubscriptionGroupManager {
             )
             .await
             .map_err(crate::runtime_to_rocketmq_error)
-            .map(|_| ())
+            .and_then(crate::require_metadata_durability)
     }
 
     #[cfg(feature = "rocksdb_store")]

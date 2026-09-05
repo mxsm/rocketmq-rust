@@ -52,7 +52,9 @@ struct PartsFixture {
 
 impl PartsFixture {
     fn new(owner: u64, deadline: Option<RequestDeadline>) -> Self {
-        let runtime = RuntimeOwner::new(RuntimeConfig::server_default("deferred-expiry-acceptance"))
+        let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("deferred-expiry-acceptance"))
+            .expect("test runtime configuration is valid")
+            .build()
             .expect("expiry acceptance runtime");
         let parent = runtime
             .root_context()

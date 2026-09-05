@@ -89,7 +89,7 @@ mod linux_bench {
     }
 
     pub fn benchmark(c: &mut Criterion) {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("benchmark runtime owner");
+        let owner = RuntimeOwner::new().expect("benchmark runtime owner");
         let blocking = owner
             .root_context()
             .component("linux-file-send-bench")

@@ -26,10 +26,10 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoError;
 use rocketmq_runtime::MetadataIoShutdownReport;
 #[cfg(test)]
 use rocketmq_runtime::MetadataIoSnapshot;
+use rocketmq_runtime::RuntimeError;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -82,7 +82,7 @@ pub struct KVConfigManager {
     mutation_service: Result<KvMutationService, Arc<str>>,
     /// Production persistence owner. Absence is retained only for legacy
     /// builders that do not inject a service lifecycle.
-    metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
+    metadata_io: Option<Result<MetadataIoActor, RuntimeError>>,
 }
 
 impl KVConfigManager {
@@ -97,7 +97,7 @@ impl KVConfigManager {
     /// A new `KVConfigManager` instance.
     pub(crate) fn new(
         name_server_runtime_inner: NameServerRuntimeHandle,
-        metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
+        metadata_io: Option<Result<MetadataIoActor, RuntimeError>>,
         service_context: &ChildServiceContext,
         target: PathBuf,
         queue_capacity: usize,

@@ -738,7 +738,9 @@ mod tests {
     async fn query_real_dispatcher_rebinds_the_original_opaque() {
         const ORIGINAL_OPAQUE: i32 = 8_701;
 
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-query-dispatch-test"))
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("broker-query-dispatch-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("query test runtime owner");
         let server_context = owner.root_context().component("query-server");
         let runner_context = owner.root_context().component("query-runner");

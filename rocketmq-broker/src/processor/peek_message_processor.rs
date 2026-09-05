@@ -710,8 +710,10 @@ mod tests {
     where
         P: RequestProcessor + Send + 'static,
     {
-        let owner =
-            RuntimeOwner::new(RuntimeConfig::server_default("peek-message-test")).expect("PeekMessage test runtime");
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("peek-message-test"))
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("PeekMessage test runtime");
         let context = owner.root_context().component("peek-message-test.request");
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             TestLeafProcessor::new(processor),

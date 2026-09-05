@@ -89,19 +89,13 @@ impl BrokerBootstrap<Configured> {
             lifecycle.mark_failed();
             lifecycle.request_shutdown(ShutdownReason::Internal);
             record_broker_lifecycle("failed", "failure", "initialization");
-            RuntimeError::LifecycleOperation {
-                operation: "initialize_broker",
-                message: error.to_string(),
-            }
+            RuntimeError::internal(rocketmq_runtime::RuntimeOperation::InitializeBroker, error)
         })?;
         let mut running = initialized.start().await.map_err(|error| {
             lifecycle.mark_failed();
             lifecycle.request_shutdown(ShutdownReason::Internal);
             record_broker_lifecycle("failed", "failure", "startup");
-            RuntimeError::LifecycleOperation {
-                operation: "start_broker",
-                message: error.to_string(),
-            }
+            RuntimeError::internal(rocketmq_runtime::RuntimeOperation::StartBroker, error)
         })?;
         lifecycle.mark_ready()?;
         record_broker_lifecycle("ready", "success", "startup");
@@ -132,13 +126,9 @@ impl BrokerBootstrap<Configured> {
             );
             lifecycle.mark_failed();
             record_broker_lifecycle("failed", "failure", "shutdown_timeout");
-            return Err(RuntimeError::LifecycleOperation {
-                operation: "shutdown_broker",
-                message: format!(
-                    "broker shutdown did not complete before the shared deadline; unhealthy components: {:?}",
-                    report.unhealthy_component_names()
-                ),
-            });
+            return Err(RuntimeError::timed_out(
+                rocketmq_runtime::RuntimeOperation::ShutdownBroker,
+            ));
         }
         lifecycle.mark_stopped();
         record_broker_lifecycle("stopped", "success", "shutdown_complete");

@@ -38,7 +38,9 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoError;
+use rocketmq_runtime::MetadataIoDurabilityOutcome;
+use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeOperation;
 use rocketmq_runtime::RuntimeResult;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -116,7 +118,8 @@ pub(crate) struct KvCommitReceipt {
 
 #[derive(Clone, Debug)]
 enum KvCommitError {
-    Metadata(MetadataIoError),
+    Metadata(RuntimeError),
+    MetadataTargetConflict,
     Serialization(Arc<str>),
     WorkerStopped,
 }
@@ -125,6 +128,9 @@ impl KvCommitError {
     fn into_rocketmq_error(self) -> RocketMQError {
         match self {
             Self::Metadata(error) => crate::runtime_to_rocketmq_error(error),
+            Self::MetadataTargetConflict => {
+                RocketMQError::storage_write_failed(KV_RESOURCE, "metadata resource target conflict")
+            }
             Self::Serialization(message) => {
                 RocketMQError::IO(io::Error::new(io::ErrorKind::InvalidData, message.to_string()))
             }
@@ -146,17 +152,17 @@ pub(crate) struct KvMutationReceipt {
 impl KvMutationReceipt {
     pub(crate) async fn wait_until(self, deadline: MetadataDeadline) -> RocketMQResult<KvCommitReceipt> {
         if deadline.is_expired() {
-            return Err(crate::runtime_to_rocketmq_error(MetadataIoError::DeadlineExceeded {
-                operation: "wait for KV mutation commit",
-            }));
+            return Err(crate::runtime_to_rocketmq_error(RuntimeError::timed_out(
+                RuntimeOperation::AdmitKvMutation,
+            )));
         }
         match tokio::time::timeout_at(deadline.instant(), self.completion).await {
             Ok(Ok(Ok(receipt))) => Ok(receipt),
             Ok(Ok(Err(error))) => Err(error.into_rocketmq_error()),
             Ok(Err(_)) => Err(KvCommitError::WorkerStopped.into_rocketmq_error()),
-            Err(_) => Err(crate::runtime_to_rocketmq_error(MetadataIoError::DeadlineExceeded {
-                operation: "wait for KV mutation commit",
-            })),
+            Err(_) => Err(crate::runtime_to_rocketmq_error(RuntimeError::timed_out(
+                RuntimeOperation::AdmitKvMutation,
+            ))),
         }
     }
 
@@ -265,13 +271,15 @@ impl KvMutationService {
 
     pub(crate) fn submit(&self, mutation: KvMutation, deadline: MetadataDeadline) -> RocketMQResult<KvMutationReceipt> {
         if deadline.is_expired() {
-            return Err(crate::runtime_to_rocketmq_error(MetadataIoError::DeadlineExceeded {
-                operation: "admit KV mutation",
-            }));
+            return Err(crate::runtime_to_rocketmq_error(RuntimeError::timed_out(
+                RuntimeOperation::AdmitKvMutation,
+            )));
         }
         if !self.inner.accepting.load(Ordering::Acquire) {
             self.metrics.record_kv_event(NameServerKvEvent::Closed);
-            return Err(crate::runtime_to_rocketmq_error(MetadataIoError::Closed));
+            return Err(crate::runtime_to_rocketmq_error(RuntimeError::context_unavailable(
+                RuntimeOperation::KvMutationWorker,
+            )));
         }
 
         let estimated_bytes = mutation.estimated_bytes();
@@ -286,13 +294,11 @@ impl KvMutationService {
                 let metadata_error = match error {
                     mpsc::error::TrySendError::Closed(_) => {
                         self.metrics.record_kv_event(NameServerKvEvent::Closed);
-                        MetadataIoError::Closed
+                        RuntimeError::context_unavailable(RuntimeOperation::KvMutationWorker)
                     }
                     mpsc::error::TrySendError::Full(_) => {
                         self.metrics.record_kv_event(NameServerKvEvent::QueueFull);
-                        MetadataIoError::QueueFull {
-                            limit: self.sender.max_capacity(),
-                        }
+                        RuntimeError::capacity(RuntimeOperation::AdmitKvMutation)
                     }
                 };
                 return Err(crate::runtime_to_rocketmq_error(metadata_error));
@@ -362,18 +368,12 @@ fn reserve_pending_bytes(inner: &MutationServiceInner, requested: usize) -> Rock
     let mut retained = inner.pending_bytes.load(Ordering::Acquire);
     loop {
         let next = retained.checked_add(requested).ok_or_else(|| {
-            crate::runtime_to_rocketmq_error(MetadataIoError::ByteLimitExceeded {
-                retained,
-                requested,
-                limit: inner.max_pending_bytes,
-            })
+            crate::runtime_to_rocketmq_error(RuntimeError::capacity(RuntimeOperation::AdmitKvMutationBytes))
         })?;
         if next > inner.max_pending_bytes {
-            return Err(crate::runtime_to_rocketmq_error(MetadataIoError::ByteLimitExceeded {
-                retained,
-                requested,
-                limit: inner.max_pending_bytes,
-            }));
+            return Err(crate::runtime_to_rocketmq_error(RuntimeError::capacity(
+                RuntimeOperation::AdmitKvMutationBytes,
+            )));
         }
         match inner
             .pending_bytes
@@ -500,14 +500,23 @@ async fn process_batch(
                 return;
             }
         };
-        if let Err(error) = metadata_io
+        match metadata_io
             .submit_next_durable(KV_RESOURCE, target, bytes, deadline)
             .await
         {
-            metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
-            finish_batch_with_error(inner, batch, KvCommitError::Metadata(error));
-            record_kv_snapshot(metrics, inner);
-            return;
+            Ok(MetadataIoDurabilityOutcome::Durable(_)) => {}
+            Ok(MetadataIoDurabilityOutcome::TargetConflict(_request)) => {
+                metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
+                finish_batch_with_error(inner, batch, KvCommitError::MetadataTargetConflict);
+                record_kv_snapshot(metrics, inner);
+                return;
+            }
+            Err(error) => {
+                metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
+                finish_batch_with_error(inner, batch, KvCommitError::Metadata(error));
+                record_kv_snapshot(metrics, inner);
+                return;
+            }
         }
         metrics.record_kv_persist(persist_started.elapsed(), true, batch_size);
         inner.persist_count.fetch_add(1, Ordering::Relaxed);
@@ -660,10 +669,10 @@ mod tests {
     }
 
     impl MetadataFileSystem for RecordingFileSystem {
-        fn persist_atomic(&self, _target: &std::path::Path, bytes: &[u8]) -> Result<(), MetadataIoError> {
+        fn persist_atomic(&self, _target: &std::path::Path, bytes: &[u8]) -> rocketmq_runtime::RuntimeResult<()> {
             self.writes.fetch_add(1, Ordering::Relaxed);
             if self.fail.load(Ordering::Acquire) {
-                return Err(MetadataIoError::InvalidConfig("injected KV persistence failure"));
+                return Err(RuntimeError::internal_failure(RuntimeOperation::KvPersistenceFault));
             }
             *self.last_bytes.lock() = bytes.to_vec();
             Ok(())
@@ -687,12 +696,11 @@ mod tests {
     ) -> (RuntimeContext, MetadataIoActor, KvMutationService, tempfile::TempDir) {
         let context = RuntimeContext::try_from_current(name).expect("test should use the current Tokio runtime");
         let service_context = context.service_context("namesrv-kv-test");
-        let actor = MetadataIoActor::start_with_file_system(
-            &service_context.component("metadata"),
-            MetadataIoConfig::default(),
-            file_system,
-        )
-        .expect("metadata actor should start");
+        let actor = MetadataIoConfig::default()
+            .into_plan()
+            .expect("default metadata I/O config is valid")
+            .start_with_file_system(&service_context.component("metadata"), file_system)
+            .expect("metadata actor should start");
         let root = tempfile::tempdir().expect("KV test directory should be created");
         let service = KvMutationService::start(
             &service_context.component("mutation"),

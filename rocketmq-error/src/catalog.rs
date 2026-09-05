@@ -529,6 +529,168 @@ define_error_catalog! {
             cli: CliExitCode::SOFTWARE,
         },
     }
+    /// Runtime configuration could not be loaded or interpreted.
+    RUNTIME_CONFIGURATION_FAILED {
+        code: "runtime.configuration.failed",
+        condition: CanonicalCondition::InvalidArgument,
+        public_message: "Runtime configuration is invalid",
+        severity: ErrorSeverity::Info,
+        recovery_hint: RecoveryHint::Never,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::InvalidParameter,
+            grpc: {
+                payload: GrpcPayloadCode::BadRequest,
+                status: GrpcStatusCode::InvalidArgument,
+            },
+            http: HttpStatusCode::BAD_REQUEST,
+            cli: CliExitCode::USAGE,
+        },
+    }
+    /// Runtime construction failed.
+    RUNTIME_BUILD_FAILED {
+        code: "runtime.build.failed",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Runtime could not be started",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Unavailable,
+            },
+            http: HttpStatusCode::SERVICE_UNAVAILABLE,
+            cli: CliExitCode::UNAVAILABLE,
+        },
+    }
+    /// Runtime I/O failed.
+    RUNTIME_IO_FAILED {
+        code: "runtime.io.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Runtime I/O operation failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Internal,
+            },
+            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+            cli: CliExitCode::SOFTWARE,
+        },
+    }
+    /// A required Tokio runtime context is unavailable.
+    RUNTIME_CONTEXT_UNAVAILABLE {
+        code: "runtime.context.unavailable",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Runtime context is unavailable",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Never,
+        fields: [fields::OPERATION_DIAGNOSTIC],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Unavailable,
+            },
+            http: HttpStatusCode::SERVICE_UNAVAILABLE,
+            cli: CliExitCode::UNAVAILABLE,
+        },
+    }
+    /// Runtime capacity needed by an operational path is exhausted.
+    RUNTIME_CAPACITY_EXHAUSTED {
+        code: "runtime.capacity.exhausted",
+        condition: CanonicalCondition::ResourceExhausted,
+        public_message: "Runtime capacity is exhausted",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Backoff,
+        fields: [fields::OPERATION_DIAGNOSTIC],
+        projection: {
+            remoting: RemotingResponseCode::SystemBusy,
+            grpc: {
+                payload: GrpcPayloadCode::TooManyRequests,
+                status: GrpcStatusCode::ResourceExhausted,
+            },
+            http: HttpStatusCode::TOO_MANY_REQUESTS,
+            cli: CliExitCode::TEMPORARY_FAILURE,
+        },
+    }
+    /// A runtime operation exceeded its deadline.
+    RUNTIME_OPERATION_TIMED_OUT {
+        code: "runtime.operation.timed_out",
+        condition: CanonicalCondition::DeadlineExceeded,
+        public_message: "Runtime operation timed out",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Backoff,
+        fields: [fields::OPERATION_DIAGNOSTIC],
+        projection: {
+            remoting: RemotingResponseCode::SystemBusy,
+            grpc: {
+                payload: GrpcPayloadCode::RequestTimeout,
+                status: GrpcStatusCode::DeadlineExceeded,
+            },
+            http: HttpStatusCode::GATEWAY_TIMEOUT,
+            cli: CliExitCode::TEMPORARY_FAILURE,
+        },
+    }
+    /// A runtime operation is unsupported.
+    RUNTIME_OPERATION_UNSUPPORTED {
+        code: "runtime.operation.unsupported",
+        condition: CanonicalCondition::Unimplemented,
+        public_message: "Runtime operation is unsupported",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Never,
+        fields: [fields::OPERATION_DIAGNOSTIC],
+        projection: {
+            remoting: RemotingResponseCode::RequestCodeNotSupported,
+            grpc: {
+                payload: GrpcPayloadCode::Unsupported,
+                status: GrpcStatusCode::Unimplemented,
+            },
+            http: HttpStatusCode::BAD_REQUEST,
+            cli: CliExitCode::USAGE,
+        },
+    }
+    /// A runtime task could not be joined.
+    RUNTIME_TASK_JOIN_FAILED {
+        code: "runtime.task.join_failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Runtime task failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Internal,
+            },
+            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+            cli: CliExitCode::SOFTWARE,
+        },
+    }
+    /// An internal runtime failure occurred.
+    RUNTIME_INTERNAL_FAILURE {
+        code: "runtime.internal.failure",
+        condition: CanonicalCondition::Internal,
+        public_message: "Runtime operation failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Internal,
+            },
+            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+            cli: CliExitCode::SOFTWARE,
+        },
+    }
 }
 
 /// Returns the registered descriptor for `code`.

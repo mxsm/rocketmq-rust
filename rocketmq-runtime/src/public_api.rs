@@ -29,7 +29,7 @@ pub use crate::diagnostics::RuntimeTaskKindSummaryV1;
 pub use crate::diagnostics::RuntimeTaskKindV1;
 pub use crate::operation::OperationContext;
 pub use crate::owner::RuntimeOwner;
-pub use crate::resource_budget::PermitRebindError;
+pub use crate::owner::RuntimeOwnerPlan;
 pub use crate::resource_budget::ResourceBudget;
 pub use crate::resources::RuntimeResources;
 pub use crate::service_context::ChildServiceContext;

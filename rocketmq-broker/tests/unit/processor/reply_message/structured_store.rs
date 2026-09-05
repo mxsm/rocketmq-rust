@@ -328,8 +328,14 @@ impl RequestPolicy for AllowEmbeddedPolicy {
 }
 
 async fn dispatch(behavior: StoreBehavior, state: Arc<State>, name: &'static str) -> EmbeddedDispatchOutcome {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default(name)).expect("structured Reply runtime");
-    let context = owner.root_context().component(format!("{name}.request"));
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default(name))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("structured Reply runtime");
+    let context = owner.root_context().component(
+        rocketmq_runtime::ScopeId::try_new(format!("{name}.request"))
+            .expect("the request scope has a fixed nonblank suffix"),
+    );
     let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
         ReplyProbeProcessor { behavior, state },
         Vec::new(),

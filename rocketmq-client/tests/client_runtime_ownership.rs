@@ -28,10 +28,12 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 fn runtime_owner(name: &str) -> RuntimeOwner {
-    RuntimeOwner::new(RuntimeConfig {
+    RuntimeOwner::plan(RuntimeConfig {
         thread_name: name.to_string(),
         ..Default::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("test runtime owner should start")
 }
 

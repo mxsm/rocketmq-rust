@@ -91,7 +91,10 @@ fn main() -> Result<()> {
     if print_release_version_if_requested("rocketmq-broker-rust") {
         return Ok(());
     }
-    let owner = RuntimeOwner::new(broker_runtime_config()).context("failed to build broker runtime")?;
+    let owner = RuntimeOwner::plan(broker_runtime_config())
+        .expect("broker runtime profile is internally valid")
+        .build()
+        .context("failed to build broker runtime")?;
     let service_context = owner.root_context().component("rocketmq-broker-runtime");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-broker").context("invalid broker lifecycle configuration")?;
 

@@ -145,10 +145,12 @@ struct QualificationRuntime {
 
 impl QualificationRuntime {
     fn create() -> anyhow::Result<Self> {
-        let owner = RuntimeOwner::new(RuntimeConfig {
+        let owner = RuntimeOwner::plan(RuntimeConfig {
             thread_name: "rocketmq-failover-qualification".to_string(),
             ..Default::default()
         })
+        .expect("test runtime configuration is valid")
+        .build()
         .context("create qualification runtime")?;
         let telemetry =
             rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

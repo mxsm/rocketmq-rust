@@ -42,7 +42,9 @@ fn service_context() -> rocketmq_runtime::ChildServiceContext {
     static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
     OWNER
         .get_or_init(|| {
-            RuntimeOwner::new(RuntimeConfig::server_default("compaction-lifecycle-tests"))
+            RuntimeOwner::plan(RuntimeConfig::server_default("compaction-lifecycle-tests"))
+                .expect("test runtime configuration is valid")
+                .build()
                 .expect("compaction lifecycle runtime")
         })
         .root_context()

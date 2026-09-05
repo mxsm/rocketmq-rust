@@ -31,7 +31,9 @@ fn migrated_initial_delay(initial_delay: Option<Duration>) -> Duration {
 
 #[test]
 fn migration_fixture_owns_scheduled_child_work_and_reports_shutdown() {
-    let owner = RuntimeOwner::new(RuntimeConfig::for_parallelism("runtime-migration-fixture", 1))
+    let owner = RuntimeOwner::plan(RuntimeConfig::for_parallelism("runtime-migration-fixture", 1))
+        .expect("runtime fixture configuration should be valid")
+        .build()
         .expect("runtime owner should start");
     let service: ChildServiceContext = owner.root_context().component("migration-fixture");
     let scheduled = service.scheduled_tasks("migration-fixture-schedules");

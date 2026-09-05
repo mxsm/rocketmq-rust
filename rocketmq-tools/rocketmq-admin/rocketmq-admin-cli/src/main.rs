@@ -93,7 +93,9 @@ fn run_cli_main_thread() -> RocketMQResult<i32> {
         reason: error.to_string(),
     })?;
 
-    let owner = RuntimeOwner::new(admin_cli_runtime_config())
+    let owner = RuntimeOwner::plan(admin_cli_runtime_config())
+        .expect("admin CLI runtime profile is internally valid")
+        .build()
         .map_err(|source| RocketMQError::internal("build rocketmq-admin-cli runtime", source))?;
     let client_runtime = ClientRuntime::try_new(
         owner.root_context().component("rocketmq-admin-client"),

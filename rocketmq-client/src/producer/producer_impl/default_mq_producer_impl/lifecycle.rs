@@ -39,7 +39,10 @@ impl DefaultMQProducerImpl {
         producer_config: ProducerConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
-        let service_context = client_runtime.component(format!("producer-{}", producer_config.producer_group()));
+        let service_context = client_runtime.component(
+            rocketmq_runtime::ScopeId::try_new(format!("producer-{}", producer_config.producer_group()))
+                .expect("the producer scope has a fixed nonblank prefix"),
+        );
         let client_pool = client_runtime.pool().clone();
         let client_config = options.client_config().clone();
         let nameserver_discovery = options.nameserver_discovery().cloned();

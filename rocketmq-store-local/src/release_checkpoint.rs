@@ -399,22 +399,18 @@ fn checkpoint_boxed_source_error(
 }
 
 fn runtime_error_descriptor(source: &RuntimeError) -> &'static rocketmq_error::ErrorDescriptor {
-    match source {
-        RuntimeError::InvalidConfig(_) | RuntimeError::Configuration(_) => &rocketmq_error::STORAGE_REQUEST_INVALID,
-        RuntimeError::BuildRuntime(_) | RuntimeError::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
-        RuntimeError::NoCurrentRuntime | RuntimeError::TaskGroupClosing { .. } => {
-            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE
-        }
-        RuntimeError::InsideTokioRuntime(_) | RuntimeError::UnsupportedBlockingKind { .. } => {
-            &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED
-        }
-        RuntimeError::BlockingQueueTimeout { .. } | RuntimeError::BlockingTaskTimeoutStillRunning { .. } => {
-            &rocketmq_error::STORAGE_OPERATION_TIMED_OUT
-        }
-        RuntimeError::BlockingQueueFull { .. } => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
-        RuntimeError::BlockingJoin { .. }
-        | RuntimeError::ScheduledTaskExists { .. }
-        | RuntimeError::LifecycleOperation { .. } => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+    if source.code() == rocketmq_error::RUNTIME_BUILD_FAILED.code()
+        || source.code() == rocketmq_error::RUNTIME_IO_FAILED.code()
+    {
+        return &rocketmq_error::STORAGE_IO_FAILED;
+    }
+    match source.condition() {
+        rocketmq_error::CanonicalCondition::InvalidArgument => &rocketmq_error::STORAGE_REQUEST_INVALID,
+        rocketmq_error::CanonicalCondition::Unavailable => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        rocketmq_error::CanonicalCondition::ResourceExhausted => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+        rocketmq_error::CanonicalCondition::DeadlineExceeded => &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
+        rocketmq_error::CanonicalCondition::Unimplemented => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+        _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
     }
 }
 
@@ -731,6 +727,22 @@ pub(crate) enum LocalReleaseCheckpointFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_build_failure_maps_to_storage_io_before_unavailable() {
+        let error = local_checkpoint_error(
+            StoreOperation::Read,
+            LocalReleaseCheckpointFailure::Runtime(RuntimeError::build(
+                rocketmq_runtime::RuntimeOperation::BuildTokioRuntime,
+                io::Error::other("injected build failure"),
+            )),
+        );
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<RuntimeError>())
+            .is_some());
+    }
 
     #[derive(Debug, thiserror::Error)]
     #[error("private checkpoint cause: {0}")]

@@ -815,7 +815,9 @@ mod tests {
     where
         P: RequestProcessor + Send + 'static,
     {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("change-invisible-test"))
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("change-invisible-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("ChangeInvisibleTime test runtime");
         let context = owner.root_context().component("change-invisible-test.request");
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(

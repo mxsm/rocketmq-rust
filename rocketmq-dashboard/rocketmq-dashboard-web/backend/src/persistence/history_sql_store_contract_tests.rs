@@ -23,13 +23,12 @@ use crate::persistence::TimeRange;
 use crate::persistence::error::PersistenceError;
 use crate::persistence::history_repository::HistoryQuery;
 use crate::persistence::lease_repository::HistoryLease;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 #[test]
 fn sqlite_history_cursor_multidimension_atomicity_and_cutoff_contract() {
     let directory = tempfile::tempdir().expect("temporary directory");
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let store = SqlPersistence::initialize(
             &StorageConfig {
@@ -240,7 +239,7 @@ fn query(
 }
 
 fn docker_history_identity_cursor_and_retention_contract(backend: StorageBackend, database_url: String) {
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let store = SqlPersistence::initialize(
             &StorageConfig {

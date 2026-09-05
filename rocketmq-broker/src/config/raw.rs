@@ -19,7 +19,6 @@ use config::File;
 use rocketmq_observability::LoggingOverrides;
 use rocketmq_observability::ObservabilityOverrides;
 use rocketmq_observability::ReloadConfig;
-use rocketmq_runtime::common::parse_config_file::render_safe_config_error;
 use rocketmq_store::MessageStoreConfig;
 use serde::Deserialize;
 
@@ -115,19 +114,19 @@ impl RawBrokerConfig {
             .build()
             .map_err(|error| BrokerConfigError::Load {
                 path: path.to_path_buf(),
-                source: render_safe_config_error(&error),
+                source: error,
             })?;
         let raw = loaded
             .clone()
             .try_deserialize()
             .map_err(|error| BrokerConfigError::Load {
                 path: path.to_path_buf(),
-                source: render_safe_config_error(&error),
+                source: error,
             })?;
         let ownership: CanonicalOwnershipMarkers =
             loaded.try_deserialize().map_err(|error| BrokerConfigError::Load {
                 path: path.to_path_buf(),
-                source: render_safe_config_error(&error),
+                source: error,
             })?;
         ownership.validate()?;
         Ok(raw)

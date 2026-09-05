@@ -18,7 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use crate::RuntimeError;
 use crate::RuntimeHandle;
+use crate::RuntimeResult;
 use crate::ShutdownReport;
 use crate::TaskGroup;
 use crate::TaskId;
@@ -31,7 +33,6 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::schedule::task::TaskExecution;
-use crate::schedule::SchedulerError;
 use crate::schedule::Task;
 use crate::schedule::TaskContext;
 use crate::schedule::TaskResult;
@@ -91,24 +92,17 @@ struct RunningTask {
     task_group: TaskGroup,
 }
 
-fn new_executor_task_group(operation: &'static str) -> Result<TaskGroup, SchedulerError> {
-    let handle = tokio::runtime::Handle::try_current()
-        .map_err(|error| SchedulerError::SystemError(format!("{operation} requires a Tokio runtime: {error}")))?;
+fn new_executor_task_group(operation: crate::RuntimeOperation) -> RuntimeResult<TaskGroup> {
+    let handle =
+        tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::context_unavailable(operation))?;
     Ok(TaskGroup::root("rocketmq.task-executor", RuntimeHandle::new(handle)))
 }
 
-fn spawn_executor_task<F>(
-    task_group: &TaskGroup,
-    operation: &'static str,
-    task_name: String,
-    future: F,
-) -> Result<TaskId, SchedulerError>
+fn spawn_executor_task<F>(task_group: &TaskGroup, task_name: String, future: F) -> RuntimeResult<TaskId>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    task_group
-        .spawn_service(task_name, future)
-        .map_err(|error| SchedulerError::SystemError(format!("{operation} failed to spawn task execution: {error}")))
+    task_group.spawn_service(task_name, future)
 }
 
 impl TaskExecutor {
@@ -144,7 +138,7 @@ impl TaskExecutor {
     }
 
     /// Execute a task asynchronously
-    pub async fn execute_task(&self, task: Arc<Task>, scheduled_time: SystemTime) -> Result<String, SchedulerError> {
+    pub async fn execute_task(&self, task: Arc<Task>, scheduled_time: SystemTime) -> RuntimeResult<String> {
         let execution_id = Uuid::new_v4().to_string();
         let mut execution = TaskExecution::new(task.id.clone(), scheduled_time);
         execution.execution_id = execution_id.clone();
@@ -159,12 +153,13 @@ impl TaskExecutor {
         let executor = self.clone_for_task();
         let task_clone = task.clone();
         let execution_id_clone = execution_id.clone();
-        let task_group = self.task_group("TaskExecutor::execute_task").await?;
+        let task_group = self
+            .task_group(crate::RuntimeOperation::CreateExecutorTaskGroup)
+            .await?;
 
         // Spawn the task execution
         let task_id = spawn_executor_task(
             &task_group,
-            "TaskExecutor::execute_task",
             format!("task-executor.execution.{execution_id}"),
             async move {
                 executor
@@ -181,7 +176,7 @@ impl TaskExecutor {
     }
 
     /// Cancel a running task
-    pub async fn cancel_task(&self, execution_id: &str) -> Result<(), SchedulerError> {
+    pub async fn cancel_task(&self, execution_id: &str) -> bool {
         let handle = {
             let mut running_tasks = self.running_tasks.write().await;
             running_tasks.remove(execution_id)
@@ -199,9 +194,9 @@ impl TaskExecutor {
             self.mark_execution_cancelled(execution_id).await;
 
             info!("Task cancelled: {}", execution_id);
-            Ok(())
+            true
         } else {
-            Err(SchedulerError::TaskNotFound(execution_id.to_string()))
+            false
         }
     }
 
@@ -291,7 +286,7 @@ impl TaskExecutor {
         }
     }
 
-    async fn task_group(&self, operation: &'static str) -> Result<TaskGroup, SchedulerError> {
+    async fn task_group(&self, operation: crate::RuntimeOperation) -> RuntimeResult<TaskGroup> {
         let mut task_group = self.task_group.write().await;
         if let Some(task_group) = task_group.as_ref() {
             return Ok(task_group.clone());
@@ -336,7 +331,7 @@ impl TaskExecutor {
         task: Arc<Task>,
         scheduled_time: SystemTime,
         execution_delay: Option<Duration>,
-    ) -> Result<String, SchedulerError> {
+    ) -> RuntimeResult<String> {
         let execution_id = Uuid::new_v4().to_string();
         let mut execution = TaskExecution::new(task.id.clone(), scheduled_time);
         execution.execution_id = execution_id.clone();
@@ -358,12 +353,13 @@ impl TaskExecutor {
         let executor = self.clone_for_task();
         let task_clone = task.clone();
         let execution_id_clone = execution_id.clone();
-        let task_group = self.task_group("TaskExecutor::execute_task_with_delay").await?;
+        let task_group = self
+            .task_group(crate::RuntimeOperation::CreateExecutorTaskGroup)
+            .await?;
 
         // Spawn the delayed task execution
         let task_id = spawn_executor_task(
             &task_group,
-            "TaskExecutor::execute_task_with_delay",
             format!("task-executor.delayed-execution.{execution_id}"),
             async move {
                 // Wait until actual execution time
@@ -587,31 +583,36 @@ mod tests {
 
     #[test]
     fn executor_task_group_without_tokio_runtime_returns_error() {
-        let error = match new_executor_task_group("test-executor-spawn") {
+        let error = match new_executor_task_group(crate::RuntimeOperation::CreateExecutorTaskGroup) {
             Ok(_) => panic!("new_executor_task_group should fail without an ambient Tokio runtime"),
             Err(error) => error,
         };
 
-        assert!(matches!(
-            error,
-            SchedulerError::SystemError(message) if message.contains("requires a Tokio runtime")
-        ));
+        assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn closed_task_group_spawn_preserves_its_runtime_error_identity() {
+        let context = RuntimeContext::from_current("closed-executor-task-group");
+        let task_group = context.service_context("executor-service").task_group().clone();
+        let _report = task_group.shutdown(std::time::Duration::ZERO).await;
+
+        let error = spawn_executor_task(&task_group, "closed-task".to_string(), async {})
+            .expect_err("closed task group must reject a service task");
+
+        assert_eq!(error.operation(), crate::RuntimeOperation::SpawnTaskGroupTask);
+        assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::Unavailable);
     }
 
     #[tokio::test]
     async fn store_running_task_drops_already_finished_task() {
         let executor = TaskExecutor::new_legacy_compatibility(ExecutorConfig::default());
         let task_group = executor
-            .task_group("test-store-running-task-handle")
+            .task_group(crate::RuntimeOperation::CreateExecutorTaskGroup)
             .await
             .expect("task group should be available");
-        let task_id = spawn_executor_task(
-            &task_group,
-            "test-store-running-task-handle",
-            "finished-task".to_string(),
-            async {},
-        )
-        .expect("task should spawn");
+        let task_id =
+            spawn_executor_task(&task_group, "finished-task".to_string(), async {}).expect("task should spawn");
 
         while task_group.contains_task(task_id) {
             tokio::task::yield_now().await;
@@ -681,10 +682,7 @@ mod tests {
         .await
         .expect("task should start");
 
-        executor
-            .cancel_task(execution_id.as_str())
-            .await
-            .expect("task should cancel");
+        assert!(executor.cancel_task(execution_id.as_str()).await, "task should cancel");
 
         assert!(
             dropped.load(Ordering::Acquire),

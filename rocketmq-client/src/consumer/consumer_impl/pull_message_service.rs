@@ -230,11 +230,11 @@ impl PullRequestDispatcher {
         let shard = &self.shards[shard_index];
         shard.metrics.record_submitted();
         let retained_bytes = request.retained_bytes();
-        if let Err(error) = shard.queue.try_push_data(request, retained_bytes) {
+        if let QueuePushOutcome::Rejected { rejection, .. } = shard.queue.try_push_data(request, retained_bytes) {
             shard.metrics.record_rejected();
             warn!(
                 shard_index = shard.index,
-                "Failed to send sharded pull request: {:?}", error
+                "Failed to send sharded pull request: {:?}", rejection
             );
         }
     }
@@ -354,10 +354,15 @@ impl DelayedSchedulePayload {
                 if let Some(tx) = tx {
                     let retained_bytes = request.retained_bytes();
                     match tx.try_push_data(Box::new(request), retained_bytes) {
-                        Ok(_) => None,
-                        Err(error) => {
-                            warn!("POP request queue rejected a delayed request; retrying: {:?}", error);
-                            match error.into_item().into_any().downcast::<PopRequest>() {
+                        QueuePushOutcome::Enqueued
+                        | QueuePushOutcome::Coalesced { .. }
+                        | QueuePushOutcome::DroppedStale { .. } => None,
+                        QueuePushOutcome::Rejected { item, rejection } => {
+                            warn!(
+                                "POP request queue rejected a delayed request; retrying: {:?}",
+                                rejection
+                            );
+                            match item.into_any().downcast::<PopRequest>() {
                                 Ok(request) => Some(Self::Pop {
                                     request: *request,
                                     tx: Some(tx),
@@ -851,11 +856,11 @@ impl PullMessageService {
         };
         let retained_bytes = command.retained_bytes();
         match queue.try_push_data(command, retained_bytes) {
-            Ok(QueuePushOutcome::DroppedStale { dropped }) => {
+            QueuePushOutcome::DroppedStale { dropped } => {
                 self.delayed_scheduler_metrics.record_cancelled(dropped);
             }
-            Ok(QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. }) => {}
-            Err(_) => self.delayed_scheduler_metrics.record_cancelled(1),
+            QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } => {}
+            QueuePushOutcome::Rejected { .. } => self.delayed_scheduler_metrics.record_cancelled(1),
         }
     }
 
@@ -1056,12 +1061,14 @@ impl PullMessageService {
         let tx = self.tx.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         if let Some(tx) = tx {
             let retained_bytes = pop_request.retained_bytes();
-            if let Err(error) = tx.try_push_data(Box::new(pop_request), retained_bytes) {
+            if let QueuePushOutcome::Rejected { item, rejection } =
+                tx.try_push_data(Box::new(pop_request), retained_bytes)
+            {
                 warn!(
                     "executePopPullRequestImmediately queue admission failed; retrying with delay: {:?}",
-                    error
+                    rejection
                 );
-                match error.into_item().into_any().downcast::<PopRequest>() {
+                match item.into_any().downcast::<PopRequest>() {
                     Ok(pop_request) => self.execute_pop_pull_request_later(*pop_request, POP_REQUEUE_DELAY_MS),
                     Err(_) => error!("POP request queue returned an unexpected request type"),
                 }
@@ -1335,9 +1342,10 @@ mod tests {
             .build_request_queue::<BoxedMessageRequest>("pop-retry-overload", FullPolicy::Reject)
             .expect("POP retry queue");
         let first = test_pop_request(0);
-        queue
-            .try_push_data(Box::new(first), std::mem::size_of::<PopRequest>())
-            .expect("first POP request should fill the queue");
+        assert!(matches!(
+            queue.try_push_data(Box::new(first), std::mem::size_of::<PopRequest>()),
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+        ));
 
         let retry = DelayedSchedulePayload::Pop {
             request: test_pop_request(1),
@@ -1361,10 +1369,22 @@ mod tests {
             .build_request_queue::<u64>("pull-worker-overload", FullPolicy::Reject)
             .expect("pull worker queue");
 
-        assert!(queue.try_push_data(1, 1).is_ok());
-        assert!(queue.try_push_data(2, 1).is_ok());
-        assert!(queue.try_push_data(3, 1).is_err());
-        assert!(queue.try_push_data(4, 1).is_err());
+        assert!(matches!(
+            queue.try_push_data(1, 1),
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+        ));
+        assert!(matches!(
+            queue.try_push_data(2, 1),
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+        ));
+        assert!(matches!(
+            queue.try_push_data(3, 1),
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+        ));
+        assert!(matches!(
+            queue.try_push_data(4, 1),
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+        ));
 
         let snapshot = queue.snapshot();
         assert_eq!(snapshot.depth, 2);

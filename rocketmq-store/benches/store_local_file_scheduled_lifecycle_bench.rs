@@ -28,12 +28,14 @@ use rocketmq_store::test_support::run_store_local_file_scheduled_lifecycle_probe
 use rocketmq_store::test_support::StoreLocalFileScheduledLifecycleProbe;
 
 fn run_lifecycle_probe() -> StoreLocalFileScheduledLifecycleProbe {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: 2,
         max_blocking_threads: 4,
         thread_name: "rocketmq-store-local-file-scheduled-bench".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("store local file scheduled benchmark runtime should start");
     let context = owner.root_context().component("store-local-file-scheduled-bench");
     let output = owner.block_on(run_store_local_file_scheduled_lifecycle_probe(context));

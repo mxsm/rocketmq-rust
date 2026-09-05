@@ -88,7 +88,9 @@ pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
     use rocketmq_runtime::RuntimeOwner;
 
     static OWNER: LazyLock<RuntimeOwner> = LazyLock::new(|| {
-        RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-admin-tui-test"))
+        RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-admin-tui-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("admin TUI test runtime should start")
     });
 

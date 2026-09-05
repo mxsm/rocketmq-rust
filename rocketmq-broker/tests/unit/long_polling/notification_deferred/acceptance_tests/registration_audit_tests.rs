@@ -268,7 +268,9 @@ async fn notification_deferred_embedded_origin_is_rejected_before_capacity_take(
         service: Arc::clone(&service),
         observed: Arc::clone(&observed),
     };
-    let runtime = RuntimeOwner::new(RuntimeConfig::server_default("notification-embedded-origin"))
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("notification-embedded-origin"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("embedded Notification runtime");
     let context = runtime.root_context().component("notification.embedded-origin");
     let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(

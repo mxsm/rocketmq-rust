@@ -576,7 +576,8 @@ impl QueryAssignmentProcessor {
                     MetadataDeadline::after(Duration::from_secs(5)),
                 )
                 .await
-                .map_err(crate::runtime_to_rocketmq_error)?;
+                .map_err(crate::runtime_to_rocketmq_error)
+                .and_then(crate::require_metadata_durability)?;
         } else {
             self.message_request_mode_manager.persist()?;
         }
@@ -765,7 +766,7 @@ impl QueryAssignmentProcessor {
                     )
                     .await
                     .map_err(crate::runtime_to_rocketmq_error)
-                    .map(|_| ())
+                    .and_then(crate::require_metadata_durability)
             } else {
                 self.message_request_mode_manager.persist()
             };
@@ -1281,7 +1282,9 @@ mod tests {
 
     #[tokio::test]
     async fn embedded_unknown_request_returns_a_reply_response() {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("query-assignment-test"))
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("query-assignment-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("QueryAssignment test runtime");
         let context = owner.root_context().component("query-assignment-test.request");
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
@@ -1318,7 +1321,9 @@ mod tests {
 
     #[tokio::test]
     async fn embedded_query_success_returns_an_owned_body_plan() {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("query-assignment-body-test"))
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("query-assignment-body-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("QueryAssignment body test runtime");
         let context = owner.root_context().component("query-assignment-body-test.request");
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
@@ -1370,7 +1375,9 @@ mod tests {
     #[tokio::test]
     async fn network_query_success_preserves_opaque_and_body() {
         const ORIGINAL_OPAQUE: i32 = 9_014;
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("query-assignment-network-test"))
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("query-assignment-network-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("QueryAssignment network test runtime");
         let server_context = owner.root_context().component("query-assignment-network-test.server");
         let runner_context = owner.root_context().component("query-assignment-network-test.runner");

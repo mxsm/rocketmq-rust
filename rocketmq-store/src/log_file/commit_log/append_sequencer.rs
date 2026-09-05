@@ -21,8 +21,8 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_runtime::resource_budget::BudgetConfigError;
 use rocketmq_runtime::resource_budget::QueueSnapshot;
+use rocketmq_runtime::RuntimeContractViolation;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
@@ -64,7 +64,7 @@ const APPEND_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, thiserror::Error)]
 pub(super) enum CommitLogAppendStartError {
     #[error("invalid append queue budget: {0}")]
-    InvalidBudget(#[from] BudgetConfigError),
+    InvalidBudget(#[from] RuntimeContractViolation),
     #[error("failed to start append worker: {0}")]
     WorkerStart(#[from] RuntimeError),
 }

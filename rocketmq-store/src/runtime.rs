@@ -188,7 +188,9 @@ pub(crate) fn test_runtime_owner() -> &'static rocketmq_runtime::RuntimeOwner {
 
     static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
     OWNER.get_or_init(|| {
-        RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-store-tests"))
+        RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-store-tests"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("store test runtime owner should start")
     })
 }

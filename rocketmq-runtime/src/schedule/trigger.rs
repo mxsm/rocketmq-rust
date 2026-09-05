@@ -21,7 +21,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use cron::Schedule;
 
-use crate::schedule::SchedulerError;
+use crate::RuntimeContractViolation;
 
 /// Trigger trait for determining when tasks should run.
 pub trait Trigger: Send + Sync {
@@ -53,36 +53,62 @@ pub struct CronTrigger {
 
 impl CronTrigger {
     /// Creates a new `CronTrigger`.
-    pub fn new(expression: impl Into<String>) -> Result<Self, SchedulerError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `expression` is not a valid cron
+    /// schedule.
+    pub fn new(expression: impl Into<String>) -> Result<Self, RuntimeContractViolation> {
         let expression = expression.into();
-        let schedule = Schedule::from_str(&expression)
-            .map_err(|e| SchedulerError::TriggerError(format!("Invalid cron expression: {e}")))?;
+        let schedule = Schedule::from_str(&expression).map_err(|_error| RuntimeContractViolation::InvalidSchedule {
+            policy: crate::RuntimeContractPolicy::CronExpression,
+        })?;
 
         Ok(Self { schedule, expression })
     }
 
-    /// Create a trigger that fires every minute
-    pub fn every_minute() -> Result<Self, SchedulerError> {
+    /// Creates a trigger that fires every minute.
+    ///
+    /// # Errors
+    ///
+    /// Returns the contract violation reported by [`Self::new`].
+    pub fn every_minute() -> Result<Self, RuntimeContractViolation> {
         Self::new("0 * * * * *")
     }
 
-    /// Create a trigger that fires every hour at minute 0
-    pub fn hourly() -> Result<Self, SchedulerError> {
+    /// Creates a trigger that fires every hour at minute 0.
+    ///
+    /// # Errors
+    ///
+    /// Returns the contract violation reported by [`Self::new`].
+    pub fn hourly() -> Result<Self, RuntimeContractViolation> {
         Self::new("0 0 * * * *")
     }
 
-    /// Create a trigger that fires daily at midnight
-    pub fn daily() -> Result<Self, SchedulerError> {
+    /// Creates a trigger that fires daily at midnight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the contract violation reported by [`Self::new`].
+    pub fn daily() -> Result<Self, RuntimeContractViolation> {
         Self::new("0 0 0 * * *")
     }
 
-    /// Create a trigger that fires weekly on Sunday at midnight
-    pub fn weekly() -> Result<Self, SchedulerError> {
+    /// Creates a trigger that fires weekly on Sunday at midnight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the contract violation reported by [`Self::new`].
+    pub fn weekly() -> Result<Self, RuntimeContractViolation> {
         Self::new("0 0 0 * * SUN")
     }
 
-    /// Create a trigger that fires monthly on the 1st at midnight
-    pub fn monthly() -> Result<Self, SchedulerError> {
+    /// Creates a trigger that fires monthly on the 1st at midnight.
+    ///
+    /// # Errors
+    ///
+    /// Returns the contract violation reported by [`Self::new`].
+    pub fn monthly() -> Result<Self, RuntimeContractViolation> {
         Self::new("0 0 0 1 * *")
     }
 }
@@ -114,14 +140,23 @@ pub struct IntervalTrigger {
 
 impl IntervalTrigger {
     /// Creates a new `IntervalTrigger`.
-    pub fn new(interval: Duration) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `interval` is zero.
+    pub fn new(interval: Duration) -> Result<Self, RuntimeContractViolation> {
+        if interval.is_zero() {
+            return Err(RuntimeContractViolation::InvalidSchedule {
+                policy: crate::RuntimeContractPolicy::IntervalMustBePositive,
+            });
+        }
+        Ok(Self {
             interval,
             start_time: None,
             end_time: None,
             repeat_count: None,
             executed_count: 0,
-        }
+        })
     }
 
     /// Sets start time and returns the updated value.
@@ -143,17 +178,29 @@ impl IntervalTrigger {
     }
 
     /// Creates the every seconds value.
-    pub fn every_seconds(seconds: u64) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `seconds` is zero.
+    pub fn every_seconds(seconds: u64) -> Result<Self, RuntimeContractViolation> {
         Self::new(Duration::from_secs(seconds))
     }
 
     /// Creates the every minutes value.
-    pub fn every_minutes(minutes: u64) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `minutes` is zero.
+    pub fn every_minutes(minutes: u64) -> Result<Self, RuntimeContractViolation> {
         Self::new(Duration::from_secs(minutes * 60))
     }
 
     /// Creates the every hours value.
-    pub fn every_hours(hours: u64) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `hours` is zero.
+    pub fn every_hours(hours: u64) -> Result<Self, RuntimeContractViolation> {
         Self::new(Duration::from_secs(hours * 3600))
     }
 }
@@ -296,8 +343,17 @@ pub struct DelayedIntervalTrigger {
 
 impl DelayedIntervalTrigger {
     /// Creates a new `DelayedIntervalTrigger`.
-    pub fn new(interval: Duration, initial_delay: Duration) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `interval` is zero.
+    pub fn new(interval: Duration, initial_delay: Duration) -> Result<Self, RuntimeContractViolation> {
+        if interval.is_zero() {
+            return Err(RuntimeContractViolation::InvalidSchedule {
+                policy: crate::RuntimeContractPolicy::DelayedIntervalMustBePositive,
+            });
+        }
+        Ok(Self {
             interval,
             initial_delay,
             start_time: SystemTime::now(),
@@ -305,11 +361,18 @@ impl DelayedIntervalTrigger {
             end_time: None,
             repeat_count: None,
             executed_count: 0,
-        }
+        })
     }
 
     /// Creates the every seconds with delay value.
-    pub fn every_seconds_with_delay(interval_seconds: u64, delay_seconds: u64) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `interval_seconds` is zero.
+    pub fn every_seconds_with_delay(
+        interval_seconds: u64,
+        delay_seconds: u64,
+    ) -> Result<Self, RuntimeContractViolation> {
         Self::new(
             Duration::from_secs(interval_seconds),
             Duration::from_secs(delay_seconds),
@@ -317,7 +380,14 @@ impl DelayedIntervalTrigger {
     }
 
     /// Creates the every minutes with delay value.
-    pub fn every_minutes_with_delay(interval_minutes: u64, delay_minutes: u64) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `interval_minutes` is zero.
+    pub fn every_minutes_with_delay(
+        interval_minutes: u64,
+        delay_minutes: u64,
+    ) -> Result<Self, RuntimeContractViolation> {
         Self::new(
             Duration::from_secs(interval_minutes * 60),
             Duration::from_secs(delay_minutes * 60),

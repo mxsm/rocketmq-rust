@@ -23,7 +23,7 @@ use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::SerializationError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::MetadataIoError;
+use rocketmq_runtime::RuntimeError;
 
 use crate::authentication::provider::LocalAuthenticationMetadataProvider;
 use crate::authorization::builder::default_authorization_context_builder::DefaultAuthorizationContextBuilder;
@@ -94,7 +94,7 @@ pub enum AuthorizationError {
 
     /// Authorization metadata actor or durability protocol failed.
     #[error("Authorization metadata persistence failed: {0}")]
-    MetadataIo(#[source] MetadataIoError),
+    MetadataIo(#[source] RuntimeError),
 
     /// Authorization metadata lock acquisition failed.
     #[error("Authorization metadata lock failed for '{0}'")]

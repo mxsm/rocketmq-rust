@@ -432,7 +432,9 @@ async fn start_running_server<P>(processor: P, controller: Arc<AdmissionControll
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-pull-deferred-acceptance"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("broker-pull-deferred-acceptance"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("Pull test runtime owner");
     let server_context = owner.root_context().component("pull-deferred.server");
     let runner_context = owner.root_context().component("pull-deferred.runner");

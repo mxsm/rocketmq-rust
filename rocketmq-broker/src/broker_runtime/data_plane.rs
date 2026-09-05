@@ -355,7 +355,10 @@ impl BrokerRuntime {
         let broker_name = self.composition.state.broker_config().broker_name().clone();
         let task_group = self.composition.state.service_context.as_ref().map(|service_context| {
             service_context
-                .component(format!("rocketmq-broker.transaction-check.{broker_name}"))
+                .component(
+                    rocketmq_runtime::ScopeId::try_new(format!("rocketmq-broker.transaction-check.{broker_name}"))
+                        .expect("the transaction-check scope has a fixed nonblank prefix"),
+                )
                 .task_group()
                 .clone()
         });

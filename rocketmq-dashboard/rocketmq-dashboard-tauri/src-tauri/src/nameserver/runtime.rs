@@ -112,7 +112,9 @@ pub(crate) fn test_client_runtime() -> Arc<ClientRuntime> {
     use rocketmq_runtime::RuntimeOwner;
 
     static OWNER: LazyLock<RuntimeOwner> = LazyLock::new(|| {
-        RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-dashboard-tauri-test"))
+        RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-dashboard-tauri-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("dashboard Tauri test runtime should start")
     });
 

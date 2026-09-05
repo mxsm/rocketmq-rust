@@ -192,7 +192,10 @@ impl ClientPool {
                 generation,
                 client_id.clone(),
                 rpc_hook,
-                self.inner.service_context.component(format!("instance-{generation}")),
+                self.inner.service_context.component(
+                    rocketmq_runtime::ScopeId::try_new(format!("instance-{generation}"))
+                        .expect("the client instance scope has a fixed nonblank prefix"),
+                ),
                 Arc::clone(&self.inner.request_future_holder),
                 self.inner.resource_budget.clone(),
                 self.inner.telemetry_handle.clone(),
@@ -235,9 +238,10 @@ impl ClientPool {
                 .or_insert_with(|| {
                     info!("Created new ProduceAccumulator for clientId:[{}]", client_id);
                     Arc::new(ProduceAccumulator::with_resource_budget(
-                        self.inner
-                            .service_context
-                            .component(format!("accumulator-{}", client_id)),
+                        self.inner.service_context.component(
+                            rocketmq_runtime::ScopeId::try_new(format!("accumulator-{}", client_id))
+                                .expect("the accumulator scope has a fixed nonblank prefix"),
+                        ),
                         client_id.as_str(),
                         self.inner.resource_budget.clone(),
                     ))

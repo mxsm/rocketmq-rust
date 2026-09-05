@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::error::RuntimeError;
-use crate::error::RuntimeResult;
+use crate::error::RuntimeContractViolation;
+use crate::RuntimeContractPolicy;
 
 #[derive(Debug, Clone)]
 /// Represents blocking pool policy.
@@ -38,26 +38,31 @@ pub struct BlockingPoolPolicy {
 
 impl BlockingPoolPolicy {
     /// Validates this value.
-    pub fn validate(&self) -> RuntimeResult<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when concurrency or queue depth is zero,
+    /// or when the combined queue and task timeout cannot be represented.
+    pub fn validate(&self) -> Result<(), RuntimeContractViolation> {
         if self.max_concurrency == 0 {
-            return Err(RuntimeError::InvalidConfig(
-                "blocking max_concurrency must be greater than zero".to_string(),
-            ));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::BlockingMaxConcurrencyPositive,
+            });
         }
         if self.max_queue_depth == 0 {
-            return Err(RuntimeError::InvalidConfig(
-                "blocking max_queue_depth must be greater than zero".to_string(),
-            ));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::BlockingMaxQueueDepthPositive,
+            });
         }
         let Some(total_timeout) = self.queue_timeout.checked_add(self.task_timeout) else {
-            return Err(RuntimeError::InvalidConfig(
-                "blocking queue_timeout plus task_timeout exceeds the supported duration".to_string(),
-            ));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::BlockingTimeoutRepresentable,
+            });
         };
         if std::time::Instant::now().checked_add(total_timeout).is_none() {
-            return Err(RuntimeError::InvalidConfig(
-                "blocking queue_timeout plus task_timeout exceeds the platform Instant range".to_string(),
-            ));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::BlockingTimeoutRepresentable,
+            });
         }
         Ok(())
     }
@@ -143,19 +148,22 @@ impl BlockingLanePolicies {
     }
 
     /// Validates this value.
-    pub fn validate(&self) -> RuntimeResult<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the first contract violation from one of the configured lanes.
+    pub fn validate(&self) -> Result<(), RuntimeContractViolation> {
         self.storage_io.validate()?;
         self.metadata_io.validate()?;
         self.cpu_crypto.validate()
     }
 
-    pub(crate) fn validate_for_global_capacity(&self, global_capacity: usize) -> RuntimeResult<()> {
+    pub(crate) fn validate_for_global_capacity(&self, global_capacity: usize) -> Result<(), RuntimeContractViolation> {
         self.validate()?;
         if global_capacity < BlockingLane::ALL.len() {
-            return Err(RuntimeError::InvalidConfig(format!(
-                "max_blocking_threads must be at least {} to reserve capacity for every blocking lane",
-                BlockingLane::ALL.len()
-            )));
+            return Err(RuntimeContractViolation::InvalidConfiguration {
+                policy: RuntimeContractPolicy::BlockingGlobalCapacityCoversLanes,
+            });
         }
         Ok(())
     }

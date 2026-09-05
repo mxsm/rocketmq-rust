@@ -153,7 +153,7 @@ impl ServiceLifecycleConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeError::InvalidConfig`] for a malformed address, non-UTF-8 input,
+    /// Returns a configuration runtime failure for a malformed address, non-UTF-8 input,
     /// zero timeout, or a liveness window shorter than two progress intervals.
     pub fn from_env(service_name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         let probe_bind_addr = optional_env(HEALTH_BIND_ADDR_ENV)?
@@ -172,18 +172,20 @@ impl ServiceLifecycleConfig {
 }
 
 fn optional_env(name: &'static str) -> RuntimeResult<Option<String>> {
-    let Some(value) = env::var_os(name) else {
-        return Ok(None);
-    };
-    value
-        .into_string()
-        .map(Some)
-        .map_err(|_| RuntimeError::InvalidConfig(format!("{name} must contain valid UTF-8")))
+    match env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(RuntimeError::configuration_failure(
+            crate::RuntimeOperation::ServiceLifecycleEnvironment,
+            error,
+        )),
+    }
 }
 
-fn parse_socket_addr(name: &'static str, raw: &str) -> RuntimeResult<SocketAddr> {
-    raw.parse::<SocketAddr>()
-        .map_err(|error| RuntimeError::InvalidConfig(format!("{name} must be a socket address: {error}")))
+fn parse_socket_addr(_name: &'static str, raw: &str) -> RuntimeResult<SocketAddr> {
+    raw.parse::<SocketAddr>().map_err(|error| {
+        RuntimeError::configuration_failure(crate::RuntimeOperation::ServiceLifecycleProbeAddress, error)
+    })
 }
 
 fn parse_duration_env(
@@ -196,12 +198,12 @@ fn parse_duration_env(
         return Ok(default);
     };
     let seconds = raw.parse::<u64>().map_err(|error| {
-        RuntimeError::InvalidConfig(format!("{name} must be an integer number of seconds: {error}"))
+        RuntimeError::configuration_failure(crate::RuntimeOperation::ServiceLifecycleDuration, error)
     })?;
     if !(minimum_seconds..=maximum_seconds).contains(&seconds) {
-        return Err(RuntimeError::InvalidConfig(format!(
-            "{name} must be between {minimum_seconds} and {maximum_seconds} seconds"
-        )));
+        return Err(RuntimeError::configuration(
+            crate::RuntimeOperation::ServiceLifecycleDurationRange,
+        ));
     }
     Ok(Duration::from_secs(seconds))
 }
@@ -303,20 +305,18 @@ impl ServiceLifecycle {
     /// task registered by that attempt before making the lifecycle retryable.
     pub async fn start(&self, service_context: &ChildServiceContext) -> RuntimeResult<()> {
         if self.inner.started.swap(true, Ordering::AcqRel) {
-            return Err(RuntimeError::LifecycleOperation {
-                operation: "start_service_lifecycle",
-                message: "service lifecycle is already started".to_string(),
-            });
+            return Err(RuntimeError::internal_failure(
+                crate::RuntimeOperation::StartServiceLifecycle,
+            ));
         }
 
         let mut start_attempt = ServiceLifecycleStartAttempt::new(&self.inner);
         let lifecycle_context = service_context.component("service-lifecycle");
         let lifecycle_tasks = lifecycle_context.task_group().clone();
         if lifecycle_tasks.lifecycle_state() != crate::TaskGroupLifecycleState::Open {
-            return Err(RuntimeError::TaskGroupClosing {
-                group_id: service_context.task_group().id(),
-                group_name: Arc::from(service_context.task_group().name()),
-            });
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::ServiceLifecycleTaskGroup,
+            ));
         }
         start_attempt.own(lifecycle_tasks.cancellation_token());
 
@@ -367,16 +367,10 @@ impl ServiceLifecycle {
         };
         let listener = TcpListener::bind(bind_addr)
             .await
-            .map_err(|error| RuntimeError::LifecycleOperation {
-                operation: "bind_service_health_probe",
-                message: error.to_string(),
-            })?;
+            .map_err(|error| RuntimeError::internal(crate::RuntimeOperation::BindServiceHealthProbe, error))?;
         let local_addr = listener
             .local_addr()
-            .map_err(|error| RuntimeError::LifecycleOperation {
-                operation: "inspect_service_health_probe",
-                message: error.to_string(),
-            })?;
+            .map_err(|error| RuntimeError::internal(crate::RuntimeOperation::InspectServiceHealthProbe, error))?;
         Ok(Some((listener, local_addr)))
     }
 
@@ -444,13 +438,9 @@ impl ServiceLifecycle {
                 Ok(())
             }
             Err(STATE_READY) => Ok(()),
-            Err(state) => Err(RuntimeError::LifecycleOperation {
-                operation: "mark_service_ready",
-                message: format!(
-                    "cannot transition service from {} to ready",
-                    ServiceLifecycleState::from_u8(state).as_str()
-                ),
-            }),
+            Err(_state) => Err(RuntimeError::internal_failure(
+                crate::RuntimeOperation::MarkServiceReady,
+            )),
         }
     }
 
@@ -466,10 +456,9 @@ impl ServiceLifecycle {
     pub fn suspend_readiness_for_maintenance(&self) -> RuntimeResult<()> {
         let shutdown_request = self.inner.shutdown_request.lock();
         if shutdown_request.is_some() || self.state() != ServiceLifecycleState::Ready {
-            return Err(RuntimeError::LifecycleOperation {
-                operation: "suspend_service_readiness_for_maintenance",
-                message: format!("cannot suspend readiness while service is {}", self.state().as_str()),
-            });
+            return Err(RuntimeError::internal_failure(
+                crate::RuntimeOperation::SuspendServiceReadiness,
+            ));
         }
         self.inner
             .maintenance_readiness_suspended
@@ -487,10 +476,9 @@ impl ServiceLifecycle {
     pub fn restore_readiness_after_maintenance(&self) -> RuntimeResult<()> {
         let shutdown_request = self.inner.shutdown_request.lock();
         if shutdown_request.is_some() || self.state() != ServiceLifecycleState::Ready {
-            return Err(RuntimeError::LifecycleOperation {
-                operation: "restore_service_readiness_after_maintenance",
-                message: format!("cannot restore readiness while service is {}", self.state().as_str()),
-            });
+            return Err(RuntimeError::internal_failure(
+                crate::RuntimeOperation::RestoreServiceReadiness,
+            ));
         }
         self.inner
             .maintenance_readiness_suspended
@@ -648,6 +636,8 @@ fn probe_response(status: u16, status_text: &'static str, state: ServiceLifecycl
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
     use crate::RuntimeContext;
 
@@ -753,16 +743,8 @@ mod tests {
             .start(&service)
             .await
             .expect_err("occupied probe address must fail startup");
-        assert!(
-            matches!(
-                error,
-                RuntimeError::LifecycleOperation {
-                    operation: "bind_service_health_probe",
-                    ..
-                }
-            ),
-            "{error}"
-        );
+        assert_eq!(error.operation(), crate::RuntimeOperation::BindServiceHealthProbe);
+        assert!(error.source().is_some());
         assert_eq!(lifecycle.state(), ServiceLifecycleState::Starting);
         assert_eq!(lifecycle.probe_local_addr(), None);
         assert!(!lifecycle.inner.started.load(Ordering::Acquire));

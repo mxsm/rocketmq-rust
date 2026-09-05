@@ -22,7 +22,9 @@ use std::path::PathBuf;
 
 fn main() -> anyhow::Result<()> {
     let command = Command::parse(env::args().skip(1))?;
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-dashboard-storage"))?;
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-dashboard-storage"))
+        .expect("dashboard storage runtime profile is internally valid")
+        .build()?;
     let result = owner.block_on(run(command, owner.root_context().component("storage-operations")));
     let shutdown = owner.shutdown_runtime_blocking();
     result?;

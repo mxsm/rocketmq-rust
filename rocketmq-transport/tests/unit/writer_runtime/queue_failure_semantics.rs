@@ -28,7 +28,6 @@ use std::time::Instant;
 use bytes::Bytes;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_protocol::protocol::RemotingCommand;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
@@ -389,7 +388,7 @@ async fn active_batch_failure_shares_source_and_drains_followers_without_a_secon
 
 #[tokio::test]
 async fn active_file_failure_and_poison_drain_release_each_file_lease_once() {
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     let blocking = owner
         .root_context()
         .component("writer-file-lease-test")
@@ -457,7 +456,7 @@ async fn active_file_failure_and_poison_drain_release_each_file_lease_once() {
 
 #[tokio::test]
 async fn successful_file_write_releases_its_lease_once_after_completion() {
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     let blocking = owner
         .root_context()
         .component("writer-file-success-test")

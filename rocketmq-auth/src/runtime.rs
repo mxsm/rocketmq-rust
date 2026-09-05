@@ -306,11 +306,11 @@ impl AuthRuntimeBuilder {
     pub async fn build(self) -> RocketMQResult<AuthRuntime> {
         let metadata_io = match self.metadata_io {
             Some(metadata_io) => metadata_io,
-            None => MetadataIoActor::start(
-                &self.service_context.component("auth.metadata-io"),
-                MetadataIoConfig::default(),
-            )
-            .map_err(|error| RocketMQError::auth_config_invalid("authRuntime", error.to_string()))?,
+            None => MetadataIoConfig::default()
+                .into_plan()
+                .expect("default metadata I/O config is valid")
+                .start(&self.service_context.component("auth.metadata-io"))
+                .map_err(|error| RocketMQError::auth_config_invalid("authRuntime", error.to_string()))?,
         };
         let provider_registry = match self.provider_registry {
             Some(provider_registry) => provider_registry,
@@ -1601,11 +1601,11 @@ accounts:
             ..AuthConfig::default()
         };
         let context = rocketmq_runtime::RuntimeContext::try_from_current("auth-v1-migration-test").unwrap();
-        let metadata_io = MetadataIoActor::start(
-            &context.service_context("auth.v1-migration"),
-            MetadataIoConfig::default(),
-        )
-        .unwrap();
+        let metadata_io = MetadataIoConfig::default()
+            .into_plan()
+            .expect("default metadata I/O config is valid")
+            .start(&context.service_context("auth.v1-migration"))
+            .unwrap();
         let registry = ProviderRegistry::local_with_metadata_io(&auth_config, Some(metadata_io)).unwrap();
         let acl_file = temp.path().join("conf").join("acl").join("legacy.yml");
         fs::create_dir_all(acl_file.parent().unwrap()).unwrap();

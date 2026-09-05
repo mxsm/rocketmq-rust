@@ -75,7 +75,10 @@ fn main() -> ProxyResult<()> {
     if print_release_version_if_requested("rocketmq-proxy-rust") {
         return Ok(());
     }
-    let owner = RuntimeOwner::new(proxy_runtime_config()).map_err(proxy_runtime_error("build proxy runtime"))?;
+    let owner = RuntimeOwner::plan(proxy_runtime_config())
+        .expect("proxy runtime profile is internally valid")
+        .build()
+        .map_err(proxy_runtime_error("build proxy runtime"))?;
     let service_context = owner.root_context().component("proxy");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-proxy").map_err(|error| ProxyError::Transport {
         message: format!("invalid Proxy lifecycle configuration: {error}"),

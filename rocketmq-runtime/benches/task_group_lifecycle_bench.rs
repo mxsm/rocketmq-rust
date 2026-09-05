@@ -26,6 +26,7 @@ use criterion::Criterion;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ScopeId;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskKind;
 
@@ -40,11 +41,17 @@ fn runtime_config() -> RuntimeConfig {
 }
 
 fn run_spawn_shutdown(task_count: usize) -> ShutdownReport {
-    let owner = RuntimeOwner::new(runtime_config()).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(runtime_config())
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime owner should start");
     let context = owner.root_context().component("bench.task-group-root");
 
     let report = owner.block_on(async move {
-        let service = context.component(format!("bench.task-group.{task_count}"));
+        let service = context.component(
+            ScopeId::try_new(format!("bench.task-group.{task_count}"))
+                .expect("the benchmark scope has a fixed nonblank prefix"),
+        );
         for task_index in 0..task_count {
             service
                 .spawn_service(format!("short-task-{task_index}"), async {})
@@ -63,11 +70,17 @@ fn run_spawn_shutdown(task_count: usize) -> ShutdownReport {
 }
 
 fn run_operation_churn(operation_count: usize) -> ShutdownReport {
-    let owner = RuntimeOwner::new(runtime_config()).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(runtime_config())
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime owner should start");
     let context = owner.root_context().component("bench.operation-registry-root");
 
     let report = owner.block_on(async move {
-        let service = context.component(format!("bench.operation-registry.{operation_count}"));
+        let service = context.component(
+            ScopeId::try_new(format!("bench.operation-registry.{operation_count}"))
+                .expect("the benchmark scope has a fixed nonblank prefix"),
+        );
         let operation = OperationContext::without_deadline(TaskKind::Worker);
         for operation_index in 0..operation_count {
             service

@@ -805,7 +805,9 @@ mod tests {
 
     #[tokio::test]
     async fn embedded_recall_fails_closed_before_business_processing() {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("recall-message-test"))
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("recall-message-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("RecallMessage test runtime");
         let context = owner.root_context().component("recall-message-test.request");
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(

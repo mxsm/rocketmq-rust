@@ -357,16 +357,15 @@ impl TaskGroup {
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeError::TaskGroupClosing`] after this owner starts
+    /// Returns an unavailable runtime failure after this owner starts
     /// shutting down or becomes poisoned.
     pub fn try_child(&self, name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
         let name = name.into();
         let _spawn_guard = self.inner.spawn_gate.lock();
         if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
-            return Err(RuntimeError::TaskGroupClosing {
-                group_id: self.inner.id,
-                group_name: self.inner.name.clone(),
-            });
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::CreateTaskGroupChild,
+            ));
         }
 
         let child = self.open_component(name);
@@ -642,10 +641,9 @@ impl TaskGroup {
     {
         let _spawn_guard = self.inner.spawn_gate.lock();
         if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
-            return Err(RuntimeError::TaskGroupClosing {
-                group_id: self.inner.id,
-                group_name: self.inner.name.clone(),
-            });
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::SpawnTaskGroupTask,
+            ));
         }
 
         let task_id = TaskId(self.inner.next_task_id.fetch_add(1, Ordering::Relaxed));

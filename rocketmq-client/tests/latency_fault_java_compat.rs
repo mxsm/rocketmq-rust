@@ -17,6 +17,7 @@
 use rocketmq_client_rust::test_support::LatencyFaultJavaCompatHarness;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ScopeId;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -82,12 +83,16 @@ fn latency_windows_match_java_55_with_a_manual_clock() {
     let corpus = corpus();
     assert_eq!(corpus.schema_version, 1);
     assert_eq!(corpus.java_version, "5.5.0");
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("latency-fault-java-compat"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("latency-fault-java-compat"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("runtime owner should start");
 
     for case in corpus.state_cases {
         let harness = LatencyFaultJavaCompatHarness::new(
-            owner.root_context().component(case.id.clone()),
+            owner.root_context().component(
+                ScopeId::try_new(case.id.clone()).expect("checked Java compatibility corpus case IDs are nonblank"),
+            ),
             case.initial_now_ms,
             corpus.latency_max_ms.clone(),
             corpus.not_available_duration_ms.clone(),
@@ -111,12 +116,16 @@ fn latency_windows_match_java_55_with_a_manual_clock() {
 #[test]
 fn selection_avoidance_recovery_and_route_changes_match_java_55() {
     let corpus = corpus();
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("latency-fault-selection-compat"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("latency-fault-selection-compat"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("runtime owner should start");
 
     for case in corpus.selection_cases {
         let harness = LatencyFaultJavaCompatHarness::new(
-            owner.root_context().component(case.id.clone()),
+            owner.root_context().component(
+                ScopeId::try_new(case.id.clone()).expect("checked Java compatibility corpus case IDs are nonblank"),
+            ),
             case.initial_now_ms,
             corpus.latency_max_ms.clone(),
             corpus.not_available_duration_ms.clone(),

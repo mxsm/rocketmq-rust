@@ -433,9 +433,9 @@ impl ProduceAccumulator {
             .try_acquire_data(estimated_message_retained_bytes(&message))
         {
             Ok(permit) => permit,
-            Err(error) => {
+            Err(_rejection) => {
                 self.release_hold_size(reserved_size);
-                return Err(crate::mq_client_err!(error.to_string()));
+                return Err(crate::mq_client_err!("producer accumulation capacity is exhausted"));
             }
         };
 
@@ -545,9 +545,9 @@ impl ProduceAccumulator {
             .try_acquire_data(estimated_message_retained_bytes(&message))
         {
             Ok(permit) => permit,
-            Err(error) => {
+            Err(_rejection) => {
                 self.release_hold_size(reserved_size);
-                return Err(crate::mq_client_err!(error.to_string()));
+                return Err(crate::mq_client_err!("producer accumulation capacity is exhausted"));
             }
         };
 
@@ -2314,10 +2314,14 @@ impl GuardForSyncSendService {
             deadline_ms,
         };
         let retained_bytes = command.retained_bytes();
-        schedule_queue
-            .try_push_data(command, retained_bytes)
-            .map(|_| ())
-            .map_err(|_| crate::mq_client_err!("sync batch deadline queue is full"))
+        match schedule_queue.try_push_data(command, retained_bytes) {
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
+                Err(crate::mq_client_err!("sync batch deadline queue is full"))
+            }
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+            | rocketmq_runtime::QueuePushOutcome::Coalesced { .. }
+            | rocketmq_runtime::QueuePushOutcome::DroppedStale { .. } => Ok(()),
+        }
     }
 
     fn metrics_snapshot(&self) -> BatchGuardMetricsSnapshot {
@@ -2505,10 +2509,14 @@ impl GuardForAsyncSendService {
             deadline_ms,
         };
         let retained_bytes = command.retained_bytes();
-        schedule_queue
-            .try_push_data(command, retained_bytes)
-            .map(|_| ())
-            .map_err(|_| crate::mq_client_err!("async batch deadline queue is full"))
+        match schedule_queue.try_push_data(command, retained_bytes) {
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
+                Err(crate::mq_client_err!("async batch deadline queue is full"))
+            }
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+            | rocketmq_runtime::QueuePushOutcome::Coalesced { .. }
+            | rocketmq_runtime::QueuePushOutcome::DroppedStale { .. } => Ok(()),
+        }
     }
 
     fn metrics_snapshot(&self) -> BatchGuardMetricsSnapshot {

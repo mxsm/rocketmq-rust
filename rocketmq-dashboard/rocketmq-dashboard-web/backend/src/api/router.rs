@@ -236,7 +236,6 @@ mod tests {
     use axum::routing::get;
     use rocketmq_admin_core::client_adapter::ClientRuntime;
     use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -318,7 +317,7 @@ mod tests {
     #[test]
     fn session_status_propagates_ambiguous_credentials_and_accepts_identical_duplicates() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let (state, client_runtime) = test_state(&owner, directory.path().join("dashboard")).await;
             let session = service::login(
@@ -378,7 +377,7 @@ mod tests {
     #[test]
     fn storage_status_is_authenticated_while_public_health_is_minimal() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let (state, client_runtime) = test_state(&owner, directory.path().join("dashboard")).await;
             let app = build_router(state.clone());

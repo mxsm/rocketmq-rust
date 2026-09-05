@@ -58,14 +58,17 @@ impl DashboardAdminLifecycle {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let client_runtime_owner = match RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-dashboard-tauri-client"))
-    {
-        Ok(owner) => owner,
-        Err(error) => {
-            eprintln!("Failed to create dashboard client runtime: {error}");
-            return;
-        }
-    };
+    let client_runtime_owner =
+        match RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-dashboard-tauri-client"))
+            .expect("dashboard client runtime profile is internally valid")
+            .build()
+        {
+            Ok(owner) => owner,
+            Err(error) => {
+                eprintln!("Failed to create dashboard client runtime: {error}");
+                return;
+            }
+        };
     let client_runtime = match ClientRuntime::try_new(
         client_runtime_owner.root_context().component("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),

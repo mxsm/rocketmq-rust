@@ -747,9 +747,11 @@ mod tests {
 
     #[test]
     fn panicking_first_target_does_not_skip_later_registry_cleanup() {
-        let runtime = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+        let runtime = rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
             "deferred-cleanup-panicking-target",
         ))
+        .expect("runtime configuration is valid")
+        .build()
         .expect("cleanup panic test runtime");
         let parent = runtime
             .root_context()

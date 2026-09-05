@@ -322,7 +322,9 @@ mod tests {
 
     impl EmbeddedFixture {
         fn new(processor: PollingInfoProcessor) -> Self {
-            let owner = RuntimeOwner::new(RuntimeConfig::server_default("polling-info-test"))
+            let owner = RuntimeOwner::plan(RuntimeConfig::server_default("polling-info-test"))
+                .expect("runtime configuration is valid")
+                .build()
                 .expect("PollingInfo test runtime");
             let context = owner.root_context().component("polling-info-test.request");
             let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
@@ -441,7 +443,9 @@ mod tests {
     #[tokio::test]
     async fn network_header_error_preserves_request_identity_and_wire_metadata() {
         const ORIGINAL_OPAQUE: i32 = 9_013;
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("polling-info-network-test"))
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("polling-info-network-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("PollingInfo network test runtime");
         let server_context = owner.root_context().component("polling-info-network-test.server");
         let runner_context = owner.root_context().component("polling-info-network-test.runner");

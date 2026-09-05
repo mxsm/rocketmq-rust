@@ -17,16 +17,21 @@
 use std::{sync::Arc, time::Duration};
 
 use rocketmq_admin_core::client_adapter::{ClientRuntime, ClientRuntimeConfig, TelemetryHandle};
-use rocketmq_runtime::{ChildServiceContext, RuntimeConfig, RuntimeOwner, ShutdownReport};
+use rocketmq_runtime::{
+    ChildServiceContext, RuntimeConfig, RuntimeContractViolation, RuntimeError, RuntimeOwner, ShutdownReport,
+};
 
 use super::admin_provider::GpuiAdminProvider;
 
 /// Runtime bootstrap or shutdown failure at the process boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum DesktopRuntimeError {
-    /// Unified runtime bootstrap or shutdown failed.
-    #[error("dashboard runtime failed: {0}")]
-    Runtime(String),
+    /// Deterministic dashboard runtime configuration was invalid.
+    #[error(transparent)]
+    Contract(#[from] RuntimeContractViolation),
+    /// Dashboard runtime startup or shutdown failed operationally.
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
     /// RocketMQ client runtime bootstrap failed.
     #[error("RocketMQ client runtime failed: {0}")]
     Client(String),
@@ -46,11 +51,11 @@ pub struct DesktopClientRuntime {
 impl DesktopClientRuntime {
     /// Creates one RuntimeOwner, one application child, and one ClientRuntime.
     pub fn new(telemetry: TelemetryHandle) -> Result<Self, DesktopRuntimeError> {
-        let owner = RuntimeOwner::new(RuntimeConfig::for_parallelism(
+        let owner = RuntimeOwner::plan(RuntimeConfig::for_parallelism(
             "rocketmq-dashboard-gpui",
             std::thread::available_parallelism().map_or(1, |parallelism| parallelism.get()),
-        ))
-        .map_err(|error| DesktopRuntimeError::Runtime(error.to_string()))?;
+        ))?
+        .build()?;
         let application_context = owner.root_context().component("dashboard-gpui");
         let work_context = application_context.component("application-work");
         let client_runtime = ClientRuntime::try_new(
@@ -95,9 +100,7 @@ impl DesktopClientRuntime {
         });
         drop(provider);
         drop(self.client_runtime);
-        owner
-            .shutdown_runtime_blocking()
-            .map_err(|error| DesktopRuntimeError::Runtime(error.to_string()))
+        owner.shutdown_runtime_blocking().map_err(DesktopRuntimeError::Runtime)
     }
 }
 

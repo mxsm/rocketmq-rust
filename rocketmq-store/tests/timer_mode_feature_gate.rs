@@ -27,7 +27,9 @@ use rocketmq_store_api::TimerStoreMode;
 
 fn service_context() -> rocketmq_runtime::ChildServiceContext {
     let owner = Box::leak(Box::new(
-        RuntimeOwner::new(RuntimeConfig::server_default("timer-mode-feature-gate"))
+        RuntimeOwner::plan(RuntimeConfig::server_default("timer-mode-feature-gate"))
+            .expect("test runtime configuration is valid")
+            .build()
             .expect("timer feature-gate runtime"),
     ));
     owner.root_context().component("store")

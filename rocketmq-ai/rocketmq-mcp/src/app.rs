@@ -1008,9 +1008,11 @@ mod tests {
             "deployment.secret".to_string(),
             RESOURCE_SENTINEL.to_string(),
         )]));
-        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+        let owner = rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
             "mcp-app-debug-redaction-test",
         ))
+        .expect("runtime configuration is valid")
+        .build()
         .unwrap();
         let app = super::McpApp::new(
             config,

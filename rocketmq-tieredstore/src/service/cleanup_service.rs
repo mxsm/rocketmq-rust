@@ -181,7 +181,7 @@ mod tests {
     fn cleanup_startup_failed_uses_service_error_kind() {
         let error = cleanup_startup_failed(
             "schedule test",
-            rocketmq_runtime::RuntimeError::InsideTokioRuntime("task group closed"),
+            rocketmq_runtime::RuntimeError::internal_failure(rocketmq_runtime::RuntimeOperation::CleanupTaskGroup),
         );
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);

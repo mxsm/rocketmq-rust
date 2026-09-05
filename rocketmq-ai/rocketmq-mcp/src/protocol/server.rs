@@ -478,7 +478,9 @@ mod tests {
     #[test]
     fn server_info_declares_mvp_capabilities() {
         let owner =
-            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default("mcp-protocol-test"))
+            rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default("mcp-protocol-test"))
+                .expect("runtime configuration is valid")
+                .build()
                 .unwrap();
         let app = McpApp::new(
             McpConfig::load(example_config_path()).unwrap(),
@@ -514,9 +516,12 @@ mod tests {
 
     #[test]
     fn request_query_unit_binds_closed_visibility_without_retaining_identity() {
-        let owner =
-            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default("mcp-visibility-test"))
-                .unwrap();
+        let owner = rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
+            "mcp-visibility-test",
+        ))
+        .expect("runtime configuration is valid")
+        .build()
+        .unwrap();
         let app = McpApp::new(
             McpConfig::load(example_config_path()).unwrap(),
             owner.root_context().component("mcp-app"),
@@ -1686,9 +1691,11 @@ mod tests {
         RocketmqMcpServer,
         Arc<ProtocolTestCounters>,
     ) {
-        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+        let owner = rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
             "mcp-real-handler-test",
         ))
+        .expect("runtime configuration is valid")
+        .build()
         .unwrap();
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.security.profile = profile.to_string();

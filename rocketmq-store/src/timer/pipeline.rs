@@ -25,7 +25,8 @@ use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushErrorKind;
+use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::QueueSnapshot;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
@@ -341,7 +342,10 @@ impl TimerPipeline {
             PipelineStage::Source => &self.source_queue,
             PipelineStage::Due => &self.due_queue,
         };
-        if queue.try_push_data(request, PUMP_RETAINED_BYTES).is_ok() {
+        if !matches!(
+            queue.try_push_data(request, PUMP_RETAINED_BYTES),
+            QueuePushOutcome::Rejected { .. }
+        ) {
             *sequence = request.sequence;
         } else {
             self.metrics.rejected_submissions.fetch_add(1, Ordering::Relaxed);
@@ -438,14 +442,22 @@ impl TimerPipeline {
                 .push_until(event, COMPLETION_RETAINED_BYTES, BudgetClass::Control, deadline.into())
                 .await
             {
-                Ok(_) => return,
-                Err(error) if matches!(error.kind(), QueuePushErrorKind::DeadlineExceeded) => {
-                    event = error.into_item();
+                QueuePushOutcome::Enqueued
+                | QueuePushOutcome::Coalesced { .. }
+                | QueuePushOutcome::DroppedStale { .. } => return,
+                QueuePushOutcome::Rejected {
+                    item,
+                    rejection: QueuePushRejection::DeadlineExceeded,
+                } => {
+                    event = item;
                     self.metrics.completion_backpressured.store(true, Ordering::Release);
                     self.metrics.retries.fetch_add(1, Ordering::Relaxed);
                 }
-                Err(error) if matches!(error.kind(), QueuePushErrorKind::Closed) => return,
-                Err(_) => {
+                QueuePushOutcome::Rejected {
+                    rejection: QueuePushRejection::Closed,
+                    ..
+                } => return,
+                QueuePushOutcome::Rejected { .. } => {
                     // The event is smaller than every validated completion queue. A permanent
                     // budget failure therefore indicates a broken runtime budget tree, not load.
                     self.metrics.quarantined.fetch_add(1, Ordering::Relaxed);

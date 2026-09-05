@@ -916,8 +916,10 @@ mod tests {
     where
         P: RequestProcessor + Send + 'static,
     {
-        let owner =
-            RuntimeOwner::new(RuntimeConfig::server_default("ack-message-test")).expect("AckMessage test runtime");
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("ack-message-test"))
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("AckMessage test runtime");
         let context = owner.root_context().component("ack-message-test.request");
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             TestLeafProcessor::new(processor),

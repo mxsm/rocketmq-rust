@@ -316,8 +316,14 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &'static str, behavior: StoreBehavior, state: Arc<ProbeState>) -> Self {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default(name)).expect("structured store runtime");
-        let context = owner.root_context().component(format!("{name}.request"));
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default(name))
+            .expect("test runtime configuration is valid")
+            .build()
+            .expect("structured store runtime");
+        let context = owner.root_context().component(
+            rocketmq_runtime::ScopeId::try_new(format!("{name}.request"))
+                .expect("the request scope has a fixed nonblank suffix"),
+        );
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             StoreProbeProcessor { behavior, state },
             Vec::new(),

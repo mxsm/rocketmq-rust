@@ -90,11 +90,11 @@ impl ConnectionProvider for FakeConnectionProvider {
 }
 
 fn test_runtime(name: &'static str) -> RuntimeOwner {
-    RuntimeOwner::new_with_memory_limit(
-        RuntimeConfig::for_parallelism(name, 1),
-        ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory limit"),
-    )
-    .expect("test runtime")
+    RuntimeOwner::plan(RuntimeConfig::for_parallelism(name, 1))
+        .expect("test runtime configuration is valid")
+        .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory limit"))
+        .build()
+        .expect("test runtime")
 }
 
 fn real_test_services(

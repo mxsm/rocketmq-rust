@@ -862,7 +862,6 @@ mod tests {
 
     use super::*;
     use rocketmq_runtime::MetadataDeadline;
-    use rocketmq_runtime::MetadataIoActor;
     use rocketmq_runtime::MetadataIoConfig;
     use rocketmq_runtime::RuntimeContext;
 
@@ -937,11 +936,11 @@ mod tests {
             CheetahString::from_static_str("127.0.0.1:10911"),
         );
         let runtime = RuntimeContext::try_from_current("broker-id-persistence-test").unwrap();
-        let actor = MetadataIoActor::start(
-            &runtime.service_context("broker-id-persistence"),
-            MetadataIoConfig::default(),
-        )
-        .unwrap();
+        let actor = MetadataIoConfig::default()
+            .into_plan()
+            .expect("default metadata I/O config is valid")
+            .start(&runtime.service_context("broker-id-persistence"))
+            .unwrap();
         let deadline = MetadataDeadline::after(Duration::from_secs(5));
 
         let plan = manager

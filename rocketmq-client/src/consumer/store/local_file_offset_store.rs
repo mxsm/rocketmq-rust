@@ -32,6 +32,7 @@ use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::QueuePushOutcome;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -591,13 +592,14 @@ impl LocalFileOffsetStore {
     ) {
         let retained_bytes = command.retained_bytes();
         match self.persist_commands.try_push_data(command, retained_bytes) {
-            Ok(_) => Self::await_persist_result(receiver, operation).await,
-            Err(rejection) => {
-                let reason = rejection.to_string();
-                drop(rejection.into_item());
+            QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } | QueuePushOutcome::DroppedStale { .. } => {
+                Self::await_persist_result(receiver, operation).await
+            }
+            QueuePushOutcome::Rejected { item, rejection } => {
+                drop(item);
                 warn!(
                     operation,
-                    reason,
+                    ?rejection,
                     "local offset persist queue rejected a scoped command; retrying through the control reserve"
                 );
 
@@ -605,11 +607,15 @@ impl LocalFileOffsetStore {
                 let fallback = PersistCommand::PersistAll(Some(fallback_sender));
                 let retained_bytes = fallback.retained_bytes();
                 match self.persist_commands.try_push_control(fallback, retained_bytes) {
-                    Ok(_) => Self::await_persist_result(fallback_receiver, operation).await,
-                    Err(rejection) => {
+                    QueuePushOutcome::Enqueued
+                    | QueuePushOutcome::Coalesced { .. }
+                    | QueuePushOutcome::DroppedStale { .. } => {
+                        Self::await_persist_result(fallback_receiver, operation).await
+                    }
+                    QueuePushOutcome::Rejected { rejection, .. } => {
                         error!(
                             operation,
-                            reason = %rejection,
+                            ?rejection,
                             "local offset persist control reserve is unavailable; the dirty offset remains eligible \
                              for periodic persistence"
                         );
@@ -1102,14 +1108,19 @@ mod tests {
 
         for _ in 0..2 {
             let command = super::PersistCommand::PersistAll(None);
-            queue.try_push_data(command, command_bytes).expect("data capacity");
+            assert!(matches!(
+                queue.try_push_data(command, command_bytes),
+                rocketmq_runtime::QueuePushOutcome::Enqueued
+            ));
         }
-        assert!(queue
-            .try_push_data(super::PersistCommand::PersistAll(None), command_bytes)
-            .is_err());
-        queue
-            .try_push_control(super::PersistCommand::Shutdown, command_bytes)
-            .expect("shutdown reserve");
+        assert!(matches!(
+            queue.try_push_data(super::PersistCommand::PersistAll(None), command_bytes),
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+        ));
+        assert!(matches!(
+            queue.try_push_control(super::PersistCommand::Shutdown, command_bytes),
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+        ));
 
         let snapshot = queue.snapshot();
         assert_eq!(snapshot.depth, 3);

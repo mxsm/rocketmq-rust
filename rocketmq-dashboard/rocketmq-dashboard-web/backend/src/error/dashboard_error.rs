@@ -18,9 +18,10 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use rocketmq_admin_core::core::AdminError;
 use rocketmq_dashboard_common::DashboardCommonError;
+use rocketmq_error::CanonicalCondition;
 use rocketmq_error::HttpStatusCode;
 use rocketmq_error::RocketMQError;
-use rocketmq_runtime::MetadataIoError;
+use rocketmq_runtime::RuntimeError;
 use std::borrow::Cow;
 use std::error::Error as StdError;
 use thiserror::Error;
@@ -199,52 +200,38 @@ fn rocketmq_response_message(error: &RocketMQError) -> String {
     }
 }
 
-fn metadata_io_source(error: &RocketMQError) -> Option<&MetadataIoError> {
+fn metadata_io_source(error: &RocketMQError) -> Option<&RuntimeError> {
     match error {
-        RocketMQError::IO(error) => error.get_ref()?.downcast_ref::<MetadataIoError>(),
+        RocketMQError::IO(error) => error.get_ref()?.downcast_ref::<RuntimeError>(),
         _ => None,
     }
 }
 
 fn metadata_io_code(error: &RocketMQError) -> Option<&'static str> {
-    match metadata_io_source(error)? {
-        MetadataIoError::DeadlineExceeded { .. } => Some("METADATA_IO_DEADLINE_EXCEEDED"),
-        MetadataIoError::QueueFull { .. } | MetadataIoError::ByteLimitExceeded { .. } => Some("METADATA_IO_SATURATED"),
-        MetadataIoError::Closed | MetadataIoError::WorkerStopped { .. } => Some("METADATA_IO_UNAVAILABLE"),
-        MetadataIoError::InvalidConfig(_)
-        | MetadataIoError::ResourcePathConflict { .. }
-        | MetadataIoError::WorkerFailed { .. }
-        | MetadataIoError::Io { .. } => Some("METADATA_IO_FAILED"),
+    match metadata_io_source(error)?.condition() {
+        CanonicalCondition::DeadlineExceeded => Some("METADATA_IO_DEADLINE_EXCEEDED"),
+        CanonicalCondition::ResourceExhausted => Some("METADATA_IO_SATURATED"),
+        CanonicalCondition::Unavailable => Some("METADATA_IO_UNAVAILABLE"),
+        _ => Some("METADATA_IO_FAILED"),
     }
 }
 
 fn metadata_io_status(error: &RocketMQError) -> Option<StatusCode> {
-    match metadata_io_source(error)? {
-        MetadataIoError::DeadlineExceeded { .. } => Some(StatusCode::GATEWAY_TIMEOUT),
-        MetadataIoError::QueueFull { .. }
-        | MetadataIoError::ByteLimitExceeded { .. }
-        | MetadataIoError::Closed
-        | MetadataIoError::WorkerStopped { .. } => Some(StatusCode::SERVICE_UNAVAILABLE),
-        MetadataIoError::InvalidConfig(_)
-        | MetadataIoError::ResourcePathConflict { .. }
-        | MetadataIoError::WorkerFailed { .. }
-        | MetadataIoError::Io { .. } => Some(StatusCode::INTERNAL_SERVER_ERROR),
+    match metadata_io_source(error)?.condition() {
+        CanonicalCondition::DeadlineExceeded => Some(StatusCode::GATEWAY_TIMEOUT),
+        CanonicalCondition::ResourceExhausted | CanonicalCondition::Unavailable => {
+            Some(StatusCode::SERVICE_UNAVAILABLE)
+        }
+        _ => Some(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
 fn metadata_io_response_message(error: &RocketMQError) -> Option<&'static str> {
-    match metadata_io_source(error)? {
-        MetadataIoError::DeadlineExceeded { .. } => Some("Metadata durability deadline exceeded"),
-        MetadataIoError::QueueFull { .. } | MetadataIoError::ByteLimitExceeded { .. } => {
-            Some("Metadata persistence is temporarily saturated")
-        }
-        MetadataIoError::Closed | MetadataIoError::WorkerStopped { .. } => {
-            Some("Metadata persistence is temporarily unavailable")
-        }
-        MetadataIoError::InvalidConfig(_)
-        | MetadataIoError::ResourcePathConflict { .. }
-        | MetadataIoError::WorkerFailed { .. }
-        | MetadataIoError::Io { .. } => Some("Metadata persistence failed"),
+    match metadata_io_source(error)?.condition() {
+        CanonicalCondition::DeadlineExceeded => Some("Metadata durability deadline exceeded"),
+        CanonicalCondition::ResourceExhausted => Some("Metadata persistence is temporarily saturated"),
+        CanonicalCondition::Unavailable => Some("Metadata persistence is temporarily unavailable"),
+        _ => Some("Metadata persistence failed"),
     }
 }
 
@@ -288,7 +275,7 @@ mod tests {
     use rocketmq_admin_core::core::AdminError;
     use rocketmq_error::REDACTED;
     use rocketmq_error::RocketMQError;
-    use rocketmq_runtime::MetadataIoError;
+    use rocketmq_runtime::RuntimeError;
     use serde_json::Value;
     use std::io;
 
@@ -374,7 +361,9 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_io_saturation_uses_typed_retryable_boundary_without_internal_details() {
-        let error = RocketMQError::IO(io::Error::other(MetadataIoError::QueueFull { limit: 32 }));
+        let error = RocketMQError::IO(io::Error::other(RuntimeError::capacity(
+            rocketmq_runtime::RuntimeOperation::MetadataIo,
+        )));
 
         let (status, body) = failure_response(DashboardError::from(error)).await;
 

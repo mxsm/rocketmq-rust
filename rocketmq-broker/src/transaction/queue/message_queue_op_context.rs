@@ -66,16 +66,14 @@ impl MessageQueueOpContext {
 
     pub async fn push(&self, msg: String) -> RocketMQResult<()> {
         let retained_bytes = std::mem::size_of::<String>().saturating_add(msg.capacity());
-        self.pending_operations
-            .try_push_data(msg, retained_bytes)
-            .map(|_| ())
-            .map_err(|_| {
-                RocketMQError::broker_operation_failed(
-                    "message_queue_push",
-                    ResponseCode::SystemBusy as i32,
-                    "transaction operation queue is full",
-                )
-            })
+        match self.pending_operations.try_push_data(msg, retained_bytes) {
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => Err(RocketMQError::broker_operation_failed(
+                "message_queue_push",
+                ResponseCode::SystemBusy as i32,
+                "transaction operation queue is full",
+            )),
+            _ => Ok(()),
+        }
     }
     pub async fn offer(&self, item: String, timeout: std::time::Duration) -> RocketMQResult<()> {
         if let Ok(res) = time::timeout(timeout, self.push(item)).await {

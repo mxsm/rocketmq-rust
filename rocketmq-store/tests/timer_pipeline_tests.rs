@@ -51,9 +51,11 @@ fn timer_store(
 #[test]
 fn worker_count_maps_to_managed_pipeline_workers() {
     for workers in [2usize, 4, 8] {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default(format!(
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default(format!(
             "timer-{workers}-worker-count-test"
         )))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("runtime");
         let (_directory, store) = timer_store(&owner, workers, workers, 32, 4_096);
 
@@ -80,7 +82,10 @@ fn worker_count_maps_to_managed_pipeline_workers() {
 
 #[test]
 fn bounded_queues_never_exceed_message_or_byte_capacity() {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("timer-budget-test")).expect("runtime");
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("timer-budget-test"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime");
     let (_directory, store) = timer_store(&owner, 2, 2, 2, 128);
 
     owner.block_on(async {
@@ -100,7 +105,10 @@ fn bounded_queues_never_exceed_message_or_byte_capacity() {
 
 #[test]
 fn due_priority_still_reserves_source_admission_each_tick() {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("timer-priority-test")).expect("runtime");
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("timer-priority-test"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime");
     let (_directory, store) = timer_store(&owner, 1, 1, 8, 1_024);
 
     owner.block_on(async {
@@ -119,7 +127,10 @@ fn due_priority_still_reserves_source_admission_each_tick() {
 
 #[test]
 fn unsupported_extended_mode_fails_closed_during_load() {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("timer-extended-closed-test")).expect("runtime");
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("timer-extended-closed-test"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime");
     let directory = tempfile::tempdir().expect("timer root");
     let config = Arc::new(MessageStoreConfig {
         store_path_root_dir: CheetahString::from_string(directory.path().to_string_lossy().into_owned()),
@@ -137,7 +148,10 @@ fn unsupported_extended_mode_fails_closed_during_load() {
 
 #[test]
 fn unsupported_skip_unknown_policy_fails_closed_during_load() {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("timer-skip-unknown-closed-test")).expect("runtime");
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("timer-skip-unknown-closed-test"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime");
     let directory = tempfile::tempdir().expect("timer root");
     let config = Arc::new(MessageStoreConfig {
         store_path_root_dir: CheetahString::from_string(directory.path().to_string_lossy().into_owned()),

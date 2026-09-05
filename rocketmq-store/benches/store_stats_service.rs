@@ -33,7 +33,9 @@ fn benchmark_service_context() -> ChildServiceContext {
     static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
     OWNER
         .get_or_init(|| {
-            RuntimeOwner::new(RuntimeConfig::server_default("store-stats-service-bench"))
+            RuntimeOwner::plan(RuntimeConfig::server_default("store-stats-service-bench"))
+                .expect("test runtime configuration is valid")
+                .build()
                 .expect("store stats benchmark runtime should start")
         })
         .root_context()

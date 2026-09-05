@@ -228,20 +228,22 @@ pub struct ServiceManagerLifecycleProbe {
     pub shutdown_elapsed_us: u128,
 }
 
-fn spawn_service_task<F>(operation: &'static str, task_name: String, future: F) -> RuntimeResult<ServiceTaskHandle>
+fn spawn_service_task<F>(
+    operation: crate::RuntimeOperation,
+    task_name: String,
+    future: F,
+) -> RuntimeResult<ServiceTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let handle = tokio::runtime::Handle::try_current().map_err(|error| RuntimeError::LifecycleOperation {
-        operation,
-        message: format!("requires a Tokio runtime: {error}"),
-    })?;
+    let handle =
+        tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::context_unavailable(operation))?;
     let task_group = TaskGroup::root("rocketmq.service-manager", RuntimeHandle::new(handle));
     spawn_service_task_with_group(operation, task_name, task_group, future)
 }
 
 fn spawn_service_task_with_task_group<F>(
-    operation: &'static str,
+    operation: crate::RuntimeOperation,
     task_name: String,
     parent_task_group: TaskGroup,
     future: F,
@@ -254,7 +256,7 @@ where
 }
 
 fn spawn_service_task_with_group<F>(
-    operation: &'static str,
+    operation: crate::RuntimeOperation,
     task_name: String,
     task_group: TaskGroup,
     future: F,
@@ -264,10 +266,7 @@ where
 {
     let task_id = task_group
         .spawn_service(task_name, future)
-        .map_err(|error| RuntimeError::LifecycleOperation {
-            operation,
-            message: format!("failed to spawn service task: {error}"),
-        })?;
+        .map_err(|error| RuntimeError::internal(operation, error))?;
     Ok(ServiceTaskHandle::new(task_id, task_group))
 }
 
@@ -390,12 +389,12 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         };
         let handle = match match self.parent_task_group.as_ref() {
             Some(parent_task_group) => spawn_service_task_with_task_group(
-                "ServiceManager::start",
+                crate::RuntimeOperation::SpawnServiceTask,
                 service_name.clone(),
                 parent_task_group.clone(),
                 future,
             ),
-            None => spawn_service_task("ServiceManager::start", service_name.clone(), future),
+            None => spawn_service_task(crate::RuntimeOperation::SpawnServiceTask, service_name.clone(), future),
         } {
             Ok(handle) => handle,
             Err(error) => {
@@ -692,6 +691,8 @@ pub async fn run_service_manager_lifecycle_probe() -> ServiceManagerLifecyclePro
 #[cfg(test)]
 mod tests {
     use std::future;
+
+    use rocketmq_error::CanonicalCondition;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
@@ -841,13 +842,18 @@ mod tests {
 
     #[test]
     fn spawn_service_task_without_tokio_runtime_returns_error() {
-        let error = match spawn_service_task("test-service-start", "test-service".to_string(), async {}) {
+        let error = match spawn_service_task(
+            crate::RuntimeOperation::SpawnServiceTask,
+            "test-service".to_string(),
+            async {},
+        ) {
             Ok(_) => panic!("spawning without a Tokio runtime should return an error"),
             Err(error) => error,
         };
 
-        assert!(
-            error.to_string().contains("requires a Tokio runtime"),
+        assert_eq!(
+            error.condition(),
+            CanonicalCondition::Unavailable,
             "unexpected error: {error}"
         );
     }

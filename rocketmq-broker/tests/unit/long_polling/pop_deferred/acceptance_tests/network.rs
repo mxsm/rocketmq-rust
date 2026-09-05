@@ -265,7 +265,9 @@ async fn start_server<P>(processor: P, controller: Arc<AdmissionController>) -> 
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-pop-deferred-acceptance"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("broker-pop-deferred-acceptance"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("POP test runtime owner");
     let server_context = owner.root_context().component("pop-deferred.server");
     let runner_context = owner.root_context().component("pop-deferred.runner");

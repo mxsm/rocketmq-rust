@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataIoDurabilityOutcome;
 use rocketmq_runtime::MetadataWriteRequest;
 
 use crate::config::is_tls_config_key;
@@ -91,14 +92,22 @@ pub(crate) async fn apply_runtime_updates(
         .as_ref()
         .map_err(|error| RocketMQError::storage_write_failed(&target, error.to_string()))?;
     let deadline = MetadataDeadline::after(CONFIG_PERSIST_TIMEOUT);
-    let durable_generation = actor
+    let durable_generation = match actor
         .submit_durable(
             MetadataWriteRequest::new(CONFIG_RESOURCE, desired_generation, &target, desired_bytes),
             deadline,
         )
         .await
         .map_err(|error| RocketMQError::storage_write_failed(&target, error.to_string()))?
-        .get();
+    {
+        MetadataIoDurabilityOutcome::Durable(generation) => generation.get(),
+        MetadataIoDurabilityOutcome::TargetConflict(request) => {
+            return Err(RocketMQError::storage_write_failed(
+                request.target().display().to_string(),
+                "metadata resource target conflict",
+            ));
+        }
+    };
 
     let mut applied_keys = classified
         .iter()

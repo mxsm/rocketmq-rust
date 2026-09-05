@@ -76,7 +76,9 @@ struct RealRegistrationFixture {
 }
 
 fn real_registration_fixture(name: &'static str, owner: u64) -> (RealRegistrationFixture, DeferredRegistration) {
-    let runtime = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(name))
+    let runtime = rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(name))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("real registration runtime");
     let parent = runtime.root_context().component(name).task_group().clone();
     let session = EmbeddedSessionRecord::new(owner);

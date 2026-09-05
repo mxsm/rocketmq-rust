@@ -245,7 +245,9 @@ pub(super) async fn start_server<P>(processor: P, controller: Arc<AdmissionContr
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("pop-lite-deferred-acceptance"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("pop-lite-deferred-acceptance"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("PopLite runtime owner");
     let server_context = owner.root_context().component("pop-lite.server");
     let runner_context = owner.root_context().component("pop-lite.runner");

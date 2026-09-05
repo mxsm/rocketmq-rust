@@ -51,7 +51,10 @@ fn runtime_config() -> RuntimeConfig {
 }
 
 fn run_scheduled_case(mode: ScheduleMode, period: Duration, run_for: Duration) -> ScheduledBenchOutput {
-    let owner = RuntimeOwner::new(runtime_config()).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(runtime_config())
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime owner should start");
     let context = owner.root_context().component("bench.scheduler-root");
     let observed_runs = Arc::new(AtomicUsize::new(0));
 

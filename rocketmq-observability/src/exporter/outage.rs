@@ -37,7 +37,8 @@ use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedItem;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushErrorKind;
+use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::ResourceBudgetTree;
 
 /// Default maximum number of telemetry records admitted during a collector outage.
@@ -320,11 +321,15 @@ impl<T> TelemetryOutageQueue<T> {
             return TelemetryEnqueueOutcome::Dropped(TelemetryDropReason::Closed);
         }
         let record = Queued { item, estimated_bytes };
-        if let Err(error) = self.queue.try_push_data(record, estimated_bytes) {
-            let reason = match error.kind() {
-                QueuePushErrorKind::Closed | QueuePushErrorKind::SlowConsumerClosed => TelemetryDropReason::Closed,
-                QueuePushErrorKind::DeadlineExceeded => TelemetryDropReason::ItemLimit,
-                QueuePushErrorKind::BudgetExhausted(error) => match error.dimension() {
+        if let QueuePushOutcome::Rejected {
+            item: _record,
+            rejection,
+        } = self.queue.try_push_data(record, estimated_bytes)
+        {
+            let reason = match rejection {
+                QueuePushRejection::Closed | QueuePushRejection::SlowConsumerClosed => TelemetryDropReason::Closed,
+                QueuePushRejection::DeadlineExceeded => TelemetryDropReason::ItemLimit,
+                QueuePushRejection::BudgetExhausted(error) => match error.dimension() {
                     BudgetDimension::Bytes => TelemetryDropReason::ByteLimit,
                     // This queue has no rate budget. Keep the exhaustive fallback fail-closed if
                     // the shared budget implementation ever reports one.

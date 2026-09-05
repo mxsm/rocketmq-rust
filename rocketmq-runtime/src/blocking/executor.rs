@@ -29,6 +29,7 @@ use super::BlockingLane;
 use super::BlockingPoolPolicy;
 use super::BlockingTaskId;
 use super::BlockingTaskState;
+use crate::error::RuntimeContractViolation;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::shutdown_deadline::ShutdownDeadline;
@@ -150,7 +151,7 @@ impl BlockingExecutor {
     /// Runtime composition roots use one shared budget through
     /// `new_managed`; this constructor preserves the existing public test and
     /// adapter surface by assigning the executor its own exact capacity.
-    pub fn new(policy: BlockingPoolPolicy, _owner_group: TaskGroup) -> RuntimeResult<Self> {
+    pub fn new(policy: BlockingPoolPolicy, _owner_group: TaskGroup) -> Result<Self, RuntimeContractViolation> {
         policy.validate()?;
         let capacity = policy.max_concurrency;
         Ok(Self::new_with_budget(
@@ -164,7 +165,7 @@ impl BlockingExecutor {
         policy: BlockingPoolPolicy,
         lane: BlockingLane,
         budget: GlobalBlockingBudget,
-    ) -> RuntimeResult<Self> {
+    ) -> Result<Self, RuntimeContractViolation> {
         policy.validate()?;
         Ok(Self::new_with_budget(policy, lane, budget))
     }
@@ -246,11 +247,11 @@ impl BlockingExecutor {
     {
         if kind == BlockingKind::LongRunning {
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            return Err(RuntimeError::UnsupportedBlockingKind { name, kind });
+            return Err(RuntimeError::unsupported(crate::RuntimeOperation::BlockingExecutorKind));
         }
         if deadline.is_some_and(ShutdownDeadline::is_expired) {
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            return Err(RuntimeError::BlockingQueueTimeout { name });
+            return Err(RuntimeError::timed_out(crate::RuntimeOperation::BlockingQueueAdmission));
         }
         let submitted_at = Instant::now();
         let operation_deadline = deadline.map_or_else(
@@ -264,10 +265,7 @@ impl BlockingExecutor {
 
         let queue_permit = self.queue_permits.clone().try_acquire_owned().map_err(|_error| {
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            RuntimeError::BlockingQueueFull {
-                name: name.clone(),
-                max_queue_depth: self.policy.max_queue_depth,
-            }
+            RuntimeError::capacity(crate::RuntimeOperation::BlockingQueueAdmission)
         })?;
         let task_id = BlockingTaskId(self.next_task_id.fetch_add(1, Ordering::Relaxed));
         self.tasks.insert(
@@ -286,14 +284,14 @@ impl BlockingExecutor {
         let queue_deadline = phase_deadline(submitted_at, self.policy.queue_timeout, operation_deadline);
         let permit = self.budget.acquire(self.lane, queue_deadline).await.map_err(|()| {
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            RuntimeError::BlockingQueueTimeout { name: name.clone() }
+            RuntimeError::timed_out(crate::RuntimeOperation::BlockingQueueAdmission)
         })?;
         drop(queue_permit);
 
         let task_deadline = phase_deadline(Instant::now(), self.policy.task_timeout, operation_deadline);
         if task_deadline <= Instant::now() {
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            return Err(RuntimeError::BlockingQueueTimeout { name });
+            return Err(RuntimeError::timed_out(crate::RuntimeOperation::BlockingTaskDeadline));
         }
 
         let started_at = Instant::now();
@@ -315,10 +313,7 @@ impl BlockingExecutor {
         });
         let mut running_task_guard = RunningBlockingTaskGuard::new(join_handle, tasks, task_id);
         let Some(join_handle) = running_task_guard.join_handle() else {
-            return Err(RuntimeError::LifecycleOperation {
-                operation: "run_blocking_task",
-                message: format!("blocking task {name} lost its owned join handle"),
-            });
+            return Err(RuntimeError::internal_failure(crate::RuntimeOperation::RunBlockingTask));
         };
 
         match tokio::time::timeout_at(tokio::time::Instant::from_std(task_deadline), join_handle).await {
@@ -337,11 +332,11 @@ impl BlockingExecutor {
             }
             Ok(Err(error)) => {
                 running_task_guard.disarm();
-                Err(RuntimeError::BlockingJoin { name, error })
+                Err(RuntimeError::join(crate::RuntimeOperation::RunBlockingTask, error))
             }
             Err(_elapsed) => {
                 running_task_guard.mark_timed_out();
-                Err(RuntimeError::BlockingTaskTimeoutStillRunning { name, task_id })
+                Err(RuntimeError::timed_out(crate::RuntimeOperation::BlockingTask))
             }
         }
     }

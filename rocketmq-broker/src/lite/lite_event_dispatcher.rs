@@ -25,7 +25,6 @@ use cheetah_string::CheetahString;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::BudgetConfigError;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetSnapshot;
 use rocketmq_runtime::FullPolicy;
@@ -33,6 +32,7 @@ use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
+use rocketmq_runtime::RuntimeContractViolation;
 use tokio::sync::Notify;
 
 pub(crate) use self::reservation::LiteEventBatch;
@@ -229,7 +229,7 @@ impl LiteEventDispatcher {
         parent_budget: &ResourceBudget,
         max_pending_event_count: usize,
         max_tracked_client_count: usize,
-    ) -> Result<Self, BudgetConfigError> {
+    ) -> Result<Self, RuntimeContractViolation> {
         let max_pending_event_count =
             normalize_limit(max_pending_event_count).min(parent_budget.limit().capacity.count);
         let max_tracked_client_count = max_tracked_client_count

@@ -3787,10 +3787,12 @@ mod tests {
     #[test]
     fn production_query_facade_uses_the_admin_core_session_factory() {
         static OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
-            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig {
+            rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig {
                 thread_name: "rocketmq-mcp-query-test".to_string(),
                 ..Default::default()
             })
+            .expect("runtime configuration is valid")
+            .build()
             .expect("MCP query test runtime should start")
         });
         let client_runtime = rocketmq_admin_core::read_client_adapter::ClientRuntime::try_new(

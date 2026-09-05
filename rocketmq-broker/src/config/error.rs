@@ -15,7 +15,9 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use rocketmq_runtime::common::parse_config_file::RedactedConfigError;
+use rocketmq_runtime::common::parse_config_file::render_safe_config_error;
+use rocketmq_runtime::RuntimeContractViolation;
+use rocketmq_runtime::RuntimeError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfigSection {
@@ -44,13 +46,25 @@ impl fmt::Display for ConfigSection {
 pub enum BrokerConfigError {
     Load {
         path: PathBuf,
-        source: RedactedConfigError,
+        source: config::ConfigError,
     },
 
     Invalid {
         section: ConfigSection,
         field: &'static str,
         message: String,
+    },
+
+    Runtime {
+        section: ConfigSection,
+        field: &'static str,
+        source: RuntimeError,
+    },
+
+    Contract {
+        section: ConfigSection,
+        field: &'static str,
+        source: RuntimeContractViolation,
     },
 
     RestartRequired {
@@ -86,12 +100,22 @@ pub enum BrokerConfigError {
 impl fmt::Display for BrokerConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Load { source, .. } => write!(formatter, "failed to load broker configuration: {source}"),
+            Self::Load { source, .. } => write!(
+                formatter,
+                "failed to load broker configuration: {}",
+                render_safe_config_error(source)
+            ),
             Self::Invalid {
                 section,
                 field,
                 message,
             } => write!(formatter, "invalid {section} configuration `{field}`: {message}"),
+            Self::Runtime { section, field, .. } => {
+                write!(formatter, "runtime could not resolve {section} configuration `{field}`")
+            }
+            Self::Contract { section, field, .. } => {
+                write!(formatter, "invalid {section} configuration `{field}`")
+            }
             Self::RestartRequired { fields } => {
                 write!(formatter, "broker configuration fields require restart: {fields}")
             }
@@ -126,7 +150,16 @@ impl fmt::Debug for BrokerConfigError {
     }
 }
 
-impl std::error::Error for BrokerConfigError {}
+impl std::error::Error for BrokerConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Load { source, .. } => Some(source),
+            Self::Runtime { source, .. } => Some(source),
+            Self::Contract { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 impl BrokerConfigError {
     pub(crate) fn invalid(section: ConfigSection, field: &'static str, message: impl Into<String>) -> Self {
@@ -135,6 +168,14 @@ impl BrokerConfigError {
             field,
             message: message.into(),
         }
+    }
+
+    pub(crate) fn runtime(section: ConfigSection, field: &'static str, source: RuntimeError) -> Self {
+        Self::Runtime { section, field, source }
+    }
+
+    pub(crate) fn contract(section: ConfigSection, field: &'static str, source: RuntimeContractViolation) -> Self {
+        Self::Contract { section, field, source }
     }
 
     pub(crate) fn restart_required(mut fields: Vec<String>) -> Self {

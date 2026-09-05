@@ -208,7 +208,10 @@ fn executor_with_limits(
     name: &'static str,
     limits: AdmissionLimits,
 ) -> (RuntimeOwner, AdmissionController, SessionExecutor) {
-    let runtime = RuntimeOwner::new(RuntimeConfig::server_default(name)).expect("resume test runtime");
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default(name))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("resume test runtime");
     let service = runtime.root_context().component(name);
     let controller = AdmissionController::new(limits);
     let scope = controller

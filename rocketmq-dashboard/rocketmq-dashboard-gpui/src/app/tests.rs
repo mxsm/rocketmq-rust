@@ -337,11 +337,11 @@ fn real_product_app_path_uses_store_fake_provider_enter_login_security_sign_out_
         serde_json::to_vec_pretty(&config).expect("serialize test config"),
     )
     .expect("write test config");
-    let runtime = RuntimeOwner::new_with_memory_limit(
-        RuntimeConfig::for_parallelism("gpui-product-app", 1),
-        ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory limit"),
-    )
-    .expect("runtime");
+    let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("gpui-product-app", 1))
+        .expect("test runtime configuration is valid")
+        .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory limit"))
+        .build()
+        .expect("runtime");
     let store = DesktopConfigStore::new(config_path, runtime.root_context().component("config"));
     let auth = DesktopAuthState::new(Arc::new(MapEnvironment::new([
         (LOGIN_USERNAME_ENV, "operator"),

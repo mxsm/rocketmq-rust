@@ -56,7 +56,9 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("namesrv-parity-probe"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("namesrv-parity-probe"))
+        .expect("test runtime configuration is valid")
+        .build()
         .context("build parity probe runtime")?;
     let result = owner.block_on(run(owner.root_context().component("parity-probe"), args));
     let shutdown = owner.shutdown_runtime_blocking_until(ShutdownDeadline::after(Duration::from_secs(5)));

@@ -114,7 +114,9 @@ pub fn main() -> Result<()> {
     if print_release_version_if_requested("rocketmq-controller-rust") {
         return Ok(());
     }
-    let owner = RuntimeOwner::new(controller_runtime_config())
+    let owner = RuntimeOwner::plan(controller_runtime_config())
+        .expect("controller runtime profile is internally valid")
+        .build()
         .map_err(|source| ControllerError::runtime_source("build controller runtime", source))?;
     let service_context = owner.root_context().component("rocketmq-controller-runtime");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-controller").map_err(|error| {

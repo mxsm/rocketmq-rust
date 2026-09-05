@@ -394,7 +394,9 @@ async fn notification_deferred_continuation_spends_one_conflict_budget_across_ba
         .admit_continuation(arrival, cursor)
         .expect("conflict continuation admission");
     assert_eq!(service.snapshot().active_continuations(), 1);
-    let runtime = RuntimeOwner::new(RuntimeConfig::server_default("notification-conflict-budget"))
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("notification-conflict-budget"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("conflict-budget runtime owner");
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);

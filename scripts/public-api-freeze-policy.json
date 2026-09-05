@@ -90,6 +90,16 @@
       "reason": "Unreleased backend APIs must preserve typed storage causes and represent pre-I/O capability validation without backend-specific public errors, panic, or default normalization.",
       "approved_by": "repository-owner",
       "approved_on": "2026-09-02"
+    },
+    {
+      "id": "API-0.9-010",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_runtime::{RuntimeOwner::new(RuntimeConfig), RuntimeOwner::new_with_memory_limit, TokioExecutorService::{new_with_config,try_new_with_config}, ScheduledExecutorService::{new_with_config,try_new_with_config}, FuturesExecutorServiceBuilder::create, MetadataIoActor::{start,start_with_file_system}, RuntimeError enum variants, MetadataIoError, RedactedConfigError, BudgetConfigError, BudgetAcquireError, PermitRebindError, MemoryLimitError, QueuePushError, QueuePushErrorKind, SchedulerError, SchedulerResult, infallible/SchedulerError trigger constructors, ScheduledTaskGroup::schedule_* registrations}",
+      "replacement": "RuntimeOwner::new() plus RuntimeOwner::plan -> RuntimeOwnerPlan::{with_memory_limit,build}; TokioExecutorService/ScheduledExecutorService plan/plan_with_config -> corresponding Plan::build; FuturesExecutorServiceBuilder::into_plan -> FuturesExecutorPlan::build; MetadataIoConfig::into_plan -> MetadataIoPlan::{start,start_with_file_system} with observer RuntimeResult; catalog-backed opaque RuntimeError; RuntimeContractViolation; BudgetRejection; PermitRebindOutcome; QueuePushOutcome<T>; SchedulerStartOutcome, ScheduleRegistrationOutcome, ScheduleControlOutcome, ScheduleExecutionOutcome, and ScheduledTaskRegistrationOutcome",
+      "reason": "The unreleased runtime boundary replaces positional construction and ambiguous error aliases with validated plans, separates operational failures with catalog descriptors and typed sources from deterministic contract violations, and represents normal admission, scheduler, trigger, and registration decisions as explicit outcomes without compatibility shims.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-09-04"
     }
   ],
   "frozen_contracts": [

@@ -145,7 +145,9 @@ async fn embedded_origin_is_rejected_before_any_pop_reservation() {
         service: Arc::clone(&service),
         observed: Arc::clone(&observed),
     };
-    let runtime = RuntimeOwner::new(RuntimeConfig::server_default("broker-pop-deferred-embedded-origin"))
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("broker-pop-deferred-embedded-origin"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("embedded POP runtime owner");
     let context = runtime.root_context().component("pop-deferred.embedded-origin");
     let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(

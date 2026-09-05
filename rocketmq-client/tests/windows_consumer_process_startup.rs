@@ -169,11 +169,13 @@ fn run_consumer_child() {
         .name("rocketmq-client-stack-probe".to_owned())
         .stack_size(WINDOWS_MAIN_STACK_SIZE)
         .spawn(move || {
-            let owner = RuntimeOwner::new(RuntimeConfig {
+            let owner = RuntimeOwner::plan(RuntimeConfig {
                 worker_threads: 2,
                 thread_name: "rocketmq-client-stack-test".to_owned(),
                 ..RuntimeConfig::default()
             })
+            .expect("test runtime configuration is valid")
+            .build()
             .expect("create client process runtime");
             let client_runtime = ClientRuntime::try_new(
                 owner.root_context().component("client"),
@@ -199,11 +201,13 @@ fn run_producer_child() {
         .name("rocketmq-client-producer-stack-probe".to_owned())
         .stack_size(WINDOWS_MAIN_STACK_SIZE)
         .spawn(move || {
-            let owner = RuntimeOwner::new(RuntimeConfig {
+            let owner = RuntimeOwner::plan(RuntimeConfig {
                 worker_threads: 2,
                 thread_name: "rocketmq-client-producer-stack-test".to_owned(),
                 ..RuntimeConfig::default()
             })
+            .expect("test runtime configuration is valid")
+            .build()
             .expect("create producer client process runtime");
             let client_runtime = ClientRuntime::try_new(
                 owner.root_context().component("client"),

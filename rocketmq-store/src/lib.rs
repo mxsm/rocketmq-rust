@@ -74,9 +74,11 @@ mod test_support_tests {
 
     #[test]
     fn store_runtime_scope_parents_blocking_executor() {
-        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+        let owner = rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
             "store-runtime-scope-test",
         ))
+        .expect("runtime configuration is valid")
+        .build()
         .expect("store runtime scope test owner should start");
         let service = owner.root_context().component("store-service");
         let scope = super::runtime::StoreRuntimeScope::new(service.clone());
@@ -104,9 +106,11 @@ mod test_support_tests {
     #[cfg(feature = "rocksdb_store")]
     #[test]
     fn rocksdb_runtime_scope_parents_blocking_executor() {
-        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+        let owner = rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
             "rocksdb-runtime-scope-test",
         ))
+        .expect("runtime configuration is valid")
+        .build()
         .expect("RocksDB runtime scope test owner should start");
         let service = owner.root_context().component("rocksdb-service");
         let scope = super::rocksdb::runtime::RocksDbRuntimeScope::new(service.clone());
@@ -138,9 +142,11 @@ mod test_support_tests {
 
     #[test]
     fn store_blocking_io_probe_reports_no_running_tasks() {
-        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+        let owner = rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
             "store-blocking-probe",
         ))
+        .expect("runtime configuration is valid")
+        .build()
         .expect("store blocking probe owner should start");
         let probe = owner.block_on(super::test_support::run_store_blocking_io_probe(
             owner.root_context().component("store-service"),
@@ -160,9 +166,11 @@ mod test_support_tests {
 
     #[test]
     fn store_blocking_io_probe_waits_for_concurrent_store_tasks() {
-        let owner = rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+        let owner = rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
             "store-blocking-concurrency-probe",
         ))
+        .expect("runtime configuration is valid")
+        .build()
         .expect("store blocking concurrency probe owner should start");
         let service_context = owner.root_context().component("store-service");
         let probe = owner.block_on(async {

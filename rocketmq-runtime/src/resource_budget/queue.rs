@@ -24,16 +24,16 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
-use super::budget::BudgetAcquireError;
+use super::budget::BudgetRejection;
 use super::budget::ResourceBudget;
 use super::budget::ResourcePermit;
 use super::limit::BudgetClass;
 use super::limit::BudgetDimension;
 use super::limit::FullPolicy;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 /// Identifies the queue push outcome state.
-pub enum QueuePushOutcome {
+pub enum QueuePushOutcome<T> {
     /// Represents the enqueued case.
     Enqueued,
     /// Represents the coalesced case.
@@ -46,66 +46,27 @@ pub enum QueuePushOutcome {
         /// The dropped value.
         dropped: usize,
     },
+    /// The item was not accepted and is returned to the caller unchanged.
+    Rejected {
+        /// The submitted item.
+        item: T,
+        /// The source-free normal rejection reason.
+        rejection: QueuePushRejection,
+    },
 }
 
+/// A source-free normal queue-admission rejection.
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Identifies the queue push error kind state.
-pub enum QueuePushErrorKind {
-    /// Represents the budget exhausted case.
-    BudgetExhausted(BudgetAcquireError),
-    /// The absolute admission deadline elapsed before capacity became available.
+pub enum QueuePushRejection {
+    /// The resource budget rejected the item.
+    BudgetExhausted(BudgetRejection),
+    /// The absolute admission deadline elapsed.
     DeadlineExceeded,
-    /// Represents the closed case.
+    /// The queue is closed.
     Closed,
-    /// Represents the slow consumer closed case.
+    /// The queue closed a slow consumer.
     SlowConsumerClosed,
 }
-
-/// Represents queue push error.
-pub struct QueuePushError<T> {
-    kind: QueuePushErrorKind,
-    item: T,
-}
-
-impl<T> QueuePushError<T> {
-    #[must_use]
-    /// Returns the kind.
-    pub fn kind(&self) -> &QueuePushErrorKind {
-        &self.kind
-    }
-
-    #[must_use]
-    /// Converts this value into item.
-    pub fn into_item(self) -> T {
-        self.item
-    }
-}
-
-impl<T> fmt::Debug for QueuePushError<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("QueuePushError")
-            .field("kind", &self.kind)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<T> fmt::Display for QueuePushError<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.kind {
-            QueuePushErrorKind::BudgetExhausted(error) => error.fmt(formatter),
-            QueuePushErrorKind::DeadlineExceeded => {
-                formatter.write_str("resource-budgeted queue admission deadline exceeded")
-            }
-            QueuePushErrorKind::Closed => formatter.write_str("resource-budgeted queue is closed"),
-            QueuePushErrorKind::SlowConsumerClosed => {
-                formatter.write_str("resource-budgeted queue closed its slow consumer")
-            }
-        }
-    }
-}
-
-impl<T: fmt::Debug> std::error::Error for QueuePushError<T> {}
 
 /// Represents budgeted item.
 pub struct BudgetedItem<T> {
@@ -220,12 +181,7 @@ impl<T> BudgetedQueue<T> {
     }
 
     /// Attempts to push.
-    pub fn try_push(
-        &self,
-        item: T,
-        retained_bytes: usize,
-        class: BudgetClass,
-    ) -> Result<QueuePushOutcome, QueuePushError<T>> {
+    pub fn try_push(&self, item: T, retained_bytes: usize, class: BudgetClass) -> QueuePushOutcome<T> {
         let _coalesce_guard = if self.inner.budget.limit().full_policy == FullPolicy::CoalesceLatest {
             Some(
                 self.inner
@@ -239,11 +195,13 @@ impl<T> BudgetedQueue<T> {
         let dropped = self.apply_age_policy();
         match self.inner.budget.try_acquire(retained_bytes, class) {
             Ok(permit) => {
-                self.enqueue(item, permit)?;
+                if let Some(rejected) = self.enqueue(item, permit) {
+                    return rejected;
+                }
                 if dropped == 0 {
-                    Ok(QueuePushOutcome::Enqueued)
+                    QueuePushOutcome::Enqueued
                 } else {
-                    Ok(QueuePushOutcome::DroppedStale { dropped })
+                    QueuePushOutcome::DroppedStale { dropped }
                 }
             }
             Err(error) => self.handle_full(item, retained_bytes, class, error),
@@ -251,12 +209,12 @@ impl<T> BudgetedQueue<T> {
     }
 
     /// Attempts to push data.
-    pub fn try_push_data(&self, item: T, retained_bytes: usize) -> Result<QueuePushOutcome, QueuePushError<T>> {
+    pub fn try_push_data(&self, item: T, retained_bytes: usize) -> QueuePushOutcome<T> {
         self.try_push(item, retained_bytes, BudgetClass::Data)
     }
 
     /// Attempts to push control.
-    pub fn try_push_control(&self, item: T, retained_bytes: usize) -> Result<QueuePushOutcome, QueuePushError<T>> {
+    pub fn try_push_control(&self, item: T, retained_bytes: usize) -> QueuePushOutcome<T> {
         self.try_push(item, retained_bytes, BudgetClass::Control)
     }
 
@@ -264,37 +222,31 @@ impl<T> BudgetedQueue<T> {
     /// Tokio deadline when this queue uses [`FullPolicy::WaitUntilDeadline`].
     ///
     /// Other full policies retain their existing immediate behavior. Rate
-    /// exhaustion remains an immediate [`QueuePushErrorKind::BudgetExhausted`]
-    /// result because capacity-release notifications do not represent token
+    /// exhaustion remains an immediate rejection because capacity-release notifications do not represent token
     /// refill time.
     ///
-    /// # Errors
-    ///
-    /// Returns the original item with [`QueuePushErrorKind::DeadlineExceeded`]
-    /// when the deadline elapses, [`QueuePushErrorKind::Closed`] when the queue
-    /// closes, or [`QueuePushErrorKind::BudgetExhausted`] when the item can
-    /// never fit or rate capacity is unavailable.
+    /// Every rejection contains the original item.
     pub async fn push_until(
         &self,
         item: T,
         retained_bytes: usize,
         class: BudgetClass,
         deadline: Instant,
-    ) -> Result<QueuePushOutcome, QueuePushError<T>> {
+    ) -> QueuePushOutcome<T> {
         if self.inner.budget.limit().full_policy != FullPolicy::WaitUntilDeadline {
             return self.try_push(item, retained_bytes, class);
         }
         if self.is_closed() {
-            return Err(QueuePushError {
-                kind: QueuePushErrorKind::Closed,
+            return QueuePushOutcome::Rejected {
                 item,
-            });
+                rejection: QueuePushRejection::Closed,
+            };
         }
-        if let Some(error) = self.inner.budget.permanent_acquire_error(retained_bytes, class) {
-            return Err(QueuePushError {
-                kind: QueuePushErrorKind::BudgetExhausted(error),
+        if let Some(rejection) = self.inner.budget.permanent_acquire_rejection(retained_bytes, class) {
+            return QueuePushOutcome::Rejected {
                 item,
-            });
+                rejection: QueuePushRejection::BudgetExhausted(rejection),
+            };
         }
 
         let mut waiter = None;
@@ -307,30 +259,29 @@ impl<T> BudgetedQueue<T> {
             state_notified.as_mut().enable();
 
             if self.is_closed() {
-                return Err(QueuePushError {
-                    kind: QueuePushErrorKind::Closed,
+                return QueuePushOutcome::Rejected {
                     item,
-                });
+                    rejection: QueuePushRejection::Closed,
+                };
             }
             if Instant::now() >= deadline {
                 self.inner.metrics.record_deadline_exceeded();
-                return Err(QueuePushError {
-                    kind: QueuePushErrorKind::DeadlineExceeded,
+                return QueuePushOutcome::Rejected {
                     item,
-                });
+                    rejection: QueuePushRejection::DeadlineExceeded,
+                };
             }
 
             match self.inner.budget.try_acquire_waiting(retained_bytes, class) {
                 Ok(permit) => {
-                    self.enqueue(item, permit)?;
-                    return Ok(QueuePushOutcome::Enqueued);
+                    return self.enqueue(item, permit).unwrap_or(QueuePushOutcome::Enqueued);
                 }
                 Err(error) if error.dimension() == BudgetDimension::Rate => {
-                    self.inner.budget.record_acquire_error(&error);
-                    return Err(QueuePushError {
-                        kind: QueuePushErrorKind::BudgetExhausted(error),
+                    self.inner.budget.record_budget_rejection(&error);
+                    return QueuePushOutcome::Rejected {
                         item,
-                    });
+                        rejection: QueuePushRejection::BudgetExhausted(error),
+                    };
                 }
                 Err(_) => {}
             }
@@ -344,10 +295,7 @@ impl<T> BudgetedQueue<T> {
                 biased;
                 () = &mut deadline_sleep => {
                     self.inner.metrics.record_deadline_exceeded();
-                    return Err(QueuePushError {
-                        kind: QueuePushErrorKind::DeadlineExceeded,
-                        item,
-                    });
+                    return QueuePushOutcome::Rejected { item, rejection: QueuePushRejection::DeadlineExceeded };
                 }
                 () = &mut state_notified => {}
                 () = &mut capacity_notified => {}
@@ -472,16 +420,16 @@ impl<T> BudgetedQueue<T> {
         }
     }
 
-    fn enqueue(&self, item: T, permit: ResourcePermit) -> Result<(), QueuePushError<T>> {
+    fn enqueue(&self, item: T, permit: ResourcePermit) -> Option<QueuePushOutcome<T>> {
         let mut state = self
             .inner
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
-            return Err(QueuePushError {
-                kind: QueuePushErrorKind::Closed,
+            return Some(QueuePushOutcome::Rejected {
                 item,
+                rejection: QueuePushRejection::Closed,
             });
         }
         state.items.push_back(BudgetedItem {
@@ -491,7 +439,7 @@ impl<T> BudgetedQueue<T> {
         });
         drop(state);
         self.inner.notify.notify_one();
-        Ok(())
+        None
     }
 
     fn handle_full(
@@ -499,25 +447,27 @@ impl<T> BudgetedQueue<T> {
         item: T,
         retained_bytes: usize,
         class: BudgetClass,
-        error: BudgetAcquireError,
-    ) -> Result<QueuePushOutcome, QueuePushError<T>> {
+        rejection: BudgetRejection,
+    ) -> QueuePushOutcome<T> {
         match self.inner.budget.limit().full_policy {
-            FullPolicy::Reject | FullPolicy::WaitUntilDeadline | FullPolicy::DropStale => Err(QueuePushError {
-                kind: QueuePushErrorKind::BudgetExhausted(error),
+            FullPolicy::Reject | FullPolicy::WaitUntilDeadline | FullPolicy::DropStale => QueuePushOutcome::Rejected {
                 item,
-            }),
+                rejection: QueuePushRejection::BudgetExhausted(rejection),
+            },
             FullPolicy::CoalesceLatest => {
-                if error.dimension() == BudgetDimension::Rate || error.exhausted_path() != self.inner.budget.path() {
-                    return Err(QueuePushError {
-                        kind: QueuePushErrorKind::BudgetExhausted(error),
+                if rejection.dimension() == BudgetDimension::Rate
+                    || rejection.exhausted_path() != self.inner.budget.path()
+                {
+                    return QueuePushOutcome::Rejected {
                         item,
-                    });
+                        rejection: QueuePushRejection::BudgetExhausted(rejection),
+                    };
                 }
                 if !self.item_can_fit(retained_bytes, class) {
-                    return Err(QueuePushError {
-                        kind: QueuePushErrorKind::BudgetExhausted(error),
+                    return QueuePushOutcome::Rejected {
                         item,
-                    });
+                        rejection: QueuePushRejection::BudgetExhausted(rejection),
+                    };
                 }
                 let replaced = {
                     let mut state = self
@@ -526,10 +476,10 @@ impl<T> BudgetedQueue<T> {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     if state.closed {
-                        return Err(QueuePushError {
-                            kind: QueuePushErrorKind::Closed,
+                        return QueuePushOutcome::Rejected {
                             item,
-                        });
+                            rejection: QueuePushRejection::Closed,
+                        };
                     }
                     let replaced = state.items.len();
                     state.items.clear();
@@ -539,14 +489,14 @@ impl<T> BudgetedQueue<T> {
                 let permit = match self.inner.budget.try_acquire(retained_bytes, class) {
                     Ok(permit) => permit,
                     Err(retry_error) => {
-                        return Err(QueuePushError {
-                            kind: QueuePushErrorKind::BudgetExhausted(retry_error),
+                        return QueuePushOutcome::Rejected {
                             item,
-                        });
+                            rejection: QueuePushRejection::BudgetExhausted(retry_error),
+                        };
                     }
                 };
-                self.enqueue(item, permit)?;
-                Ok(QueuePushOutcome::Coalesced { replaced })
+                self.enqueue(item, permit)
+                    .unwrap_or(QueuePushOutcome::Coalesced { replaced })
             }
             FullPolicy::CloseSlowConsumer => {
                 let dropped = {
@@ -563,10 +513,10 @@ impl<T> BudgetedQueue<T> {
                 self.inner.budget.record_dropped(dropped);
                 self.inner.budget.record_slow_consumer_closed();
                 self.inner.notify.notify_waiters();
-                Err(QueuePushError {
-                    kind: QueuePushErrorKind::SlowConsumerClosed,
+                QueuePushOutcome::Rejected {
                     item,
-                })
+                    rejection: QueuePushRejection::SlowConsumerClosed,
+                }
             }
         }
     }
