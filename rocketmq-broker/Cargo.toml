@@ -92,7 +92,7 @@ rand = { workspace = true }
 
 #tools
 dirs.workspace = true
-dns-lookup     = "3.0"
+dns-lookup     = "4.0"
 local-ip-address = "0.6.13"
 
 cfg-if         = { workspace = true }

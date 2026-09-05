@@ -35,7 +35,7 @@ bytes = { version = "1.12.1", optional = true }
 libfuzzer-sys = "0.4.12"
 # openraft 0.10.0-alpha.21 uses prerelease-compatible transitive ranges. Keep this standalone
 # workspace on the exact runtime and macro versions selected by the production workspace lockfile.
-openraft-macros = { version = "=0.10.0-alpha.21", optional = true }
+openraft-macros = { version = "=0.10.0-alpha.34", optional = true }
 openraft-rt = { version = "=0.10.0-alpha.21", optional = true }
 openraft-rt-tokio = { version = "=0.10.0-alpha.21", optional = true }
 rocketmq-broker = { path = "../rocketmq-broker", optional = true }
