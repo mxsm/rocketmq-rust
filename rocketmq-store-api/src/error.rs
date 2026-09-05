@@ -14,12 +14,15 @@
 
 //! Canonical errors exposed by storage capabilities.
 
+use std::backtrace::Backtrace;
 use std::error::Error as StdError;
 use std::fmt;
+use std::panic::Location;
 
 use rocketmq_error::fields;
 use rocketmq_error::CanonicalCondition;
 use rocketmq_error::DiagnosticView;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
@@ -145,12 +148,10 @@ impl StoreComponent {
 /// typed source are retained for local diagnosis, but their values are never
 /// formatted by this facade or exposed through its public view.
 pub struct StoreError {
-    descriptor: &'static ErrorDescriptor,
+    error: CanonicalError,
     operation: StoreOperation,
     component: StoreComponent,
-    context: ErrorContext,
     private_detail: Option<Sensitive<String>>,
-    source: Option<BoxError>,
 }
 
 impl StoreError {
@@ -164,6 +165,7 @@ impl StoreError {
     /// Panics when `descriptor` is not one of the twelve canonical storage
     /// descriptors. This is a programmer contract: runtime failures select a
     /// reviewed storage identity before constructing the facade.
+    #[track_caller]
     pub fn new(descriptor: &'static ErrorDescriptor, operation: StoreOperation) -> Self {
         Self::try_new(descriptor, operation)
             .expect("StoreError requires one of the twelve canonical storage descriptors")
@@ -174,72 +176,67 @@ impl StoreError {
     /// Returns `None` when `descriptor` belongs to another error domain. The
     /// facade never accepts caller-provided context, so successful construction
     /// also guarantees that only the four storage context fields can be emitted.
+    #[track_caller]
     pub fn try_new(descriptor: &'static ErrorDescriptor, operation: StoreOperation) -> Option<Self> {
         if !is_storage_descriptor(descriptor) {
             return None;
         }
         let component = StoreComponent::Store;
         Some(Self {
-            descriptor,
+            error: CanonicalError::new(descriptor).with_context(store_context(operation, component, false, false)),
             operation,
             component,
-            context: store_context(operation, component, false, false),
             private_detail: None,
-            source: None,
         })
     }
 
     /// Adds the closed component classification as diagnostic context.
     pub fn in_component(mut self, component: StoreComponent) -> Self {
         self.component = component;
-        self.rebuild_context();
-        self
+        self.rebuild_context()
     }
 
     /// Retains sensitive diagnostic detail without exposing its value.
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.private_detail = Some(Sensitive::new(detail.into()));
-        self.rebuild_context();
-        self
+        self.rebuild_context()
     }
 
     /// Preserves a typed cause in the standard source chain.
     pub fn with_source(mut self, source: impl StdError + Send + Sync + 'static) -> Self {
-        self.source = Some(Box::new(source));
-        self.rebuild_context();
-        self
+        self.error = self.error.with_source(source);
+        self.rebuild_context()
     }
 
     /// Preserves an already boxed typed cause in the standard source chain.
     pub fn with_boxed_source(mut self, source: BoxError) -> Self {
-        self.source = Some(source);
-        self.rebuild_context();
-        self
+        self.error = self.error.with_boxed_source(source);
+        self.rebuild_context()
     }
 
     /// Returns the immutable catalog descriptor that owns this error's identity.
     pub const fn descriptor(&self) -> &'static ErrorDescriptor {
-        self.descriptor
+        self.error.descriptor()
     }
 
     /// Returns the stable dotted catalog code.
     pub const fn code(&self) -> ErrorCode {
-        self.descriptor.code()
+        self.error.code()
     }
 
     /// Returns the protocol-independent condition.
     pub const fn condition(&self) -> CanonicalCondition {
-        self.descriptor.condition()
+        self.error.condition()
     }
 
     /// Returns the catalog-owned severity.
     pub const fn severity(&self) -> ErrorSeverity {
-        self.descriptor.severity()
+        self.error.severity()
     }
 
     /// Returns the catalog-owned recovery hint.
     pub const fn recovery_hint(&self) -> RecoveryHint {
-        self.descriptor.recovery_hint()
+        self.error.recovery_hint()
     }
 
     /// Returns the operation that failed.
@@ -252,6 +249,21 @@ impl StoreError {
         self.component
     }
 
+    /// Returns the bounded context retained by the canonical error.
+    pub const fn context(&self) -> &ErrorContext {
+        self.error.context()
+    }
+
+    /// Returns the first-promotion caller location.
+    pub const fn location(&self) -> &'static Location<'static> {
+        self.error.location()
+    }
+
+    /// Returns the catalog-controlled captured backtrace, when enabled.
+    pub const fn backtrace(&self) -> Option<&Backtrace> {
+        self.error.backtrace()
+    }
+
     /// Creates the descriptor-validated public projection.
     ///
     /// # Errors
@@ -259,7 +271,7 @@ impl StoreError {
     /// Returns a schema violation if the catalog and the internally generated
     /// storage context become inconsistent.
     pub fn public_view(&self) -> Result<PublicErrorView<'_>, ViewContextViolation> {
-        PublicErrorView::try_new(self.descriptor, &self.context)
+        self.error.public_view()
     }
 
     /// Creates the descriptor-validated controlled diagnostic projection.
@@ -269,16 +281,20 @@ impl StoreError {
     /// Returns a schema violation if the catalog and the internally generated
     /// storage context become inconsistent.
     pub fn diagnostic_view(&self) -> Result<DiagnosticView<'_>, ViewContextViolation> {
-        DiagnosticView::try_new(self.descriptor, &self.context)
+        self.error.diagnostic_view()
     }
 
-    fn rebuild_context(&mut self) {
-        self.context = store_context(
+    fn rebuild_context(self) -> Self {
+        let context = store_context(
             self.operation,
             self.component,
             self.private_detail.is_some(),
-            self.source.is_some(),
+            self.error.source().is_some(),
         );
+        Self {
+            error: self.error.with_context(context),
+            ..self
+        }
     }
 }
 
@@ -320,7 +336,7 @@ fn store_context(
 
 impl fmt::Display for StoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code(), self.descriptor.public_message())
+        fmt::Display::fmt(&self.error, formatter)
     }
 }
 
@@ -329,18 +345,18 @@ impl fmt::Debug for StoreError {
         formatter
             .debug_struct("StoreError")
             .field("code", &self.code())
-            .field("message", &self.descriptor.public_message())
+            .field("message", &self.descriptor().public_message())
             .field("operation", &self.operation)
             .field("component", &self.component)
             .field("detail_present", &self.private_detail.is_some())
-            .field("source_present", &self.source.is_some())
+            .field("source_present", &self.error.source().is_some())
             .finish()
     }
 }
 
 impl StdError for StoreError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        self.source.as_deref().map(|source| source as &(dyn StdError + 'static))
+        self.error.source()
     }
 }
 
@@ -447,5 +463,30 @@ mod tests {
             .expect("leaf cause follows the wrapper");
         assert_eq!(leaf.to_string(), "typed leaf");
         assert!(leaf.source().is_none());
+    }
+
+    #[test]
+    fn storage_error_preserves_an_already_boxed_source_as_the_direct_leaf() {
+        let source: BoxError = Box::new(io::Error::other("boxed leaf"));
+        let error = StoreError::new(&STORAGE_WRITE_FAILED, StoreOperation::Flush).with_boxed_source(source);
+
+        let leaf = error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("boxed source remains the direct typed leaf");
+        assert_eq!(leaf.to_string(), "boxed leaf");
+    }
+
+    #[test]
+    fn storage_error_builders_preserve_first_promotion_provenance() {
+        let caller_line = line!() + 1;
+        let error = StoreError::new(&STORAGE_WRITE_FAILED, StoreOperation::Flush)
+            .in_component(StoreComponent::MappedFile)
+            .with_detail("private detail")
+            .with_source(io::Error::other("typed leaf"));
+
+        assert_eq!(error.location().file(), file!());
+        assert_eq!(error.location().line(), caller_line);
+        assert_eq!(error.context().len(), 4);
     }
 }

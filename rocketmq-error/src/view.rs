@@ -24,6 +24,7 @@ use crate::ErrorCode;
 use crate::ErrorContext;
 use crate::ErrorDescriptor;
 use crate::ErrorSeverity;
+use crate::Exposure;
 use crate::FieldSchema;
 use crate::ProjectionSpec;
 use crate::RecoveryHint;
@@ -102,9 +103,11 @@ impl fmt::Display for ViewContextViolation {
 /// A borrowed public projection of one descriptor-validated error context.
 ///
 /// This view exposes only the descriptor's stable identity, fixed public
-/// message, explicitly public context fields, and descriptor-owned protocol
-/// projections. It borrows its inputs and performs no allocation after the
-/// [`ErrorContext`] has been constructed.
+/// message, and descriptor-owned protocol projections. Descriptors with
+/// [`Exposure::Public`] may additionally expose declared public context fields;
+/// [`Exposure::Generic`] descriptors expose no dynamic fields. The view borrows
+/// its inputs and performs no allocation after the [`ErrorContext`] has been
+/// constructed.
 ///
 /// ```compile_fail,E0616
 /// use rocketmq_error::{ErrorContext, PublicErrorView, ROUTE_TOPIC_NOT_FOUND};
@@ -149,7 +152,9 @@ impl<'a> PublicErrorView<'a> {
         self.descriptor.public_message()
     }
 
-    /// Iterates present public fields in descriptor declaration order.
+    /// Iterates permitted public fields in descriptor declaration order.
+    ///
+    /// Generic-exposure descriptors always return an empty iterator.
     #[inline]
     pub fn fields(&self) -> PublicFields<'a> {
         PublicFields::new(self.descriptor, self.context)
@@ -184,8 +189,9 @@ impl fmt::Debug for PublicErrorView<'_> {
 /// A borrowed controlled-diagnostics projection of one descriptor-validated context.
 ///
 /// `DiagnosticView` exposes descriptor-approved diagnostic fields and
-/// key-only secret-presence markers for operational diagnostics. It must not
-/// be serialized into public protocol responses. Like [`PublicErrorView`], it
+/// key-only secret-presence markers for operational diagnostics. It never
+/// exposes source errors, caller locations, or backtraces and must not be
+/// serialized into public protocol responses. Like [`PublicErrorView`], it
 /// borrows its inputs and performs no allocation after [`ErrorContext`] has
 /// been constructed.
 pub struct DiagnosticView<'a> {
@@ -277,12 +283,14 @@ impl fmt::Debug for DiagnosticView<'_> {
 #[derive(Clone)]
 pub struct PublicFields<'a> {
     inner: ViewFields<'a>,
+    enabled: bool,
 }
 
 impl<'a> PublicFields<'a> {
     fn new(descriptor: &'static ErrorDescriptor, context: &'a ErrorContext) -> Self {
         Self {
             inner: ViewFields::new(descriptor, context),
+            enabled: matches!(descriptor.exposure(), Exposure::Public),
         }
     }
 }
@@ -291,7 +299,11 @@ impl<'a> Iterator for PublicFields<'a> {
     type Item = ViewFieldRef<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next_field(false)
+        if self.enabled {
+            self.inner.next_field(false)
+        } else {
+            None
+        }
     }
 }
 
@@ -475,15 +487,43 @@ mod tests {
     static BOOLEAN_FIELDS: [FieldSchema; 1] = [fields::ATTEMPTED.schema()];
     static BOOLEAN_DESCRIPTOR: ErrorDescriptor = match ErrorDescriptor::try_new(
         BOOLEAN_CODE,
+        crate::ErrorClass::INTERNAL,
         CanonicalCondition::Internal,
+        crate::FaultAttribution::Unknown,
+        crate::ComponentId::CORE,
         "Synthetic Boolean view test",
         ErrorSeverity::Info,
         RecoveryHint::Never,
+        crate::BacktracePolicy::Never,
+        crate::Exposure::Public,
         crate::ROUTE_TOPIC_NOT_FOUND.projection(),
         &BOOLEAN_FIELDS,
     ) {
         Some(descriptor) => descriptor,
         None => panic!("synthetic Boolean descriptor must be valid"),
+    };
+
+    const GENERIC_CODE: ErrorCode = match ErrorCode::try_new("test.view.generic") {
+        Some(code) => code,
+        None => panic!("synthetic test code must be valid"),
+    };
+    static GENERIC_FIELDS: [FieldSchema; 1] = [fields::ACTUAL_BYTES.schema()];
+    static GENERIC_DESCRIPTOR: ErrorDescriptor = match ErrorDescriptor::try_new(
+        GENERIC_CODE,
+        crate::ErrorClass::INTERNAL,
+        CanonicalCondition::Internal,
+        crate::FaultAttribution::Unknown,
+        crate::ComponentId::CORE,
+        "Synthetic Generic view test",
+        ErrorSeverity::Info,
+        RecoveryHint::Never,
+        crate::BacktracePolicy::Never,
+        crate::Exposure::Generic,
+        crate::ROUTE_TOPIC_NOT_FOUND.projection(),
+        &GENERIC_FIELDS,
+    ) {
+        Some(descriptor) => descriptor,
+        None => panic!("synthetic Generic descriptor must be valid"),
     };
 
     #[test]
@@ -496,6 +536,19 @@ mod tests {
         assert_eq!(
             diagnostic.fields().next().expect("Boolean field").value(),
             ViewValueRef::Bool(true)
+        );
+    }
+
+    #[test]
+    fn generic_exposure_suppresses_descriptor_declared_public_fields() {
+        let context = ErrorContext::new().with_u64(fields::ACTUAL_BYTES, 42);
+        let public = PublicErrorView::try_new(&GENERIC_DESCRIPTOR, &context).expect("public view");
+        let diagnostic = DiagnosticView::try_new(&GENERIC_DESCRIPTOR, &context).expect("diagnostic view");
+
+        assert!(public.fields().next().is_none());
+        assert_eq!(
+            diagnostic.fields().next().expect("diagnostic field").value(),
+            ViewValueRef::U64(42)
         );
     }
 }

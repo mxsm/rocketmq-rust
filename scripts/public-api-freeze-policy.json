@@ -120,6 +120,16 @@
       "reason": "The unreleased Transport boundary replaces overlapping and mixed lifecycle/error enums with one opaque catalog-backed operational facade and one deterministic contract enum; normal capacity, lifecycle, deadline, terminal, cancellation, and closed states are source-free outcomes that preserve caller-owned permits, requests, builders, deferred parts, job cells, queued writes, and shared close completion without compatibility aliases or wire-codec changes.",
       "approved_by": "repository-owner",
       "approved_on": "2026-09-05"
+    },
+    {
+      "id": "API-0.9-013",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_runtime::RuntimeError::{descriptor,code,condition,recovery_hint,context} const qualifiers; rocketmq_transport::TransportError::{descriptor,code,condition,severity,recovery_hint} const qualifiers; rocketmq_auth::project_authorization_error const qualifier",
+      "replacement": "rocketmq_error root exports {Error,Result,SharedError,ErrorClass,FaultAttribution,ComponentId,Exposure,BacktracePolicy}; ErrorDescriptor owns the complete canonical policy; StoreError owns Error; RuntimeError and TransportError own SharedError; the listed metadata accessors and the directly dependent authorization projection delegate through the canonical allocation as ordinary functions; facade context/location/backtrace accessors expose borrowed canonical state",
+      "reason": "The opaque canonical core removes duplicate descriptor, context, and source storage from the unreleased Store, Runtime, and Transport facades. Arc-backed cloneable facades and the authorization projection that reads RuntimeError metadata cannot retain const callability without duplicating canonical policy, so the affected const qualifiers are removed while runtime values, typed sources, safe views, authorization classification, and operational behavior remain unchanged.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-09-05"
     }
   ],
   "frozen_contracts": [

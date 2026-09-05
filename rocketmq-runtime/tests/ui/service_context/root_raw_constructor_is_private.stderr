@@ -12,8 +12,8 @@ error[E0624]: associated function `new` is private
   | |         task_group: TaskGroup,
 ... |
   | |         resources: RuntimeResources,
-  | |     ) -> RuntimeResult<Self> {
-  | |____________________________- private associated function defined here
+  | |     ) -> Self {
+  | |_____________- private associated function defined here
 
 error[E0061]: this function takes 7 arguments but 0 arguments were supplied
  --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:5
@@ -30,18 +30,3 @@ help: provide the arguments
   |
 4 |     RootServiceContext::new(/* Arc<str> */, /* rocketmq_runtime::handle::RuntimeHandle */, /* TaskGroup */, /* BlockingLanePolicies */, /* usize */, /* RuntimeDiagnostics */, /* RuntimeResources */)
   |                             +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-error[E0308]: mismatched types
- --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:5
-  |
-3 | fn forge() -> RootServiceContext {
-  |               ------------------ expected `RootServiceContext` because of return type
-4 |     RootServiceContext::new()
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RootServiceContext`, found `Result<RootServiceContext, RuntimeError>`
-  |
-  = note: expected struct `RootServiceContext`
-               found enum `Result<RootServiceContext, RuntimeError>`
-help: consider using `Result::expect` to unwrap the `Result<RootServiceContext, RuntimeError>` value, panicking if the value is a `Result::Err`
-  |
-4 |     RootServiceContext::new().expect("REASON")
-  |                              +++++++++++++++++

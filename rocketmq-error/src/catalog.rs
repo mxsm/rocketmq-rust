@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::descriptor::ErrorClass;
 use crate::descriptor::ErrorCode;
 use crate::descriptor::ErrorDescriptor;
 use crate::field::fields;
 use crate::field::FieldSchema;
 use crate::projection::ProjectionSpec;
+use crate::BacktracePolicy;
 use crate::CanonicalCondition;
 use crate::CliExitCode;
 use crate::CliSpec;
+use crate::ComponentId;
 use crate::ErrorSeverity;
+use crate::Exposure;
+use crate::FaultAttribution;
 use crate::GrpcPayloadCode;
 use crate::GrpcSpec;
 use crate::GrpcStatusCode;
@@ -36,10 +41,15 @@ macro_rules! define_error_catalog {
             $(#[$metadata:meta])*
             $name:ident {
                 code: $code:literal,
+                class: $class:path,
                 condition: $condition:path,
+                fault: $fault:path,
+                component: $component:path,
                 public_message: $public_message:literal,
                 severity: $severity:path,
                 recovery_hint: $recovery_hint:path,
+                backtrace: $backtrace:path,
+                exposure: $exposure:path,
                 fields: [$($field:path),* $(,)?],
                 projection: {
                     remoting: $remoting:path,
@@ -64,10 +74,15 @@ macro_rules! define_error_catalog {
 
                 match ErrorDescriptor::try_new(
                     CODE,
+                    $class,
                     $condition,
+                    $fault,
+                    $component,
                     $public_message,
                     $severity,
                     $recovery_hint,
+                    $backtrace,
+                    $exposure,
                     ProjectionSpec::new(
                         RemotingSpec::new($remoting),
                         GrpcSpec::new($grpc_payload, $grpc_status),
@@ -94,10 +109,15 @@ define_error_catalog! {
     /// Invalid request-header syntax or values.
     PROTOCOL_HEADER_INVALID {
         code: "protocol.header.invalid",
+        class: ErrorClass::VALIDATION,
         condition: CanonicalCondition::InvalidArgument,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::PROTOCOL,
         public_message: "Request header is invalid",
         severity: ErrorSeverity::Info,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::INVALID_VALUE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::InvalidParameter,
@@ -112,10 +132,15 @@ define_error_catalog! {
     /// Missing routing information for a topic.
     ROUTE_TOPIC_NOT_FOUND {
         code: "route.topic.not_found",
+        class: ErrorClass::ROUTING,
         condition: CanonicalCondition::NotFound,
+        fault: FaultAttribution::RemotePeer,
+        component: ComponentId::ROUTE,
         public_message: "Topic route was not found",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::RefreshRoute,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [fields::TOPIC],
         projection: {
             remoting: RemotingResponseCode::TopicNotExist,
@@ -130,10 +155,15 @@ define_error_catalog! {
     /// Invalid authentication credentials or signature.
     AUTH_CREDENTIALS_INVALID {
         code: "auth.credentials.invalid",
+        class: ErrorClass::AUTHENTICATION,
         condition: CanonicalCondition::Unauthenticated,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::AUTH,
         public_message: "Authentication credentials are invalid",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::RefreshCredentials,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [fields::CREDENTIALS_PRESENT],
         projection: {
             remoting: RemotingResponseCode::NoPermission,
@@ -148,10 +178,15 @@ define_error_catalog! {
     /// Permission denied for an authenticated principal.
     AUTH_PERMISSION_DENIED {
         code: "auth.permission.denied",
+        class: ErrorClass::AUTHORIZATION,
         condition: CanonicalCondition::PermissionDenied,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::AUTH,
         public_message: "Permission was denied",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [fields::OPERATION],
         projection: {
             remoting: RemotingResponseCode::NoPermission,
@@ -166,10 +201,15 @@ define_error_catalog! {
     /// Saturated transport admission queue.
     TRANSPORT_ADMISSION_QUEUE_SATURATED {
         code: "transport.admission.queue_saturated",
+        class: ErrorClass::CAPACITY,
         condition: CanonicalCondition::ResourceExhausted,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport admission queue is saturated",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [fields::REMOTE_ADDR],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
@@ -184,10 +224,15 @@ define_error_catalog! {
     /// Operation sent to a controller that is not the leader.
     CONTROLLER_LEADERSHIP_NOT_LEADER {
         code: "controller.leadership.not_leader",
+        class: ErrorClass::ROUTING,
         condition: CanonicalCondition::FailedPrecondition,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::CONTROLLER,
         public_message: "Controller is not the leader",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::RefreshLeader,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [fields::LEADER_ID],
         projection: {
             remoting: RemotingResponseCode::ControllerNotLeader,
@@ -202,10 +247,15 @@ define_error_catalog! {
     /// Timed-out transport connection attempt.
     TRANSPORT_CONNECTION_TIMEOUT {
         code: "transport.connection.timeout",
+        class: ErrorClass::TIMEOUT,
         condition: CanonicalCondition::DeadlineExceeded,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport connection timed out",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [fields::TIMEOUT_MS, fields::REMOTE_ADDR],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
@@ -220,10 +270,15 @@ define_error_catalog! {
     /// A transport request failed with a legacy request or connection timeout.
     TRANSPORT_REQUEST_TIMEOUT {
         code: "transport.request.timeout",
+        class: ErrorClass::TIMEOUT,
         condition: CanonicalCondition::DeadlineExceeded,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport request timed out",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
@@ -238,10 +293,15 @@ define_error_catalog! {
     /// Transport server startup failed.
     TRANSPORT_START_FAILED {
         code: "transport.start.failed",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::Unknown,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport server could not be started",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,
@@ -256,10 +316,15 @@ define_error_catalog! {
     /// Transport request dispatch failed.
     TRANSPORT_DISPATCH_FAILED {
         code: "transport.dispatch.failed",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport request dispatch failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,
@@ -274,10 +339,15 @@ define_error_catalog! {
     /// Transport response delivery failed.
     TRANSPORT_RESPONSE_FAILED {
         code: "transport.response.failed",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport response delivery failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,
@@ -292,10 +362,15 @@ define_error_catalog! {
     /// Transport session operation failed.
     TRANSPORT_SESSION_FAILED {
         code: "transport.session.failed",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport session operation failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,
@@ -310,10 +385,15 @@ define_error_catalog! {
     /// Storage lifecycle operation attempted before startup completed.
     STORAGE_LIFECYCLE_NOT_STARTED {
         code: "storage.lifecycle.not_started",
+        class: ErrorClass::VALIDATION,
         condition: CanonicalCondition::FailedPrecondition,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::STORAGE,
         public_message: "Storage service is not started",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -333,10 +413,15 @@ define_error_catalog! {
     /// Configured storage backend is unavailable.
     STORAGE_BACKEND_UNAVAILABLE {
         code: "storage.backend.unavailable",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::STORAGE,
         public_message: "Storage backend is unavailable",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -356,10 +441,15 @@ define_error_catalog! {
     /// Invalid request at the storage capability boundary.
     STORAGE_REQUEST_INVALID {
         code: "storage.request.invalid",
+        class: ErrorClass::VALIDATION,
         condition: CanonicalCondition::InvalidArgument,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::STORAGE,
         public_message: "Storage request is invalid",
         severity: ErrorSeverity::Info,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -379,10 +469,15 @@ define_error_catalog! {
     /// Requested mapped file does not exist.
     STORAGE_MAPPED_FILE_NOT_FOUND {
         code: "storage.mapped_file.not_found",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::NotFound,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Mapped file was not found",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -402,10 +497,15 @@ define_error_catalog! {
     /// Storage has no remaining capacity for the operation.
     STORAGE_CAPACITY_EXHAUSTED {
         code: "storage.capacity.exhausted",
+        class: ErrorClass::CAPACITY,
         condition: CanonicalCondition::ResourceExhausted,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage capacity is exhausted",
         severity: ErrorSeverity::Critical,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -425,10 +525,15 @@ define_error_catalog! {
     /// Storage read operation failed.
     STORAGE_READ_FAILED {
         code: "storage.read.failed",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage read failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -448,10 +553,15 @@ define_error_catalog! {
     /// Storage write operation failed.
     STORAGE_WRITE_FAILED {
         code: "storage.write.failed",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage write failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -471,10 +581,15 @@ define_error_catalog! {
     /// Storage I/O operation failed.
     STORAGE_IO_FAILED {
         code: "storage.io.failed",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage I/O operation failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -494,10 +609,15 @@ define_error_catalog! {
     /// Storage state is corrupted.
     STORAGE_STATE_CORRUPTED {
         code: "storage.state.corrupted",
+        class: ErrorClass::DATA_CORRUPTION,
         condition: CanonicalCondition::DataLoss,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage state is corrupted",
         severity: ErrorSeverity::Critical,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -517,10 +637,15 @@ define_error_catalog! {
     /// Storage operation exceeded its deadline.
     STORAGE_OPERATION_TIMED_OUT {
         code: "storage.operation.timed_out",
+        class: ErrorClass::TIMEOUT,
         condition: CanonicalCondition::DeadlineExceeded,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage operation timed out",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -540,10 +665,15 @@ define_error_catalog! {
     /// Storage operation is not implemented by the backend.
     STORAGE_OPERATION_UNSUPPORTED {
         code: "storage.operation.unsupported",
+        class: ErrorClass::UNSUPPORTED,
         condition: CanonicalCondition::Unimplemented,
+        fault: FaultAttribution::Configuration,
+        component: ComponentId::STORAGE,
         public_message: "Storage operation is unsupported",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -563,10 +693,15 @@ define_error_catalog! {
     /// Internal storage failure without a more specific descriptor.
     STORAGE_INTERNAL_FAILURE {
         code: "storage.internal.failure",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Unknown,
+        component: ComponentId::STORAGE,
         public_message: "Internal storage failure",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         fields: [
             fields::STORE_OPERATION,
             fields::STORE_COMPONENT,
@@ -586,10 +721,15 @@ define_error_catalog! {
     /// Protocol version that this implementation does not support.
     PROTOCOL_VERSION_UNSUPPORTED {
         code: "protocol.version.unsupported",
+        class: ErrorClass::UNSUPPORTED,
         condition: CanonicalCondition::Unimplemented,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::PROTOCOL,
         public_message: "Protocol version is unsupported",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [fields::ORDINAL],
         projection: {
             remoting: RemotingResponseCode::RequestCodeNotSupported,
@@ -604,10 +744,15 @@ define_error_catalog! {
     /// Internal failure without a more specific catalog identity.
     CORE_INTERNAL_FAILURE {
         code: "core.internal.failure",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Unknown,
+        component: ComponentId::CORE,
         public_message: "Internal error",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,
@@ -622,10 +767,15 @@ define_error_catalog! {
     /// Runtime configuration could not be loaded or interpreted.
     RUNTIME_CONFIGURATION_FAILED {
         code: "runtime.configuration.failed",
+        class: ErrorClass::VALIDATION,
         condition: CanonicalCondition::InvalidArgument,
+        fault: FaultAttribution::Configuration,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime configuration is invalid",
         severity: ErrorSeverity::Info,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::InvalidParameter,
@@ -640,10 +790,15 @@ define_error_catalog! {
     /// Runtime construction failed.
     RUNTIME_BUILD_FAILED {
         code: "runtime.build.failed",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::Configuration,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime could not be started",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,
@@ -658,10 +813,15 @@ define_error_catalog! {
     /// Runtime I/O failed.
     RUNTIME_IO_FAILED {
         code: "runtime.io.failed",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime I/O operation failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,
@@ -676,10 +836,15 @@ define_error_catalog! {
     /// A required Tokio runtime context is unavailable.
     RUNTIME_CONTEXT_UNAVAILABLE {
         code: "runtime.context.unavailable",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime context is unavailable",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC],
         projection: {
             remoting: RemotingResponseCode::SystemError,
@@ -694,10 +859,15 @@ define_error_catalog! {
     /// Runtime capacity needed by an operational path is exhausted.
     RUNTIME_CAPACITY_EXHAUSTED {
         code: "runtime.capacity.exhausted",
+        class: ErrorClass::CAPACITY,
         condition: CanonicalCondition::ResourceExhausted,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime capacity is exhausted",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
@@ -712,10 +882,15 @@ define_error_catalog! {
     /// A runtime operation exceeded its deadline.
     RUNTIME_OPERATION_TIMED_OUT {
         code: "runtime.operation.timed_out",
+        class: ErrorClass::TIMEOUT,
         condition: CanonicalCondition::DeadlineExceeded,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime operation timed out",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
@@ -730,10 +905,15 @@ define_error_catalog! {
     /// A runtime operation is unsupported.
     RUNTIME_OPERATION_UNSUPPORTED {
         code: "runtime.operation.unsupported",
+        class: ErrorClass::UNSUPPORTED,
         condition: CanonicalCondition::Unimplemented,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime operation is unsupported",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         fields: [fields::OPERATION_DIAGNOSTIC],
         projection: {
             remoting: RemotingResponseCode::RequestCodeNotSupported,
@@ -748,10 +928,15 @@ define_error_catalog! {
     /// A runtime task could not be joined.
     RUNTIME_TASK_JOIN_FAILED {
         code: "runtime.task.join_failed",
+        class: ErrorClass::BUG,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Bug,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime task failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,
@@ -766,10 +951,15 @@ define_error_catalog! {
     /// An internal runtime failure occurred.
     RUNTIME_INTERNAL_FAILURE {
         code: "runtime.internal.failure",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Unknown,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime operation failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemError,

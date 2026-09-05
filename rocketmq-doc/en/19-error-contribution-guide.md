@@ -2,28 +2,28 @@
 title: "Error Architecture Contribution Guide"
 permalink: /docs/error-contribution-guide/
 excerpt: "How to add, map, test, and review typed RocketMQ Rust errors."
-last_modified_at: 2026-08-31T00:00:00+08:00
+last_modified_at: 2026-09-05T00:00:00+08:00
 toc: true
 classes: wide
 ---
 
 # Error Architecture Contribution Guide
 
-This guide separates rules effective in the current repository from the target
-opaque canonical architecture. The [Error Architecture Redesign
-ADR](07-error-architecture-adr.md) defines the target, and the [Error
-Architecture Inventory](07-error-inventory.md) pins the baseline and records
-pending migration evidence. Naming a target type here does not make a future
-API available to current callers.
+This guide separates the canonical core that is effective now from the
+remaining migration target. The [Error Architecture Redesign
+ADR](07-error-architecture-adr.md) defines both, and the [Error Architecture
+Inventory](07-error-inventory.md) pins the baseline and records per-owner
+migration evidence.
 
 ## Effective-now rules
 
-At the pinned baseline, the effective central API is the public mega
-`RocketMQError` enum and the existing `ErrorKind`, `ErrorSpec`,
-`ALL_ERROR_SPECS`, `DomainError`, `ErrorContext`, `BoundaryErrorView`, and
-shared `Sensitive` support. Client callback errors are typed and `StoreError`
-is an opaque domain facade. Work in a crate must follow that crate's existing
-public API until its migration wave lands.
+The effective central API now includes the one-pointer, non-`Clone` canonical
+`Error`, `Result<T>`, `SharedError = Arc<Error>`, typed `ErrorContext`, safe
+views, and the complete policy fields on the exact 35-entry declarative
+catalog. `StoreError` owns one canonical `Error`; `RuntimeError` and
+`TransportError` clone through `SharedError`. The legacy public
+`RocketMQError` enum, `ErrorKind`, `ErrorSpec`, and their consumers remain
+effective until their own migration stages land.
 
 1. Preserve typed sources for I/O, serde, storage, raft, transport, and runtime
    failures. Do not replace a source with rendered text.
@@ -49,7 +49,7 @@ These rules apply now, including while a private migration bridge is present.
 A bridge must remain private and temporary; it must not become a public,
 deprecated, feature-gated, or long-lived dual API.
 
-## Future target, not current imports
+## Five-layer migration contract
 
 When an owning migration lands, it follows these five layers exactly:
 
@@ -67,8 +67,9 @@ When an owning migration lands, it follows these five layers exactly:
 
 `ErrorCatalog`, boundary adapters, and presentation/observability are
 supporting mechanisms, not additional layers. The declarative catalog is the
-sole owner of stable dotted code, `CanonicalCondition`, fixed public message,
-severity, `RecoveryHint`, and projection metadata.
+sole owner of stable dotted code, class, `CanonicalCondition`, fault
+attribution, component, fixed public message, severity, `RecoveryHint`,
+backtrace policy, exposure, projection, and ordered field schemas.
 
 Catalog codes use lowercase dotted stable domain semantics, for example
 `storage.commit_log.corrupt_record`. Never include a dynamic topic, group, path,
@@ -80,18 +81,21 @@ Context visibility is explicit: `Public` is safe for the public view,
 `Diagnostic` is restricted to controlled diagnostics and operational telemetry,
 and `SecretPresenceOnly` records only that secret-bearing data was present.
 `PublicErrorView` contains only catalog-approved identity, fixed public message,
-safe public context, and boundary-safe projection fields. `DiagnosticView` may
-add redacted context and typed source information according to its visibility
-policy.
+safe public context, and boundary-safe projection fields; Generic exposure
+suppresses all dynamic public fields. `DiagnosticView` adds only declared,
+bounded diagnostic values and value-free redaction markers. Neither view
+exposes the source, caller location, or backtrace; typed causes are inspected
+through `std::error::Error::source()`.
 
 `RetryDecision` remains separate from canonical error identity. It uses
 operation idempotency, operation stage, and remaining budget together with the
 catalog's `RecoveryHint`; it never uses a response message or source string as
 the decision.
 
-These are target concepts, not instructions to add future imports to an
-unmigrated crate. A target API becomes usable only in the owning migration,
-with its inventory evidence and focused tests.
+The canonical core types are current imports from `rocketmq-error`. Other
+target types become usable only in their owning migration, with inventory
+evidence and focused tests; do not invent a compatibility alias or parallel
+catalog in an unmigrated crate.
 
 ## Where changes belong
 

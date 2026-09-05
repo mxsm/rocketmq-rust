@@ -354,12 +354,29 @@ def check_error_and_model_public_surface() -> list[Finding]:
         "rocketmq_error::Result": "old rocketmq_error::Result alias must not be used",
         "anyhow::Result": "rocketmq-error/model must not expose public anyhow Result",
         "anyhow::Error": "rocketmq-error/model must not expose anyhow Error",
-        "pub type Result": "rocketmq-error/model must use typed crate-local aliases, not generic public Result",
     }
-    return scan_forbidden_terms(
-        [*rust_files_under("rocketmq-error", "src"), *rust_files_under("rocketmq-model", "src")],
-        forbidden,
-    )
+    paths = [*rust_files_under("rocketmq-error", "src"), *rust_files_under("rocketmq-model", "src")]
+    findings = scan_forbidden_terms(paths, forbidden)
+    for path in paths:
+        relative_path = rel_path(path)
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+            if is_test_context(path, line_number):
+                continue
+            message = generic_public_result_message(relative_path, line)
+            if message:
+                findings.append(Finding(path, line_number, message))
+    return findings
+
+
+def generic_public_result_message(relative_path: str, line: str) -> str | None:
+    if "pub type Result" not in line:
+        return None
+    if (
+        relative_path == "rocketmq-error/src/error.rs"
+        and line.strip() == "pub type Result<T> = std::result::Result<T, Error>;"
+    ):
+        return None
+    return "rocketmq-error/model must use typed crate-local aliases, not generic public Result"
 
 
 def check_processor_boundary_mappings() -> list[Finding]:
@@ -851,14 +868,14 @@ def check_backend_source_preservation() -> list[Finding]:
 def check_source_stringification_allowlist() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-store-api" / "src" / "error.rs": [
-            "descriptor: &'static ErrorDescriptor",
-            "context: ErrorContext",
+            "error: CanonicalError",
             "private_detail: Option<Sensitive<String>>",
-            "source: Option<BoxError>",
             "pub fn with_source",
+            "pub fn with_boxed_source",
             "pub fn public_view",
             "pub fn diagnostic_view",
             "impl StdError for StoreError",
+            "self.error.source()",
         ],
         ROOT / "rocketmq-store-local" / "src" / "mapped_file" / "mapped_file_error.rs": [
             "MmapFailed(#[source] io::Error)",

@@ -14,42 +14,34 @@
 
 #![deny(missing_docs)]
 
-//! # RocketMQ Error Handling System
+//! # RocketMQ Error Handling
 //!
-//! This crate provides a unified, semantic, and performant error handling system
-//! for the RocketMQ Rust implementation.
+//! This crate provides the canonical catalog, opaque [`Error`] envelope,
+//! typed context, safe views, and boundary-neutral policy used by RocketMQ
+//! components.
 //!
-//! ## New Unified Error System (v0.7.0+)
-//!
-//! The new error system provides:
-//! - **Semantic clarity**: Each error type clearly expresses what went wrong
-//! - **Performance**: Minimal heap allocations, optimized for hot paths
-//! - **Ergonomics**: Automatic error conversions via `From` trait
-//! - **Debuggability**: Rich context for production debugging
-//!
-//! ### Usage
+//! Catalog descriptors are the sole owners of stable identity and policy.
+//! Error instances retain one direct typed source and record the first caller
+//! that promotes a failure into the canonical envelope. Formatting and safe
+//! views never render source text, caller paths, or backtrace frames.
 //!
 //! ```rust
-//! use rocketmq_error::RocketMQError;
-//! use rocketmq_error::RocketMQResult;
+//! use std::io;
+//! use rocketmq_error::{Error, Result, RUNTIME_IO_FAILED};
 //!
-//! fn send_message(addr: &str) -> RocketMQResult<()> {
-//!     if addr.is_empty() {
-//!         return Err(RocketMQError::network_connection_failed(
-//!             "localhost:9876",
-//!             "invalid address",
-//!         ));
-//!     }
-//!     Ok(())
+//! fn read_metadata() -> Result<()> {
+//!     Err(Error::caused_by(
+//!         &RUNTIME_IO_FAILED,
+//!         io::Error::other("metadata read failed"),
+//!     ))
 //! }
-//! # send_message("localhost:9876").unwrap();
+//!
+//! let error = read_metadata().expect_err("example failure");
+//! assert_eq!(error.code().as_str(), "runtime.io.failed");
 //! ```
 //!
-//! ## Public Error Surface
-//!
-//! The crate exports the typed `RocketMQError` enum and stable supporting
-//! contracts only. Pre-typed compatibility aliases and enum variants are not
-//! part of the public API.
+//! The public `RocketMQError` and related spec types remain available only for
+//! domains that have not yet migrated to the canonical envelope.
 
 mod auth_error;
 mod boundary;
@@ -59,6 +51,7 @@ mod context;
 mod controller_error;
 mod descriptor;
 mod domain;
+mod error;
 mod field;
 mod filter_error;
 mod kind;
@@ -130,9 +123,18 @@ pub use context::Sensitive;
 pub use context::REDACTED;
 pub use controller_error::ControllerError;
 pub use controller_error::ControllerResult;
+pub use descriptor::BacktracePolicy;
+pub use descriptor::ComponentId;
+pub use descriptor::ErrorClass;
 pub use descriptor::ErrorCode;
 pub use descriptor::ErrorDescriptor;
+pub use descriptor::ErrorSeverity;
+pub use descriptor::Exposure;
+pub use descriptor::FaultAttribution;
 pub use domain::DomainError;
+pub use error::Error;
+pub use error::Result;
+pub use error::SharedError;
 pub use field::fields;
 pub use field::BoolField;
 pub use field::ContextVisibility;
@@ -153,7 +155,6 @@ pub use kind::ErrorCategory;
 pub use kind::ErrorKind;
 pub use kind::ErrorScope;
 pub use observability_error::ObservabilityError;
-pub use policy::ErrorSeverity;
 pub use policy::ObserveSpec;
 pub use policy::RecoverySpec;
 pub use policy::RetryClass;
