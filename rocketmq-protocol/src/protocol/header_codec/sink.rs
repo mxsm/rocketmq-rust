@@ -18,9 +18,9 @@ use cheetah_string::CheetahString;
 
 use super::private::Sealed;
 use super::write_json_string;
-use super::HeaderCodecError;
 use super::HeaderFieldContext;
 use super::HeaderValue;
+use super::ProtocolContractViolation;
 use crate::protocol::command_custom_header::HeaderMap;
 
 /// A statically dispatched destination for typed header fields.
@@ -43,7 +43,7 @@ pub trait EncodeSink: Sealed {
         key: &'static str,
         value: &V,
         context: HeaderFieldContext,
-    ) -> Result<(), HeaderCodecError>;
+    ) -> Result<(), ProtocolContractViolation>;
 }
 
 /// An [`EncodeSink`] that appends typed fields directly to a [`HeaderMap`].
@@ -74,7 +74,7 @@ impl EncodeSink for MapSink<'_> {
         key: &'static str,
         value: &V,
         _context: HeaderFieldContext,
-    ) -> Result<(), HeaderCodecError> {
+    ) -> Result<(), ProtocolContractViolation> {
         self.out
             .insert(CheetahString::from_static_str(key), value.to_map_value());
         Ok(())
@@ -115,7 +115,7 @@ impl EncodeSink for JsonSink<'_> {
         key: &'static str,
         value: &V,
         _context: HeaderFieldContext,
-    ) -> Result<(), HeaderCodecError> {
+    ) -> Result<(), ProtocolContractViolation> {
         if self.first {
             self.first = false;
         } else {
@@ -161,13 +161,13 @@ impl EncodeSink for BinarySink<'_> {
         key: &'static str,
         value: &V,
         context: HeaderFieldContext,
-    ) -> Result<(), HeaderCodecError> {
-        let key_len = u16::try_from(key.len()).map_err(|_| HeaderCodecError::KeyLengthOverflow {
+    ) -> Result<(), ProtocolContractViolation> {
+        let key_len = u16::try_from(key.len()).map_err(|_| ProtocolContractViolation::KeyLengthOverflow {
             header: context.header,
             key: context.key,
         })?;
         if !V::ALWAYS_FITS_WIRE_LENGTH && value.encoded_len() > i32::MAX as usize {
-            return Err(HeaderCodecError::ValueLengthOverflow {
+            return Err(ProtocolContractViolation::ValueLengthOverflow {
                 header: context.header,
                 key: context.key,
             });
@@ -184,7 +184,7 @@ impl EncodeSink for BinarySink<'_> {
         let actual_value_len = self.out.len() - value_offset;
         let actual_value_len = i32::try_from(actual_value_len).map_err(|_| {
             self.out.truncate(pair_start);
-            HeaderCodecError::ValueLengthOverflow {
+            ProtocolContractViolation::ValueLengthOverflow {
                 header: context.header,
                 key: context.key,
             }
@@ -274,7 +274,7 @@ mod tests {
         let mut out = BytesMut::from(&b"prefix"[..]);
         let error = BinarySink::new(&mut out).write(key, &true, CONTEXT).unwrap_err();
 
-        assert!(matches!(error, HeaderCodecError::KeyLengthOverflow { .. }));
+        assert!(matches!(error, ProtocolContractViolation::KeyLengthOverflow { .. }));
         assert_eq!(out.as_ref(), b"prefix");
     }
 

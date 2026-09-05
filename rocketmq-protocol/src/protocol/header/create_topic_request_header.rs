@@ -75,10 +75,10 @@ fn default_force() -> Option<bool> {
 }
 
 impl CreateTopicRequestHeader {
-    fn validate(&self) -> Result<(), crate::protocol::header_codec::HeaderCodecError> {
+    fn validate(&self) -> Result<(), crate::ProtocolContractViolation> {
         match self.topic_filter_type.as_str() {
             "SINGLE_TAG" | "MULTI_TAG" => Ok(()),
-            _ => Err(crate::protocol::header_codec::HeaderCodecError::Validation {
+            _ => Err(crate::ProtocolContractViolation::Validation {
                 header: "rocketmq_protocol::protocol::header::create_topic_request_header::CreateTopicRequestHeader",
                 rule: "supported_topic_filter_type",
             }),

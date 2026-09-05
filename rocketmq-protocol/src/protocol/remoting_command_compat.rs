@@ -26,9 +26,9 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::remoting_command_defaults::initialize_remoting_command_defaults;
 use crate::protocol::remoting_command_defaults::RemotingCommandDefaults;
-use crate::protocol::remoting_command_defaults::RemotingCommandDefaultsConflict;
 use crate::protocol::remoting_command_defaults::RemotingCommandFactory;
 use crate::protocol::SerializeType;
+use crate::ProtocolContractViolation;
 
 use super::remoting_command::REMOTING_VERSION_KEY;
 use super::remoting_command::SERIALIZE_TYPE_ENV;
@@ -81,7 +81,7 @@ static SERIALIZE_TYPE: LazyLock<SerializeType> = LazyLock::new(|| {
 });
 
 /// An unsupported value selected for the process remoting serialization type.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InvalidRemotingSerializeType {
     key: &'static str,
     value: String,
@@ -109,15 +109,6 @@ impl fmt::Display for InvalidRemotingSerializeType {
 
 impl std::error::Error for InvalidRemotingSerializeType {}
 
-/// Failure while resolving or initializing process remoting defaults.
-#[derive(Debug, thiserror::Error)]
-pub enum RemotingDefaultsError {
-    #[error(transparent)]
-    InvalidSerializeType(#[from] InvalidRemotingSerializeType),
-    #[error(transparent)]
-    Conflict(#[from] RemotingCommandDefaultsConflict),
-}
-
 /// Resolves the serialization type with Java-compatible configuration precedence.
 ///
 /// The property-style value takes precedence over the environment fallback.
@@ -125,12 +116,12 @@ pub enum RemotingDefaultsError {
 ///
 /// # Errors
 ///
-/// Returns [`InvalidRemotingSerializeType`] when the selected value is not
-/// exactly `JSON` or `ROCKETMQ`.
+/// Returns [`ProtocolContractViolation::InvalidSerializeType`] when the
+/// selected value is not exactly `JSON` or `ROCKETMQ`.
 pub fn resolve_remoting_serialize_type(
     property_value: Option<&str>,
     environment_value: Option<&str>,
-) -> Result<SerializeType, InvalidRemotingSerializeType> {
+) -> Result<SerializeType, ProtocolContractViolation> {
     let (key, value) = property_value
         .map(|value| (SERIALIZE_TYPE_PROPERTY, value))
         .or_else(|| environment_value.map(|value| (SERIALIZE_TYPE_ENV, value)))
@@ -142,18 +133,30 @@ pub fn resolve_remoting_serialize_type(
         _ => Err(InvalidRemotingSerializeType {
             key,
             value: value.to_string(),
-        }),
+        }
+        .into()),
     }
 }
 
-fn read_environment_value(key: &'static str) -> Result<Option<String>, InvalidRemotingSerializeType> {
+impl fmt::Debug for InvalidRemotingSerializeType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InvalidRemotingSerializeType")
+            .field("key", &self.key)
+            .field("value_present", &true)
+            .finish()
+    }
+}
+
+fn read_environment_value(key: &'static str) -> Result<Option<String>, ProtocolContractViolation> {
     match std::env::var(key) {
         Ok(value) => Ok(Some(value)),
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(value)) => Err(InvalidRemotingSerializeType {
             key,
             value: value.to_string_lossy().into_owned(),
-        }),
+        }
+        .into()),
     }
 }
 
@@ -165,9 +168,9 @@ fn read_environment_value(key: &'static str) -> Result<Option<String>, InvalidRe
 ///
 /// # Errors
 ///
-/// Returns [`RemotingDefaultsError`] when configuration is invalid or a
+/// Returns [`ProtocolContractViolation`] when configuration is invalid or a
 /// different process default was initialized earlier.
-pub fn initialize_remoting_command_factory(version: i32) -> Result<RemotingCommandFactory, RemotingDefaultsError> {
+pub fn initialize_remoting_command_factory(version: i32) -> Result<RemotingCommandFactory, ProtocolContractViolation> {
     let property_value = read_environment_value(SERIALIZE_TYPE_PROPERTY)?;
     let environment_value = if property_value.is_none() {
         read_environment_value(SERIALIZE_TYPE_ENV)?
@@ -189,9 +192,9 @@ pub fn initialize_remoting_command_factory(version: i32) -> Result<RemotingComma
 ///
 /// # Errors
 ///
-/// Returns [`RemotingDefaultsError`] when configuration is invalid or a
+/// Returns [`ProtocolContractViolation`] when configuration is invalid or a
 /// different process default was initialized earlier.
-pub fn initialize_remoting_defaults(version: i32) -> Result<(), RemotingDefaultsError> {
+pub fn initialize_remoting_defaults(version: i32) -> Result<(), ProtocolContractViolation> {
     initialize_remoting_command_factory(version)?;
     Ok(())
 }

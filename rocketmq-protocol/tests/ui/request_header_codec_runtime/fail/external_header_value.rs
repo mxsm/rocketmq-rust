@@ -1,8 +1,7 @@
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_protocol::protocol::header_codec::{
-    HeaderCodecError, HeaderFieldContext, HeaderValue, HeaderValueKind,
-};
+use rocketmq_protocol::protocol::header_codec::{HeaderFieldContext, HeaderValue, HeaderValueKind};
+use rocketmq_protocol::ProtocolContractViolation;
 
 struct ExternalValue;
 
@@ -19,7 +18,7 @@ impl HeaderValue for ExternalValue {
 
     fn write_ascii(&self, _out: &mut BytesMut) {}
 
-    fn decode(_raw: &str, _context: HeaderFieldContext) -> Result<Self, HeaderCodecError> {
+    fn decode(_raw: &str, _context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation> {
         Ok(Self)
     }
 }

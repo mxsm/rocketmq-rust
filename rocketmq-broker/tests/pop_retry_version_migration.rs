@@ -15,6 +15,7 @@
 use rocketmq_broker::test_support::PopProfileStoreProbe;
 use rocketmq_model::common::pop_retry_policy::PopRetryMigrationState;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
+use rocketmq_model::PopRetryPolicyOutcome;
 use tempfile::TempDir;
 
 #[test]
@@ -25,37 +26,35 @@ fn group_policy_survives_upgrade_write_rollback_and_restart() {
     let v1 = store
         .upsert_policy("group-a", &["orders"], PopRetryPolicy::v1_only(0), 10)
         .expect("persist v1-only policy");
+    let PopRetryPolicyOutcome::Transitioned(dual_v1_policy) = v1
+        .retry_policy
+        .transition_to(PopRetryMigrationState::DualReadV1Write, 2)
+        .expect("enter dual-read before switching writes")
+    else {
+        panic!("the first migration transition should be accepted");
+    };
     let dual_v1 = store
-        .upsert_policy(
-            "group-a",
-            &["orders"],
-            v1.retry_policy
-                .transition_to(PopRetryMigrationState::DualReadV1Write, 2)
-                .expect("enter dual-read before switching writes"),
-            11,
-        )
+        .upsert_policy("group-a", &["orders"], dual_v1_policy, 11)
         .expect("persist dual-read/v1-write policy");
+    let PopRetryPolicyOutcome::Transitioned(dual_v2_policy) = dual_v1
+        .retry_policy
+        .transition_to(PopRetryMigrationState::DualReadV2Write, 3)
+        .expect("switch writes to v2")
+    else {
+        panic!("the write-version transition should be accepted");
+    };
     let dual_v2 = store
-        .upsert_policy(
-            "group-a",
-            &["orders"],
-            dual_v1
-                .retry_policy
-                .transition_to(PopRetryMigrationState::DualReadV2Write, 3)
-                .expect("switch writes to v2"),
-            12,
-        )
+        .upsert_policy("group-a", &["orders"], dual_v2_policy, 12)
         .expect("persist dual-read/v2-write policy");
+    let PopRetryPolicyOutcome::Transitioned(rolled_back_policy) = dual_v2
+        .retry_policy
+        .transition_to(PopRetryMigrationState::DualReadV1Write, 4)
+        .expect("roll writes back while retaining v2 reads")
+    else {
+        panic!("the rollback transition should be accepted");
+    };
     let rolled_back = store
-        .upsert_policy(
-            "group-a",
-            &["orders"],
-            dual_v2
-                .retry_policy
-                .transition_to(PopRetryMigrationState::DualReadV1Write, 4)
-                .expect("roll writes back while retaining v2 reads"),
-            13,
-        )
+        .upsert_policy("group-a", &["orders"], rolled_back_policy, 13)
         .expect("persist rollback policy");
     assert_eq!(
         rolled_back.retry_policy.state(),
@@ -88,6 +87,6 @@ fn persisted_profile_rejects_a_skipped_v1_to_v2_only_transition() {
     let error = store
         .upsert_policy("group-a", &["orders"], PopRetryPolicy::v2_only(2), 11)
         .expect_err("migration must not skip both dual-read states");
-    assert!(error.contains("not safe"), "{error}");
+    assert!(error.contains("next safe POP retry migration state"), "{error}");
     assert_eq!(store.generation(), 1);
 }

@@ -14,7 +14,7 @@
 
 use rocketmq_protocol::protocol::remoting_command::SERIALIZE_TYPE_PROPERTY;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
-use rocketmq_protocol::protocol::remoting_command_facade::RemotingDefaultsError;
+use rocketmq_protocol::ProtocolContractViolation;
 
 #[test]
 fn invalid_process_configuration_fails_before_defaults_are_initialized() {
@@ -25,7 +25,7 @@ fn invalid_process_configuration_fails_before_defaults_are_initialized() {
     }
 
     let error = initialize_remoting_defaults(4242).expect_err("invalid serialization config must fail startup");
-    let RemotingDefaultsError::InvalidSerializeType(error) = error else {
+    let ProtocolContractViolation::InvalidSerializeType(error) = error else {
         panic!("expected invalid serialization type error");
     };
     assert_eq!(error.key(), SERIALIZE_TYPE_PROPERTY);

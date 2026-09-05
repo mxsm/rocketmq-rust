@@ -43,7 +43,7 @@ impl RemotingCommand {
             Some(header) => RocketMQSerializable::try_rocketmq_protocol_encode_direct(self, header, dst),
             None => RocketMQSerializable::try_rocketmq_protocol_encode_with_capability(self, dst, capability),
         }
-        .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
+        .map_err(crate::protocol::header_codec::into_rocketmq_error)?;
         let (total_length, serialize_type) =
             Self::checked_frame_lengths(header_size, body_length, SerializeType::ROCKETMQ)?;
 

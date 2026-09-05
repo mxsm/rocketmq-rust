@@ -20,6 +20,7 @@ use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
 use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
+use rocketmq_model::PopRetryPolicyOutcome;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_store_rocksdb::profile_marker::pop_consumer_profile_key;
 use rocketmq_store_rocksdb::profile_marker::PopConsumerProfileMarker;
@@ -310,13 +311,17 @@ fn next_retry_policy(
     if current.state().map_err(|error| codec_error(error.to_string()))? == requested_state {
         return Ok(PopRetryPolicy::for_state(requested_state, generation));
     }
-    current.transition_to(requested_state, generation).map_err(|error| {
-        invalid_profile(
+    match current
+        .transition_to(requested_state, generation)
+        .map_err(|_| codec_error("existing POP retry policy is invalid"))?
+    {
+        PopRetryPolicyOutcome::Transitioned(policy) => Ok(policy),
+        PopRetryPolicyOutcome::Rejected => Err(invalid_profile(
             "retryPolicy",
-            error.to_string(),
+            format!("{requested_state:?}"),
             "the next safe POP retry migration state",
-        )
-    })
+        )),
+    }
 }
 
 fn validate_format_version(format_version: u32) -> Result<(), RocketMQError> {

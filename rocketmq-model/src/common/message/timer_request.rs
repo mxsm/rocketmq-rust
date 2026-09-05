@@ -15,9 +15,9 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use thiserror::Error;
 
 use crate::common::message::MessageConst;
+use crate::ModelContractViolation;
 
 /// Timer precisions supported by the Java-compatible timer engine.
 pub const JAVA_COMPAT_TIMER_PRECISIONS_MS: [u64; 4] = [100, 200, 500, 1_000];
@@ -35,11 +35,11 @@ impl TimerPolicySnapshot {
     ///
     /// # Errors
     ///
-    /// Returns [`TimerNormalizeError::UnsupportedPrecision`] when the precision is not one of the
+    /// Returns [`ModelContractViolation::UnsupportedTimerPrecision`] when the precision is not one of the
     /// values supported by the Java-compatible timer engine.
-    pub fn try_new(precision_ms: u64, max_delay_ms: u64) -> Result<Self, TimerNormalizeError> {
+    pub fn try_new(precision_ms: u64, max_delay_ms: u64) -> Result<Self, ModelContractViolation> {
         if !JAVA_COMPAT_TIMER_PRECISIONS_MS.contains(&precision_ms) {
-            return Err(TimerNormalizeError::UnsupportedPrecision { precision_ms });
+            return Err(ModelContractViolation::UnsupportedTimerPrecision { precision_ms });
         }
         Ok(Self {
             precision_ms,
@@ -98,23 +98,6 @@ pub struct NormalizedTimerRequest {
     pub timer_out_ms: u64,
 }
 
-/// A fallible timer request normalization error.
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub enum TimerNormalizeError {
-    #[error("timer request does not contain a supported delivery property")]
-    MissingDeliveryProperty,
-    #[error("timer property {property} has invalid unsigned integer value `{value}`")]
-    InvalidProperty { property: &'static str, value: String },
-    #[error("timer precision {precision_ms}ms is unsupported; expected one of 100, 200, 500, 1000")]
-    UnsupportedPrecision { precision_ms: u64 },
-    #[error("timer delivery time arithmetic overflowed")]
-    ArithmeticOverflow,
-    #[error("timer delivery time {deliver_ms} is not later than current time {now_ms}")]
-    NotInFuture { deliver_ms: u64, now_ms: u64 },
-    #[error("timer delay {delay_ms}ms exceeds the configured maximum {max_delay_ms}ms")]
-    ExceedsMaximum { delay_ms: u64, max_delay_ms: u64 },
-}
-
 /// Normalizes RocketMQ timer properties without reading the system clock.
 ///
 /// Property precedence matches Java RocketMQ: `TIMER_DELAY_SEC`, then `TIMER_DELAY_MS`, then
@@ -129,7 +112,7 @@ pub fn normalize_timer_request(
     properties: &HashMap<CheetahString, CheetahString>,
     now_ms: u64,
     policy: TimerPolicySnapshot,
-) -> Result<NormalizedTimerRequest, TimerNormalizeError> {
+) -> Result<NormalizedTimerRequest, ModelContractViolation> {
     normalize_timer_request_fields(
         properties
             .get(MessageConst::PROPERTY_TIMER_DELAY_SEC)
@@ -156,17 +139,17 @@ pub fn normalize_timer_request_fields(
     deliver_at_milliseconds: Option<&str>,
     now_ms: u64,
     policy: TimerPolicySnapshot,
-) -> Result<NormalizedTimerRequest, TimerNormalizeError> {
+) -> Result<NormalizedTimerRequest, ModelContractViolation> {
     let (kind, original_deliver_ms) = if let Some(value) = delay_seconds {
         let delay_seconds = parse_property(MessageConst::PROPERTY_TIMER_DELAY_SEC, value)?;
         let delay_ms = delay_seconds
             .checked_mul(1_000)
-            .ok_or(TimerNormalizeError::ArithmeticOverflow)?;
+            .ok_or(ModelContractViolation::TimerDeliveryArithmeticOverflow)?;
         (
             TimerRequestKind::DelaySeconds,
             now_ms
                 .checked_add(delay_ms)
-                .ok_or(TimerNormalizeError::ArithmeticOverflow)?,
+                .ok_or(ModelContractViolation::TimerDeliveryArithmeticOverflow)?,
         )
     } else if let Some(value) = delay_milliseconds {
         let delay_ms = parse_property(MessageConst::PROPERTY_TIMER_DELAY_MS, value)?;
@@ -174,7 +157,7 @@ pub fn normalize_timer_request_fields(
             TimerRequestKind::DelayMilliseconds,
             now_ms
                 .checked_add(delay_ms)
-                .ok_or(TimerNormalizeError::ArithmeticOverflow)?,
+                .ok_or(ModelContractViolation::TimerDeliveryArithmeticOverflow)?,
         )
     } else if let Some(value) = deliver_at_milliseconds {
         (
@@ -182,23 +165,24 @@ pub fn normalize_timer_request_fields(
             parse_property(MessageConst::PROPERTY_TIMER_DELIVER_MS, value)?,
         )
     } else {
-        return Err(TimerNormalizeError::MissingDeliveryProperty);
+        return Err(ModelContractViolation::MissingTimerDeliveryProperty);
     };
 
-    let delay_ms = original_deliver_ms
-        .checked_sub(now_ms)
-        .ok_or(TimerNormalizeError::NotInFuture {
-            deliver_ms: original_deliver_ms,
-            now_ms,
-        })?;
+    let delay_ms =
+        original_deliver_ms
+            .checked_sub(now_ms)
+            .ok_or(ModelContractViolation::TimerDeliveryTimeIsNotInFuture {
+                deliver_ms: original_deliver_ms,
+                now_ms,
+            })?;
     if delay_ms == 0 {
-        return Err(TimerNormalizeError::NotInFuture {
+        return Err(ModelContractViolation::TimerDeliveryTimeIsNotInFuture {
             deliver_ms: original_deliver_ms,
             now_ms,
         });
     }
     if delay_ms > policy.max_delay_ms() {
-        return Err(TimerNormalizeError::ExceedsMaximum {
+        return Err(ModelContractViolation::TimerDelayExceedsMaximum {
             delay_ms,
             max_delay_ms: policy.max_delay_ms(),
         });
@@ -208,7 +192,7 @@ pub fn normalize_timer_request_fields(
     let timer_out_ms = if original_deliver_ms.is_multiple_of(precision_ms) {
         original_deliver_ms
             .checked_sub(precision_ms)
-            .ok_or(TimerNormalizeError::ArithmeticOverflow)?
+            .ok_or(ModelContractViolation::TimerDeliveryArithmeticOverflow)?
     } else {
         original_deliver_ms / precision_ms * precision_ms
     };
@@ -220,11 +204,10 @@ pub fn normalize_timer_request_fields(
     })
 }
 
-fn parse_property(property: &'static str, value: &str) -> Result<u64, TimerNormalizeError> {
-    value.parse::<u64>().map_err(|_| TimerNormalizeError::InvalidProperty {
-        property,
-        value: value.to_string(),
-    })
+fn parse_property(property: &'static str, value: &str) -> Result<u64, ModelContractViolation> {
+    value
+        .parse::<u64>()
+        .map_err(|_| ModelContractViolation::InvalidTimerProperty { property })
 }
 
 #[cfg(test)]
@@ -283,19 +266,41 @@ mod tests {
     fn timer_request_rejects_invalid_configuration_and_arithmetic() {
         assert_eq!(
             TimerPolicySnapshot::try_new(0, 1_000),
-            Err(TimerNormalizeError::UnsupportedPrecision { precision_ms: 0 })
+            Err(ModelContractViolation::UnsupportedTimerPrecision { precision_ms: 0 })
         );
         assert_eq!(
             TimerPolicySnapshot::try_new(250, 1_000),
-            Err(TimerNormalizeError::UnsupportedPrecision { precision_ms: 250 })
+            Err(ModelContractViolation::UnsupportedTimerPrecision { precision_ms: 250 })
         );
 
         let policy = TimerPolicySnapshot::try_new(1_000, u64::MAX).unwrap();
         let overflow = properties(&[(MessageConst::PROPERTY_TIMER_DELAY_SEC, "18446744073709552")]);
         assert_eq!(
             normalize_timer_request(&overflow, 1, policy),
-            Err(TimerNormalizeError::ArithmeticOverflow)
+            Err(ModelContractViolation::TimerDeliveryArithmeticOverflow)
         );
+    }
+
+    #[test]
+    fn timer_property_violation_keeps_only_its_static_schema_identifier() {
+        let rejected_value = "untrusted-timer-value";
+        let policy = TimerPolicySnapshot::try_new(1_000, 10_000).unwrap();
+
+        let error = normalize_timer_request_fields(Some(rejected_value), None, None, 1, policy)
+            .expect_err("non-numeric timer property should be rejected");
+
+        assert_eq!(
+            error,
+            ModelContractViolation::InvalidTimerProperty {
+                property: MessageConst::PROPERTY_TIMER_DELAY_SEC,
+            }
+        );
+        assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::InvalidArgument);
+        assert_eq!(
+            error.to_string(),
+            "timer property has an invalid unsigned integer value"
+        );
+        assert!(!format!("{error:?}").contains(rejected_value));
     }
 
     #[test]
@@ -308,11 +313,11 @@ mod tests {
         assert!(normalize_timer_request(&at_max, 10_000, policy).is_ok());
         assert!(matches!(
             normalize_timer_request(&beyond_max, 10_000, policy),
-            Err(TimerNormalizeError::ExceedsMaximum { .. })
+            Err(ModelContractViolation::TimerDelayExceedsMaximum { .. })
         ));
         assert!(matches!(
             normalize_timer_request(&past, 10_000, policy),
-            Err(TimerNormalizeError::NotInFuture { .. })
+            Err(ModelContractViolation::TimerDeliveryTimeIsNotInFuture { .. })
         ));
     }
 

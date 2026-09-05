@@ -28,7 +28,6 @@ use crate::protocol::header::message_operation_header::send_message_request_head
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header_codec::BinarySink;
 use crate::protocol::header_codec::HeaderCodec;
-use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_codec::HeaderFieldContext;
 use crate::protocol::header_codec::HeaderFieldSource;
 use crate::protocol::header_codec::HeaderValue;
@@ -37,6 +36,7 @@ use crate::protocol::header_codec::MapSink;
 use crate::protocol::header_codec::ResolvedHeaderKey;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 use crate::rpc::topic_request_header::TopicRequestHeader;
+use crate::ProtocolContractViolation;
 
 // Field key constants to avoid repeated allocations
 const FIELD_A: &str = "a";
@@ -98,8 +98,7 @@ pub struct SendMessageRequestHeaderV2 {
 
 impl CommandCustomHeader for SendMessageRequestHeaderV2 {
     fn check_fields(&self) -> rocketmq_error::RocketMQResult<()> {
-        <Self as HeaderCodec>::validate_for_wire(self)
-            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))
+        <Self as HeaderCodec>::validate_for_wire(self).map_err(crate::protocol::header_codec::into_rocketmq_error)
     }
 
     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
@@ -112,7 +111,10 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         let _ = self.try_encode_into_map(out);
     }
 
-    fn try_encode_into_map(&self, out: &mut HashMap<CheetahString, CheetahString>) -> Result<(), HeaderCodecError> {
+    fn try_encode_into_map(
+        &self,
+        out: &mut HashMap<CheetahString, CheetahString>,
+    ) -> Result<(), ProtocolContractViolation> {
         out.reserve(<Self as HeaderCodec>::FIELD_COUNT_HINT);
         let mut sink = MapSink::new(out);
         <Self as HeaderCodec>::encode_into(self, &mut sink)
@@ -138,7 +140,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         HeaderEncodeCapability::DirectBinary
     }
 
-    fn encode_direct_binary(&self, out: &mut BytesMut) -> Result<(), HeaderCodecError> {
+    fn encode_direct_binary(&self, out: &mut BytesMut) -> Result<(), ProtocolContractViolation> {
         let checkpoint = out.len();
         // Java's V2 fast codec writes only the compact a..n fields. Inherited
         // topic/RPC fields remain available through the compatibility map.
@@ -156,7 +158,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         true
     }
 
-    fn encode_direct_json_fields(&self, out: &mut BytesMut) -> Result<(), HeaderCodecError> {
+    fn encode_direct_json_fields(&self, out: &mut BytesMut) -> Result<(), ProtocolContractViolation> {
         let checkpoint = out.len();
         let result = {
             let mut sink = JsonSink::new(out);
@@ -316,18 +318,16 @@ impl FromMap for SendMessageRequestHeaderV2 {
     const SUPPORTS_HEADER_FIELD_SOURCE: bool = true;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        <Self as HeaderCodec>::decode_from_map(map)
-            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))
+        <Self as HeaderCodec>::decode_from_map(map).map_err(crate::protocol::header_codec::into_rocketmq_error)
     }
 
     fn from_field_source(source: &dyn HeaderFieldSource) -> Result<Self::Target, Self::Error> {
-        Self::decode_from_field_source(source)
-            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))
+        Self::decode_from_field_source(source).map_err(crate::protocol::header_codec::into_rocketmq_error)
     }
 }
 
 impl SendMessageRequestHeaderV2 {
-    fn decode_from_field_source(source: &dyn HeaderFieldSource) -> Result<Self, HeaderCodecError> {
+    fn decode_from_field_source(source: &dyn HeaderFieldSource) -> Result<Self, ProtocolContractViolation> {
         #[derive(Default)]
         struct SourceFields<'a> {
             a: Option<&'a str>,
@@ -360,9 +360,9 @@ impl SendMessageRequestHeaderV2 {
             raw: Option<&str>,
             header: &'static str,
             key: &'static str,
-        ) -> Result<T, HeaderCodecError> {
+        ) -> Result<T, ProtocolContractViolation> {
             let context = HeaderFieldContext::new(header, key, T::KIND, None);
-            T::decode(raw.ok_or(HeaderCodecError::Missing { header, key })?, context)
+            T::decode(raw.ok_or(ProtocolContractViolation::Missing { header, key })?, context)
         }
 
         #[inline(always)]
@@ -370,7 +370,7 @@ impl SendMessageRequestHeaderV2 {
             raw: Option<&str>,
             header: &'static str,
             key: &'static str,
-        ) -> Result<Option<T>, HeaderCodecError> {
+        ) -> Result<Option<T>, ProtocolContractViolation> {
             let context = HeaderFieldContext::new(header, key, T::KIND, None);
             raw.map(|value| T::decode(value, context)).transpose()
         }

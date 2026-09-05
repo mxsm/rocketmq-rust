@@ -1,13 +1,13 @@
 error[E0277]: the trait bound `ExternalSink: header_codec::private::Sealed` is not satisfied
- --> tests/ui/request_header_codec_runtime/fail/external_sink.rs:7:21
+ --> tests/ui/request_header_codec_runtime/fail/external_sink.rs:6:21
   |
-7 | impl EncodeSink for ExternalSink {
+6 | impl EncodeSink for ExternalSink {
   |                     ^^^^^^^^^^^^ unsatisfied trait bound
   |
 help: the trait `header_codec::private::Sealed` is not implemented for `ExternalSink`
- --> tests/ui/request_header_codec_runtime/fail/external_sink.rs:5:1
+ --> tests/ui/request_header_codec_runtime/fail/external_sink.rs:4:1
   |
-5 | struct ExternalSink;
+4 | struct ExternalSink;
   | ^^^^^^^^^^^^^^^^^^^
   = help: the following other types implement trait `header_codec::private::Sealed`:
             BinarySink<'_>

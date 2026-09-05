@@ -41,11 +41,11 @@ pub struct GetLiteClientInfoRequestHeader {
 }
 
 impl GetLiteClientInfoRequestHeader {
-    fn validate(&self) -> Result<(), crate::protocol::header_codec::HeaderCodecError> {
+    fn validate(&self) -> Result<(), crate::ProtocolContractViolation> {
         if self.max_count > 0 {
             return Ok(());
         }
-        Err(crate::protocol::header_codec::HeaderCodecError::Validation {
+        Err(crate::ProtocolContractViolation::Validation {
             header: "rocketmq_protocol::protocol::header::get_lite_client_info_request_header::GetLiteClientInfoRequestHeader",
             rule: "max_count_positive",
         })

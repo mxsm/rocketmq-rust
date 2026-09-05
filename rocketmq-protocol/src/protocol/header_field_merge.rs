@@ -18,7 +18,7 @@ use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::HeaderMap;
 use crate::protocol::header_codec::AliasConflictPolicy;
 use crate::protocol::header_codec::DynamicCollisionPolicy;
-use crate::protocol::header_codec::HeaderCodecError;
+use crate::ProtocolContractViolation;
 
 type FieldIdentity = (&'static str, &'static str);
 
@@ -35,7 +35,7 @@ pub(crate) fn has_custom_ext_collision(header: &dyn CommandCustomHeader, dynamic
 pub(crate) fn merge_header_and_dynamic(
     header: &dyn CommandCustomHeader,
     dynamic: Option<&HeaderMap>,
-) -> Result<HeaderMap, HeaderCodecError> {
+) -> Result<HeaderMap, ProtocolContractViolation> {
     let mut merged = HeaderMap::with_capacity(dynamic.map_or(0, HeaderMap::len));
     header.try_encode_into_map(&mut merged)?;
 
@@ -71,7 +71,7 @@ pub(crate) fn merge_header_and_dynamic(
 
             match resolved.alias_conflict {
                 AliasConflictPolicy::Error => {
-                    return Err(HeaderCodecError::Conflict {
+                    return Err(ProtocolContractViolation::Conflict {
                         header: resolved.header,
                         key: resolved.canonical,
                     });
@@ -89,7 +89,7 @@ pub(crate) fn merge_header_and_dynamic(
             if typed_value != value {
                 match resolved.dynamic_collision {
                     DynamicCollisionPolicy::ErrorOnDifferentValue => {
-                        return Err(HeaderCodecError::DynamicFieldConflict {
+                        return Err(ProtocolContractViolation::DynamicFieldConflict {
                             header: resolved.header,
                             key: resolved.canonical,
                         });
@@ -144,7 +144,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            HeaderCodecError::DynamicFieldConflict {
+            ProtocolContractViolation::DynamicFieldConflict {
                 header: "RpcRequestHeader",
                 key: "ns"
             }
@@ -188,7 +188,7 @@ mod tests {
 
             assert!(matches!(
                 error,
-                HeaderCodecError::Conflict {
+                ProtocolContractViolation::Conflict {
                     header: "StrictAliasHeader",
                     key: "canonical"
                 }

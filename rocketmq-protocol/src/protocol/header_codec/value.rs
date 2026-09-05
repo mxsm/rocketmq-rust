@@ -18,7 +18,7 @@ use rocketmq_model::boundary_type::BoundaryType;
 
 use super::private::Sealed;
 use super::write_json_string;
-use super::HeaderCodecError;
+use super::ProtocolContractViolation;
 
 /// Protocol-reviewed value categories supported by typed request headers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -118,11 +118,11 @@ pub trait HeaderValue: Sealed + Sized {
     ///
     /// # Errors
     ///
-    /// Returns [`HeaderCodecError::InvalidValue`] for malformed or overflowing
-    /// scalar values, or [`HeaderCodecError::JavaRange`] when an unsigned value
+    /// Returns [`ProtocolContractViolation::InvalidValue`] for malformed or overflowing
+    /// scalar values, or [`ProtocolContractViolation::JavaRange`] when an unsigned value
     /// exceeds its field's declared signed Java range. Errors never retain
     /// `raw`.
-    fn decode(raw: &str, context: HeaderFieldContext) -> Result<Self, HeaderCodecError>;
+    fn decode(raw: &str, context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation>;
 }
 
 /// Validates an unsigned value against its field-level signed Java range.
@@ -133,10 +133,10 @@ pub trait HeaderValue: Sealed + Sized {
 ///
 /// # Errors
 ///
-/// Returns [`HeaderCodecError::JavaRange`] when `value` exceeds the declared
+/// Returns [`ProtocolContractViolation::JavaRange`] when `value` exceeds the declared
 /// range. The error contains only static field metadata.
 #[inline]
-pub fn validate_unsigned_java_range(value: u64, context: HeaderFieldContext) -> Result<(), HeaderCodecError> {
+pub fn validate_unsigned_java_range(value: u64, context: HeaderFieldContext) -> Result<(), ProtocolContractViolation> {
     let in_range = match context.range {
         None => true,
         Some(HeaderRange::I32) => value <= i32::MAX as u64,
@@ -145,7 +145,7 @@ pub fn validate_unsigned_java_range(value: u64, context: HeaderFieldContext) -> 
     if in_range {
         Ok(())
     } else {
-        Err(HeaderCodecError::JavaRange {
+        Err(ProtocolContractViolation::JavaRange {
             header: context.header,
             key: context.key,
         })
@@ -153,8 +153,8 @@ pub fn validate_unsigned_java_range(value: u64, context: HeaderFieldContext) -> 
 }
 
 #[inline]
-const fn invalid_value(context: HeaderFieldContext) -> HeaderCodecError {
-    HeaderCodecError::InvalidValue {
+const fn invalid_value(context: HeaderFieldContext) -> ProtocolContractViolation {
+    ProtocolContractViolation::InvalidValue {
         header: context.header,
         key: context.key,
         expected: context.kind,
@@ -202,7 +202,7 @@ impl HeaderValue for CheetahString {
     }
 
     #[inline]
-    fn decode(raw: &str, _context: HeaderFieldContext) -> Result<Self, HeaderCodecError> {
+    fn decode(raw: &str, _context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation> {
         Ok(CheetahString::from_slice(raw))
     }
 }
@@ -234,7 +234,7 @@ impl HeaderValue for String {
     }
 
     #[inline]
-    fn decode(raw: &str, _context: HeaderFieldContext) -> Result<Self, HeaderCodecError> {
+    fn decode(raw: &str, _context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation> {
         Ok(raw.to_owned())
     }
 }
@@ -265,7 +265,7 @@ impl HeaderValue for bool {
     }
 
     #[inline]
-    fn decode(raw: &str, context: HeaderFieldContext) -> Result<Self, HeaderCodecError> {
+    fn decode(raw: &str, context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation> {
         if raw.eq_ignore_ascii_case("true") {
             Ok(true)
         } else if raw.eq_ignore_ascii_case("false") {
@@ -302,7 +302,7 @@ macro_rules! impl_signed_header_value {
             }
 
             #[inline]
-            fn decode(raw: &str, context: HeaderFieldContext) -> Result<Self, HeaderCodecError> {
+            fn decode(raw: &str, context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation> {
                 raw.parse::<$ty>().map_err(|_| invalid_value(context))
             }
         }
@@ -335,7 +335,7 @@ macro_rules! impl_unsigned_header_value {
             }
 
             #[inline]
-            fn decode(raw: &str, context: HeaderFieldContext) -> Result<Self, HeaderCodecError> {
+            fn decode(raw: &str, context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation> {
                 let value = raw.parse::<$ty>().map_err(|_| invalid_value(context))?;
                 validate_unsigned_java_range(value as u64, context)?;
                 Ok(value)
@@ -380,7 +380,7 @@ impl HeaderValue for BoundaryType {
     }
 
     #[inline]
-    fn decode(raw: &str, _context: HeaderFieldContext) -> Result<Self, HeaderCodecError> {
+    fn decode(raw: &str, _context: HeaderFieldContext) -> Result<Self, ProtocolContractViolation> {
         Ok(BoundaryType::get_type(raw))
     }
 }
@@ -432,13 +432,13 @@ mod tests {
         for raw in ["2147483648", "-2147483649", " 1", "1 "] {
             assert!(matches!(
                 i32::decode(raw, context(HeaderValueKind::I32, None)),
-                Err(HeaderCodecError::InvalidValue { .. })
+                Err(ProtocolContractViolation::InvalidValue { .. })
             ));
         }
         for raw in ["9223372036854775808", "-9223372036854775809"] {
             assert!(matches!(
                 i64::decode(raw, context(HeaderValueKind::I64, None)),
-                Err(HeaderCodecError::InvalidValue { .. })
+                Err(ProtocolContractViolation::InvalidValue { .. })
             ));
         }
     }
@@ -458,15 +458,15 @@ mod tests {
 
         assert!(matches!(
             u32::decode("4294967296", context(HeaderValueKind::U32, None)),
-            Err(HeaderCodecError::InvalidValue { .. })
+            Err(ProtocolContractViolation::InvalidValue { .. })
         ));
         assert!(matches!(
             u64::decode("18446744073709551616", context(HeaderValueKind::U64, None)),
-            Err(HeaderCodecError::InvalidValue { .. })
+            Err(ProtocolContractViolation::InvalidValue { .. })
         ));
         assert!(matches!(
             u64::decode("-1", context(HeaderValueKind::U64, None)),
-            Err(HeaderCodecError::InvalidValue { .. })
+            Err(ProtocolContractViolation::InvalidValue { .. })
         ));
 
         assert_eq!(
@@ -482,7 +482,7 @@ mod tests {
                 &(i32::MAX as u32 + 1).to_string(),
                 context(HeaderValueKind::U32, Some(HeaderRange::I32)),
             ),
-            Err(HeaderCodecError::JavaRange { .. })
+            Err(ProtocolContractViolation::JavaRange { .. })
         ));
         assert_eq!(
             u64::decode(
@@ -497,7 +497,7 @@ mod tests {
                 &(i64::MAX as u64 + 1).to_string(),
                 context(HeaderValueKind::U64, Some(HeaderRange::I64)),
             ),
-            Err(HeaderCodecError::JavaRange { .. })
+            Err(ProtocolContractViolation::JavaRange { .. })
         ));
     }
 
@@ -511,7 +511,7 @@ mod tests {
 
         let java_int = context(HeaderValueKind::U32, Some(HeaderRange::I32));
         let error = validate_unsigned_java_range(i32::MAX as u64 + 1, java_int).unwrap_err();
-        assert!(matches!(error, HeaderCodecError::JavaRange { .. }));
+        assert!(matches!(error, ProtocolContractViolation::JavaRange { .. }));
     }
 
     #[test]
@@ -525,7 +525,7 @@ mod tests {
         for raw in ["", "1", "yes", " true"] {
             assert!(matches!(
                 bool::decode(raw, context(HeaderValueKind::Bool, None)),
-                Err(HeaderCodecError::InvalidValue { .. })
+                Err(ProtocolContractViolation::InvalidValue { .. })
             ));
         }
         assert_encoding(true, "true");

@@ -2394,6 +2394,24 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use common::pop_retry_policy::PopRetryPolicyOutcome",
+          "identity": "rocketmq-model/src/lib.rs:pub use common::pop_retry_policy::PopRetryPolicyOutcome",
+          "owner": "model",
+          "path": "rocketmq-model/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use model_contract_violation::ModelContractViolation",
+          "identity": "rocketmq-model/src/lib.rs:pub use model_contract_violation::ModelContractViolation",
+          "owner": "model",
+          "path": "rocketmq-model/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use rocketmq_error::RocketMQError",
           "identity": "rocketmq-model/src/lib.rs:pub use rocketmq_error::RocketMQError",
           "owner": "model",
@@ -2429,7 +2447,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 18
+      "maximum_exports": 20
     },
     "rocketmq-protocol": {
       "entries": [
@@ -2500,6 +2518,15 @@
           "category": "stable",
           "declaration": "pub use code::response_code::RemotingSysResponseCode",
           "identity": "rocketmq-protocol/src/lib.rs:pub use code::response_code::RemotingSysResponseCode",
+          "owner": "protocol",
+          "path": "rocketmq-protocol/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use contract::ProtocolContractViolation",
+          "identity": "rocketmq-protocol/src/lib.rs:pub use contract::ProtocolContractViolation",
           "owner": "protocol",
           "path": "rocketmq-protocol/src/lib.rs",
           "rationale": "deliberate root entry point",
@@ -2614,7 +2641,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 20
+      "maximum_exports": 21
     },
     "rocketmq-runtime": {
       "entries": [
@@ -2845,12 +2872,30 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use error::RuntimeOperation",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use error::RuntimeOperation",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "closed operation metadata for runtime error classification",
+          "removal_condition": "retain while runtime errors expose operation metadata"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use error::RuntimeResult",
           "identity": "rocketmq-runtime/src/lib.rs:pub use error::RuntimeResult",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
           "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use executor_service::FuturesExecutorPlan",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::FuturesExecutorPlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "fallible futures executor construction plan",
+          "removal_condition": "retain while executor construction remains plan-then-build"
         },
         {
           "category": "stable",
@@ -2881,12 +2926,30 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use executor_service::ScheduledExecutorServicePlan",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::ScheduledExecutorServicePlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "fallible scheduled executor construction plan",
+          "removal_condition": "retain while executor construction remains plan-then-build"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use executor_service::TokioExecutorService",
           "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::TokioExecutorService",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
           "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use executor_service::TokioExecutorServicePlan",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::TokioExecutorServicePlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "fallible Tokio executor construction plan",
+          "removal_condition": "retain while executor construction remains plan-then-build"
         },
         {
           "category": "compat",
@@ -2953,6 +3016,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use metadata_io::MetadataIoAdmissionOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoAdmissionOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "source-free metadata admission result",
+          "removal_condition": "retain while metadata admission is a public outcome"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use metadata_io::MetadataIoConfig",
           "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoConfig",
           "owner": "runtime",
@@ -2962,12 +3034,30 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use metadata_io::MetadataIoDurabilityOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoDurabilityOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "source-free metadata durability result",
+          "removal_condition": "retain while metadata durability is a public outcome"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use metadata_io::MetadataIoOperation",
           "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoOperation",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
           "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use metadata_io::MetadataIoPlan",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoPlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "validated metadata I/O construction plan",
+          "removal_condition": "retain while metadata I/O uses plan-then-start construction"
         },
         {
           "category": "stable",
@@ -3403,6 +3493,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use scheduled::ScheduledTaskRegistrationOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use scheduled::ScheduledTaskRegistrationOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "source-free scheduled registration result",
+          "removal_condition": "retain while duplicate registration is a public outcome"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use scheduled::ScheduledTaskSnapshot",
           "identity": "rocketmq-runtime/src/lib.rs:pub use scheduled::ScheduledTaskSnapshot",
           "owner": "runtime",
@@ -3781,6 +3880,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::owner::RuntimeOwnerPlan",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::owner::RuntimeOwnerPlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/public_api.rs",
+          "rationale": "validated owned-runtime construction plan",
+          "removal_condition": "retain while runtime ownership uses plan-then-build construction"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::resource_budget::ResourceBudget",
           "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::resource_budget::ResourceBudget",
           "owner": "runtime",
@@ -3841,87 +3949,6 @@
           "path": "rocketmq-runtime/src/public_api.rs",
           "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use error::RuntimeOperation",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use error::RuntimeOperation",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "closed operation metadata for runtime error classification",
-          "removal_condition": "retain while runtime errors expose operation metadata"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use executor_service::FuturesExecutorPlan",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::FuturesExecutorPlan",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "fallible futures executor construction plan",
-          "removal_condition": "retain while executor construction remains plan-then-build"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use executor_service::ScheduledExecutorServicePlan",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::ScheduledExecutorServicePlan",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "fallible scheduled executor construction plan",
-          "removal_condition": "retain while executor construction remains plan-then-build"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use executor_service::TokioExecutorServicePlan",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::TokioExecutorServicePlan",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "fallible Tokio executor construction plan",
-          "removal_condition": "retain while executor construction remains plan-then-build"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use metadata_io::MetadataIoAdmissionOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoAdmissionOutcome",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "source-free metadata admission result",
-          "removal_condition": "retain while metadata admission is a public outcome"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use metadata_io::MetadataIoDurabilityOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoDurabilityOutcome",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "source-free metadata durability result",
-          "removal_condition": "retain while metadata durability is a public outcome"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use metadata_io::MetadataIoPlan",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoPlan",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "validated metadata I/O construction plan",
-          "removal_condition": "retain while metadata I/O uses plan-then-start construction"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use scheduled::ScheduledTaskRegistrationOutcome",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use scheduled::ScheduledTaskRegistrationOutcome",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "source-free scheduled registration result",
-          "removal_condition": "retain while duplicate registration is a public outcome"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::owner::RuntimeOwnerPlan",
-          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::owner::RuntimeOwnerPlan",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/public_api.rs",
-          "rationale": "validated owned-runtime construction plan",
-          "removal_condition": "retain while runtime ownership uses plan-then-build construction"
         }
       ],
       "maximum_exports": 145

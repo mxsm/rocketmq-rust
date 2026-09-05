@@ -21,33 +21,7 @@ use cheetah_string::CheetahString;
 use tracing::info;
 
 use crate::common::attribute::Attribute;
-
-#[derive(Debug, thiserror::Error)]
-pub enum AttributeError {
-    #[error("Only add attribute is supported while creating topic. Key: {0}")]
-    CreateOnlySupportsAdd(String),
-
-    #[error("Attempt to delete a nonexistent key: {0}")]
-    DeleteNonexistentKey(String),
-
-    #[error("Wrong format key: {0}")]
-    WrongFormatKey(String),
-
-    #[error("Alter duplication key. Key: {0}")]
-    DuplicateKey(String),
-
-    #[error("KV string format wrong")]
-    KvStringFormatWrong,
-
-    #[error("Unsupported key: {0}")]
-    UnsupportedKey(String),
-
-    #[error("Attempt to update an unchangeable attribute. Key: {0}")]
-    UnchangeableAttribute(String),
-
-    #[error("Attribute verification failed: {0}")]
-    AttributeVerificationFailed(String),
-}
+use crate::ModelContractViolation;
 
 /// Utility for working with topic attributes
 pub struct AttributeUtil;
@@ -71,7 +45,7 @@ impl AttributeUtil {
         all: &HashMap<CheetahString, Arc<dyn Attribute>>,
         current_attributes: &HashMap<CheetahString, CheetahString>,
         new_attributes: &HashMap<CheetahString, CheetahString>,
-    ) -> Result<HashMap<CheetahString, CheetahString>, AttributeError> {
+    ) -> Result<HashMap<CheetahString, CheetahString>, ModelContractViolation> {
         let mut init = HashMap::new();
         let mut add = HashMap::new();
         let mut update = HashMap::new();
@@ -89,7 +63,7 @@ impl AttributeUtil {
                 if key.starts_with('+') {
                     init.insert(real_key, value.clone());
                 } else {
-                    return Err(AttributeError::CreateOnlySupportsAdd(real_key.to_string()));
+                    return Err(ModelContractViolation::AttributeCreateRequiresAdd);
                 }
             } else if key.starts_with('+') {
                 if !current_attributes.contains_key(&real_key) {
@@ -99,11 +73,11 @@ impl AttributeUtil {
                 }
             } else if key.starts_with('-') {
                 if !current_attributes.contains_key(&real_key) {
-                    return Err(AttributeError::DeleteNonexistentKey(real_key.to_string()));
+                    return Err(ModelContractViolation::AttributeDeleteTargetsMissingKey);
                 }
                 delete.insert(real_key, value.clone());
             } else {
-                return Err(AttributeError::WrongFormatKey(real_key.to_string()));
+                return Err(ModelContractViolation::AttributeOperationKeyHasUnsupportedForm);
             }
         }
 
@@ -139,25 +113,25 @@ impl AttributeUtil {
     }
 
     /// Check for key duplication in the operation set
-    fn duplication_check(keys: &mut HashSet<String>, key: &str) -> Result<(), AttributeError> {
+    fn duplication_check(keys: &mut HashSet<String>, key: &str) -> Result<(), ModelContractViolation> {
         if !keys.insert(key.to_string()) {
-            return Err(AttributeError::DuplicateKey(key.to_string()));
+            return Err(ModelContractViolation::AttributeOperationSetContainsDuplicateKey);
         }
         Ok(())
     }
 
     /// Validate attribute key format
-    fn validate(kv_attribute: &str) -> Result<(), AttributeError> {
+    fn validate(kv_attribute: &str) -> Result<(), ModelContractViolation> {
         if kv_attribute.is_empty() {
-            return Err(AttributeError::KvStringFormatWrong);
+            return Err(ModelContractViolation::AttributeOperationKeyIsInvalid);
         }
 
         if kv_attribute.contains('+') {
-            return Err(AttributeError::KvStringFormatWrong);
+            return Err(ModelContractViolation::AttributeOperationKeyIsInvalid);
         }
 
         if kv_attribute.contains('-') {
-            return Err(AttributeError::KvStringFormatWrong);
+            return Err(ModelContractViolation::AttributeOperationKeyIsInvalid);
         }
 
         Ok(())
@@ -169,21 +143,21 @@ impl AttributeUtil {
         alter: &HashMap<CheetahString, CheetahString>,
         init: bool,
         delete: bool,
-    ) -> Result<(), AttributeError> {
+    ) -> Result<(), ModelContractViolation> {
         for (key, value) in alter {
             let attribute = match all.get(key) {
                 Some(attr) => attr,
-                None => return Err(AttributeError::UnsupportedKey(key.to_string())),
+                None => return Err(ModelContractViolation::AttributeOperationTargetsUnsupportedKey),
             };
 
             if !init && !attribute.is_changeable() {
-                return Err(AttributeError::UnchangeableAttribute(key.to_string()));
+                return Err(ModelContractViolation::AttributeUpdateTargetsImmutableAttribute);
             }
 
             if !delete {
                 attribute
                     .verify(value)
-                    .map_err(|e| AttributeError::AttributeVerificationFailed(format!("Key: {key}, Error: {e}")))?;
+                    .map_err(|_| ModelContractViolation::AttributeValueDoesNotSatisfyRules)?;
             }
         }
 
@@ -191,16 +165,16 @@ impl AttributeUtil {
     }
 
     /// Extract the real key by removing the prefix (+ or -)
-    fn real_key(key: &str) -> Result<CheetahString, AttributeError> {
+    fn real_key(key: &str) -> Result<CheetahString, ModelContractViolation> {
         if key.len() < 2 {
-            return Err(AttributeError::KvStringFormatWrong);
+            return Err(ModelContractViolation::AttributeOperationKeyIsInvalid);
         }
 
         let Some(real_key) = key.strip_prefix('+').or_else(|| key.strip_prefix('-')) else {
-            return Err(AttributeError::WrongFormatKey(key.to_string()));
+            return Err(ModelContractViolation::AttributeOperationKeyHasUnsupportedForm);
         };
         if real_key.is_empty() {
-            return Err(AttributeError::KvStringFormatWrong);
+            return Err(ModelContractViolation::AttributeOperationKeyIsInvalid);
         }
         Ok(real_key.to_string().into())
     }
@@ -222,7 +196,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Only add attribute is supported while creating topic. Key: key1"
+            "topic creation attribute operation must use the add form"
         );
     }
 
@@ -237,7 +211,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Attempt to delete a nonexistent key: key1"
+            "attribute delete operation targets a missing key"
         );
     }
 
@@ -250,6 +224,9 @@ mod tests {
 
         let result = AttributeUtil::alter_current_attributes(false, &all, &current_attributes, &new_attributes);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "Wrong format key: key1");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "attribute operation key has an unsupported form"
+        );
     }
 }

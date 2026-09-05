@@ -36,12 +36,12 @@ pub struct CheckTransactionStateResponseHeader {
 }
 
 impl CheckTransactionStateResponseHeader {
-    fn validate(&self) -> Result<(), crate::protocol::header_codec::HeaderCodecError> {
+    fn validate(&self) -> Result<(), crate::ProtocolContractViolation> {
         use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 
         match self.commit_or_rollback {
             MessageSysFlag::TRANSACTION_COMMIT_TYPE | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => Ok(()),
-            _ => Err(crate::protocol::header_codec::HeaderCodecError::Validation {
+            _ => Err(crate::ProtocolContractViolation::Validation {
                 header: "rocketmq_protocol::protocol::header::check_transaction_state_response_header::CheckTransactionStateResponseHeader",
                 rule: "commit_or_rollback",
             }),

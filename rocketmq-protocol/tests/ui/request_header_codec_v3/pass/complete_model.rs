@@ -43,7 +43,7 @@ struct CompleteHeader<T> {
 }
 
 impl<T> CompleteHeader<T> {
-    fn validate_header(&self) -> Result<(), rocketmq_protocol::protocol::header_codec::HeaderCodecError> {
+    fn validate_header(&self) -> Result<(), rocketmq_protocol::ProtocolContractViolation> {
         Ok(())
     }
 }

@@ -29,12 +29,12 @@ impl RemotingCommand {
             SerializeType::ROCKETMQ => {
                 let mut encoded = BytesMut::new();
                 RocketMQSerializable::try_rocketmq_protocol_encode(self, &mut encoded)
-                    .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
+                    .map_err(crate::protocol::header_codec::into_rocketmq_error)?;
                 Ok(encoded.freeze())
             }
             SerializeType::JSON => {
                 self.try_make_custom_header_to_net()
-                    .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
+                    .map_err(crate::protocol::header_codec::into_rocketmq_error)?;
                 #[cfg(feature = "simd")]
                 {
                     simd_json::to_vec(self).map(Bytes::from).map_err(|error| {

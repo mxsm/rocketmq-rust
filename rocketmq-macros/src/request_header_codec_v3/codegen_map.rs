@@ -46,7 +46,7 @@ pub(super) fn context_declarations(model: &HeaderModel) -> TokenStream {
 
 pub(super) fn manual_fast_helpers(model: &HeaderModel, codec_trait: &TokenStream) -> TokenStream {
     let protocol_path = &model.protocol_path;
-    let error_type = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
+    let error_type = quote!(#protocol_path::ProtocolContractViolation);
     let sink_trait = quote!(#protocol_path::protocol::header_codec::EncodeSink);
     let encode = local_encode_body(model, codec_trait, protocol_path);
 
@@ -63,7 +63,7 @@ pub(super) fn manual_fast_helpers(model: &HeaderModel, codec_trait: &TokenStream
 
 pub(super) fn codec_items(model: &HeaderModel, codec_trait: &TokenStream) -> TokenStream {
     let protocol_path = &model.protocol_path;
-    let error_type = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
+    let error_type = quote!(#protocol_path::ProtocolContractViolation);
     let sink_trait = quote!(#protocol_path::protocol::header_codec::EncodeSink);
     let map_type = quote!(#protocol_path::HeaderMap);
     let source_type = quote!(#protocol_path::protocol::header_codec::HeaderFieldSource);

@@ -266,6 +266,7 @@ pub fn application_remoting_command_factory() -> RemotingCommandFactory {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_error::CanonicalCondition;
     use rocketmq_error::RocketMQError;
 
     use super::*;
@@ -284,6 +285,23 @@ mod tests {
                 initialized: first,
                 requested: second,
             })
+        );
+    }
+
+    #[test]
+    fn initialized_defaults_conflict_is_a_failed_precondition() {
+        let cell = OnceLock::new();
+        let initialized = RemotingCommandDefaults::new(1, SerializeType::JSON);
+        let requested = RemotingCommandDefaults::new(2, SerializeType::ROCKETMQ);
+        initialize_defaults(&cell, initialized).expect("first defaults initialize");
+
+        let source = initialize_defaults(&cell, requested).expect_err("different defaults conflict");
+        let error = crate::ProtocolContractViolation::from(source);
+
+        assert_eq!(error.condition(), CanonicalCondition::FailedPrecondition);
+        assert_eq!(
+            error.to_string(),
+            "remoting command defaults conflict with the initialized value"
         );
     }
 

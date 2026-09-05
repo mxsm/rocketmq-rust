@@ -23,7 +23,7 @@ impl CommandCustomHeader for ManualLegacyShim {
     fn try_encode_into_map(
         &self,
         out: &mut HeaderMap,
-    ) -> Result<(), rocketmq_protocol::protocol::header_codec::HeaderCodecError> {
+    ) -> Result<(), rocketmq_protocol::ProtocolContractViolation> {
         let mut sink = rocketmq_protocol::protocol::header_codec::MapSink::new(out);
         <Self as HeaderCodec>::encode_into(self, &mut sink)
     }
@@ -34,9 +34,8 @@ impl FromMap for ManualLegacyShim {
     type Target = Self;
 
     fn from(map: &HeaderMap) -> Result<Self::Target, Self::Error> {
-        <Self as HeaderCodec>::decode_from_map(map).map_err(|error| {
-            rocketmq_protocol::__request_header_codec::RocketMQError::request_header_error(error.to_string())
-        })
+        <Self as HeaderCodec>::decode_from_map(map)
+            .map_err(rocketmq_protocol::protocol::header_codec::into_rocketmq_error)
     }
 }
 
