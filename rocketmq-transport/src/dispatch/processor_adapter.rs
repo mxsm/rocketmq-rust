@@ -17,7 +17,6 @@
 use std::future::Future;
 use std::net::SocketAddr;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use super::remoting_request::RemotingRequestBuilder;
@@ -346,10 +345,9 @@ where
 
     fn close_network_session(&self, session: &Self::NetworkSession) {
         session.response_table.close_owner(&session.owner, || {
-            RocketMQError::network_connection_failed(
-                "server-request",
-                "canonical session closed while awaiting response",
-            )
+            crate::error_helpers::network(crate::error_helpers::connection_failed_without_source(
+                crate::error_helpers::TransportStage::Closed,
+            ))
         });
     }
 

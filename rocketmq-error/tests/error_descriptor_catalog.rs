@@ -42,8 +42,7 @@ const EXPECTED_DESCRIPTOR_SNAPSHOTS: &[&str] = &[
     "auth.permission.denied|authorization|PermissionDenied|Caller|auth|Permission was denied|Error|never|Never|Public|16|Forbidden|PermissionDenied|403|77|operation:Public:Text:Some(64)",
     "transport.admission.queue_saturated|capacity|ResourceExhausted|LocalResource|transport|Transport admission queue is saturated|Warn|backoff|Never|Public|2|TooManyRequests|ResourceExhausted|429|75|remote_addr:Diagnostic:Text:Some(256)",
     "controller.leadership.not_leader|routing|FailedPrecondition|LocalResource|controller|Controller is not the leader|Warn|refresh_leader|Never|Public|2007|InternalError|FailedPrecondition|409|65|leader_id:Diagnostic:U64:None",
-    "transport.connection.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport connection timed out|Warn|backoff|Never|Public|2|RequestTimeout|DeadlineExceeded|504|75|timeout_ms:Public:U64:None,remote_addr:Diagnostic:Text:Some(256)",
-    "transport.request.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport request timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "transport.connection.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport connection timed out|Warn|backoff|Never|Public|2|RequestTimeout|DeadlineExceeded|504|75|timeout_ms:Public:U64:None,remote_addr:Diagnostic:Text:Some(256),source_present:SecretPresenceOnly:Presence:None",
     "transport.start.failed|unavailable|Unavailable|Unknown|transport|Transport server could not be started|Error|operator_action|Never|Generic|1|InternalError|Unavailable|503|69|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
     "transport.dispatch.failed|internal|Internal|LocalResource|transport|Transport request dispatch failed|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
     "transport.response.failed|internal|Internal|Dependency|transport|Transport response delivery failed|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
@@ -73,10 +72,10 @@ const EXPECTED_DESCRIPTOR_SNAPSHOTS: &[&str] = &[
     "runtime.internal.failure|internal|Internal|Unknown|runtime|Runtime operation failed|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
     "transport.endpoint.invalid|validation|InvalidArgument|Caller|transport|Transport endpoint is invalid|Info|never|Never|Generic|2|BadRequest|InvalidArgument|400|64|remote_addr:SecretPresenceOnly:Presence:None",
     "transport.remote.rate_limited|capacity|ResourceExhausted|RemotePeer|transport|Remote transport peer rate limited the request|Warn|backoff|Never|Generic|2|TooManyRequests|ResourceExhausted|429|75|remote_addr:Diagnostic:Text:Some(256),limit:Diagnostic:U64:None",
-    "transport.write.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport write timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|phase:Diagnostic:Text:Some(32),timeout_ms:Public:U64:None,remote_addr:SecretPresenceOnly:Presence:None",
-    "transport.response.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport response timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|phase:Diagnostic:Text:Some(32),timeout_ms:Public:U64:None,remote_addr:SecretPresenceOnly:Presence:None",
-    "transport.dns.failed|unavailable|Unavailable|Dependency|transport|Transport DNS resolution failed|Error|backoff|Never|Generic|2|InternalError|Unavailable|503|69|host:SecretPresenceOnly:Presence:None,reason:SecretPresenceOnly:Presence:None",
-    "transport.connection.failed|unavailable|Unavailable|Dependency|transport|Transport connection operation failed|Error|backoff|Never|Generic|2|InternalError|Unavailable|503|69|phase:Diagnostic:Text:Some(32),remote_addr:SecretPresenceOnly:Presence:None,reason:SecretPresenceOnly:Presence:None",
+    "transport.write.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport write timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|phase:Diagnostic:Text:Some(32),timeout_ms:Public:U64:None,remote_addr:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "transport.response.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport response timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|phase:Diagnostic:Text:Some(32),timeout_ms:Public:U64:None,remote_addr:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "transport.dns.failed|unavailable|Unavailable|Dependency|transport|Transport DNS resolution failed|Error|backoff|Never|Generic|2|InternalError|Unavailable|503|69|host:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "transport.connection.failed|unavailable|Unavailable|Dependency|transport|Transport connection operation failed|Error|backoff|Never|Generic|2|InternalError|Unavailable|503|69|phase:Diagnostic:Text:Some(32),remote_addr:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
     "core.serialization.failed|internal|Internal|Unknown|core|Serialization failed|Error|never|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),format:Diagnostic:Text:Some(64),field:Public:Text:Some(64),source_present:SecretPresenceOnly:Presence:None,detail:SecretPresenceOnly:Presence:None",
     "protocol.body.invalid|validation|InvalidArgument|Caller|protocol|Request body is invalid|Info|never|Never|Generic|29|BadRequest|InvalidArgument|400|64|operation:Diagnostic:Text:Some(64),invalid_value_present:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
     "protocol.encoding.unsupported|unsupported|Unimplemented|Caller|protocol|Protocol encoding is unsupported|Error|never|Never|Public|3|Unsupported|Unimplemented|400|64|serialization_type:Public:U64:None",
@@ -176,7 +175,7 @@ fn descriptor_snapshot(descriptor: &ErrorDescriptor) -> String {
 
 #[test]
 fn descriptor_catalog_snapshot_is_exact() {
-    assert_eq!(EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 98);
+    assert_eq!(EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 97);
     assert_eq!(ALL_DESCRIPTORS.len(), EXPECTED_DESCRIPTOR_SNAPSHOTS.len());
 
     for (descriptor, expected) in ALL_DESCRIPTORS.iter().zip(EXPECTED_DESCRIPTOR_SNAPSHOTS) {
@@ -219,7 +218,6 @@ fn on_demand_backtraces_are_limited_to_internal_bug_or_data_loss_descriptors() {
 #[test]
 fn transport_convergence_descriptors_are_exact() {
     for code in [
-        "transport.request.timeout",
         "transport.start.failed",
         "transport.dispatch.failed",
         "transport.response.failed",

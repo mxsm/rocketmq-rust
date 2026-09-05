@@ -222,7 +222,7 @@ impl RpcClientImpl {
 
         let (request_code, request_command) = self.create_request_command(addr, request, timeout_millis)?;
         deadline
-            .ensure_before_send(addr.to_string())
+            .ensure_before_send()
             .map_err(|err| RpcClientError::RequestFailed {
                 addr: addr.to_string(),
                 request_code,
@@ -304,7 +304,7 @@ impl RpcClientImpl {
         let timeout_millis = deadline.budget_millis();
         let (request_code, request_command) = self.create_request_command(addr, request, timeout_millis)?;
         deadline
-            .ensure_before_send(addr.to_string())
+            .ensure_before_send()
             .map_err(|err| RpcClientError::RequestFailed {
                 addr: addr.to_string(),
                 request_code,
@@ -369,10 +369,9 @@ impl RpcClientImpl {
         let timeout_millis = deadline.budget_millis();
         if let Some(response) = self.execute_hooks(&request)? {
             if deadline.is_expired() {
-                return Err(rocketmq_error::RocketMQError::network_response_timeout(
-                    "<rpc-hook>",
+                return Err(crate::error_helpers::network(crate::error_helpers::response_timeout(
                     timeout_millis,
-                ));
+                )));
             }
             return Ok(response);
         }
@@ -384,7 +383,7 @@ impl RpcClientImpl {
                 broker_name: "<missing brokerName>".to_string(),
             })?;
         let addr = self.get_broker_addr_by_name(broker_name.as_ref())?;
-        deadline.ensure_before_send(addr.to_string())?;
+        deadline.ensure_before_send()?;
 
         let result = match RequestCode::from(request.code) {
             RequestCode::PullMessage => self.handle_pull_message(&addr, request, deadline).await?,
@@ -436,7 +435,7 @@ impl RpcClientImpl {
             }
             RequestCode::GetTopicStatsInfo | RequestCode::GetTopicConfig => {
                 let (request_code, request_command) = self.create_request_command(&addr, request, timeout_millis)?;
-                deadline.ensure_before_send(addr.to_string())?;
+                deadline.ensure_before_send()?;
                 let response = self
                     .remoting_client
                     .invoke_request_with_deadline(Some(&addr), request_command, deadline)

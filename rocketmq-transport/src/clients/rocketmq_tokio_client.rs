@@ -292,7 +292,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             },
             &process_budget,
         )?;
-        let owner = ProcessorClientInboundOwner::new(processor, pending_requests, &process_budget)?;
+        let owner = ProcessorClientInboundOwner::new(processor, pending_requests, &process_budget);
         Self::build_with_inbound_owner(
             tokio_client_config,
             Arc::new(owner),

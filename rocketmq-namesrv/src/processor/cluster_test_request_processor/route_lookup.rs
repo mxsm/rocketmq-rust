@@ -20,9 +20,14 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::RpcClientError;
+use rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT;
+use rocketmq_error::TRANSPORT_DNS_FAILED;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -50,10 +55,22 @@ use crate::NamesrvConfig;
 
 const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
-const LOOKUP_OWNER: &str = "namesrv.cluster-test-route-lookup";
 
 pub(crate) type ClusterTestLookupFuture<'a, T> = Pin<Box<dyn Future<Output = RocketMQResult<T>> + Send + 'a>>;
-type EndpointResolveFuture<'a> = ClusterTestLookupFuture<'a, Vec<SocketAddr>>;
+type EndpointResolveFuture<'a> = ClusterTestLookupFuture<'a, EndpointResolutionOutcome>;
+
+#[derive(Debug)]
+enum EndpointResolutionOutcome {
+    Resolved(Vec<SocketAddr>),
+    Unavailable,
+}
+
+#[derive(Debug)]
+pub(super) enum RouteLookupOutcome<T> {
+    Resolved(T),
+    Unavailable,
+    Cancelled,
+}
 
 pub(crate) trait ClusterTestRouteLookup: Send + Sync {
     fn start(&self) -> ClusterTestLookupFuture<'_, ()>;
@@ -69,15 +86,15 @@ trait ClusterTestEndpointResolver: Send + Sync {
 
 struct ProductEnvironmentEndpointResolver {
     addressing: DefaultTopAddressing,
+    address_server: CheetahString,
 }
 
 impl ProductEnvironmentEndpointResolver {
     fn new(product_env_name: &str) -> Self {
+        let address_server = CheetahString::from_string(mix_all::get_ws_addr());
         Self {
-            addressing: DefaultTopAddressing::new(
-                CheetahString::from_string(mix_all::get_ws_addr()),
-                Some(CheetahString::from(product_env_name)),
-            ),
+            addressing: DefaultTopAddressing::new(address_server.clone(), Some(CheetahString::from(product_env_name))),
+            address_server,
         }
     }
 }
@@ -86,7 +103,7 @@ impl ClusterTestEndpointResolver for ProductEnvironmentEndpointResolver {
     fn resolve(&self, deadline: RequestDeadline) -> EndpointResolveFuture<'_> {
         Box::pin(async move {
             if deadline.is_expired() {
-                return Err(route_lookup_timeout(deadline));
+                return Err(route_lookup_timeout(deadline, self.address_server.as_str()));
             }
 
             let timeout_millis = deadline.remaining().as_millis().min(u128::from(u64::MAX)).max(1) as u64;
@@ -95,13 +112,11 @@ impl ClusterTestEndpointResolver for ProductEnvironmentEndpointResolver {
                 self.addressing.fetch_ns_addr_inner_async(true, timeout_millis),
             )
             .await
-            .map_err(|_| route_lookup_timeout(deadline))?
-            .ok_or_else(|| {
-                RocketMQError::network_connection_failed(
-                    LOOKUP_OWNER,
-                    "product environment returned no name-server endpoints",
-                )
-            })?;
+            .map_err(|source| route_lookup_timeout_caused_by(deadline, self.address_server.as_str(), source))?;
+
+            let Some(address_list) = address_list else {
+                return Ok(EndpointResolutionOutcome::Unavailable);
+            };
 
             resolve_socket_addresses(&address_list, deadline).await
         })
@@ -190,8 +205,12 @@ impl TransportClusterTestRouteLookup {
         &self,
         topic: &CheetahString,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<Option<TopicRouteData>> {
-        let (endpoints, endpoint_generation) = self.resolve_endpoints(deadline).await?;
+    ) -> RocketMQResult<RouteLookupOutcome<Option<TopicRouteData>>> {
+        let (endpoints, endpoint_generation) = match self.resolve_endpoints(deadline).await? {
+            RouteLookupOutcome::Resolved(endpoints) => endpoints,
+            RouteLookupOutcome::Unavailable => return Ok(RouteLookupOutcome::Unavailable),
+            RouteLookupOutcome::Cancelled => return Ok(RouteLookupOutcome::Cancelled),
+        };
         let cache_key = LookupCacheKey::new(endpoint_generation, topic.clone());
         self.lookup_cache
             .get_or_resolve(cache_key, || async move {
@@ -207,12 +226,12 @@ impl TransportClusterTestRouteLookup {
         endpoints: Vec<SocketAddr>,
         endpoint_generation: u64,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<ResolvedRoute> {
+    ) -> RocketMQResult<RouteLookupOutcome<ResolvedRoute>> {
         let mut last_error = None;
 
         for endpoint in endpoints {
             if deadline.is_expired() {
-                return Err(route_lookup_timeout(deadline));
+                return Err(route_lookup_timeout(deadline, &endpoint.to_string()));
             }
 
             match self
@@ -220,7 +239,7 @@ impl TransportClusterTestRouteLookup {
                 .invoke(endpoint, route_request(&self.command_factory, topic), deadline)
                 .await
             {
-                Ok(response) => return decode_route_response(response),
+                Ok(response) => return decode_route_response(response).map(RouteLookupOutcome::Resolved),
                 Err(error) => last_error = Some(error),
             }
         }
@@ -229,16 +248,23 @@ impl TransportClusterTestRouteLookup {
         if cached.generation == endpoint_generation {
             cached.endpoints.clear();
         }
-        Err(last_error.unwrap_or_else(|| {
-            RocketMQError::network_connection_failed(LOOKUP_OWNER, "no product-environment endpoint was reachable")
-        }))
+        match last_error {
+            Some(error) => Err(error),
+            None => Ok(RouteLookupOutcome::Unavailable),
+        }
     }
 
-    async fn resolve_endpoints(&self, deadline: RequestDeadline) -> RocketMQResult<(Vec<SocketAddr>, u64)> {
+    async fn resolve_endpoints(
+        &self,
+        deadline: RequestDeadline,
+    ) -> RocketMQResult<RouteLookupOutcome<(Vec<SocketAddr>, u64)>> {
         {
             let cached = self.cached_endpoints.read();
             if !cached.endpoints.is_empty() {
-                return Ok((cached.endpoints.clone(), cached.generation));
+                return Ok(RouteLookupOutcome::Resolved((
+                    cached.endpoints.clone(),
+                    cached.generation,
+                )));
             }
         }
 
@@ -246,20 +272,22 @@ impl TransportClusterTestRouteLookup {
         {
             let cached = self.cached_endpoints.read();
             if !cached.endpoints.is_empty() {
-                return Ok((cached.endpoints.clone(), cached.generation));
+                return Ok(RouteLookupOutcome::Resolved((
+                    cached.endpoints.clone(),
+                    cached.generation,
+                )));
             }
         }
-        let resolved = self.resolver.resolve(deadline).await?;
+        let EndpointResolutionOutcome::Resolved(resolved) = self.resolver.resolve(deadline).await? else {
+            return Ok(RouteLookupOutcome::Unavailable);
+        };
         if resolved.is_empty() {
-            return Err(RocketMQError::network_connection_failed(
-                LOOKUP_OWNER,
-                "product environment resolved to an empty endpoint list",
-            ));
+            return Ok(RouteLookupOutcome::Unavailable);
         }
         let mut cached = self.cached_endpoints.write();
         cached.generation = cached.generation.wrapping_add(1).max(1);
         cached.endpoints = resolved.clone();
-        Ok((resolved, cached.generation))
+        Ok(RouteLookupOutcome::Resolved((resolved, cached.generation)))
     }
 }
 
@@ -267,7 +295,7 @@ impl ClusterTestRouteLookup for TransportClusterTestRouteLookup {
     fn start(&self) -> ClusterTestLookupFuture<'_, ()> {
         Box::pin(async move {
             if self.task_group.cancellation_token().is_cancelled() {
-                return Err(route_lookup_cancelled());
+                return Err(route_lookup_cancelled_error());
             }
             Ok(())
         })
@@ -278,10 +306,15 @@ impl ClusterTestRouteLookup for TransportClusterTestRouteLookup {
         Box::pin(async move {
             let deadline = RequestDeadline::after(self.request_timeout);
             let cancellation = self.task_group.cancellation_token();
-            tokio::select! {
+            let outcome = tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => Err(route_lookup_cancelled()),
+                _ = cancellation.cancelled() => Ok(RouteLookupOutcome::Cancelled),
                 result = self.lookup_topic_route_until(&topic, deadline) => result,
+            }?;
+            match outcome {
+                RouteLookupOutcome::Resolved(route) => Ok(route),
+                RouteLookupOutcome::Unavailable => Ok(None),
+                RouteLookupOutcome::Cancelled => Err(route_lookup_cancelled_error()),
             }
         })
     }
@@ -292,9 +325,7 @@ impl ClusterTestRouteLookup for TransportClusterTestRouteLookup {
                 .task_group
                 .shutdown_until(ShutdownDeadline::after(ROUTE_LOOKUP_SHUTDOWN_TIMEOUT))
                 .await;
-            report
-                .assert_no_task_leak()
-                .map_err(|error| RocketMQError::network_connection_failed(LOOKUP_OWNER, error.to_string()))
+            report.assert_no_task_leak().map_err(route_lookup_shutdown_error)
         })
     }
 }
@@ -333,7 +364,10 @@ fn decode_route_response(response: RemotingCommand) -> RocketMQResult<ResolvedRo
     }
 }
 
-async fn resolve_socket_addresses(address_list: &str, deadline: RequestDeadline) -> RocketMQResult<Vec<SocketAddr>> {
+async fn resolve_socket_addresses(
+    address_list: &str,
+    deadline: RequestDeadline,
+) -> RocketMQResult<EndpointResolutionOutcome> {
     let mut resolved = Vec::new();
     let mut last_error = None;
 
@@ -353,26 +387,86 @@ async fn resolve_socket_addresses(address_list: &str, deadline: RequestDeadline)
                     }
                 }
             }
-            Ok(Err(error)) => last_error = Some(error.to_string()),
-            Err(_) => return Err(route_lookup_timeout(deadline)),
+            Ok(Err(error)) => last_error = Some(error),
+            Err(source) => return Err(route_lookup_timeout_caused_by(deadline, endpoint, source)),
         }
     }
 
     if resolved.is_empty() {
-        return Err(RocketMQError::network_connection_failed(
-            LOOKUP_OWNER,
-            last_error.unwrap_or_else(|| "product environment returned no valid endpoints".to_string()),
-        ));
+        return match last_error {
+            Some(source) => Err(route_lookup_dns_failure_from_source(source)),
+            None => Ok(EndpointResolutionOutcome::Unavailable),
+        };
     }
-    Ok(resolved)
+    Ok(EndpointResolutionOutcome::Resolved(resolved))
 }
 
-fn route_lookup_timeout(deadline: RequestDeadline) -> RocketMQError {
-    RocketMQError::network_connection_timeout(LOOKUP_OWNER, deadline.budget_millis())
+#[track_caller]
+fn route_lookup_timeout(deadline: RequestDeadline, remote_addr: &str) -> RocketMQError {
+    let context = ErrorContext::new()
+        .with_u64(fields::TIMEOUT_MS, deadline.budget_millis())
+        .with_text(fields::REMOTE_ADDR, remote_addr);
+    RocketMQError::Network(Arc::new(
+        Error::new(&TRANSPORT_CONNECTION_TIMEOUT).with_context(context),
+    ))
 }
 
-fn route_lookup_cancelled() -> RocketMQError {
-    RocketMQError::network_connection_failed(LOOKUP_OWNER, "route lookup owner is shutting down")
+#[track_caller]
+fn route_lookup_timeout_caused_by(
+    deadline: RequestDeadline,
+    remote_addr: &str,
+    source: tokio::time::error::Elapsed,
+) -> RocketMQError {
+    let context = ErrorContext::new()
+        .with_u64(fields::TIMEOUT_MS, deadline.budget_millis())
+        .with_text(fields::REMOTE_ADDR, remote_addr)
+        .with_secret_presence(fields::SOURCE_PRESENT);
+    RocketMQError::Network(Arc::new(
+        Error::caused_by(&TRANSPORT_CONNECTION_TIMEOUT, source).with_context(context),
+    ))
+}
+
+#[track_caller]
+fn route_lookup_cancelled_error() -> RocketMQError {
+    let context = ErrorContext::new().with_text(fields::PHASE, "closed");
+    RocketMQError::Network(Arc::new(
+        Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
+    ))
+}
+
+#[track_caller]
+fn route_lookup_dns_failure_from_source(source: std::io::Error) -> RocketMQError {
+    let context = ErrorContext::new()
+        .with_secret_presence(fields::HOST_PRESENT)
+        .with_secret_presence(fields::SOURCE_PRESENT);
+    RocketMQError::Network(Arc::new(
+        Error::caused_by(&TRANSPORT_DNS_FAILED, source).with_context(context),
+    ))
+}
+
+#[derive(Debug)]
+struct RouteLookupShutdownFailure(String);
+
+impl std::fmt::Display for RouteLookupShutdownFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RouteLookupShutdownFailure {}
+
+#[track_caller]
+fn route_lookup_shutdown_error(detail: String) -> RocketMQError {
+    let context = ErrorContext::new()
+        .with_text(fields::PHASE, "closed")
+        .with_secret_presence(fields::SOURCE_PRESENT);
+    RocketMQError::Network(Arc::new(
+        Error::caused_by(
+            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+            RouteLookupShutdownFailure(detail),
+        )
+        .with_context(context),
+    ))
 }
 
 #[cfg(test)]
@@ -389,6 +483,7 @@ mod tests {
     use rocketmq_runtime::ShutdownReport;
     use rocketmq_transport::api::HandlerOutcome;
     use rocketmq_transport::api::RemotingRequest;
+
     use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
     use rocketmq_transport::api::ServerConfig;
@@ -398,6 +493,52 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::*;
+
+    #[test]
+    fn route_lookup_failures_use_canonical_descriptors_and_preserve_remoting() {
+        let timeout = route_lookup_timeout(RequestDeadline::from_timeout_millis(25), "address-server:80");
+        assert_eq!(timeout.descriptor().code().as_str(), "transport.connection.timeout");
+        assert_eq!(timeout.boundary_view().remoting().code.as_i32(), 2);
+
+        let dns = route_lookup_dns_failure_from_source(std::io::Error::other("resolver unavailable"));
+        assert_eq!(dns.descriptor().code().as_str(), "transport.dns.failed");
+        assert_eq!(dns.boundary_view().remoting().code.as_i32(), 2);
+        let RocketMQError::Network(canonical) = &dns else {
+            panic!("DNS failure must use the canonical Network carrier");
+        };
+        let io_source = std::error::Error::source(canonical.as_ref())
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .expect("DNS failure must retain the physical resolver error");
+        assert_eq!(io_source.kind(), std::io::ErrorKind::Other);
+
+        let cancelled = route_lookup_cancelled_error();
+        assert_eq!(cancelled.descriptor().code().as_str(), "transport.connection.failed");
+        assert_eq!(cancelled.boundary_view().remoting().code.as_i32(), 2);
+    }
+
+    #[tokio::test]
+    async fn route_lookup_timeout_retains_elapsed_source_when_available() {
+        let elapsed = tokio::time::timeout(Duration::ZERO, std::future::pending::<()>())
+            .await
+            .expect_err("pending future must time out");
+        let error =
+            route_lookup_timeout_caused_by(RequestDeadline::from_timeout_millis(25), "address-server:80", elapsed);
+        let RocketMQError::Network(canonical) = error else {
+            panic!("timeout must use the canonical Network carrier");
+        };
+        assert!(std::error::Error::source(canonical.as_ref())
+            .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn absent_endpoint_discovery_is_a_normal_unavailable_outcome() {
+        let outcome = resolve_socket_addresses(" ; ", RequestDeadline::from_timeout_millis(25))
+            .await
+            .expect("an absent endpoint list is not a DNS failure");
+
+        assert!(matches!(outcome, EndpointResolutionOutcome::Unavailable));
+    }
 
     #[test]
     fn route_request_keeps_lookup_factory_defaults() {
@@ -435,7 +576,7 @@ mod tests {
         fn resolve(&self, _deadline: RequestDeadline) -> EndpointResolveFuture<'_> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let endpoints = self.endpoints.clone();
-            Box::pin(async move { Ok(endpoints) })
+            Box::pin(async move { Ok(EndpointResolutionOutcome::Resolved(endpoints)) })
         }
     }
 

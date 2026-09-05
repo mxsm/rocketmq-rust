@@ -563,8 +563,10 @@ impl SessionCommandDecoder {
                 retained_frame_bytes,
                 AdmissionClass::Data,
             )
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::network_connection_failed("partial-frame-admission", error.to_string())
+            .map_err(|_| {
+                crate::error_helpers::network(crate::error_helpers::admission_queue_saturated(
+                    "partial-frame-admission",
+                ))
             })?;
         self.partial_frame_permit = Some(PartialFramePermit::new(permit));
         Ok(())

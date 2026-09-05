@@ -26,26 +26,29 @@
 ## 快速开始
 
 ```rust
+use std::sync::Arc;
+
+use rocketmq_error::Error;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::TRANSPORT_ENDPOINT_INVALID;
 
-fn validate_broker_addr(addr: &str) -> RocketMQResult<()> {
+fn validate_transport_endpoint(addr: &str) -> RocketMQResult<()> {
     if addr.is_empty() {
-        return Err(RocketMQError::Network(
-            rocketmq_error::NetworkError::InvalidAddress {
-                addr: addr.to_owned(),
-            },
-        ));
+        return Err(RocketMQError::Network(Arc::new(Error::new(
+            &TRANSPORT_ENDPOINT_INVALID,
+        ))));
     }
 
     Ok(())
 }
 ```
 
-`NetworkError`、`SerializationError`、`ProtocolError`、
-`RpcClientError`、`AuthError`、`ControllerError`、`ToolsError`、
-`FilterError`、`ObservabilityError` 和 `UnifiedServiceError` 等嵌套领域错误
-都可通过 `From` 转换为 `RocketMQError`。
+`Network` variant 携带唯一的规范 `SharedError`，因此 transport descriptor 标识、
+上下文和类型化物理 source 可以跨 crate 传递而无需重建。保留的领域错误类型，
+如 `SerializationError`、`ProtocolError`、`RpcClientError`、`AuthError`、
+`ControllerError`、`ToolsError`、`FilterError`、`ObservabilityError` 和
+`UnifiedServiceError`，都可通过 `From` 转换为 `RocketMQError`。
 
 ## 规范 Descriptor
 

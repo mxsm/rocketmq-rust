@@ -909,8 +909,11 @@ async fn broker_backed_producer_async_callback_smoke() -> RocketMQResult<()> {
         .expect("async callback result mutex should not be poisoned")
         .take()
         .expect("async callback should store an outcome");
-    let msg_id =
-        outcome.map_err(|error| rocketmq_error::RocketMQError::network_request_failed(env.topic.clone(), error))?;
+    let msg_id = outcome.map_err(|_| {
+        rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::new(
+            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+        )))
+    })?;
     assert!(!msg_id.is_empty(), "async callback should return a message id");
 
     producer.shutdown().await;
@@ -1184,9 +1187,12 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
     responder.shutdown().await;
     drop(reply_tx);
 
-    reply_task.await.map_err(|error| {
-        rocketmq_error::RocketMQError::network_request_failed(env.topic.clone(), error.to_string())
-    })??;
+    reply_task
+        .await
+        .map_err(|error| rocketmq_error::RocketMQError::Internal {
+            operation: "join broker-backed reply task",
+            source: Box::new(error),
+        })??;
 
     assert_eq!(
         response.get_body().map(|body| body.as_ref()),

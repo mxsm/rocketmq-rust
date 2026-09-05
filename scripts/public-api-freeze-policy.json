@@ -140,6 +140,16 @@
       "reason": "The repository owner approved the unreleased E1-3 migration from the legacy 73-row ErrorSpec and derived policy tables to one explicit 98-descriptor catalog. Dead Protocol, Controller, and MissingRequiredMessageProperty shapes are removed rather than retained as aliases; every live remoting numeric code remains frozen while the reviewed HTTP, gRPC, CLI, recovery, exposure, and field-schema semantics move to the canonical descriptors.",
       "approved_by": "repository-owner",
       "approved_on": "2026-09-05"
+    },
+    {
+      "id": "API-0.9-015",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_error::{TRANSPORT_REQUEST_TIMEOUT, unified::RocketMQError::{Network(NetworkError),network_connection_failed,network_connection_timeout,network_deadline_exceeded_before_send,network_queue_full,network_request_failed,network_response_timeout,network_timeout,network_write_timeout}, unified::network::NetworkError}; rocketmq_transport::deadline::RequestDeadline::ensure_before_send(self, addr: impl Into<String>)",
+      "replacement": "rocketmq_error::RocketMQError::Network(SharedError) with transport-owner canonical descriptor construction and the 97-descriptor catalog; rocketmq_transport::RequestDeadline::ensure_before_send(self)",
+      "reason": "The repository owner approved moving the exact Network legacy-deletion slice forward from E9 into E4-4. Transport now allocates one canonical stage error with truthful typed-source and context ownership, normal delivery decisions remain typed outcomes, and callers classify exact descriptors without reconstructing the removed NetworkError taxonomy. The unreachable transport.request.timeout descriptor and latent remoting 207 branch are deleted without activating new wire behavior, and the obsolete address argument is removed from the unreleased deadline API without a compatibility shim.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-09-05"
     }
   ],
   "frozen_contracts": [

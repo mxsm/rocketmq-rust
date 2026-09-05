@@ -612,10 +612,17 @@ mod tests {
             .update_topic_config(TopicConfig::with_queues("RetryRegistrationTopic", 1, 1), 0);
         let failed: TopicRegistrationAction = Box::new(|| {
             Box::pin(async {
-                Err(rocketmq_error::RocketMQError::network_connection_failed(
-                    "topic-registration-test",
-                    "unavailable",
-                ))
+                let context = rocketmq_error::ErrorContext::new()
+                    .with_text(rocketmq_error::fields::PHASE, "connect")
+                    .with_secret_presence(rocketmq_error::fields::REMOTE_ADDR_PRESENT)
+                    .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT);
+                Err(rocketmq_error::RocketMQError::Network(Arc::new(
+                    rocketmq_error::Error::caused_by(
+                        &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+                        std::io::Error::other("unavailable"),
+                    )
+                    .with_context(context),
+                )))
             })
         });
         assert!(coordinator.persist_and_register_wait(failed).await.is_err());

@@ -18,7 +18,6 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::RemotingCommand;
 use rocketmq_runtime::RuntimeOwner;
@@ -209,11 +208,11 @@ fn explicit_sendfile_on_tls_fails_before_writing_the_head() {
             )
             .await
             .expect_err("sendfile must never bypass a TLS stream");
-        assert!(matches!(
-            error,
-            RocketMQError::Network(NetworkError::ConnectionFailed { addr, reason })
-                if addr == "transport-file-region-writer" && reason.contains("sendfile")
-        ));
+        let RocketMQError::Network(source) = error else {
+            panic!("sendfile preflight must use the canonical Network carrier")
+        };
+        assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
+        assert!(std::error::Error::source(source.as_ref()).is_some());
         assert_eq!(sender.state(), ConnectionState::Healthy);
 
         let mut receiver = Connection::new_with_plaintext_stream(server);

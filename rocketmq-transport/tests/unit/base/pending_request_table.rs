@@ -23,6 +23,13 @@ use super::pending_request_table::PendingRequestLimits;
 use super::pending_request_table::PendingRequestTable;
 use crate::deadline::RequestDeadline;
 
+fn closed_error(target: &str) -> RocketMQError {
+    crate::error_helpers::network(crate::error_helpers::connection_failed_without_source_for_remote(
+        target,
+        crate::error_helpers::TransportStage::Closed,
+    ))
+}
+
 #[tokio::test]
 async fn response_completion_is_exactly_once_and_releases_the_reservation() {
     let table = PendingRequestTable::new();
@@ -73,9 +80,8 @@ async fn expiring_ten_thousand_requests_completes_every_waiter_and_releases_ever
     for receiver in receivers {
         assert!(matches!(
             receiver.await.expect("timeout should notify every waiter"),
-            Err(RocketMQError::Network(
-                rocketmq_error::NetworkError::ResponseTimeout { .. }
-            ))
+            Err(RocketMQError::Network(source))
+                if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
         ));
     }
     drop(guards);
@@ -111,9 +117,8 @@ async fn retired_opaque_cannot_be_reused_by_a_late_response() {
     );
     assert!(matches!(
         first_receiver.await.unwrap(),
-        Err(RocketMQError::Network(
-            rocketmq_error::NetworkError::ResponseTimeout { .. }
-        ))
+        Err(RocketMQError::Network(source))
+            if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
     ));
     drop(first);
 
@@ -139,7 +144,7 @@ async fn admission_permit_is_released_after_completion() {
         .register(2, RequestDeadline::from_timeout_millis(3_000), blocked_sender)
         .is_err());
 
-    assert!(first.complete(Err(RocketMQError::network_connection_failed("test", "done",))));
+    assert!(first.complete(Err(closed_error("test"))));
     assert!(first_receiver.await.unwrap().is_err());
     let (next_sender, _next_receiver) = tokio::sync::oneshot::channel();
     assert!(table
@@ -164,10 +169,7 @@ async fn close_all_completes_every_waiter_with_a_typed_cause() {
         receivers.push(receiver);
     }
 
-    assert_eq!(
-        table.close_all(|| RocketMQError::network_connection_failed("test-peer", "connection closed")),
-        REQUESTS
-    );
+    assert_eq!(table.close_all(|| closed_error("test-peer")), REQUESTS);
     assert!(table.is_empty());
     for receiver in receivers {
         assert!(matches!(
@@ -203,12 +205,7 @@ async fn closing_one_connection_owner_does_not_complete_another_owners_request()
         )
         .unwrap();
 
-    assert_eq!(
-        table.close_owner(&first_owner, || {
-            RocketMQError::network_connection_failed("first-peer", "connection closed")
-        }),
-        1
-    );
+    assert_eq!(table.close_owner(&first_owner, || closed_error("first-peer")), 1);
     assert!(matches!(
         first_receiver.await.expect("first owner should be completed"),
         Err(RocketMQError::Network(_))
@@ -248,9 +245,8 @@ async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_respo
     );
     assert!(matches!(
         first_receiver.await.unwrap(),
-        Err(RocketMQError::Network(
-            rocketmq_error::NetworkError::ResponseTimeout { .. }
-        ))
+        Err(RocketMQError::Network(source))
+            if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
     ));
     drop(first);
     let (reused_sender, _reused_receiver) = tokio::sync::oneshot::channel();
@@ -311,7 +307,7 @@ async fn count_and_byte_admission_are_observable_and_released_on_every_completio
         .is_err());
     assert_eq!(table.usage().rejected_bytes, 1);
 
-    assert!(first.complete(Err(RocketMQError::network_connection_failed("test", "send failed",))));
+    assert!(first.complete(Err(closed_error("test"))));
     assert!(first_receiver.await.unwrap().is_err());
     assert_eq!(table.usage().count, 0);
     assert_eq!(table.usage().bytes, 0);
@@ -320,10 +316,7 @@ async fn count_and_byte_admission_are_observable_and_released_on_every_completio
     let next = table
         .register_with_bytes(2, RequestDeadline::from_timeout_millis(3_000), 8, next_sender)
         .unwrap();
-    assert_eq!(
-        table.close_all(|| { RocketMQError::network_connection_failed("test", "connection closed") }),
-        1
-    );
+    assert_eq!(table.close_all(|| closed_error("test")), 1);
     assert!(next_receiver.await.unwrap().is_err());
     drop(next);
     assert_eq!(table.usage().count, 0);
@@ -374,9 +367,7 @@ fn close_and_registration_are_one_atomic_owner_epoch() {
     let close_barrier = barrier.clone();
     let closing = std::thread::spawn(move || {
         close_barrier.wait();
-        close_table.close_owner(&close_owner, || {
-            RocketMQError::network_connection_failed("race", "owner closed")
-        })
+        close_table.close_owner(&close_owner, || closed_error("race"))
     });
 
     barrier.wait();
@@ -435,9 +426,7 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
         let disconnect_barrier = Arc::clone(&barrier);
         let disconnect = std::thread::spawn(move || {
             disconnect_barrier.wait();
-            disconnect_table.close_owner(&disconnect_owner, || {
-                RocketMQError::network_connection_failed("race", "owner disconnected")
-            })
+            disconnect_table.close_owner(&disconnect_owner, || closed_error("race"))
         });
 
         barrier.wait();
@@ -454,7 +443,9 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
                 assert_eq!(command.code(), ResponseCode::Success.to_i32());
                 assert_eq!(disconnected, 0);
             }
-            Err(RocketMQError::Network(rocketmq_error::NetworkError::ResponseTimeout { .. })) => {
+            Err(RocketMQError::Network(source))
+                if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code() =>
+            {
                 assert!(!response_won);
                 assert_eq!(disconnected, 0);
             }

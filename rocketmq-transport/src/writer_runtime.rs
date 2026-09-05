@@ -90,9 +90,8 @@ impl Default for WriterQueueConfig {
 impl WriterQueueConfig {
     pub(crate) fn validate(self) -> Result<Self, RocketMQError> {
         if self.max_write_stall.is_zero() {
-            return Err(RocketMQError::network_connection_failed(
-                "transport-writer-policy",
-                "maximum write stall must be greater than zero",
+            return Err(RocketMQError::IllegalArgument(
+                "maximum write stall must be greater than zero".to_owned(),
             ));
         }
         Ok(self)
@@ -225,6 +224,8 @@ pub(crate) struct WriterReceivers {
     deferred: Option<LaneEnvelope>,
     control_taken: usize,
     config: WriterQueueConfig,
+    #[cfg(test)]
+    batch_wait_started: Option<Arc<tokio::sync::Notify>>,
 }
 
 pub(crate) fn writer_lanes(config: WriterQueueConfig) -> (WriterLanes, WriterReceivers) {
@@ -258,6 +259,8 @@ pub(crate) fn writer_lanes(config: WriterQueueConfig) -> (WriterLanes, WriterRec
             deferred: None,
             control_taken: 0,
             config,
+            #[cfg(test)]
+            batch_wait_started: None,
         },
     )
 }
@@ -274,6 +277,11 @@ enum WriterEvent {
 }
 
 impl WriterReceivers {
+    #[cfg(test)]
+    fn notify_when_collecting_batch(&mut self, signal: Arc<tokio::sync::Notify>) {
+        self.batch_wait_started = Some(signal);
+    }
+
     fn take_ready(&mut self) -> Option<LaneEnvelope> {
         if let Some(envelope) = self.deferred.take() {
             return Some(envelope);
@@ -412,6 +420,10 @@ impl WriterReceivers {
         if wait.is_zero() {
             return None;
         }
+        #[cfg(test)]
+        if let Some(signal) = self.batch_wait_started.take() {
+            signal.notify_one();
+        }
         match tokio::time::timeout(wait, self.recv()).await {
             Ok(WriterEvent::Write(next)) => {
                 let bytes = batch
@@ -450,10 +462,11 @@ impl WriterReceivers {
             fail_envelope(envelope, diagnostics, failure);
         }
         while let Ok(close) = self.close.try_recv() {
-            let _ = close.completion.send(Err(RocketMQError::network_connection_failed(
-                "transport-session-writer",
-                "connection writer is poisoned by a previous frame failure",
-            )));
+            let error = failure
+                .clone()
+                .into_network()
+                .unwrap_or(RocketMQError::ClientShuttingDown);
+            let _ = close.completion.send(Err(error));
         }
     }
 }
@@ -461,7 +474,7 @@ impl WriterReceivers {
 fn fail_envelope(envelope: LaneEnvelope, diagnostics: &SessionWriterDiagnostics, failure: &WriterFailure) {
     let write = envelope.into_write();
     diagnostics.finish_not_started(write.enqueued_at, write.encoded_len(), false);
-    let _ = write.completion.send(Err(failure.clone()));
+    let _ = write.completion.send(Err(failure.for_queued_follower()));
 }
 
 /// Runs the sole socket writer owner until graceful close, cancellation, or a poisoned write.
@@ -491,7 +504,7 @@ pub(crate) async fn run_session_writer(
             WriterEvent::Write(first) => {
                 let mut batch = Vec::with_capacity(receivers.config.batch.max_items.get());
                 batch.push(first);
-                let close_during_batch = receivers.collect_batch(&mut batch).await;
+                let mut close_during_batch = receivers.collect_batch(&mut batch).await;
                 match write_batch(
                     &mut frame_writer,
                     &diagnostics,
@@ -503,20 +516,24 @@ pub(crate) async fn run_session_writer(
                 .await
                 {
                     BatchWriteDisposition::Continue => {}
-                    BatchWriteDisposition::Poisoned => {
+                    BatchWriteDisposition::Poisoned(failure) => {
                         let _ = state.send(ConnectionState::Degraded);
                         receivers.close_business_lanes();
                         let _ = frame_writer.shutdown().await;
-                        let drained = WriterFailure::connection_failed(
-                            crate::dispatch::WriteProgress::NotStarted,
-                            "connection writer is poisoned by a previous frame failure",
-                        );
-                        receivers.fail_remaining(&diagnostics, &drained);
+                        receivers.fail_remaining(&diagnostics, &failure);
+                        if let Some(close) = close_during_batch.take() {
+                            let error = failure
+                                .clone()
+                                .into_network()
+                                .unwrap_or(RocketMQError::ClientShuttingDown);
+                            let _ = close.completion.send(Err(error));
+                        }
                         if let Some(close) = closing.take() {
-                            let _ = close.completion.send(Err(RocketMQError::network_connection_failed(
-                                "transport-session-writer",
-                                "connection writer failed during retirement",
-                            )));
+                            let error = failure
+                                .clone()
+                                .into_network()
+                                .unwrap_or(RocketMQError::ClientShuttingDown);
+                            let _ = close.completion.send(Err(error));
                         }
                         let _ = state.send(ConnectionState::Closed);
                         reader_shutdown.cancel();
@@ -544,7 +561,7 @@ pub(crate) async fn run_session_writer(
 
 enum BatchWriteDisposition {
     Continue,
-    Poisoned,
+    Poisoned(WriterFailure),
 }
 
 async fn write_batch(
@@ -569,26 +586,16 @@ async fn write_batch(
                 cancellation == QueuedWriteCancellation::Deadline,
             );
             let failure = match cancellation {
-                QueuedWriteCancellation::Deadline => WriterFailure::deadline_exceeded_before_send(None),
-                QueuedWriteCancellation::Request => WriterFailure::connection_failed(
-                    crate::dispatch::WriteProgress::NotStarted,
-                    "request was cancelled before writer start",
-                ),
-                QueuedWriteCancellation::SessionClosed => WriterFailure::connection_failed(
-                    crate::dispatch::WriteProgress::NotStarted,
-                    "session closed before writer start",
-                ),
+                QueuedWriteCancellation::Deadline => WriterFailure::deadline_expired(),
+                QueuedWriteCancellation::Request => WriterFailure::cancelled(),
+                QueuedWriteCancellation::SessionClosed => WriterFailure::session_closed(),
             };
             let _ = write.completion.send(Err(failure));
             continue;
         }
-        if let Some(deadline) = write.deadline.filter(|deadline| deadline.is_expired()) {
+        if write.deadline.is_some_and(|deadline| deadline.is_expired()) {
             diagnostics.finish_not_started(write.enqueued_at, write.encoded_len(), true);
-            let _ = write
-                .completion
-                .send(Err(WriterFailure::deadline_exceeded_before_send(Some(
-                    deadline.instant(),
-                ))));
+            let _ = write.completion.send(Err(WriterFailure::deadline_expired()));
             continue;
         }
         ready.push(write);
@@ -655,10 +662,14 @@ async fn write_batch(
             } else {
                 WriterFailure::from_io(crate::dispatch::WriteProgress::NotStarted, error)
             }),
-            Err(_) => Err(if write_started {
-                WriterFailure::write_timeout(write_deadline.budget_millis())
+            Err(source) => Err(if write_started {
+                WriterFailure::write_timeout_caused_by(
+                    crate::dispatch::WriteProgress::PossiblyPartial,
+                    write_deadline.budget_millis(),
+                    source,
+                )
             } else {
-                WriterFailure::deadline_exceeded_before_send(Some(write_deadline.instant()))
+                WriterFailure::prewrite_timeout(write_deadline.budget_millis(), write_deadline.instant())
             }),
         }
     };
@@ -693,15 +704,14 @@ async fn write_batch(
         };
         let _ = write.completion.send(completion);
     }
-    if result
-        .as_ref()
-        .err()
-        .is_some_and(|failure| failure.progress() == crate::dispatch::WriteProgress::PossiblyPartial)
-        || frame_writer.is_poisoned()
-    {
-        BatchWriteDisposition::Poisoned
-    } else {
-        BatchWriteDisposition::Continue
+    match result {
+        Err(failure)
+            if failure.progress() == Some(crate::dispatch::WriteProgress::PossiblyPartial)
+                || frame_writer.is_poisoned() =>
+        {
+            BatchWriteDisposition::Poisoned(failure)
+        }
+        _ => BatchWriteDisposition::Continue,
     }
 }
 

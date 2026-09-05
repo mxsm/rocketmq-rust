@@ -20,6 +20,12 @@ use std::sync::Arc;
 
 use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedRocketMQError;
+use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
@@ -54,13 +60,39 @@ pub(crate) enum BrokerRegistrationError {
     #[error("broker registration was requested after shutdown")]
     ShuttingDown,
     #[error("broker registration coordination failed: {0}")]
-    Coordination(String),
+    Coordination(#[source] SharedRocketMQError),
     #[error("broker registration completion channel was dropped")]
     CompletionDropped,
     #[error("broker registration snapshot contains a topic without a name")]
     MissingTopicName,
     #[error("no NameServer accepted broker registration for configured address `{configured_address}`")]
     NoSuccessfulNameServer { configured_address: CheetahString },
+}
+
+impl BrokerRegistrationError {
+    fn coordination(error: RocketMQError) -> Self {
+        Self::Coordination(SharedRocketMQError::new(error))
+    }
+
+    pub(crate) fn into_coordination_result(self, operation: &'static str) -> rocketmq_error::RocketMQResult<()> {
+        match self {
+            Self::ShuttingDown => Ok(()),
+            Self::Coordination(error) => Err(error.into_error()),
+            error @ Self::NoSuccessfulNameServer { .. } => {
+                let context = ErrorContext::new()
+                    .with_text(fields::PHASE, "connect")
+                    .with_secret_presence(fields::REMOTE_ADDR_PRESENT)
+                    .with_secret_presence(fields::SOURCE_PRESENT);
+                Err(RocketMQError::Network(Arc::new(
+                    Error::caused_by(&TRANSPORT_CONNECTION_FAILED, error).with_context(context),
+                )))
+            }
+            error => Err(RocketMQError::Internal {
+                operation,
+                source: Box::new(error),
+            }),
+        }
+    }
 }
 
 /// Explicit capability carrier for NameServer registration.
@@ -147,9 +179,12 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
                 let result = runtime
                     .register_full_snapshot(None, check_order_config, oneway, force_register)
                     .await;
-                let coordination_result = result.as_ref().map(|_| ()).map_err(|error| {
-                    rocketmq_error::RocketMQError::network_connection_failed("broker-registration", error.to_string())
-                });
+                let coordination_result = match result.as_ref() {
+                    Ok(_) => Ok(()),
+                    Err(error) => error
+                        .clone()
+                        .into_coordination_result("broker registration coordination"),
+                };
                 let _ = result_tx.send(result);
                 coordination_result
             })
@@ -163,13 +198,13 @@ impl<MS: BrokerAdminStore> BrokerRegistrationRuntime<MS> {
             Err(_) => {
                 return match coordination_result {
                     Ok(()) => Err(BrokerRegistrationError::CompletionDropped),
-                    Err(error) => Err(BrokerRegistrationError::Coordination(error.to_string())),
+                    Err(error) => Err(BrokerRegistrationError::coordination(error)),
                 };
             }
         };
         match registration_result {
             Ok(status) => {
-                coordination_result.map_err(|error| BrokerRegistrationError::Coordination(error.to_string()))?;
+                coordination_result.map_err(BrokerRegistrationError::coordination)?;
                 Ok(status)
             }
             Err(error) => Err(error),
@@ -472,6 +507,8 @@ fn need_register(change_list: &[bool]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_error::RocketMQError;
+
     #[test]
     fn registration_boundary_does_not_retain_the_broker_root() {
         let source = include_str!("broker_registration_runtime.rs");
@@ -484,5 +521,41 @@ mod tests {
     fn need_register_reflects_any_namesrv_change() {
         assert!(super::need_register(&[false, true, false]));
         assert!(!super::need_register(&[false, false, false]));
+    }
+
+    #[test]
+    fn registration_coordination_projects_each_variant_without_losing_transport_identity() {
+        assert!(super::BrokerRegistrationError::ShuttingDown
+            .into_coordination_result("broker registration coordination")
+            .is_ok());
+
+        let unavailable = super::BrokerRegistrationError::NoSuccessfulNameServer {
+            configured_address: "namesrv.example:9876".into(),
+        }
+        .into_coordination_result("broker registration coordination")
+        .expect_err("NameServer unavailability must remain a failure");
+        assert_eq!(unavailable.descriptor().code().as_str(), "transport.connection.failed");
+        assert_eq!(unavailable.boundary_view().remoting().code.as_i32(), 2);
+        assert!(std::error::Error::source(&unavailable).is_some());
+
+        let canonical = std::sync::Arc::new(rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED));
+        let shared =
+            rocketmq_error::SharedRocketMQError::new(RocketMQError::Network(std::sync::Arc::clone(&canonical)));
+        let coordinated = super::BrokerRegistrationError::Coordination(shared)
+            .into_coordination_result("broker registration coordination")
+            .expect_err("coordination failure must be returned");
+        let RocketMQError::Shared(shared) = coordinated else {
+            panic!("coordination must retain the underlying shared error");
+        };
+        let RocketMQError::Network(actual) = shared.as_error() else {
+            panic!("coordination must retain the underlying Network error");
+        };
+        assert!(std::sync::Arc::ptr_eq(actual, &canonical));
+
+        let completion = super::BrokerRegistrationError::CompletionDropped
+            .into_coordination_result("broker registration coordination")
+            .expect_err("a dropped completion is an internal coordination failure");
+        assert_eq!(completion.descriptor().code().as_str(), "core.internal.failure");
+        assert_eq!(completion.boundary_view().remoting().code.as_i32(), 1);
     }
 }

@@ -178,8 +178,7 @@ impl DefaultMQProducerImpl {
                         let namespace = runtime.client_config.namespace.clone();
                         let retained_bytes = Self::message_body_len_for_backpressure(&msg).saturating_add(4 * 1024);
                         let deadline = rocketmq_transport::api::RequestDeadline::from_timeout_millis(timeout);
-                        let target = broker_addr.to_string();
-                        self.oneway_egress()?.try_admit(retained_bytes, &target, deadline, || {
+                        let admission = self.oneway_egress()?.try_admit(retained_bytes, deadline, || {
                             let request = build_oneway_request_internal(
                                 &mut msg,
                                 &mq,
@@ -200,7 +199,12 @@ impl DefaultMQProducerImpl {
                                 }),
                             })
                         })?;
-                        sent_count += 1;
+                        match admission {
+                            OnewayAdmissionOutcome::Accepted => sent_count += 1,
+                            OnewayAdmissionOutcome::Rejected(rejection) => {
+                                let _ = rejection;
+                            }
+                        }
                     }
                 }
             }

@@ -15,9 +15,14 @@
 use std::collections::HashSet;
 
 use rocketmq_error::ErrorKind;
-use rocketmq_error::NetworkError;
 use rocketmq_error::RecoveryHint;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
+use rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT;
+use rocketmq_error::TRANSPORT_DNS_FAILED;
+use rocketmq_error::TRANSPORT_REMOTE_RATE_LIMITED;
+use rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT;
+use rocketmq_error::TRANSPORT_WRITE_TIMEOUT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClientRetryDecision {
@@ -183,7 +188,7 @@ pub(crate) fn producer_send_fault_decision(
     error: &RocketMQError,
     start_detector_enabled: bool,
 ) -> Option<ProducerSendFaultDecision> {
-    match error {
+    match retry_policy_error(error) {
         RocketMQError::IllegalArgument(_) => Some(ProducerSendFaultDecision {
             isolation: false,
             reachable: true,
@@ -194,7 +199,7 @@ pub(crate) fn producer_send_fault_decision(
             reachable: false,
             log_resend_immediately: false,
         }),
-        RocketMQError::Network(_) => Some(ProducerSendFaultDecision {
+        error if is_network_send_failure(error) => Some(ProducerSendFaultDecision {
             isolation: true,
             reachable: !start_detector_enabled,
             log_resend_immediately: false,
@@ -205,32 +210,56 @@ pub(crate) fn producer_send_fault_decision(
 
 #[inline]
 fn is_terminal_send_error(error: &RocketMQError) -> bool {
+    let error = retry_policy_error(error);
     matches!(
-        retry_policy_error(error),
-        RocketMQError::Timeout { .. }
-            | RocketMQError::ClientNotStarted
-            | RocketMQError::ClientShuttingDown
-            | RocketMQError::Network(
-                NetworkError::ConnectionTimeout { .. }
-                    | NetworkError::RequestTimeout { .. }
-                    | NetworkError::TooManyRequests { .. },
-            )
-    )
+        error,
+        RocketMQError::Timeout { .. } | RocketMQError::ClientNotStarted | RocketMQError::ClientShuttingDown
+    ) || network_has_descriptor(error, &TRANSPORT_CONNECTION_TIMEOUT)
+        || network_has_descriptor(error, &TRANSPORT_REMOTE_RATE_LIMITED)
 }
 
 #[inline]
-fn retry_policy_error(error: &RocketMQError) -> &RocketMQError {
+pub(crate) fn retry_policy_error(error: &RocketMQError) -> &RocketMQError {
     match error {
         RocketMQError::Shared(shared) => shared.as_error(),
         error => error,
     }
 }
 
+#[inline]
+pub(crate) fn is_network_send_failure(error: &RocketMQError) -> bool {
+    let error = retry_policy_error(error);
+    [
+        &TRANSPORT_DNS_FAILED,
+        &TRANSPORT_CONNECTION_FAILED,
+        &TRANSPORT_CONNECTION_TIMEOUT,
+        &TRANSPORT_REMOTE_RATE_LIMITED,
+        &TRANSPORT_WRITE_TIMEOUT,
+        &TRANSPORT_RESPONSE_TIMEOUT,
+    ]
+    .into_iter()
+    .any(|descriptor| network_has_descriptor(error, descriptor))
+}
+
+#[inline]
+fn network_has_descriptor(error: &RocketMQError, descriptor: &'static rocketmq_error::ErrorDescriptor) -> bool {
+    matches!(error, RocketMQError::Network(network) if network.code() == descriptor.code())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use rocketmq_error::Error;
     use rocketmq_error::RpcClientError;
     use rocketmq_error::SharedRocketMQError;
+    use rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED;
+    use rocketmq_error::TRANSPORT_ENDPOINT_INVALID;
+
+    fn network_error(descriptor: &'static rocketmq_error::ErrorDescriptor) -> RocketMQError {
+        RocketMQError::Network(Arc::new(Error::new(descriptor)))
+    }
 
     const fn effect(
         retry: bool,
@@ -251,7 +280,7 @@ mod tests {
     #[test]
     fn retry_decision_uses_error_recovery_policy() {
         let route_error = RocketMQError::route_not_found("TopicA");
-        let network_error = RocketMQError::network_connection_failed("broker-a:10911", "connection failed");
+        let network_error = network_error(&TRANSPORT_CONNECTION_FAILED);
         let client_state_error = RocketMQError::ClientNotStarted;
 
         assert_eq!(
@@ -270,18 +299,14 @@ mod tests {
 
     #[test]
     fn async_send_retry_excludes_terminal_send_errors() {
-        let retryable = RocketMQError::Network(NetworkError::send_failed("broker-a:10911", "write failed"));
-        let request_timeout = RocketMQError::Network(NetworkError::RequestTimeout {
-            addr: "broker-a:10911".into(),
-            timeout_ms: 3_000,
-        });
-        let too_many_requests = RocketMQError::Network(NetworkError::TooManyRequests {
-            addr: "broker-a:10911".into(),
-            limit: 1,
-        });
+        let retryable = network_error(&TRANSPORT_WRITE_TIMEOUT);
+        let response_timeout = network_error(&TRANSPORT_RESPONSE_TIMEOUT);
+        let connection_timeout = network_error(&TRANSPORT_CONNECTION_TIMEOUT);
+        let too_many_requests = network_error(&TRANSPORT_REMOTE_RATE_LIMITED);
 
         assert!(should_retry_async_send_error(&retryable));
-        assert!(!should_retry_async_send_error(&request_timeout));
+        assert!(should_retry_async_send_error(&response_timeout));
+        assert!(!should_retry_async_send_error(&connection_timeout));
         assert!(!should_retry_async_send_error(&too_many_requests));
         assert!(!should_retry_async_send_error(&RocketMQError::ClientShuttingDown));
     }
@@ -319,7 +344,7 @@ mod tests {
                 effect(true, false, false, true, false),
             ),
             (
-                RocketMQError::network_connection_failed("broker-a:10911", "connection failed"),
+                network_error(&TRANSPORT_CONNECTION_FAILED),
                 ClientRetryDecision::Backoff,
                 effect(true, false, false, false, true),
             ),
@@ -347,7 +372,7 @@ mod tests {
             timeout_ms: 3_000,
         };
         let broker_error = RocketMQError::broker_operation_failed("SEND_MESSAGE", 12, "system busy");
-        let network_error = RocketMQError::network_connection_failed("broker-a:10911", "connection failed");
+        let network_error = network_error(&TRANSPORT_CONNECTION_FAILED);
 
         assert_eq!(ClientRetryDecision::from_error(&timeout), ClientRetryDecision::Backoff);
         assert_eq!(
@@ -419,18 +444,13 @@ mod tests {
             current: 3,
             max: 2,
         });
-        assert_no_retry_for_direct_and_shared(RocketMQError::Network(NetworkError::InvalidAddress {
-            addr: "not-an-address".into(),
-        }));
+        assert_no_retry_for_direct_and_shared(network_error(&TRANSPORT_ENDPOINT_INVALID));
         assert_no_retry_for_direct_and_shared(RocketMQError::Rpc(RpcClientError::UnsupportedRequestCode { code: 999 }));
     }
 
     #[test]
     fn descriptor_backoff_controls_remain_retryable() {
-        assert_backoff_for_direct_and_shared(RocketMQError::network_connection_failed(
-            "broker-a:10911",
-            "connection failed",
-        ));
+        assert_backoff_for_direct_and_shared(network_error(&TRANSPORT_CONNECTION_FAILED));
         assert_backoff_for_direct_and_shared(RocketMQError::Rpc(RpcClientError::request_failed(
             "broker-a:10911",
             10,
@@ -467,18 +487,8 @@ mod tests {
                 operation: "SEND_MESSAGE",
                 timeout_ms: 3_000,
             },
-            RocketMQError::Network(NetworkError::ConnectionTimeout {
-                addr: "broker-a:10911".into(),
-                timeout_ms: 3_000,
-            }),
-            RocketMQError::Network(NetworkError::RequestTimeout {
-                addr: "broker-a:10911".into(),
-                timeout_ms: 3_000,
-            }),
-            RocketMQError::Network(NetworkError::TooManyRequests {
-                addr: "broker-a:10911".into(),
-                limit: 1,
-            }),
+            network_error(&TRANSPORT_CONNECTION_TIMEOUT),
+            network_error(&TRANSPORT_REMOTE_RATE_LIMITED),
         ] {
             assert_eq!(async_send_retry_decision(&error), ClientRetryDecision::NoRetry);
             assert_eq!(
@@ -513,7 +523,7 @@ mod tests {
     fn producer_send_fault_decision_is_centralized() {
         let illegal_argument = RocketMQError::illegal_argument("bad request");
         let broker_error = RocketMQError::broker_operation_failed("SEND_MESSAGE", 12, "system busy");
-        let network_error = RocketMQError::Network(NetworkError::send_failed("broker-a:10911", "write failed"));
+        let network_error = network_error(&TRANSPORT_WRITE_TIMEOUT);
 
         assert_eq!(
             producer_send_fault_decision(&illegal_argument, false),
@@ -551,6 +561,50 @@ mod tests {
             producer_send_fault_decision(&RocketMQError::ClientNotStarted, false),
             None
         );
+    }
+
+    #[test]
+    fn producer_send_fault_decision_preserves_shared_network_identity() {
+        for descriptor in [
+            &TRANSPORT_CONNECTION_FAILED,
+            &TRANSPORT_WRITE_TIMEOUT,
+            &TRANSPORT_RESPONSE_TIMEOUT,
+        ] {
+            let canonical = Arc::new(Error::caused_by(
+                descriptor,
+                std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset"),
+            ));
+            let direct = RocketMQError::Network(Arc::clone(&canonical));
+            let shared = SharedRocketMQError::new(RocketMQError::Network(Arc::clone(&canonical))).into_error();
+
+            for (detector_enabled, reachable) in [(false, true), (true, false)] {
+                let expected = Some(ProducerSendFaultDecision {
+                    isolation: true,
+                    reachable,
+                    log_resend_immediately: false,
+                });
+                assert_eq!(producer_send_fault_decision(&direct, detector_enabled), expected);
+                assert_eq!(producer_send_fault_decision(&shared, detector_enabled), expected);
+            }
+            let RocketMQError::Network(borrowed) = retry_policy_error(&shared) else {
+                panic!("shared error should retain the Network carrier");
+            };
+            assert!(Arc::ptr_eq(borrowed, &canonical));
+            assert!(std::error::Error::source(canonical.as_ref()).is_some());
+        }
+    }
+
+    #[test]
+    fn local_network_outcomes_do_not_trigger_broker_fault_isolation() {
+        for descriptor in [&TRANSPORT_ENDPOINT_INVALID, &TRANSPORT_ADMISSION_QUEUE_SATURATED] {
+            let canonical = Arc::new(Error::new(descriptor));
+            let direct = RocketMQError::Network(Arc::clone(&canonical));
+            let shared = SharedRocketMQError::new(RocketMQError::Network(canonical)).into_error();
+            for error in [&direct, &shared] {
+                assert_eq!(producer_send_fault_decision(error, false), None);
+                assert_eq!(producer_send_fault_decision(error, true), None);
+            }
+        }
     }
 
     #[test]

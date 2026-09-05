@@ -14,11 +14,15 @@
 
 #![cfg(feature = "test-support")]
 
+use std::error::Error as _;
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -38,6 +42,36 @@ use rocketmq_transport::test_support::SessionTransportServerConfig;
 
 struct FaultSelectingProcessor;
 
+#[derive(Debug)]
+struct InjectedProcessorFailure {
+    detail: &'static str,
+}
+
+impl fmt::Display for InjectedProcessorFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.detail)
+    }
+}
+
+impl std::error::Error for InjectedProcessorFailure {}
+
+fn injected_processor_failure() -> RocketMQError {
+    RocketMQError::Network(Arc::new(
+        CanonicalError::caused_by(
+            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+            InjectedProcessorFailure {
+                detail: "injected processor failure",
+            },
+        )
+        .with_context(
+            ErrorContext::new()
+                .with_text(rocketmq_error::fields::PHASE, "connect")
+                .with_secret_presence(rocketmq_error::fields::REMOTE_ADDR_PRESENT)
+                .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT),
+        ),
+    ))
+}
+
 impl SessionProcessor for FaultSelectingProcessor {
     fn process(
         &self,
@@ -45,14 +79,42 @@ impl SessionProcessor for FaultSelectingProcessor {
     ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
         Box::pin(async move {
             match request.opaque() {
-                2 => Err(RocketMQError::network_connection_failed(
-                    "test-processor",
-                    "injected processor failure",
-                )),
+                2 => Err(injected_processor_failure()),
                 5 => std::future::pending().await,
                 _ => Ok(RemotingCommand::create_response_command_with_code(0).set_opaque(request.opaque())),
             }
         })
+    }
+}
+
+#[test]
+fn injected_fault_preserves_canonical_network_policy_and_typed_source() {
+    let error = injected_processor_failure();
+    assert_eq!(
+        error.descriptor().code(),
+        rocketmq_error::TRANSPORT_CONNECTION_FAILED.code()
+    );
+    assert_eq!(
+        error.boundary_view().remoting().code.as_i32(),
+        2,
+        "processor faults retain the legacy SystemError remoting code"
+    );
+
+    let RocketMQError::Network(canonical) = &error else {
+        panic!("injected processor failure must remain a Network error")
+    };
+    assert_eq!(canonical.fault(), rocketmq_error::FaultAttribution::Dependency);
+    let source = canonical
+        .source()
+        .expect("canonical error retains the typed processor failure");
+    let typed = source
+        .downcast_ref::<InjectedProcessorFailure>()
+        .expect("processor failure source remains downcastable");
+    assert_eq!(typed.detail, "injected processor failure");
+
+    for rendered in [format!("{error}"), format!("{error:?}")] {
+        assert!(!rendered.contains("test-processor"));
+        assert!(!rendered.contains("injected processor failure"));
     }
 }
 

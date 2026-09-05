@@ -49,11 +49,17 @@ use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseSendOutcome;
 use crate::dispatch::ResponseTransportDropHandle;
 use crate::dispatch::WriteProgress;
+use crate::error_helpers::admission_queue_saturated;
+use crate::error_helpers::connection_failed;
+use crate::error_helpers::connection_failed_without_source;
+use crate::error_helpers::network;
+use crate::error_helpers::TransportStage;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
 use crate::file_region::FileTransferMode;
 use crate::telemetry::TransportTelemetry;
 use crate::write_result::WriterFailure;
+use crate::write_result::WriterRejection;
 use crate::write_strategy::FrameWriteMode;
 use crate::write_strategy::FrameWriter;
 use crate::write_strategy::OutboundPayload;
@@ -62,6 +68,7 @@ use crate::write_strategy::QueuedWriteCancellation;
 use crate::write_strategy::QueuedWriteProgress;
 use crate::write_strategy::ResponseQueueWaitObservation;
 use crate::writer_runtime::WriterLanes;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ResourcePermit;
@@ -150,104 +157,91 @@ enum ConnectionWriter {
     Queued(QueuedConnection),
 }
 
-/// Static legacy reason selected from the caller's operation rather than an
-/// I/O source. The writer completion remains source-preserving for typed
-/// response fan-out, while each legacy caller reconstructs its historic text.
-#[derive(Clone, Copy)]
-enum LegacyWriterReason {
-    CanonicalWriter,
-    ExplicitSendfile,
-    CompletionDropped,
-}
-
-impl LegacyWriterReason {
-    const fn for_direct_payload(payload: &OutboundPayload, file_transfer_mode: FileTransferMode) -> Self {
-        if matches!(payload, OutboundPayload::FileFrame { .. })
-            && matches!(file_transfer_mode, FileTransferMode::Sendfile)
-        {
-            Self::ExplicitSendfile
-        } else {
-            Self::CanonicalWriter
-        }
-    }
-
-    const fn as_static_reason(self) -> &'static str {
-        match self {
-            Self::CanonicalWriter => "canonical writer failure",
-            Self::ExplicitSendfile => "sendfile mode requires an eligible file and plaintext TCP connection",
-            Self::CompletionDropped => "writer completion dropped",
-        }
-    }
-}
-
-/// Private send mechanics shared by legacy `RocketMQResult` facades and the
+/// Private send mechanics shared by `RocketMQResult` facades and the
 /// server's typed response completion path.
 enum SendFailure {
     DeadlineExceeded {
-        target: String,
+        timeout_ms: u64,
     },
-    SessionClosed {
-        target: String,
-    },
-    Cancelled {
-        target: String,
-    },
+    SessionClosed,
+    Cancelled,
     QueueSaturated {
         target: String,
     },
     Writer {
-        target: String,
-        failure: WriterFailure,
-        legacy_reason: LegacyWriterReason,
+        progress: WriteProgress,
+        error: SharedError,
     },
 }
 
+/// Crate-private completion used where transport owns the delivery decision.
+///
+/// This keeps normal admission and lifecycle outcomes distinct from a
+/// canonical operational failure without exporting writer progress through a
+/// public compatibility surface.
+pub(crate) enum CommandSendOutcome {
+    Written,
+    DeadlineExpired,
+    SessionClosed,
+    Cancelled,
+    QueueSaturated,
+    EncodingFailed(rocketmq_error::RocketMQError),
+    OperationalFailure { error: SharedError },
+}
+
 impl SendFailure {
-    fn into_legacy(self) -> rocketmq_error::RocketMQError {
+    fn into_error(self) -> rocketmq_error::RocketMQError {
         match self {
-            Self::DeadlineExceeded { target } => {
-                rocketmq_error::RocketMQError::network_deadline_exceeded_before_send(target)
-            }
-            Self::SessionClosed { target } => {
-                rocketmq_error::RocketMQError::network_connection_failed(target, "connection is closed")
-            }
-            Self::Cancelled { target } => {
-                rocketmq_error::RocketMQError::network_connection_failed(target, "request was cancelled before send")
-            }
-            Self::QueueSaturated { target } => rocketmq_error::RocketMQError::network_queue_full(target),
-            Self::Writer {
-                target,
-                failure,
-                legacy_reason,
-            } => failure.into_legacy_for_target(target, legacy_reason.as_static_reason()),
+            Self::DeadlineExceeded { timeout_ms } => rocketmq_error::RocketMQError::Timeout {
+                operation: "transport_before_send",
+                timeout_ms,
+            },
+            Self::SessionClosed | Self::Cancelled => network(connection_failed_without_source(TransportStage::Closed)),
+            Self::QueueSaturated { target } => network(admission_queue_saturated(target)),
+            Self::Writer { error, .. } => network(error),
         }
     }
 
     fn into_response(self) -> ResponseSendOutcome {
         match self {
             Self::DeadlineExceeded { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::DeadlineExpired),
-            Self::SessionClosed { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed),
-            Self::Cancelled { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::Cancelled),
+            Self::SessionClosed => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed),
+            Self::Cancelled => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::Cancelled),
             Self::QueueSaturated { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::QueueSaturated),
-            Self::Writer { failure, .. } => ResponseSendOutcome::OperationalFailure(failure.into_response()),
+            Self::Writer { progress, error } => {
+                ResponseSendOutcome::OperationalFailure(ResponseOperationalFailure::transport(progress, error))
+            }
+        }
+    }
+
+    fn into_command_outcome(self) -> CommandSendOutcome {
+        match self {
+            Self::DeadlineExceeded { .. } => CommandSendOutcome::DeadlineExpired,
+            Self::SessionClosed => CommandSendOutcome::SessionClosed,
+            Self::Cancelled => CommandSendOutcome::Cancelled,
+            Self::QueueSaturated { .. } => CommandSendOutcome::QueueSaturated,
+            Self::Writer { error, .. } => CommandSendOutcome::OperationalFailure { error },
         }
     }
 }
 
 fn classify_writer_failure(
-    target: String,
+    _target: String,
     failure: WriterFailure,
-    legacy_reason: LegacyWriterReason,
     owner_deadline: Option<RequestDeadline>,
 ) -> SendFailure {
     if owner_deadline.is_some_and(|deadline| failure.was_caused_by(deadline)) {
-        SendFailure::DeadlineExceeded { target }
-    } else {
-        SendFailure::Writer {
-            target,
-            failure,
-            legacy_reason,
-        }
+        return SendFailure::DeadlineExceeded {
+            timeout_ms: owner_deadline.map_or(0, RequestDeadline::budget_millis),
+        };
+    }
+    match failure.into_operational() {
+        Ok((progress, error)) => SendFailure::Writer { progress, error },
+        Err(WriterRejection::DeadlineExpired) => SendFailure::DeadlineExceeded {
+            timeout_ms: owner_deadline.map_or(0, RequestDeadline::budget_millis),
+        },
+        Err(WriterRejection::Cancelled) => SendFailure::Cancelled,
+        Err(WriterRejection::SessionClosed) => SendFailure::SessionClosed,
     }
 }
 
@@ -274,11 +268,13 @@ async fn wait_for_control_stop(control: &RequestControlView, policy: RequestStop
     }
 }
 
-fn stop_failure(reason: QueuedWriteCancellation, target: String) -> SendFailure {
+fn stop_failure(reason: QueuedWriteCancellation, _target: String, deadline: Option<RequestDeadline>) -> SendFailure {
     match reason {
-        QueuedWriteCancellation::Deadline => SendFailure::DeadlineExceeded { target },
-        QueuedWriteCancellation::Request => SendFailure::Cancelled { target },
-        QueuedWriteCancellation::SessionClosed => SendFailure::SessionClosed { target },
+        QueuedWriteCancellation::Deadline => SendFailure::DeadlineExceeded {
+            timeout_ms: deadline.map_or(0, RequestDeadline::budget_millis),
+        },
+        QueuedWriteCancellation::Request => SendFailure::Cancelled,
+        QueuedWriteCancellation::SessionClosed => SendFailure::SessionClosed,
     }
 }
 
@@ -962,7 +958,7 @@ impl Connection {
             target,
         )
         .await
-        .map_err(SendFailure::into_legacy)
+        .map_err(SendFailure::into_error)
     }
 
     async fn send_payload_inner(
@@ -1004,30 +1000,26 @@ impl Connection {
     ) -> Result<(), SendFailure> {
         let response_drop = self.response_drop.clone();
         let encoded_len = payload.encoded_len();
-        let legacy_reason = match &self.outbound {
-            ConnectionWriter::Direct(writer) => {
-                LegacyWriterReason::for_direct_payload(&payload, writer.file_transfer_mode())
-            }
-            ConnectionWriter::Queued(_) => LegacyWriterReason::CanonicalWriter,
-        };
         self.telemetry.record_outbound_attempted_plaintext_bytes(encoded_len);
         if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
-            return Err(stop_failure(reason, target));
+            return Err(stop_failure(reason, target, deadline));
         }
         if deadline.is_some_and(RequestDeadline::is_expired) {
-            return Err(SendFailure::DeadlineExceeded { target });
+            return Err(SendFailure::DeadlineExceeded {
+                timeout_ms: deadline.map_or(0, RequestDeadline::budget_millis),
+            });
         }
         if let Some(queued) = self.queued_writer() {
             let _send_lease = match queued.lifecycle.begin_send() {
                 Some(lease) => lease,
                 None => {
                     queued.writer_diagnostics.record_rejected(None);
-                    return Err(SendFailure::SessionClosed { target });
+                    return Err(SendFailure::SessionClosed);
                 }
             };
             if self.state() == ConnectionState::Closed {
                 queued.writer_diagnostics.record_rejected(None);
-                return Err(SendFailure::SessionClosed { target });
+                return Err(SendFailure::SessionClosed);
             }
             #[cfg(test)]
             if let Some((checked, resume)) = self.enqueue_gate.as_ref() {
@@ -1038,7 +1030,7 @@ impl Connection {
                         () = wait_for_control_stop(control, stop_policy) => {
                             let reason = current_request_stop(control, stop_policy)
                                 .unwrap_or(QueuedWriteCancellation::Request);
-                            return Err(stop_failure(reason, target));
+                            return Err(stop_failure(reason, target, deadline));
                         }
                         () = resume.notified() => {}
                     }
@@ -1046,7 +1038,9 @@ impl Connection {
                     deadline
                         .timeout(resume.notified())
                         .await
-                        .map_err(|_| SendFailure::DeadlineExceeded { target: target.clone() })?;
+                        .map_err(|_| SendFailure::DeadlineExceeded {
+                            timeout_ms: deadline.budget_millis(),
+                        })?;
                 } else {
                     resume.notified().await;
                 }
@@ -1062,10 +1056,12 @@ impl Connection {
                 SendFailure::QueueSaturated { target: target.clone() }
             })?;
             if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
-                return Err(stop_failure(reason, target));
+                return Err(stop_failure(reason, target, deadline));
             }
             if deadline.is_some_and(RequestDeadline::is_expired) {
-                return Err(SendFailure::DeadlineExceeded { target });
+                return Err(SendFailure::DeadlineExceeded {
+                    timeout_ms: deadline.map_or(0, RequestDeadline::budget_millis),
+                });
             }
             let (completion, result) = oneshot::channel();
             let progress = Arc::new(QueuedWriteProgress::waiting());
@@ -1096,7 +1092,7 @@ impl Connection {
                         }
                         crate::writer_runtime::WriterEnqueueOutcome::Closed(write) => {
                             drop(write);
-                            SendFailure::SessionClosed { target: target.clone() }
+                            SendFailure::SessionClosed
                         }
                         crate::writer_runtime::WriterEnqueueOutcome::Enqueued => unreachable!(),
                     });
@@ -1120,7 +1116,7 @@ impl Connection {
                             if let Some(drop_guard) = in_flight_drop.take() {
                                 drop_guard.complete();
                             }
-                            return Err(stop_failure(reason, target));
+                            return Err(stop_failure(reason, target, deadline));
                         }
                         result.await
                     }
@@ -1133,7 +1129,9 @@ impl Connection {
                             if let Some(drop_guard) = in_flight_drop.take() {
                                 drop_guard.complete();
                             }
-                            return Err(SendFailure::DeadlineExceeded { target });
+                            return Err(SendFailure::DeadlineExceeded {
+                                timeout_ms: deadline.budget_millis(),
+                            });
                         }
                         result.await
                     }
@@ -1143,27 +1141,23 @@ impl Connection {
             };
             let outcome = outcome.map_err(|_| {
                 if let Some(reason) = progress.cancellation_reason() {
-                    return stop_failure(reason, target.clone());
+                    return stop_failure(reason, target.clone(), deadline);
                 }
                 let progress = if progress.write_started() {
                     WriteProgress::PossiblyPartial
                 } else {
                     WriteProgress::NotStarted
                 };
-                SendFailure::Writer {
-                    failure: WriterFailure::completion_dropped(progress),
-                    target: target.clone(),
-                    legacy_reason: LegacyWriterReason::CompletionDropped,
-                }
+                classify_writer_failure(target.clone(), WriterFailure::completion_dropped(progress), deadline)
             });
             if let Some(drop_guard) = in_flight_drop.take() {
                 drop_guard.complete();
             }
             let outcome = outcome?;
-            return outcome.map_err(|failure| classify_writer_failure(target, failure, legacy_reason, deadline));
+            return outcome.map_err(|failure| classify_writer_failure(target, failure, deadline));
         }
         if self.state() == ConnectionState::Closed {
-            return Err(SendFailure::SessionClosed { target });
+            return Err(SendFailure::SessionClosed);
         }
         self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
         let writer = match &mut self.outbound {
@@ -1187,10 +1181,14 @@ impl Connection {
                     },
                     error,
                 )),
-                Err(_) => Err(if write_started.load(Ordering::Acquire) {
-                    WriterFailure::write_timeout(deadline.budget_millis())
+                Err(source) => Err(if write_started.load(Ordering::Acquire) {
+                    WriterFailure::write_timeout_caused_by(
+                        WriteProgress::PossiblyPartial,
+                        deadline.budget_millis(),
+                        source,
+                    )
                 } else {
-                    WriterFailure::deadline_exceeded_before_send(Some(deadline.instant()))
+                    WriterFailure::prewrite_timeout(deadline.budget_millis(), deadline.instant())
                 }),
             }
         } else {
@@ -1215,12 +1213,12 @@ impl Connection {
                 Ok(())
             }
             Err(failure) => {
-                if failure.progress() == WriteProgress::PossiblyPartial || writer.is_poisoned() {
+                if failure.progress() == Some(WriteProgress::PossiblyPartial) || writer.is_poisoned() {
                     let _ = self.state_tx.send(ConnectionState::Degraded);
                     let _ = writer.shutdown().await;
                     let _ = self.state_tx.send(ConnectionState::Closed);
                 }
-                Err(classify_writer_failure(target, failure, legacy_reason, deadline))
+                Err(classify_writer_failure(target, failure, deadline))
             }
         }
     }
@@ -1378,15 +1376,50 @@ impl Connection {
         target: impl Into<String>,
     ) -> rocketmq_error::RocketMQResult<()> {
         let target = target.into();
-        deadline.ensure_before_send(target.clone())?;
+        deadline.ensure_before_send()?;
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let frame = self.limits.encode_command(command)?;
-        deadline.ensure_before_send(target.clone())?;
+        deadline.ensure_before_send()?;
 
         self.send_payload(OutboundPayload::Frame(frame), class, None, Some(deadline), target)
             .await
+    }
+
+    pub(crate) async fn send_command_outcome_with_deadline(
+        &mut self,
+        command: RemotingCommand,
+        deadline: RequestDeadline,
+        target: impl Into<String>,
+    ) -> CommandSendOutcome {
+        let target = target.into();
+        if deadline.is_expired() {
+            return CommandSendOutcome::DeadlineExpired;
+        }
+        let class = self
+            .response_class()
+            .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
+        let frame = match self.limits.encode_command(command) {
+            Ok(frame) => frame,
+            Err(source) => return CommandSendOutcome::EncodingFailed(source),
+        };
+        if deadline.is_expired() {
+            return CommandSendOutcome::DeadlineExpired;
+        }
+
+        self.send_payload_inner(
+            OutboundPayload::Frame(frame),
+            class,
+            None,
+            Some(deadline),
+            None,
+            RequestStopPolicy::All,
+            None,
+            target,
+        )
+        .await
+        .map_or_else(SendFailure::into_command_outcome, |_| CommandSendOutcome::Written)
     }
 
     /// Sends a RocketMQ command whose body is a validated, leased file region.
@@ -1438,7 +1471,7 @@ impl Connection {
     ) -> rocketmq_error::RocketMQResult<()> {
         let target = "transport-file-region-writer".to_string();
         if let Some(deadline) = deadline {
-            deadline.ensure_before_send(target.clone())?;
+            deadline.ensure_before_send()?;
         }
         let class = self
             .response_class()
@@ -1448,7 +1481,7 @@ impl Connection {
         })?;
         let head = self.limits.encode_frame_head(command_without_body, body_len)?;
         if let Some(deadline) = deadline {
-            deadline.ensure_before_send(target.clone())?;
+            deadline.ensure_before_send()?;
         }
         self.send_payload(OutboundPayload::FileFrame { head, body }, class, None, deadline, target)
             .await
@@ -1469,12 +1502,12 @@ impl Connection {
         permit: ResourcePermit,
     ) -> rocketmq_error::RocketMQResult<()> {
         let target = target.into();
-        deadline.ensure_before_send(target.clone())?;
+        deadline.ensure_before_send()?;
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
         let frame = self.limits.encode_command(command)?;
-        deadline.ensure_before_send(target.clone())?;
+        deadline.ensure_before_send()?;
 
         self.send_payload(
             OutboundPayload::Frame(frame),
@@ -1790,25 +1823,19 @@ impl Connection {
         let result = match &mut self.outbound {
             ConnectionWriter::Queued(queued) => {
                 let (completion, result) = oneshot::channel();
-                queued.writer.close(completion).await.map_err(|_| {
-                    rocketmq_error::RocketMQError::network_connection_failed(
-                        "transport-session-writer",
-                        "writer queue closed",
-                    )
-                })?;
-                result.await.map_err(|_| {
-                    rocketmq_error::RocketMQError::network_connection_failed(
-                        "transport-session-writer",
-                        "writer completion dropped",
-                    )
-                })?
+                queued
+                    .writer
+                    .close(completion)
+                    .await
+                    .map_err(|_| network(connection_failed_without_source(TransportStage::Closed)))?;
+                result
+                    .await
+                    .map_err(|source| network(connection_failed(TransportStage::Closed, source)))?
             }
-            ConnectionWriter::Direct(writer) => writer.shutdown().await.map_err(|error| {
-                rocketmq_error::RocketMQError::network_connection_failed(
-                    "transport-connection-writer",
-                    error.to_string(),
-                )
-            }),
+            ConnectionWriter::Direct(writer) => writer
+                .shutdown()
+                .await
+                .map_err(|source| network(connection_failed(TransportStage::Closed, source))),
         };
         self.mark_closed();
         result

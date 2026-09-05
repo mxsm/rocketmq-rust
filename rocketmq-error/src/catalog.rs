@@ -279,30 +279,7 @@ define_error_catalog! {
         recovery_hint: RecoveryHint::Backoff,
         backtrace: BacktracePolicy::Never,
         exposure: Exposure::Public,
-        fields: [fields::TIMEOUT_MS, fields::REMOTE_ADDR],
-        projection: {
-            remoting: RemotingResponseCode::SystemBusy,
-            grpc: {
-                payload: GrpcPayloadCode::RequestTimeout,
-                status: GrpcStatusCode::DeadlineExceeded,
-            },
-            http: HttpStatusCode::GATEWAY_TIMEOUT,
-            cli: CliExitCode::TEMPORARY_FAILURE,
-        },
-    }
-    /// A transport request failed with a legacy request or connection timeout.
-    TRANSPORT_REQUEST_TIMEOUT {
-        code: "transport.request.timeout",
-        class: ErrorClass::TIMEOUT,
-        condition: CanonicalCondition::DeadlineExceeded,
-        fault: FaultAttribution::Dependency,
-        component: ComponentId::TRANSPORT,
-        public_message: "Transport request timed out",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::Backoff,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        fields: [fields::TIMEOUT_MS, fields::REMOTE_ADDR, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
             grpc: {
@@ -1007,7 +984,6 @@ pub const ALL_DESCRIPTORS: &[ErrorDescriptor] = &[
     TRANSPORT_ADMISSION_QUEUE_SATURATED,
     CONTROLLER_LEADERSHIP_NOT_LEADER,
     TRANSPORT_CONNECTION_TIMEOUT,
-    TRANSPORT_REQUEST_TIMEOUT,
     TRANSPORT_START_FAILED,
     TRANSPORT_DISPATCH_FAILED,
     TRANSPORT_RESPONSE_FAILED,

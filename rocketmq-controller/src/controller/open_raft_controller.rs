@@ -63,10 +63,14 @@ use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::SerializationError;
 use rocketmq_error::UnifiedServiceError;
+use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
@@ -918,12 +922,9 @@ impl OpenRaftController {
 
         let addr = raft_bind_addr;
         let node_id = startup_config.node_id;
-        let listener = TcpListener::bind(addr).await.map_err(|error| {
-            RocketMQError::network_connection_failed(
-                addr.to_string(),
-                format!("bind OpenRaft gRPC server for node {node_id}: {error}"),
-            )
-        })?;
+        let listener = TcpListener::bind(addr)
+            .await
+            .map_err(|error| controller_bind_error(addr, node_id, error))?;
         let task_group = self.ensure_task_group()?;
         let node =
             Arc::new(RaftNodeManager::new(self.config.clone(), self.service_context.storage_io().clone()).await?);
@@ -1009,6 +1010,40 @@ impl OpenRaftController {
     pub(crate) fn record_election_attempt(&self, latency_ms: u64) {
         self.metrics_manager.record_election_attempt(latency_ms);
     }
+}
+
+#[derive(Debug)]
+struct OpenRaftBindSource {
+    addr: SocketAddr,
+    node_id: NodeId,
+    source: std::io::Error,
+}
+
+impl std::fmt::Display for OpenRaftBindSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "bind OpenRaft gRPC server for node {} at {}",
+            self.node_id, self.addr
+        )
+    }
+}
+
+impl std::error::Error for OpenRaftBindSource {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+fn controller_bind_error(addr: SocketAddr, node_id: NodeId, source: std::io::Error) -> RocketMQError {
+    let source = OpenRaftBindSource { addr, node_id, source };
+    let context = ErrorContext::new()
+        .with_text(fields::PHASE, "bind")
+        .with_secret_presence(fields::REMOTE_ADDR_PRESENT)
+        .with_secret_presence(fields::SOURCE_PRESENT);
+    RocketMQError::Network(Arc::new(
+        Error::caused_by(&TRANSPORT_CONNECTION_FAILED, source).with_context(context),
+    ))
 }
 
 impl Controller for OpenRaftController {
@@ -1439,7 +1474,9 @@ mod tests {
     use crate::config::ControllerConfig;
     use crate::config::RaftPeer;
     use rocketmq_error::ErrorKind;
+    use rocketmq_error::RocketMQError;
 
+    use super::controller_bind_error;
     use super::openraft_response_decode_failed;
     use super::openraft_startup_failed;
     use super::parse_controller_raft_bind_addr;
@@ -1472,6 +1509,30 @@ mod tests {
             SocketAddr::from(([0, 0, 0, 0], 60110))
         );
         assert!(parse_controller_raft_bind_addr("rocketmq-controller:60110").is_err());
+    }
+
+    #[test]
+    fn controller_bind_failure_uses_canonical_network_descriptor_and_retains_source() {
+        let error = controller_bind_error(
+            "127.0.0.1:9876".parse().expect("valid test address"),
+            7,
+            std::io::Error::new(std::io::ErrorKind::AddrInUse, "address already in use"),
+        );
+
+        assert_eq!(error.descriptor().code().as_str(), "transport.connection.failed");
+        assert_eq!(error.boundary_view().remoting().code.as_i32(), 2);
+        let RocketMQError::Network(canonical) = &error else {
+            panic!("bind failure must use the canonical Network carrier");
+        };
+        let bind_source = std::error::Error::source(canonical.as_ref())
+            .and_then(|source| source.downcast_ref::<super::OpenRaftBindSource>())
+            .expect("canonical error must retain the typed bind source");
+        assert_eq!(bind_source.addr, "127.0.0.1:9876".parse().unwrap());
+        assert_eq!(bind_source.node_id, 7);
+        let io_source = std::error::Error::source(bind_source)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .expect("bind source must retain the physical io error");
+        assert_eq!(io_source.kind(), std::io::ErrorKind::AddrInUse);
     }
 
     #[tokio::test]

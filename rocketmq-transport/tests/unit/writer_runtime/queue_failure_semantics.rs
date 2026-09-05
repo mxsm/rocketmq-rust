@@ -26,6 +26,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bytes::Bytes;
+use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_protocol::protocol::RemotingCommand;
 use rocketmq_runtime::RuntimeOwner;
@@ -418,14 +419,90 @@ async fn active_batch_failure_shares_source_and_drains_followers_without_a_secon
         .expect("follower completion")
         .expect_err("poison-drained follower must fail");
 
-    assert_eq!(first.progress(), WriteProgress::PossiblyPartial);
-    assert_eq!(second.progress(), WriteProgress::PossiblyPartial);
-    assert_eq!(follower.progress(), WriteProgress::NotStarted);
-    assert!(std::ptr::eq(first.source().as_error(), second.source().as_error()));
+    assert_eq!(first.progress(), Some(WriteProgress::PossiblyPartial));
+    assert_eq!(second.progress(), Some(WriteProgress::PossiblyPartial));
+    assert_eq!(follower.progress(), Some(WriteProgress::NotStarted));
+    assert!(Arc::ptr_eq(
+        first.error().expect("first canonical writer error"),
+        second.error().expect("second canonical writer error")
+    ));
+    assert!(Arc::ptr_eq(
+        first.error().expect("first canonical writer error"),
+        follower.error().expect("follower canonical writer error")
+    ));
     assert_eq!(attempts.load(Ordering::Acquire), 1);
     assert_eq!(controller.snapshot().queued.current_count, 0);
     assert_eq!(controller.snapshot().queued.current_bytes, 0);
     assert_eq!(diagnostics.snapshot().failed, 3);
+}
+
+#[tokio::test]
+async fn close_collected_with_a_poisoned_batch_receives_the_same_canonical_failure() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let connection = Connection::new_with_plaintext_stream(FailingTransport {
+        attempts: Arc::clone(&attempts),
+        flushes: Arc::new(AtomicUsize::new(0)),
+        phase: WriteFailurePhase::FirstWrite,
+    });
+    let (frame_writer, _reader) = connection.into_session_io(admission.clone());
+    let mut config = queue_config();
+    config.batch.max_items = NonZeroUsize::new(2).expect("non-zero");
+    config.batch.max_delay = Duration::from_secs(1);
+    let (lanes, mut receivers) = writer_lanes(config);
+    let (write, write_completion) = queued_write_with_completion(
+        &admission,
+        "poisoned-close-target",
+        16,
+        Arc::new(QueuedWriteProgress::waiting()),
+    );
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, write), "queued write");
+
+    let batch_wait_started = Arc::new(tokio::sync::Notify::new());
+    receivers.notify_when_collecting_batch(Arc::clone(&batch_wait_started));
+    let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
+    let (state, _) = watch::channel(ConnectionState::Healthy);
+    let writer = tokio::spawn(run_session_writer(
+        frame_writer,
+        receivers,
+        Arc::clone(&diagnostics),
+        state,
+        CancellationToken::new(),
+        TransportTelemetry::noop(),
+    ));
+
+    batch_wait_started.notified().await;
+
+    let (close_completion, close_result) = oneshot::channel();
+    lanes
+        .close(close_completion)
+        .await
+        .expect("close lane remains available");
+    drop(lanes);
+    writer.await.expect("writer task");
+
+    let write_failure = write_completion
+        .await
+        .expect("write completion")
+        .expect_err("socket write must fail");
+    let close_failure = close_result
+        .await
+        .expect("close completion")
+        .expect_err("poisoned close must report the write failure");
+    let RocketMQError::Network(close_error) = close_failure else {
+        panic!("poisoned close must retain the canonical Network error")
+    };
+    assert!(Arc::ptr_eq(
+        write_failure.error().expect("canonical write failure"),
+        &close_error
+    ));
+    assert!(std::error::Error::source(close_error.as_ref())
+        .and_then(|source| source.downcast_ref::<io::Error>())
+        .is_some());
+    assert_eq!(attempts.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]
@@ -476,7 +553,7 @@ async fn active_file_failure_and_poison_drain_release_each_file_lease_once() {
             .expect("active completion")
             .expect_err("active file head write must fail")
             .progress(),
-        WriteProgress::PossiblyPartial
+        Some(WriteProgress::PossiblyPartial)
     );
     assert_eq!(
         follower_completion
@@ -484,7 +561,7 @@ async fn active_file_failure_and_poison_drain_release_each_file_lease_once() {
             .expect("follower completion")
             .expect_err("poison-drained file write must fail")
             .progress(),
-        WriteProgress::NotStarted
+        Some(WriteProgress::NotStarted)
     );
     assert_eq!(attempts.load(Ordering::Acquire), 1);
     assert_eq!(active_drops.load(Ordering::SeqCst), 1);
@@ -636,7 +713,7 @@ async fn queued_file_cancellation_releases_its_lease_before_socket_progress() {
         .await
         .expect("cancelled file completion")
         .expect_err("cancelled file must fail");
-    assert_eq!(failure.progress(), WriteProgress::NotStarted);
+    assert_eq!(failure.progress(), Some(WriteProgress::NotStarted));
     assert_eq!(attempts.load(Ordering::Acquire), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
@@ -703,7 +780,7 @@ async fn queued_cancellation_wins_before_writer_start_and_never_touches_the_sock
         .await
         .expect("deadline completion")
         .expect_err("cancelled queued write must fail");
-    assert_eq!(failure.progress(), WriteProgress::NotStarted);
+    assert_eq!(failure.progress(), Some(WriteProgress::NotStarted));
     assert_eq!(attempts.load(Ordering::Acquire), 0);
     assert_eq!(controller.snapshot().queued.current_count, 0);
     assert_eq!(diagnostics.snapshot().failed, 1);
@@ -733,7 +810,7 @@ async fn dropped_completion_before_writer_start_is_not_started_and_releases_its_
     assert!(!progress.write_started());
     assert_eq!(
         WriterFailure::completion_dropped(WriteProgress::NotStarted).progress(),
-        WriteProgress::NotStarted
+        Some(WriteProgress::NotStarted)
     );
     assert_eq!(controller.snapshot().queued.current_count, 0);
     assert_eq!(controller.snapshot().queued.current_bytes, 0);
@@ -777,7 +854,7 @@ async fn dropped_active_completion_is_possibly_partial_and_releases_its_permit()
     assert!(progress.write_started());
     assert_eq!(
         WriterFailure::completion_dropped(WriteProgress::PossiblyPartial).progress(),
-        WriteProgress::PossiblyPartial
+        Some(WriteProgress::PossiblyPartial)
     );
     assert_eq!(attempts.load(Ordering::Acquire), 1);
     assert_eq!(controller.snapshot().queued.current_count, 0);

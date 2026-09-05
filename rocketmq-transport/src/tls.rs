@@ -48,6 +48,16 @@ use tracing::warn;
 
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::connection::Connection;
+#[cfg(feature = "tls")]
+use crate::error_helpers::connection_failed;
+#[cfg(feature = "tls")]
+use crate::error_helpers::connection_failed_for_remote;
+#[cfg(feature = "tls")]
+use crate::error_helpers::connection_failed_without_source;
+#[cfg(feature = "tls")]
+use crate::error_helpers::network;
+#[cfg(feature = "tls")]
+use crate::error_helpers::TransportStage;
 
 const TLS_HANDSHAKE_MAGIC_CODE: u8 = 0x16;
 #[cfg(feature = "tls")]
@@ -197,17 +207,14 @@ impl TlsServerRuntime {
                     build_server_acceptor(&effective)
                 })
                 .await
-                .map_err(|error| RocketMQError::network_connection_failed("tls-initialize", error.to_string()))?;
+                .map_err(|source| network(connection_failed(TransportStage::EndpointValidation, source)))?;
             match initial {
                 Ok(initial) => acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
                     generation: 1,
                     acceptor: initial,
                 }))),
                 Err(error) if mode == TlsMode::Enforcing => {
-                    return Err(RocketMQError::network_connection_failed(
-                        "tls-initialize",
-                        error.to_string(),
-                    ));
+                    return Err(network(connection_failed(TransportStage::EndpointValidation, error)));
                 }
                 Err(error) => warn!("failed to build initial TLS server acceptor: {error}"),
             }
@@ -377,7 +384,7 @@ impl TlsServerRuntime {
                 }
             })
             .await
-            .map_err(|error| RocketMQError::network_connection_failed("tls-reload", error.to_string()))??;
+            .map_err(|source| network(connection_failed(TransportStage::EndpointValidation, source)))??;
         let previous_generation = self.active_generation();
         let Some(acceptor) = acceptor else {
             return Ok(TlsReloadReport {
@@ -388,7 +395,7 @@ impl TlsServerRuntime {
         };
         let active_generation = previous_generation
             .checked_add(1)
-            .ok_or_else(|| RocketMQError::network_connection_failed("tls-reload", "TLS generation is exhausted"))?;
+            .ok_or_else(|| network(connection_failed_without_source(TransportStage::EndpointValidation)))?;
         self.acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
             generation: active_generation,
             acceptor,
@@ -544,8 +551,12 @@ pub async fn connect_tls_stream(
     connector
         .connect(parse_server_name(server_name)?, stream)
         .await
-        .map_err(|error| {
-            RocketMQError::network_connection_failed(server_name, format!("TLS handshake failed: {error}"))
+        .map_err(|source| {
+            network(connection_failed_for_remote(
+                server_name,
+                TransportStage::Connect,
+                source,
+            ))
         })
 }
 

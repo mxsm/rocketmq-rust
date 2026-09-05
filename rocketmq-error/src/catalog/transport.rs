@@ -73,7 +73,7 @@ define_error_catalog! {
         recovery_hint: RecoveryHint::Backoff,
         backtrace: BacktracePolicy::Never,
         exposure: Exposure::Generic,
-        fields: [fields::PHASE, fields::TIMEOUT_MS, fields::REMOTE_ADDR_PRESENT],
+        fields: [fields::PHASE, fields::TIMEOUT_MS, fields::REMOTE_ADDR_PRESENT, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
             grpc: {
@@ -96,7 +96,7 @@ define_error_catalog! {
         recovery_hint: RecoveryHint::Backoff,
         backtrace: BacktracePolicy::Never,
         exposure: Exposure::Generic,
-        fields: [fields::PHASE, fields::TIMEOUT_MS, fields::REMOTE_ADDR_PRESENT],
+        fields: [fields::PHASE, fields::TIMEOUT_MS, fields::REMOTE_ADDR_PRESENT, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
             grpc: {
@@ -119,7 +119,7 @@ define_error_catalog! {
         recovery_hint: RecoveryHint::Backoff,
         backtrace: BacktracePolicy::Never,
         exposure: Exposure::Generic,
-        fields: [fields::HOST_PRESENT, fields::REASON_PRESENT],
+        fields: [fields::HOST_PRESENT, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
             grpc: {
@@ -142,7 +142,7 @@ define_error_catalog! {
         recovery_hint: RecoveryHint::Backoff,
         backtrace: BacktracePolicy::Never,
         exposure: Exposure::Generic,
-        fields: [fields::PHASE, fields::REMOTE_ADDR_PRESENT, fields::REASON_PRESENT],
+        fields: [fields::PHASE, fields::REMOTE_ADDR_PRESENT, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::SystemBusy,
             grpc: {

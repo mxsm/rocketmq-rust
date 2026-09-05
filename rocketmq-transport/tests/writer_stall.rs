@@ -14,6 +14,7 @@
 
 #![cfg(feature = "test-support")]
 
+use std::error::Error as _;
 use std::future::Future;
 use std::io;
 use std::io::IoSlice;
@@ -24,6 +25,7 @@ use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
 
+use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::api::AdmissionController;
@@ -161,8 +163,26 @@ async fn hard_write_stall_deadline_poison_closes_and_drains_session_writer() {
 
     tokio::time::advance(Duration::from_millis(1)).await;
     tokio::task::yield_now().await;
-    assert!(first.await.expect("first send task").is_err());
-    assert!(second.await.expect("second send task").is_err());
+    let first = first
+        .await
+        .expect("first send task")
+        .expect_err("stalled writer must fail");
+    let second = second
+        .await
+        .expect("second send task")
+        .expect_err("batched follower must share the failure");
+    let RocketMQError::Network(first) = first else {
+        panic!("stalled writer must return the canonical Network error");
+    };
+    let RocketMQError::Network(second) = second else {
+        panic!("batched follower must return the canonical Network error");
+    };
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(first.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
+    assert!(first
+        .source()
+        .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())
+        .is_some());
 
     let snapshot = session.writer_snapshot();
     assert_eq!(snapshot.queued_items, 0);

@@ -43,7 +43,10 @@ use super::ClientShutdownReport;
 use super::ClientStartReport;
 use super::ConnectionShutdownReport;
 use super::TransportClient;
-use crate::error_helpers::remote_error;
+use crate::error_helpers::connection_failed;
+use crate::error_helpers::connection_failed_without_source;
+use crate::error_helpers::network;
+use crate::error_helpers::TransportStage;
 
 const START_ROLLBACK_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -192,7 +195,7 @@ impl ClientLifecycle {
         self.generation = self
             .generation
             .checked_add(1)
-            .ok_or_else(|| remote_error("transport client lifecycle generation overflow"))?;
+            .ok_or_else(|| network(connection_failed_without_source(TransportStage::Closed)))?;
         let generation = ClientGeneration {
             number: self.generation,
             cancellation: task_group.cancellation_token(),
@@ -594,12 +597,12 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 .service_context
                 .task_group()
                 .try_child("rocketmq-transport.client")
-                .map_err(|error| remote_error(format!("failed to create client lifecycle task group: {error}")))?;
+                .map_err(|source| network(connection_failed(TransportStage::Closed, source)))?;
             let generation = lifecycle.begin_start(task_group.clone())?;
             let token = generation.cancellation.clone();
 
             let scan_result = if lifecycle.should_fail_background_spawn() {
-                Err(remote_error("injected nameserver scan task spawn failure"))
+                Err(network(connection_failed_without_source(TransportStage::Closed)))
             } else {
                 let client = Arc::clone(self);
                 let scan_token = token.clone();
@@ -615,7 +618,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                             }
                         }
                     })
-                    .map_err(|error| remote_error(format!("failed to spawn nameserver scan task: {error}")))
+                    .map_err(|source| network(connection_failed(TransportStage::Closed, source)))
             };
             if let Err(error) = scan_result {
                 StartAttempt::Failed { generation, error }
@@ -656,7 +659,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     StartAttempt::Interrupted
                 } else {
                     let idle_result = if lifecycle.should_fail_background_spawn() {
-                        Err(remote_error("injected idle connection scan task spawn failure"))
+                        Err(network(connection_failed_without_source(TransportStage::Closed)))
                     } else {
                         let client = Arc::clone(self);
                         task_group
@@ -668,9 +671,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                                     }
                                 }
                             })
-                            .map_err(|error| {
-                                remote_error(format!("failed to spawn idle connection scan task: {error}"))
-                            })
+                            .map_err(|source| network(connection_failed(TransportStage::Closed, source)))
                     };
                     match idle_result {
                         Ok(_) => {
@@ -717,9 +718,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 self.lifecycle
                     .lock()
                     .restore_stopped_after_failed_start(generation.number);
-                Err(remote_error(
-                    "transport client lifecycle start continuation was not completed",
-                ))
+                Err(network(connection_failed_without_source(TransportStage::Closed)))
             }
         }
     }

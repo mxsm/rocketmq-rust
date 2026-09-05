@@ -24,8 +24,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_protocol::protocol::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
@@ -41,8 +41,12 @@ use tokio::sync::broadcast;
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
+use crate::connection::CommandSendOutcome;
 use crate::deadline::RequestDeadline;
 use crate::error::TransportError;
+use crate::error_helpers::connection_failed_without_source;
+use crate::error_helpers::response_timeout_caused_by_for_remote;
+use crate::error_helpers::TransportStage;
 use crate::server::SessionHandle;
 use crate::session_view::SessionId;
 use crate::session_view::SessionView;
@@ -190,6 +194,26 @@ pub enum ServerPushOutcome {
     SessionClosed,
 }
 
+enum ServerCommandDisposition {
+    Written,
+    QueueSaturated,
+    DeadlineExpired,
+    SessionClosed,
+    EncodingFailed(RocketMQError),
+    OperationalFailure(SharedError),
+}
+
+fn server_command_disposition(outcome: CommandSendOutcome) -> ServerCommandDisposition {
+    match outcome {
+        CommandSendOutcome::Written => ServerCommandDisposition::Written,
+        CommandSendOutcome::QueueSaturated => ServerCommandDisposition::QueueSaturated,
+        CommandSendOutcome::DeadlineExpired => ServerCommandDisposition::DeadlineExpired,
+        CommandSendOutcome::SessionClosed | CommandSendOutcome::Cancelled => ServerCommandDisposition::SessionClosed,
+        CommandSendOutcome::EncodingFailed(source) => ServerCommandDisposition::EncodingFailed(source),
+        CommandSendOutcome::OperationalFailure { error } => ServerCommandDisposition::OperationalFailure(error),
+    }
+}
+
 impl From<SessionCloseReason> for crate::server::SessionCloseCause {
     fn from(reason: SessionCloseReason) -> Self {
         match reason {
@@ -240,21 +264,26 @@ impl ServerPushSender {
     ) -> Result<ServerPushOutcome, TransportError> {
         let session_id = self.session_id();
         let kind = command.kind();
-        let _outbound_lease = match self.session.acquire_server_outbound("server-push") {
+        let _outbound_lease = match self.session.acquire_server_outbound() {
             Ok(lease) => lease,
             Err(_) => return Ok(ServerPushOutcome::SessionClosed),
         };
         let mut connection = self.session.connection();
-        match connection
-            .send_command_with_deadline(command.into_command(), RequestDeadline::after(timeout), "server-push")
-            .await
-        {
-            Ok(()) => Ok(ServerPushOutcome::Sent(ServerPushReceipt { session_id, kind })),
-            Err(RocketMQError::Network(NetworkError::QueueFull { .. })) => Ok(ServerPushOutcome::QueueSaturated),
-            Err(RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })) => {
-                Ok(ServerPushOutcome::DeadlineExpired)
-            }
-            Err(source) => Err(TransportError::push(source)),
+        match server_command_disposition(
+            connection
+                .send_command_outcome_with_deadline(
+                    command.into_command(),
+                    RequestDeadline::after(timeout),
+                    "server-push",
+                )
+                .await,
+        ) {
+            ServerCommandDisposition::Written => Ok(ServerPushOutcome::Sent(ServerPushReceipt { session_id, kind })),
+            ServerCommandDisposition::QueueSaturated => Ok(ServerPushOutcome::QueueSaturated),
+            ServerCommandDisposition::DeadlineExpired => Ok(ServerPushOutcome::DeadlineExpired),
+            ServerCommandDisposition::SessionClosed => Ok(ServerPushOutcome::SessionClosed),
+            ServerCommandDisposition::EncodingFailed(source) => Err(TransportError::push(source)),
+            ServerCommandDisposition::OperationalFailure(error) => Err(TransportError::push(error)),
         }
     }
 }
@@ -462,16 +491,6 @@ impl Drop for ServerRequestFailClosedGuard {
     }
 }
 
-fn write_failure_may_have_reached_socket(error: &RocketMQError) -> bool {
-    match error {
-        RocketMQError::Network(NetworkError::QueueFull { .. } | NetworkError::DeadlineExceededBeforeSend { .. }) => {
-            false
-        }
-        RocketMQError::Network(_) | RocketMQError::Shared(_) => true,
-        _ => false,
-    }
-}
-
 impl ServerRequestSender {
     /// Returns the canonical session identity owned by this sender.
     #[must_use]
@@ -503,7 +522,7 @@ impl ServerRequestSender {
     ) -> Result<ServerRequestOutcome, TransportError> {
         let session_id = self.session_id();
         let kind = command.kind();
-        let outbound_lease = match self.session.acquire_server_outbound("server-request") {
+        let outbound_lease = match self.session.acquire_server_outbound() {
             Ok(lease) => lease,
             Err(_) => return Ok(ServerRequestOutcome::SessionClosed),
         };
@@ -520,10 +539,12 @@ impl ServerRequestSender {
             response_tx,
         ) {
             Ok(guard) => guard,
-            Err(RocketMQError::Network(NetworkError::QueueFull { .. })) => {
+            Err(RocketMQError::Network(source))
+                if source.code() == rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED.code() =>
+            {
                 return Ok(ServerRequestOutcome::QueueSaturated)
             }
-            Err(RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })) => {
+            Err(RocketMQError::Network(source)) if source.code() == rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code() => {
                 return Ok(ServerRequestOutcome::DeadlineExpired)
             }
             Err(source) => {
@@ -536,21 +557,34 @@ impl ServerRequestSender {
         let mut connection = self.session.connection();
         let mut fail_closed = ServerRequestFailClosedGuard::new(self);
         fail_closed.arm();
-        let write_result = connection
-            .send_command_with_deadline(command, deadline, "server-request")
+        let write_outcome = connection
+            .send_command_outcome_with_deadline(command, deadline, "server-request")
             .await;
         drop(outbound_lease);
-        if let Err(source) = write_result {
-            if !write_failure_may_have_reached_socket(&source) {
+        match server_command_disposition(write_outcome) {
+            ServerCommandDisposition::Written => {}
+            normal @ (ServerCommandDisposition::QueueSaturated
+            | ServerCommandDisposition::DeadlineExpired
+            | ServerCommandDisposition::SessionClosed) => {
+                let outcome = match normal {
+                    ServerCommandDisposition::QueueSaturated => ServerRequestOutcome::QueueSaturated,
+                    ServerCommandDisposition::DeadlineExpired => ServerRequestOutcome::DeadlineExpired,
+                    ServerCommandDisposition::SessionClosed => ServerRequestOutcome::SessionClosed,
+                    _ => unreachable!("normal server-request dispositions are exhaustive"),
+                };
                 fail_closed.complete();
+                return Ok(outcome);
             }
-            return match source {
-                RocketMQError::Network(NetworkError::QueueFull { .. }) => Ok(ServerRequestOutcome::QueueSaturated),
-                RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. }) => {
-                    Ok(ServerRequestOutcome::DeadlineExpired)
-                }
-                source => Err(request_transport_error(crate::error::RequestOperation::Write, source)),
-            };
+            ServerCommandDisposition::EncodingFailed(source) => {
+                fail_closed.complete();
+                return Err(request_transport_error(crate::error::RequestOperation::Write, source));
+            }
+            ServerCommandDisposition::OperationalFailure(error) => {
+                return Err(TransportError::request_failed(
+                    crate::error::RequestOperation::Write,
+                    error,
+                ));
+            }
         }
 
         let response = match deadline.timeout(&mut response_rx).await {
@@ -559,16 +593,18 @@ impl ServerRequestSender {
             Ok(Err(_)) => {
                 return Err(TransportError::request_failed(
                     crate::error::RequestOperation::AwaitResponse,
-                    RocketMQError::network_connection_failed(
-                        "server-request",
-                        "response correlation owner was dropped",
-                    ),
+                    connection_failed_without_source(TransportStage::Closed),
                 ))
             }
-            Err(_) => {
-                let source = guard.expire("server-request");
+            Err(source) => {
+                let source = response_timeout_caused_by_for_remote(
+                    self.session.remote_addr().to_string(),
+                    deadline.budget_millis(),
+                    source,
+                );
+                let source = guard.expire_with_network(source);
                 self.session.terminate().await;
-                return Err(TransportError::request_failed(
+                return Err(request_transport_error(
                     crate::error::RequestOperation::AwaitResponse,
                     source,
                 ));
@@ -584,13 +620,9 @@ impl ServerRequestSender {
 }
 
 fn request_transport_error(operation: crate::error::RequestOperation, source: RocketMQError) -> TransportError {
-    if matches!(
-        source,
-        RocketMQError::Network(NetworkError::RequestTimeout { .. } | NetworkError::ConnectionTimeout { .. })
-    ) {
-        TransportError::request_timeout(operation, source)
-    } else {
-        TransportError::request_failed(operation, source)
+    match source {
+        RocketMQError::Network(source) => TransportError::request_failed(operation, source),
+        source => TransportError::request_failed(operation, source),
     }
 }
 
@@ -909,65 +941,40 @@ mod tests {
     }
 
     #[test]
-    fn request_timeout_classification_preserves_exact_sources_and_private_stages() {
-        let cases = [
-            (
-                crate::error::RequestOperation::Register,
-                "request_register",
-                NetworkError::request_timeout("private-register-endpoint", 10),
-            ),
-            (
-                crate::error::RequestOperation::Write,
-                "request_write",
-                NetworkError::ConnectionTimeout {
-                    addr: "private-write-endpoint".to_owned(),
-                    timeout_ms: 20,
-                },
-            ),
-            (
-                crate::error::RequestOperation::AwaitResponse,
-                "request_await_response",
-                NetworkError::request_timeout("private-await-endpoint", 30),
-            ),
-        ];
+    fn request_wrapper_keeps_r1_and_the_exact_stage_canonical_source() {
+        let stage =
+            crate::error_helpers::connection_failed_without_source(crate::error_helpers::TransportStage::Connect);
+        let error = request_transport_error(
+            crate::error::RequestOperation::Write,
+            RocketMQError::Network(Arc::clone(&stage)),
+        );
 
-        for (operation, expected_operation, source) in cases {
-            let error = request_transport_error(operation, RocketMQError::Network(source));
-            assert_eq!(error.code(), rocketmq_error::TRANSPORT_REQUEST_TIMEOUT.code());
-            let view = error.diagnostic_view().expect("request timeout diagnostic view");
-            assert!(view.fields().any(|field| {
-                field.name() == "operation" && field.value() == rocketmq_error::ViewValueRef::Text(expected_operation)
-            }));
-            assert!(matches!(
-                error.source().and_then(|source| source.downcast_ref::<RocketMQError>()),
-                Some(RocketMQError::Network(
-                    NetworkError::RequestTimeout { .. } | NetworkError::ConnectionTimeout { .. }
-                ))
-            ));
-        }
+        assert_eq!(error.code(), rocketmq_error::TRANSPORT_SESSION_FAILED.code());
+        assert_eq!(
+            error
+                .public_view()
+                .expect("request public view")
+                .projection()
+                .remoting(),
+            rocketmq_error::TRANSPORT_SESSION_FAILED.projection().remoting()
+        );
+        let retained_stage = error
+            .source()
+            .and_then(|source| source.downcast_ref::<rocketmq_error::SharedError>())
+            .expect("request wrapper must retain the stage canonical source");
+        assert!(Arc::ptr_eq(retained_stage, &stage));
+        assert_eq!(
+            retained_stage.code(),
+            rocketmq_error::TRANSPORT_CONNECTION_FAILED.code()
+        );
     }
 
     #[test]
-    fn other_deadline_failures_do_not_widen_the_request_timeout_descriptor() {
-        let sources = [
-            NetworkError::write_timeout("private-write-endpoint", 40),
-            NetworkError::deadline_exceeded_before_send("private-before-send-endpoint"),
-            NetworkError::response_timeout("private-await-endpoint", 50),
-        ];
-
-        for source in sources {
-            let error = request_transport_error(
-                crate::error::RequestOperation::AwaitResponse,
-                RocketMQError::Network(source),
-            );
-            assert_eq!(error.code(), rocketmq_error::TRANSPORT_SESSION_FAILED.code());
+    fn post_acquire_expected_close_outcomes_remain_normal_session_closure() {
+        for outcome in [CommandSendOutcome::SessionClosed, CommandSendOutcome::Cancelled] {
             assert!(matches!(
-                error.source().and_then(|source| source.downcast_ref::<RocketMQError>()),
-                Some(RocketMQError::Network(
-                    NetworkError::WriteTimeout { .. }
-                        | NetworkError::DeadlineExceededBeforeSend { .. }
-                        | NetworkError::ResponseTimeout { .. }
-                ))
+                server_command_disposition(outcome),
+                ServerCommandDisposition::SessionClosed
             ));
         }
     }

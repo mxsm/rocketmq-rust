@@ -18,6 +18,7 @@ use std::error::Error;
 use std::fmt;
 
 use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 
 const RESERVED_RESPONSE_OWNER_ID: u64 = u64::MAX;
 
@@ -135,7 +136,7 @@ pub(crate) enum ResponseOperationalFailure {
         /// Progress made by the canonical writer before the failure.
         progress: WriteProgress,
         /// Typed transport failure preserved for programmatic inspection.
-        source: RocketMQError,
+        source: SharedError,
     },
 }
 
@@ -188,7 +189,7 @@ impl ResponseOperationalFailure {
         Self::Encode { source }
     }
 
-    pub(crate) const fn transport(progress: WriteProgress, source: RocketMQError) -> Self {
+    pub(crate) const fn transport(progress: WriteProgress, source: SharedError) -> Self {
         Self::Transport { progress, source }
     }
 
@@ -274,7 +275,8 @@ impl fmt::Display for ResponseOperationalFailure {
 impl Error for ResponseOperationalFailure {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Encode { source } | Self::Transport { source, .. } => Some(source),
+            Self::Encode { source } => Some(source),
+            Self::Transport { source, .. } => Some(source.as_ref()),
         }
     }
 }
@@ -336,8 +338,11 @@ impl ResponseDisposition {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::sync::Arc;
 
+    use rocketmq_error::Error as CanonicalError;
     use rocketmq_error::ErrorKind;
+    use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 
     use super::*;
 
@@ -355,7 +360,7 @@ mod tests {
             (
                 ResponseOperationalFailure::Transport {
                     progress: WriteProgress::NotStarted,
-                    source: RocketMQError::InvalidProperty("transport-canary".to_owned()),
+                    source: Arc::new(CanonicalError::new(&TRANSPORT_CONNECTION_FAILED)),
                 },
                 "transport",
                 WriteProgress::NotStarted,
@@ -364,7 +369,7 @@ mod tests {
             (
                 ResponseOperationalFailure::Transport {
                     progress: WriteProgress::PossiblyPartial,
-                    source: RocketMQError::InvalidProperty("partial-canary".to_owned()),
+                    source: Arc::new(CanonicalError::new(&TRANSPORT_CONNECTION_FAILED)),
                 },
                 "transport",
                 WriteProgress::PossiblyPartial,
@@ -381,29 +386,29 @@ mod tests {
 
     #[test]
     fn source_errors_retain_their_concrete_type_and_identity() {
-        let errors = [
-            ResponseOperationalFailure::Encode {
-                source: RocketMQError::InvalidProperty("encode-source-canary".to_owned()),
-            },
-            ResponseOperationalFailure::Transport {
-                progress: WriteProgress::NotStarted,
-                source: RocketMQError::InvalidProperty("transport-source-canary".to_owned()),
-            },
-        ];
+        let encode = ResponseOperationalFailure::Encode {
+            source: RocketMQError::InvalidProperty("encode-source-canary".to_owned()),
+        };
+        let ResponseOperationalFailure::Encode { source: expected } = &encode else {
+            unreachable!()
+        };
+        let source = Error::source(&encode).expect("encode error should preserve its source");
+        let typed = source
+            .downcast_ref::<RocketMQError>()
+            .expect("encode source should remain a RocketMQError");
+        assert!(std::ptr::eq(typed, expected));
+        assert_eq!(typed.kind(), ErrorKind::InvalidProperty);
 
-        for error in &errors {
-            let expected = match error {
-                ResponseOperationalFailure::Encode { source }
-                | ResponseOperationalFailure::Transport { source, .. } => source,
-            };
-            let source = Error::source(error).expect("response error should preserve its source");
-            let typed = source
-                .downcast_ref::<RocketMQError>()
-                .expect("response source should remain a RocketMQError");
-
-            assert!(std::ptr::eq(typed, expected));
-            assert_eq!(typed.kind(), ErrorKind::InvalidProperty);
-        }
+        let canonical = Arc::new(CanonicalError::new(&TRANSPORT_CONNECTION_FAILED));
+        let transport = ResponseOperationalFailure::Transport {
+            progress: WriteProgress::NotStarted,
+            source: Arc::clone(&canonical),
+        };
+        let source = Error::source(&transport).expect("transport error should preserve its canonical source");
+        let typed = source
+            .downcast_ref::<CanonicalError>()
+            .expect("transport source should remain the canonical Error");
+        assert!(std::ptr::eq(typed, canonical.as_ref()));
     }
 
     #[test]
@@ -415,7 +420,7 @@ mod tests {
             },
             ResponseOperationalFailure::Transport {
                 progress: WriteProgress::PossiblyPartial,
-                source: RocketMQError::InvalidProperty(CANARY.to_owned()),
+                source: Arc::new(CanonicalError::new(&TRANSPORT_CONNECTION_FAILED)),
             },
         ];
 
@@ -427,8 +432,8 @@ mod tests {
                 "display leaked sensitive source text: {display}"
             );
             assert!(!debug.contains(CANARY), "debug leaked sensitive source text: {debug}");
-            assert!(display.contains("source_code=INVALID_PROPERTY"));
-            assert!(debug.contains("source_code: \"INVALID_PROPERTY\""));
+            assert!(display.contains("source_code="));
+            assert!(debug.contains("source_code:"));
         }
     }
 }

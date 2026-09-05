@@ -30,7 +30,6 @@ use rocketmq_error::FilterError;
 use rocketmq_error::GrpcPayloadCode;
 use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::HttpStatusCode;
-use rocketmq_error::NetworkError;
 use rocketmq_error::ObservabilityError;
 use rocketmq_error::ProtocolError;
 use rocketmq_error::PublicErrorView;
@@ -901,7 +900,7 @@ fn shared_filter_view_keeps_the_same_descriptor_and_projection() {
 }
 
 #[test]
-fn the_three_corrected_legacy_backoff_associations_publish_never() {
+fn the_two_retained_corrected_legacy_backoff_associations_publish_never() {
     let cases = [
         (
             "retry budget",
@@ -911,11 +910,6 @@ fn the_three_corrected_legacy_backoff_associations_publish_never() {
                 max: 3,
             },
             "client.retry.budget_exhausted",
-        ),
-        (
-            "invalid endpoint",
-            RocketMQError::Network(NetworkError::InvalidAddress { addr: "bad".into() }),
-            "transport.endpoint.invalid",
         ),
         (
             "unsupported RPC request",
@@ -938,123 +932,6 @@ fn the_three_corrected_legacy_backoff_associations_publish_never() {
             "shared descriptor for {label}"
         );
         assert_eq!(shared.recovery_hint(), RecoveryHint::Never, "shared hint for {label}");
-    }
-}
-
-fn assert_network(label: &'static str, error: NetworkError, expected: Expected) {
-    assert_domain_error(&error, label, expected);
-    assert_case(Case {
-        label,
-        error: RocketMQError::Network(error),
-        expected,
-    });
-}
-
-#[test]
-fn network_leaves_keep_remoting_two_and_gain_final_semantics() {
-    let cases = [
-        (
-            "ConnectionFailed",
-            NetworkError::ConnectionFailed {
-                addr: "127.0.0.1:10911".into(),
-                reason: "refused".into(),
-            },
-            unavailable("transport.connection.failed", 2),
-        ),
-        (
-            "ConnectionTimeout",
-            NetworkError::ConnectionTimeout {
-                addr: "127.0.0.1:10911".into(),
-                timeout_ms: 100,
-            },
-            timeout("transport.connection.timeout", 2),
-        ),
-        (
-            "ConnectionClosed",
-            NetworkError::ConnectionClosed {
-                addr: "127.0.0.1:10911".into(),
-            },
-            unavailable("transport.connection.failed", 2),
-        ),
-        (
-            "SendFailed",
-            NetworkError::SendFailed {
-                addr: "127.0.0.1:10911".into(),
-                reason: "closed".into(),
-            },
-            unavailable("transport.connection.failed", 2),
-        ),
-        (
-            "ReceiveFailed",
-            NetworkError::ReceiveFailed {
-                addr: "127.0.0.1:10911".into(),
-                reason: "closed".into(),
-            },
-            unavailable("transport.connection.failed", 2),
-        ),
-        (
-            "InvalidAddress",
-            NetworkError::InvalidAddress { addr: "bad".into() },
-            invalid("transport.endpoint.invalid", 2),
-        ),
-        (
-            "DnsResolutionFailed",
-            NetworkError::DnsResolutionFailed {
-                host: "broker.example".into(),
-                reason: "not found".into(),
-            },
-            unavailable("transport.dns.failed", 2),
-        ),
-        (
-            "TooManyRequests",
-            NetworkError::TooManyRequests {
-                addr: "127.0.0.1:10911".into(),
-                limit: 32,
-            },
-            capacity("transport.remote.rate_limited", 2),
-        ),
-        (
-            "QueueFull",
-            NetworkError::QueueFull {
-                addr: "127.0.0.1:10911".into(),
-            },
-            capacity("transport.admission.queue_saturated", 2),
-        ),
-        (
-            "DeadlineExceededBeforeSend",
-            NetworkError::DeadlineExceededBeforeSend {
-                addr: "127.0.0.1:10911".into(),
-            },
-            timeout("transport.write.timeout", 2),
-        ),
-        (
-            "WriteTimeout",
-            NetworkError::WriteTimeout {
-                addr: "127.0.0.1:10911".into(),
-                timeout_ms: 100,
-            },
-            timeout("transport.write.timeout", 2),
-        ),
-        (
-            "ResponseTimeout",
-            NetworkError::ResponseTimeout {
-                addr: "127.0.0.1:10911".into(),
-                timeout_ms: 100,
-            },
-            timeout("transport.response.timeout", 2),
-        ),
-        (
-            "RequestTimeout",
-            NetworkError::RequestTimeout {
-                addr: "127.0.0.1:10911".into(),
-                timeout_ms: 100,
-            },
-            timeout("transport.response.timeout", 2),
-        ),
-    ];
-    assert_eq!(cases.len(), 13);
-    for (label, error, expected) in cases {
-        assert_network(label, error, expected);
     }
 }
 

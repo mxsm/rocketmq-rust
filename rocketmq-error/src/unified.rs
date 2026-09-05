@@ -18,7 +18,6 @@
 //! for all RocketMQ operations. All errors are categorized into logical groups for
 //! better debuggability and maintainability.
 
-mod network;
 mod protocol;
 mod rpc;
 mod serialization;
@@ -38,7 +37,7 @@ use crate::fields;
 use crate::kind::ErrorKind;
 use crate::shared::SharedRocketMQError;
 use crate::ErrorDescriptor;
-pub use network::NetworkError;
+use crate::SharedError;
 pub use protocol::ProtocolError;
 pub use rpc::RpcClientError;
 pub use serialization::SerializationError;
@@ -67,17 +66,6 @@ pub use crate::controller_error::ControllerError;
 /// use rocketmq_error::RocketMQError;
 /// use rocketmq_error::RocketMQResult;
 ///
-/// fn send_message(addr: &str) -> RocketMQResult<()> {
-///     // Create a network error
-///     if addr.is_empty() {
-///         return Err(RocketMQError::network_connection_failed(
-///             "localhost:9876",
-///             "empty address",
-///         ));
-///     }
-///     Ok(())
-/// }
-///
 /// fn authenticate_user(username: &str) -> RocketMQResult<()> {
 ///     // Create an authentication error
 ///     if username.is_empty() {
@@ -95,9 +83,9 @@ pub enum RocketMQError {
     // ============================================================================
     // Network Errors
     // ============================================================================
-    /// Network operation errors (connection, timeout, send/receive failures)
+    /// Canonical Network failure selected by the transport operation owner.
     #[error(transparent)]
-    Network(#[from] NetworkError),
+    Network(SharedError),
 
     // ============================================================================
     // Serialization Errors
@@ -811,7 +799,7 @@ impl RocketMQError {
     pub fn context(&self) -> ErrorContext {
         match self {
             Self::Shared(error) => error.as_error().context(),
-            Self::Network(error) => error.context(),
+            Self::Network(error) => error.context().clone(),
             Self::Serialization(error) => error.context(),
             Self::Protocol(error) => error.context(),
             Self::Rpc(error) => error.context(),
@@ -971,54 +959,6 @@ impl RocketMQError {
     #[inline]
     pub fn boundary_view(&self) -> BoundaryErrorView {
         BoundaryErrorView::new(self.descriptor(), self.context())
-    }
-
-    /// Create a network connection failed error
-    #[inline]
-    pub fn network_connection_failed(addr: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::Network(NetworkError::connection_failed(addr, reason))
-    }
-
-    /// Create a network timeout error
-    #[inline]
-    pub fn network_timeout(addr: impl Into<String>, timeout: std::time::Duration) -> Self {
-        Self::Network(NetworkError::request_timeout(addr, timeout.as_millis() as u64))
-    }
-
-    /// Create a connection-stage timeout error.
-    #[inline]
-    pub fn network_connection_timeout(addr: impl Into<String>, timeout_millis: u64) -> Self {
-        Self::Network(NetworkError::connection_timeout(addr, timeout_millis))
-    }
-
-    /// Create an outbound queue capacity error.
-    #[inline]
-    pub fn network_queue_full(addr: impl Into<String>) -> Self {
-        Self::Network(NetworkError::queue_full(addr))
-    }
-
-    /// Create a request-expired-before-send error.
-    #[inline]
-    pub fn network_deadline_exceeded_before_send(addr: impl Into<String>) -> Self {
-        Self::Network(NetworkError::deadline_exceeded_before_send(addr))
-    }
-
-    /// Create a socket write timeout error.
-    #[inline]
-    pub fn network_write_timeout(addr: impl Into<String>, timeout_millis: u64) -> Self {
-        Self::Network(NetworkError::write_timeout(addr, timeout_millis))
-    }
-
-    /// Create a response-stage timeout error.
-    #[inline]
-    pub fn network_response_timeout(addr: impl Into<String>, timeout_millis: u64) -> Self {
-        Self::Network(NetworkError::response_timeout(addr, timeout_millis))
-    }
-
-    /// Create a network request failed error
-    #[inline]
-    pub fn network_request_failed(addr: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::Network(NetworkError::send_failed(addr, reason))
     }
 
     /// Create a deserialization failed error
@@ -1485,9 +1425,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_creation() {
-        let err = RocketMQError::network_connection_failed("127.0.0.1:9876", "timeout");
-        assert!(err.to_string().contains("Connection failed"));
+    fn network_envelope_delegates_to_one_canonical_error() {
+        let canonical = std::sync::Arc::new(crate::Error::new(&TRANSPORT_CONNECTION_FAILED));
+        let error = RocketMQError::Network(std::sync::Arc::clone(&canonical));
+
+        assert_eq!(error.descriptor().code(), TRANSPORT_CONNECTION_FAILED.code());
+        let RocketMQError::Network(retained) = error else {
+            panic!("expected the canonical Network carrier")
+        };
+        assert!(std::sync::Arc::ptr_eq(&canonical, &retained));
     }
 
     #[test]

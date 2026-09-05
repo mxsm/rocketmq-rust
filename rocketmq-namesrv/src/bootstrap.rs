@@ -2323,8 +2323,8 @@ mod tests {
                         cancellation.cancelled().await;
                     })
                     .map_err(|error| namesrv_startup_failed("start test route lookup task", error))?;
-                Err(RocketMQError::network_connection_failed(
-                    "namesrv.test-partial-route-lookup",
+                Err(namesrv_startup_failed(
+                    "start test partial route lookup",
                     "simulated partial startup failure",
                 ))
             })
@@ -2341,8 +2341,9 @@ mod tests {
                     .task_group
                     .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
                     .await;
-                report.assert_no_task_leak().map_err(|error| {
-                    RocketMQError::network_connection_failed("namesrv.test-partial-route-lookup", error)
+                report.assert_no_task_leak().map_err(|error| RocketMQError::Internal {
+                    operation: "shutdown test route lookup",
+                    source: Box::new(std::io::Error::other(error)),
                 })
             })
         }

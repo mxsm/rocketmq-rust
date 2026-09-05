@@ -46,6 +46,19 @@ pub(crate) struct OnewayEnvelope {
     pub(crate) send: OnewaySend,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnewayAdmissionOutcome {
+    Accepted,
+    Rejected(OnewayAdmissionRejection),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnewayAdmissionRejection {
+    DeadlineExpired,
+    Capacity,
+    Closed,
+}
+
 struct ReservedEnvelope {
     envelope: OnewayEnvelope,
     permit: ResourcePermit,
@@ -141,43 +154,37 @@ impl BoundedEgress {
     pub(crate) fn try_admit<F>(
         &self,
         retained_bytes: usize,
-        target: &str,
         deadline: RequestDeadline,
         build: F,
-    ) -> RocketMQResult<()>
+    ) -> RocketMQResult<OnewayAdmissionOutcome>
     where
         F: FnOnce() -> RocketMQResult<OnewayEnvelope>,
     {
-        deadline.ensure_before_send(target.to_owned())?;
+        if deadline.is_expired() {
+            return Ok(self.reject(OnewayAdmissionRejection::DeadlineExpired));
+        }
         let sender = self.sender.lock();
-        let sender = sender.as_ref().ok_or_else(|| {
-            self.metrics.rejected.fetch_add(1, Ordering::Relaxed);
-            self.client_metrics.record_oneway_egress_event("rejected");
-            RocketMQError::network_connection_failed(target.to_owned(), "producer one-way egress is closed")
-        })?;
-        let permit = self.budget.try_acquire_data(retained_bytes).map_err(|_| {
-            self.metrics.rejected.fetch_add(1, Ordering::Relaxed);
-            self.client_metrics.record_oneway_egress_event("rejected");
-            RocketMQError::network_queue_full(target.to_owned())
-        })?;
+        let Some(sender) = sender.as_ref() else {
+            return Ok(self.reject(OnewayAdmissionRejection::Closed));
+        };
+        let Ok(permit) = self.budget.try_acquire_data(retained_bytes) else {
+            return Ok(self.reject(OnewayAdmissionRejection::Capacity));
+        };
         let envelope = build()?;
-        envelope.deadline.ensure_before_send(target.to_owned())?;
-        sender
-            .try_send(ReservedEnvelope { envelope, permit })
-            .map_err(|error| {
-                self.metrics.rejected.fetch_add(1, Ordering::Relaxed);
-                self.client_metrics.record_oneway_egress_event("rejected");
-                match error {
-                    mpsc::error::TrySendError::Full(_) => RocketMQError::network_queue_full(target.to_owned()),
-                    mpsc::error::TrySendError::Closed(_) => {
-                        RocketMQError::network_connection_failed(target.to_owned(), "producer one-way egress is closed")
-                    }
-                }
-            })?;
+        if envelope.deadline.is_expired() {
+            return Ok(self.reject(OnewayAdmissionRejection::DeadlineExpired));
+        }
+        if let Err(error) = sender.try_send(ReservedEnvelope { envelope, permit }) {
+            let rejection = match error {
+                mpsc::error::TrySendError::Full(_) => OnewayAdmissionRejection::Capacity,
+                mpsc::error::TrySendError::Closed(_) => OnewayAdmissionRejection::Closed,
+            };
+            return Ok(self.reject(rejection));
+        }
         self.metrics.accepted.fetch_add(1, Ordering::Relaxed);
         self.client_metrics.record_oneway_egress_event("accepted");
         self.record_state();
-        Ok(())
+        Ok(OnewayAdmissionOutcome::Accepted)
     }
 
     pub(crate) fn close(&self) {
@@ -212,6 +219,13 @@ impl BoundedEgress {
             0,
             0,
         );
+    }
+
+    fn reject(&self, rejection: OnewayAdmissionRejection) -> OnewayAdmissionOutcome {
+        self.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        self.client_metrics.record_oneway_egress_event("rejected");
+        self.record_state();
+        OnewayAdmissionOutcome::Rejected(rejection)
     }
 }
 
@@ -325,13 +339,17 @@ mod tests {
         let (_owner, egress, _tracker, _cancellation) = fixture();
         let permit = egress.try_reserve(64).expect("fill byte budget");
         let built = AtomicU64::new(0);
-        let result = egress.try_admit(1, "broker", RequestDeadline::after(Duration::from_secs(1)), || {
+        let result = egress.try_admit(1, RequestDeadline::after(Duration::from_secs(1)), || {
             built.fetch_add(1, Ordering::Relaxed);
             unreachable!("overload must reject before building")
         });
 
-        assert!(result.is_err());
+        assert_eq!(
+            result.expect("capacity is a normal rejection"),
+            OnewayAdmissionOutcome::Rejected(OnewayAdmissionRejection::Capacity)
+        );
         assert_eq!(built.load(Ordering::Relaxed), 0);
+        assert_eq!(egress.snapshot().rejected, 1);
         drop(permit);
     }
 
@@ -339,23 +357,31 @@ mod tests {
     fn closed_and_expired_admission_do_not_run_the_builder() {
         let (_owner, egress, _tracker, _cancellation) = fixture();
         egress.close();
-        let closed = egress.try_admit(1, "broker", RequestDeadline::after(Duration::from_secs(1)), || {
+        let closed = egress.try_admit(1, RequestDeadline::after(Duration::from_secs(1)), || {
             unreachable!("closed egress must reject before building")
         });
-        assert!(closed.is_err());
+        assert_eq!(
+            closed.expect("closed admission is a normal rejection"),
+            OnewayAdmissionOutcome::Rejected(OnewayAdmissionRejection::Closed)
+        );
+        assert_eq!(egress.snapshot().rejected, 1);
 
         let (_owner, open, _tracker, _cancellation) = fixture();
-        let expired = open.try_admit(1, "broker", RequestDeadline::from_timeout_millis(0), || {
+        let expired = open.try_admit(1, RequestDeadline::from_timeout_millis(0), || {
             unreachable!("expired egress admission must reject before building")
         });
-        assert!(expired.is_err());
+        assert_eq!(
+            expired.expect("expired admission is a normal rejection"),
+            OnewayAdmissionOutcome::Rejected(OnewayAdmissionRejection::DeadlineExpired)
+        );
+        assert_eq!(open.snapshot().rejected, 1);
     }
 
     #[test]
     fn builder_panic_releases_the_process_reservation() {
         let (_owner, egress, _tracker, _cancellation) = fixture();
         let panic = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let _ = egress.try_admit(32, "broker", RequestDeadline::after(Duration::from_secs(1)), || {
+            let _ = egress.try_admit(32, RequestDeadline::after(Duration::from_secs(1)), || {
                 panic!("synthetic builder panic")
             });
         }));

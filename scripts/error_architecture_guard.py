@@ -749,7 +749,7 @@ def check_error_descriptor_contract() -> list[Finding]:
             "BoundaryErrorView::new(self.descriptor(), self.context())",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_descriptor_catalog.rs": [
-            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 98",
+            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 97",
             "descriptor_catalog_snapshot_is_exact",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [

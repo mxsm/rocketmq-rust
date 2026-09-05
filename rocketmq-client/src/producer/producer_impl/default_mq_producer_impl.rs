@@ -76,8 +76,10 @@ use crate::base::client_options::ClientOptions;
 use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
 use crate::common::client_error_code::ClientErrorCode;
+use crate::common::retry_decision::is_network_send_failure;
 use crate::common::retry_decision::producer_send_fault_decision;
 use crate::common::retry_decision::producer_send_retry_decision;
+use crate::common::retry_decision::retry_policy_error;
 use crate::common::retry_decision::ClientRetryDecision;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::check_forbidden_context::CheckForbiddenContext;
@@ -99,6 +101,7 @@ use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM;
 use crate::producer::default_mq_producer::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE;
 use crate::producer::local_transaction_state::LocalTransactionState;
 use crate::producer::producer_impl::egress::BoundedEgress;
+use crate::producer::producer_impl::egress::OnewayAdmissionOutcome;
 use crate::producer::producer_impl::egress::OnewayEgressSnapshot;
 use crate::producer::producer_impl::egress::OnewayEnvelope;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
@@ -328,20 +331,21 @@ impl RetryState {
         );
 
         if let Some(ref err) = self.last_error {
-            match err {
+            let policy_error = retry_policy_error(err);
+            if matches!(
+                policy_error,
                 rocketmq_error::RocketMQError::IllegalArgument(_)
-                | rocketmq_error::RocketMQError::Timeout { .. }
-                | rocketmq_error::RocketMQError::BrokerOperationFailed { .. }
-                | rocketmq_error::RocketMQError::Network(_) => {
-                    mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
-                }
-                _ => {
-                    // For other error types, create a new error with info
-                    mq_client_err!(
-                        ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                        format!("{}: {}", info, err)
-                    )
-                }
+                    | rocketmq_error::RocketMQError::Timeout { .. }
+                    | rocketmq_error::RocketMQError::BrokerOperationFailed { .. }
+            ) || is_network_send_failure(policy_error)
+            {
+                mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
+            } else {
+                // For other error types, create a new error with info
+                mq_client_err!(
+                    ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                    format!("{}: {}", info, err)
+                )
             }
         } else {
             mq_client_err!(info)

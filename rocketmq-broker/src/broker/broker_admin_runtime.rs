@@ -646,12 +646,7 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
                             .register_runtime_config_snapshot()
                             .await
                             .map(|_| ())
-                            .map_err(|error| {
-                                rocketmq_error::RocketMQError::network_connection_failed(
-                                    "broker-runtime-config-registration",
-                                    error.to_string(),
-                                )
-                            })
+                            .or_else(|error| error.into_coordination_result("broker runtime config registration"))
                     })
                 })
             });

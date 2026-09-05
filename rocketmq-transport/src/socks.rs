@@ -27,6 +27,13 @@ use tokio::net::TcpStream;
 use zeroize::Zeroizing;
 
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::connection_failed_for_remote;
+use crate::error_helpers::connection_failed_without_source_for_remote;
+use crate::error_helpers::connection_timeout_caused_by;
+use crate::error_helpers::dns_failed;
+use crate::error_helpers::endpoint_invalid;
+use crate::error_helpers::network;
+use crate::error_helpers::TransportStage;
 
 /// A validated, deterministic routing table parsed from Java's SOCKS proxy JSON shape.
 #[derive(Clone, Default)]
@@ -159,8 +166,14 @@ impl SocksProxyRoute {
         let mut stream = deadline
             .timeout(TcpStream::connect(&endpoint))
             .await
-            .map_err(|_| RocketMQError::network_connection_timeout(endpoint.clone(), deadline.budget_millis()))?
-            .map_err(|error| RocketMQError::network_connection_failed(endpoint.clone(), error.to_string()))?;
+            .map_err(|source| {
+                network(connection_timeout_caused_by(
+                    &endpoint,
+                    deadline.budget_millis(),
+                    source,
+                ))
+            })?
+            .map_err(|source| network(connection_failed_for_remote(&endpoint, TransportStage::Connect, source)))?;
         deadline
             .timeout(negotiate(
                 &mut stream,
@@ -169,7 +182,13 @@ impl SocksProxyRoute {
                 target_port,
             ))
             .await
-            .map_err(|_| RocketMQError::network_connection_timeout(endpoint.clone(), deadline.budget_millis()))??;
+            .map_err(|source| {
+                network(connection_timeout_caused_by(
+                    &endpoint,
+                    deadline.budget_millis(),
+                    source,
+                ))
+            })??;
         Ok(stream)
     }
 
@@ -186,7 +205,13 @@ impl SocksProxyRoute {
         deadline
             .timeout(crate::tls::connect_tls_stream(stream, target_host, tls_config))
             .await
-            .map_err(|_| RocketMQError::network_connection_timeout(target_host, deadline.budget_millis()))?
+            .map_err(|source| {
+                network(connection_timeout_caused_by(
+                    target_host,
+                    deadline.budget_millis(),
+                    source,
+                ))
+            })?
     }
 }
 
@@ -197,14 +222,23 @@ pub(crate) async fn connect_target(
     deadline: RequestDeadline,
 ) -> RocketMQResult<TcpStream> {
     let (host, port) = split_host_port(authority)?;
+    if host.is_empty() || host.as_bytes().contains(&0) {
+        return Err(network(endpoint_invalid(true)));
+    }
     let resolved_ip = match resolved_addr {
         Some(address) => Some(address.ip()),
         None if config.route_for(host, None).is_none() && !config.is_empty() => {
             let addresses = deadline
                 .timeout(tokio::net::lookup_host(authority))
                 .await
-                .map_err(|_| RocketMQError::network_connection_timeout(authority, deadline.budget_millis()))?
-                .map_err(|error| RocketMQError::network_connection_failed(authority, error.to_string()))?;
+                .map_err(|source| {
+                    network(connection_timeout_caused_by(
+                        authority,
+                        deadline.budget_millis(),
+                        source,
+                    ))
+                })?
+                .map_err(|source| network(dns_failed(source)))?;
             let mut first_ip = None;
             let mut matching_ip = None;
             for address in addresses {
@@ -227,8 +261,14 @@ pub(crate) async fn connect_target(
     deadline
         .timeout(TcpStream::connect(&destination))
         .await
-        .map_err(|_| RocketMQError::network_connection_timeout(authority, deadline.budget_millis()))?
-        .map_err(|error| RocketMQError::network_connection_failed(authority, error.to_string()))
+        .map_err(|source| {
+            network(connection_timeout_caused_by(
+                authority,
+                deadline.budget_millis(),
+                source,
+            ))
+        })?
+        .map_err(|source| network(connection_failed_for_remote(authority, TransportStage::Connect, source)))
 }
 
 impl ProxyEndpoint {
@@ -418,9 +458,16 @@ fn invalid_config(reason: &'static str) -> RocketMQError {
 }
 
 fn proxy_io_error(error: std::io::Error) -> RocketMQError {
-    RocketMQError::network_connection_failed("socks5-proxy", error.to_string())
+    network(connection_failed_for_remote(
+        "socks5-proxy",
+        TransportStage::Connect,
+        error,
+    ))
 }
 
-fn proxy_protocol_error(reason: &'static str) -> RocketMQError {
-    RocketMQError::network_connection_failed("socks5-proxy", reason)
+fn proxy_protocol_error(_reason: &'static str) -> RocketMQError {
+    network(connection_failed_without_source_for_remote(
+        "socks5-proxy",
+        TransportStage::Connect,
+    ))
 }

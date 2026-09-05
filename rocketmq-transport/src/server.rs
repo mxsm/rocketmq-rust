@@ -28,7 +28,6 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use futures_util::StreamExt;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::SharedRocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -70,6 +69,10 @@ use crate::dispatch::DeferredSessionCleanupReport;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
 use crate::dispatch::ResponseDeliveryContext;
+use crate::error_helpers::connection_failed;
+use crate::error_helpers::connection_failed_without_source;
+use crate::error_helpers::network;
+use crate::error_helpers::TransportStage;
 use crate::file_region::FileTransferMode;
 use crate::proxy_protocol::read_proxy_protocol;
 use crate::proxy_protocol::ProxyProtocolConfig;
@@ -277,10 +280,7 @@ impl Drop for SessionCloseCompletionGuard {
         }
         self.session.abort();
         let writer = self.session.writer_snapshot();
-        let error = SharedRocketMQError::new(RocketMQError::network_connection_failed(
-            "transport-session-close",
-            "session finalizer exited before ordered close completion",
-        ));
+        let error = SharedRocketMQError::new(network(connection_failed_without_source(TransportStage::Closed)));
         self.session.send.close_coordinator.complete(SessionCloseCompletion {
             snapshot: SessionCloseCompletionSnapshot {
                 healthy: false,
@@ -334,12 +334,10 @@ impl SessionCloseCoordinator {
                 );
                 return Ok(completed);
             }
-            completion.changed().await.map_err(|_| {
-                RocketMQError::network_connection_failed(
-                    "transport-session-close",
-                    "session close coordinator retired before completion",
-                )
-            })?;
+            completion
+                .changed()
+                .await
+                .map_err(|source| network(connection_failed(TransportStage::Closed, source)))?;
         }
     }
 
@@ -426,12 +424,8 @@ impl SessionCloseReport {
             writer_queued_bytes: self.writer.snapshot.queued_bytes,
         };
         let error = self.writer.failure.clone().or_else(|| {
-            (!snapshot.healthy).then(|| {
-                SharedRocketMQError::new(RocketMQError::network_connection_failed(
-                    "transport-session-close",
-                    "session close report is unhealthy",
-                ))
-            })
+            (!snapshot.healthy)
+                .then(|| SharedRocketMQError::new(network(connection_failed_without_source(TransportStage::Closed))))
         });
         SessionCloseCompletion { snapshot, error }
     }
@@ -458,10 +452,9 @@ impl Default for SessionIoPolicy {
 impl SessionIoPolicy {
     fn validate(self) -> RocketMQResult<Self> {
         if self.idle_timeout.is_zero() {
-            return Err(RocketMQError::network_connection_failed(
-                "transport-session-policy",
-                "idle timeout must be greater than zero",
-            ));
+            return Err(network(connection_failed_without_source(
+                TransportStage::EndpointValidation,
+            )));
         }
         self.writer_queue.validate()?;
         Ok(self)
@@ -702,10 +695,11 @@ impl SessionHandle {
         outcome
     }
 
-    pub(crate) fn acquire_server_outbound(&self, target: &'static str) -> RocketMQResult<ServerOutboundLease> {
-        self.send.server_outbound.acquire().ok_or_else(|| {
-            RocketMQError::network_connection_failed(target, "server-originated outbound admission is closed")
-        })
+    pub(crate) fn acquire_server_outbound(&self) -> RocketMQResult<ServerOutboundLease> {
+        self.send
+            .server_outbound
+            .acquire()
+            .ok_or_else(|| network(connection_failed_without_source(TransportStage::Closed)))
     }
 
     pub(crate) fn close_requested(&self) -> bool {
@@ -739,10 +733,7 @@ impl SessionHandle {
             Ok(result) => result,
             Err(_) => {
                 self.abort();
-                Err(rocketmq_error::RocketMQError::network_connection_failed(
-                    "transport-session-writer",
-                    "writer retirement exceeded its absolute deadline",
-                ))
+                Err(network(connection_failed_without_source(TransportStage::Closed)))
             }
         };
         retirement_guard.complete();
@@ -759,24 +750,18 @@ impl SessionHandle {
         self.send.lifecycle.begin_retirement().await;
         let (completion, result) = tokio::sync::oneshot::channel();
         let send_result = self.send.writer.close(completion).await;
-        if send_result.is_err() {
+        if let Err(source) = send_result {
             let _ = self.send.session_closed_tx.send(true);
             let _ = self.send.state_tx.send(ConnectionState::Closed);
             self.send.reader_cancellation.cancel();
             self.request_operation.cancel();
             self.send.writer_operation.cancel();
             self.send.task_group.abort_task(self.send.writer_task_id);
-            return Err(rocketmq_error::RocketMQError::network_connection_failed(
-                "transport-session-writer",
-                "writer queue closed before retirement",
-            ));
+            return Err(network(connection_failed(TransportStage::Closed, source)));
         }
-        let close_result = result.await.unwrap_or_else(|_| {
-            Err(rocketmq_error::RocketMQError::network_connection_failed(
-                "transport-session-writer",
-                "writer retirement completion dropped",
-            ))
-        });
+        let close_result = result
+            .await
+            .unwrap_or_else(|source| Err(network(connection_failed(TransportStage::Closed, source))));
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
@@ -1182,10 +1167,7 @@ impl TransportListener {
             let local_addr = stream.local_addr()?;
             let Some(session_id) = reserve_session_owner() else {
                 drop(stream);
-                return Err(RocketMQError::network_connection_failed(
-                    "transport-session-owner",
-                    "process-local session owner namespace exhausted",
-                ));
+                return Err(network(connection_failed_without_source(TransportStage::Closed)));
             };
             let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
             let crate::admission::AdmissionOutcome::Acquired(connection_permit) = admission.try_acquire(
@@ -2213,7 +2195,6 @@ mod retirement_tests {
     use std::task::Poll;
     use std::time::Duration;
 
-    use rocketmq_error::NetworkError;
     use rocketmq_error::RocketMQError;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::RemotingCommandType;
@@ -2264,9 +2245,8 @@ mod retirement_tests {
         assert!(healthy.is_healthy());
 
         let failed_writer = SessionWriterCompletionReport::new(
-            Err(RocketMQError::network_connection_failed(
-                "test-session-writer",
-                "writer completion failed",
+            Err(crate::error_helpers::network(
+                crate::error_helpers::connection_failed_without_source(crate::error_helpers::TransportStage::Closed),
             )),
             SessionWriterSnapshot::default(),
         );
@@ -3141,10 +3121,10 @@ mod retirement_tests {
             .await
             .expect("checked send task")
             .expect_err("session abort must reject the draining send");
-        assert!(matches!(
-            send_error,
-            RocketMQError::Network(NetworkError::ConnectionFailed { .. })
-        ));
+        let RocketMQError::Network(source) = send_error else {
+            panic!("session abort must retain a canonical Network error")
+        };
+        assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
         runner.await.expect("session runner");
     }
 
@@ -3241,7 +3221,10 @@ mod retirement_tests {
 
         assert!(matches!(
             error,
-            RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })
+            RocketMQError::Timeout {
+                operation: "transport_before_send",
+                timeout_ms: 50,
+            }
         ));
         let mut byte = [0_u8; 1];
         tokio::select! {

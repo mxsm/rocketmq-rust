@@ -214,10 +214,12 @@ async fn running_is_published_only_after_async_start_initialization() {
 
 #[test]
 fn request_cause_from_error_uses_typed_error() {
-    let error = DefaultMQProducerImpl::request_cause_from_error(&RocketMQError::network_request_failed(
-        "broker-a",
-        "send failed",
-    ));
+    let error = DefaultMQProducerImpl::request_cause_from_error(&RocketMQError::Network(Arc::new(
+        rocketmq_error::Error::caused_by(
+            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+            std::io::Error::other("send failed"),
+        ),
+    )));
 
     assert!(matches!(
         error,
@@ -225,7 +227,7 @@ fn request_cause_from_error_uses_typed_error() {
     ));
     assert_eq!(
         error.to_string(),
-        "Response request_response_callback failed: Send failed to broker-a: send failed"
+        "Response request_response_callback failed: transport.connection.failed: Transport connection operation failed"
     );
 }
 
@@ -681,6 +683,29 @@ fn last_retryable_send_result_is_preserved() {
     retry_state.record_send_result(last.clone());
 
     assert_eq!(retry_state.take_last_send_result(), Some(last));
+}
+
+#[test]
+fn retry_failure_redacts_direct_and_shared_network_sources_equally() {
+    let canonical = Arc::new(rocketmq_error::Error::caused_by(
+        &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+        std::io::Error::new(std::io::ErrorKind::ConnectionReset, "private network detail"),
+    ));
+    let errors = [
+        rocketmq_error::RocketMQError::Network(Arc::clone(&canonical)),
+        rocketmq_error::SharedRocketMQError::new(rocketmq_error::RocketMQError::Network(Arc::clone(&canonical)))
+            .into_error(),
+    ];
+
+    for error in errors {
+        let mut retry_state = RetryState::new(1);
+        retry_state.set_error(error);
+        let rendered = retry_state
+            .build_failure_error(&CheetahString::from_static_str("TopicTest"), 1)
+            .to_string();
+        assert!(rendered.contains("CODE: 10003"));
+        assert!(!rendered.contains("private network detail"));
+    }
 }
 
 #[test]

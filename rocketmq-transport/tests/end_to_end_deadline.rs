@@ -14,6 +14,7 @@
 
 #![cfg(feature = "test-support")]
 
+use std::error::Error as _;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -22,7 +23,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
@@ -147,7 +147,10 @@ async fn expired_before_send_has_zero_remote_side_effects() {
 
     assert!(matches!(
         error,
-        RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })
+        RocketMQError::Timeout {
+            operation: "transport_before_send",
+            timeout_ms: 10,
+        }
     ));
     tokio::task::yield_now().await;
     assert_eq!(side_effects.load(Ordering::SeqCst), 0);
@@ -179,10 +182,18 @@ async fn blocked_socket_write_uses_the_original_deadline() {
         .expect("send task")
         .expect_err("blocked socket write must time out");
 
-    assert!(matches!(
-        error,
-        RocketMQError::Network(NetworkError::WriteTimeout { timeout_ms: 50, .. })
-    ));
+    let RocketMQError::Network(source) = error else {
+        panic!("blocked write must use the canonical Network carrier")
+    };
+    assert_eq!(source.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
+    assert_eq!(
+        source.context().to_string(),
+        "phase=<redacted>, timeout_ms=50, source_present=<redacted>"
+    );
+    assert!(source
+        .source()
+        .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())
+        .is_some());
 
     session.task_group().cancel();
     runner.await.expect("session runner");
@@ -228,9 +239,12 @@ async fn full_outbound_admission_returns_queue_full_without_extending_deadline()
         .await
         .expect_err("full admission must reject immediately");
 
-    assert!(
-        matches!(error, RocketMQError::Network(NetworkError::QueueFull { .. })),
-        "unexpected error: {error:?}"
+    let RocketMQError::Network(source) = error else {
+        panic!("queue rejection must use the canonical Network carrier")
+    };
+    assert_eq!(
+        source.code(),
+        rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED.code()
     );
 
     session.task_group().cancel();
@@ -278,7 +292,10 @@ async fn queued_request_expiry_is_reported_before_send() {
 
     assert!(matches!(
         error,
-        RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })
+        RocketMQError::Timeout {
+            operation: "transport_before_send",
+            timeout_ms: 50,
+        }
     ));
 
     session.task_group().cancel();
@@ -335,10 +352,14 @@ async fn missing_response_uses_the_same_absolute_response_deadline() {
         Err(error) => error,
     };
 
-    assert!(matches!(
-        error,
-        RocketMQError::Network(NetworkError::ResponseTimeout { timeout_ms: 100, .. })
-    ));
+    let RocketMQError::Network(source) = error else {
+        panic!("response timeout must use the canonical Network carrier")
+    };
+    assert_eq!(source.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());
+    assert_eq!(
+        source.context().to_string(),
+        "phase=awaiting_response, timeout_ms=100, remote_addr=<redacted>"
+    );
 
     let _ = release_tx.send(());
     server.await.expect("server task");

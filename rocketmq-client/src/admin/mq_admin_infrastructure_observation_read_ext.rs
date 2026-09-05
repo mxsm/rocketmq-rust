@@ -182,14 +182,18 @@ const fn invalid_response() -> InfrastructureObservationReadError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use rocketmq_error::Error;
+    use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 
     #[test]
     fn public_error_is_typed_and_never_retains_endpoint_detail() {
-        let error = sanitized_error(RocketMQError::network_connection_failed(
-            "10.23.45.67:10911",
-            "private-controller.internal:9878",
-        ));
+        let error = sanitized_error(RocketMQError::Network(Arc::new(Error::caused_by(
+            &TRANSPORT_CONNECTION_FAILED,
+            std::io::Error::other("private-controller.internal:9878 at 10.23.45.67:10911"),
+        ))));
         assert_eq!(error.code(), InfrastructureObservationReadErrorCode::SourceUnavailable);
         let rendered = format!("{error:?} {error}");
         assert!(!rendered.contains("10.23.45.67"));

@@ -26,7 +26,6 @@ use crate::clients::nameserver_endpoint::ConnectTarget;
 #[cfg(test)]
 use crate::config::TlsConfig;
 use crate::runtime::config::client_config::TransportClientConfig;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
@@ -38,6 +37,8 @@ use rocketmq_runtime::TaskKind;
 use rocketmq_security_api::PeerInfo;
 use tokio::sync::broadcast;
 
+use crate::admission::AdmissionController;
+use crate::admission::AdmissionLimits;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
 use crate::base::pending_request_table::PendingRequestOwner;
@@ -45,11 +46,15 @@ use crate::base::pending_request_table::PendingRequestTable;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
-// Import error helpers for convenient error creation
-use crate::admission::AdmissionController;
-use crate::admission::AdmissionLimits;
 use crate::deadline::RequestDeadline;
-use crate::error_helpers::remote_error;
+use crate::error_helpers::connection_failed;
+use crate::error_helpers::connection_failed_for_remote;
+use crate::error_helpers::connection_failed_without_source;
+use crate::error_helpers::connection_failed_without_source_for_remote;
+use crate::error_helpers::connection_timeout_caused_by;
+use crate::error_helpers::network;
+use crate::error_helpers::response_timeout_caused_by_for_remote;
+use crate::error_helpers::TransportStage;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::runtime::processor::RequestProcessor;
@@ -141,16 +146,16 @@ impl<P> ProcessorClientInboundOwner<P>
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    pub(crate) fn new(
-        processor: P,
-        pending_requests: PendingRequestTable,
-        process_budget: &ResourceBudget,
-    ) -> RocketMQResult<Self> {
+    pub(crate) fn new(processor: P, pending_requests: PendingRequestTable, process_budget: &ResourceBudget) -> Self {
+        // A sealed ChildServiceContext supplies a validated positive process
+        // root. Fixed positive defaults and derived clamps therefore make this
+        // admission subtree construction infallible for every production caller.
         let admission = Arc::new(
-            AdmissionController::try_new_with_budget(AdmissionLimits::default(), process_budget)
-                .map_err(|error| remote_error(format!("invalid  client inbound admission budget: {error}")))?,
+            AdmissionController::try_new_with_budget(AdmissionLimits::default(), process_budget).expect(
+                "fixed default admission limits must fit the validated positive process budget after derived clamps",
+            ),
         );
-        Ok(Self {
+        Self {
             dispatcher: Arc::new(crate::dispatch::AuthorizedCommandDispatcher::new(
                 processor,
                 Vec::new(),
@@ -158,7 +163,7 @@ where
                 admission,
             )),
             pending_requests,
-        })
+        }
     }
 }
 
@@ -346,7 +351,10 @@ impl<PR> Drop for TransportSession<PR> {
 
         let _ = self.notify_shutdown.send(());
         self.pending_requests.close_owner(&self.pending_request_owner, || {
-            RocketMQError::network_connection_failed("client", "connection dropped")
+            network(connection_failed_without_source_for_remote(
+                self.peer.address().to_string(),
+                TransportStage::Closed,
+            ))
         });
         self.session.abort();
         self.task_lifecycle.operation.cancel();
@@ -429,12 +437,18 @@ fn connect(
         )?;
         task_group
             .spawn_operation(&operation, "rocketmq.transport.client-session", session_runner)
-            .map_err(|error| remote_error(format!("failed to spawn transport client session: {error}")))?;
+            .map_err(|source| network(connection_failed(TransportStage::Connect, source)))?;
         let (channel, pending_request_owner, session) = deadline
             .timeout(connected_session)
             .await
-            .map_err(|_| RocketMQError::network_connection_timeout(error_identity, deadline.budget_millis()))?
-            .map_err(|_| remote_error("transport client session ended before connection setup"))?;
+            .map_err(|source| {
+                network(connection_timeout_caused_by(
+                    error_identity,
+                    deadline.budget_millis(),
+                    source,
+                ))
+            })?
+            .map_err(|_| network(connection_failed_without_source(TransportStage::Closed)))?;
         if let Some(tx) = tx {
             let _ = tx.send(ConnectionNetEvent::CONNECTED(channel.remote_address()));
         }
@@ -580,24 +594,24 @@ impl<PR> TransportSession<PR> {
         deadline: RequestDeadline,
     ) -> RocketMQResult<()> {
         if !self.accepting_requests.load(Ordering::Acquire) {
-            return Err(RocketMQError::network_connection_failed(
+            return Err(network(connection_failed_without_source_for_remote(
                 self.peer.address().to_string(),
-                "connection is draining and no longer accepts new requests",
-            ));
+                TransportStage::Closed,
+            )));
         }
         self.last_used_millis.store(current_millis(), Ordering::Release);
         let transport_security = &self.transport_security;
         let target = self.peer.address().to_string();
-        deadline.ensure_before_send(target.clone())?;
+        deadline.ensure_before_send()?;
         transport_security
             .sign(request, Some(&self.peer))
-            .map_err(|error| remote_error(format!("request signing failed: {error}")))?;
-        deadline.ensure_before_send(target)
+            .map_err(|source| network(connection_failed_for_remote(&target, TransportStage::Connect, source)))?;
+        deadline.ensure_before_send()
     }
 
     async fn send_prepared_transport(&self, request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
         let target = self.peer.address().to_string();
-        deadline.ensure_before_send(target.clone())?;
+        deadline.ensure_before_send()?;
         let mut connection = self.session.connection();
         connection.send_command_with_deadline(request, deadline, target).await
     }
@@ -615,7 +629,7 @@ impl<PR> TransportSession<PR> {
     ) -> RocketMQResult<()> {
         self.prepare_transport_request(&mut request, deadline)?;
         let target = self.peer.address().to_string();
-        deadline.ensure_before_send(target.clone())?;
+        deadline.ensure_before_send()?;
         let mut connection = self.session.connection();
         connection
             .send_command_with_deadline_and_permit(request, deadline, target, permit)
@@ -659,8 +673,19 @@ impl<PR> TransportSession<PR> {
         self.send_prepared_transport(request, deadline).await?;
         match deadline.timeout(rx).await {
             Ok(Ok(value)) => value,
-            Ok(Err(error)) => Err(remote_error(error.to_string())),
-            Err(_) => Err(guard.expire(self.peer.address().to_string())),
+            Ok(Err(source)) => Err(network(connection_failed_for_remote(
+                self.peer.address().to_string(),
+                TransportStage::Closed,
+                source,
+            ))),
+            Err(source) => {
+                let source = response_timeout_caused_by_for_remote(
+                    self.peer.address().to_string(),
+                    deadline.budget_millis(),
+                    source,
+                );
+                Err(guard.expire_with_network(source))
+            }
         }
     }
 
@@ -689,8 +714,13 @@ impl<PR> TransportSession<PR> {
             return;
         }
 
-        if deadline.timeout(rx).await.is_err() {
-            guard.expire(self.peer.address().to_string());
+        if let Err(source) = deadline.timeout(rx).await {
+            let source = response_timeout_caused_by_for_remote(
+                self.peer.address().to_string(),
+                deadline.budget_millis(),
+                source,
+            );
+            guard.expire_with_network(source);
             self.retire_after_timeout().await;
         }
         func();
@@ -785,10 +815,19 @@ impl<PR> TransportSession<PR> {
         for (guard, rx) in receivers {
             let result = match deadline.timeout(rx).await {
                 Ok(Ok(value)) => value,
-                Ok(Err(error)) => Err(remote_error(error.to_string())),
-                Err(_) => {
+                Ok(Err(source)) => Err(network(connection_failed_for_remote(
+                    self.peer.address().to_string(),
+                    TransportStage::Closed,
+                    source,
+                ))),
+                Err(source) => {
                     timed_out = true;
-                    Err(guard.expire(self.peer.address().to_string()))
+                    let source = response_timeout_caused_by_for_remote(
+                        self.peer.address().to_string(),
+                        deadline.budget_millis(),
+                        source,
+                    );
+                    Err(guard.expire_with_network(source))
                 }
             };
             results.push(result);
@@ -841,7 +880,10 @@ impl<PR> TransportSession<PR> {
             ));
         }
         self.pending_requests.close_owner(&self.pending_request_owner, || {
-            RocketMQError::network_connection_failed("client", "connection closed")
+            network(connection_failed_without_source_for_remote(
+                self.peer.address().to_string(),
+                TransportStage::Closed,
+            ))
         });
         report.log_if_unhealthy();
         report
@@ -879,7 +921,10 @@ impl<PR> TransportSession<PR> {
             let _ = self.notify_shutdown.send(());
             self.task_lifecycle.operation.cancel();
             self.pending_requests.close_owner(&self.pending_request_owner, || {
-                RocketMQError::network_connection_failed("client", "connection retired after request timeout")
+                network(connection_failed_without_source_for_remote(
+                    self.peer.address().to_string(),
+                    TransportStage::Closed,
+                ))
             });
         })
     }
@@ -904,6 +949,7 @@ impl<PR> TransportSession<PR> {
 #[cfg(test)]
 mod inbound_tests {
     use bytes::Bytes;
+    use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
@@ -931,8 +977,7 @@ mod inbound_tests {
         let service = runtime.service_context("client");
         let pending = PendingRequestTable::try_with_limits_and_budget(Default::default(), &service.process_budget())
             .expect("pending request table");
-        let owner = ProcessorClientInboundOwner::new(EchoProcessor, pending, &service.process_budget())
-            .expect(" inbound owner");
+        let owner = ProcessorClientInboundOwner::new(EchoProcessor, pending, &service.process_budget());
         let (transport_io, peer_io) = tokio::io::duplex(4096);
         let local_addr = "127.0.0.1:21001".parse().expect("local address");
         let remote_addr = "127.0.0.1:21002".parse().expect("remote address");
@@ -974,8 +1019,10 @@ mod inbound_tests {
 
 #[cfg(test)]
 mod lifecycle_tests {
+    use std::error::Error as _;
     use std::time::Duration;
 
+    use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::TaskGroupLifecycleState;
     use tokio::net::TcpListener;
@@ -995,14 +1042,11 @@ mod lifecycle_tests {
             let (_socket, _) = listener.accept().await.expect("accept client");
             time::sleep(Duration::from_secs(5)).await;
         });
-        let cmd_handler = Arc::new(
-            ProcessorClientInboundOwner::new(
-                DefaultRequestProcessor,
-                PendingRequestTable::new(),
-                &service.process_budget(),
-            )
-            .expect(" client inbound owner"),
-        );
+        let cmd_handler = Arc::new(ProcessorClientInboundOwner::new(
+            DefaultRequestProcessor,
+            PendingRequestTable::new(),
+            &service.process_budget(),
+        ));
 
         let mut client = TransportSession::<DefaultRequestProcessor>::connect_with_service_context_until(
             &service,
@@ -1058,14 +1102,11 @@ mod lifecycle_tests {
             let (_socket, _) = listener.accept().await.expect("accept client");
             time::sleep(Duration::from_secs(5)).await;
         });
-        let cmd_handler = Arc::new(
-            ProcessorClientInboundOwner::new(
-                DefaultRequestProcessor,
-                PendingRequestTable::new(),
-                &service.process_budget(),
-            )
-            .expect(" client inbound owner"),
-        );
+        let cmd_handler = Arc::new(ProcessorClientInboundOwner::new(
+            DefaultRequestProcessor,
+            PendingRequestTable::new(),
+            &service.process_budget(),
+        ));
 
         let mut client = TransportSession::<DefaultRequestProcessor>::connect_with_service_context_until(
             &service,
@@ -1096,9 +1137,12 @@ mod lifecycle_tests {
         assert_eq!(results.len(), 3);
         assert!(results.iter().all(|result| matches!(
             result,
-            Err(RocketMQError::Network(
-                rocketmq_error::NetworkError::ResponseTimeout { .. }
-            ))
+            Err(RocketMQError::Network(source))
+                if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
+                    && source
+                        .source()
+                        .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())
+                        .is_some()
         )));
         assert!(
             time::Instant::now().duration_since(started_at) < Duration::from_millis(200),
@@ -1149,14 +1193,11 @@ mod lifecycle_tests {
             time::sleep(Duration::from_secs(5)).await;
         });
         let response_table = PendingRequestTable::new();
-        let cmd_handler = Arc::new(
-            ProcessorClientInboundOwner::new(
-                DefaultRequestProcessor,
-                response_table.clone(),
-                &service.process_budget(),
-            )
-            .expect(" client inbound owner"),
-        );
+        let cmd_handler = Arc::new(ProcessorClientInboundOwner::new(
+            DefaultRequestProcessor,
+            response_table.clone(),
+            &service.process_budget(),
+        ));
 
         let client = TransportSession::<DefaultRequestProcessor>::connect_with_service_context_until(
             &service,

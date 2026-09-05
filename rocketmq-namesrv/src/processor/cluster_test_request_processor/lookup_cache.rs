@@ -21,17 +21,16 @@ use cheetah_string::CheetahString;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use moka::sync::SegmentedCache;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedRocketMQError;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
+use super::route_lookup::RouteLookupOutcome;
 use crate::config::NamesrvConfig;
 
 const CACHE_SHARDS: usize = 16;
-const LOOKUP_OWNER: &str = "namesrv.cluster-test-route-cache";
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct LookupCacheKey {
     endpoint_generation: u64,
@@ -84,7 +83,8 @@ struct CachedEntry {
 #[derive(Clone)]
 enum FlightState {
     Pending,
-    Complete(Result<CachedRoute, Arc<str>>),
+    Complete(Result<CachedRoute, SharedRocketMQError>),
+    Unavailable,
     Cancelled,
 }
 
@@ -167,14 +167,14 @@ impl ClusterTestLookupCache {
         &self,
         key: LookupCacheKey,
         resolve: F,
-    ) -> RocketMQResult<Option<TopicRouteData>>
+    ) -> RocketMQResult<RouteLookupOutcome<Option<TopicRouteData>>>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = RocketMQResult<ResolvedRoute>>,
+        Fut: Future<Output = RocketMQResult<RouteLookupOutcome<ResolvedRoute>>>,
     {
         if let Some(entry) = self.entries.get(&key) {
             if entry.expires_at > Instant::now() {
-                return Ok(entry.route.into_owned());
+                return Ok(RouteLookupOutcome::Resolved(entry.route.into_owned()));
             }
             self.entries.invalidate(&key);
         }
@@ -194,7 +194,7 @@ impl ClusterTestLookupCache {
 
         let mut leader = FlightLeaderGuard::new(&self.flights, key.clone(), Arc::clone(&flight));
         match resolve().await {
-            Ok(resolved) => {
+            Ok(RouteLookupOutcome::Resolved(resolved)) => {
                 let response_bytes = resolved.response_bytes;
                 let route = CachedRoute::from_route(resolved.route);
                 if response_bytes <= self.max_bytes {
@@ -212,12 +212,21 @@ impl ClusterTestLookupCache {
                         },
                     );
                 }
-                leader.complete(Ok(route.clone()));
-                Ok(route.into_owned())
+                leader.complete(FlightState::Complete(Ok(route.clone())));
+                Ok(RouteLookupOutcome::Resolved(route.into_owned()))
+            }
+            Ok(RouteLookupOutcome::Unavailable) => {
+                leader.complete(FlightState::Unavailable);
+                Ok(RouteLookupOutcome::Unavailable)
+            }
+            Ok(RouteLookupOutcome::Cancelled) => {
+                leader.complete(FlightState::Cancelled);
+                Ok(RouteLookupOutcome::Cancelled)
             }
             Err(error) => {
-                leader.complete(Err(Arc::from(error.to_string())));
-                Err(error)
+                let error = SharedRocketMQError::new(error);
+                leader.complete(FlightState::Complete(Err(error.clone())));
+                Err(error.into_error())
             }
         }
     }
@@ -233,28 +242,19 @@ impl ClusterTestLookupCache {
     }
 }
 
-async fn wait_for_flight(flight: &LookupFlight) -> RocketMQResult<Option<TopicRouteData>> {
+async fn wait_for_flight(flight: &LookupFlight) -> RocketMQResult<RouteLookupOutcome<Option<TopicRouteData>>> {
     let mut state = flight.state.subscribe();
     loop {
         match state.borrow_and_update().clone() {
             FlightState::Pending => {}
-            FlightState::Complete(Ok(route)) => return Ok(route.into_owned()),
-            FlightState::Complete(Err(error)) => {
-                return Err(RocketMQError::network_connection_failed(
-                    LOOKUP_OWNER,
-                    error.to_string(),
-                ));
-            }
-            FlightState::Cancelled => {
-                return Err(RocketMQError::network_connection_failed(
-                    LOOKUP_OWNER,
-                    "coalesced route lookup was cancelled",
-                ));
-            }
+            FlightState::Complete(Ok(route)) => return Ok(RouteLookupOutcome::Resolved(route.into_owned())),
+            FlightState::Complete(Err(error)) => return Err(error.into_error()),
+            FlightState::Unavailable => return Ok(RouteLookupOutcome::Unavailable),
+            FlightState::Cancelled => return Ok(RouteLookupOutcome::Cancelled),
         }
-        state.changed().await.map_err(|_| {
-            RocketMQError::network_connection_failed(LOOKUP_OWNER, "coalesced route lookup ended without a result")
-        })?;
+        if state.changed().await.is_err() {
+            return Ok(RouteLookupOutcome::Cancelled);
+        }
     }
 }
 
@@ -279,8 +279,8 @@ impl<'a> FlightLeaderGuard<'a> {
         }
     }
 
-    fn complete(&mut self, state: Result<CachedRoute, Arc<str>>) {
-        let _ = self.flight.state.send(FlightState::Complete(state));
+    fn complete(&mut self, state: FlightState) {
+        let _ = self.flight.state.send(state);
         self.flights
             .remove_if(&self.key, |_, current| Arc::ptr_eq(current, &self.flight));
         self.completed = true;
@@ -303,6 +303,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
+    use rocketmq_error::RocketMQError;
     use tokio::sync::Barrier;
     use tokio::sync::Notify;
 
@@ -330,10 +331,10 @@ mod tests {
                     .get_or_resolve(key("missing"), || async move {
                         calls.fetch_add(1, Ordering::SeqCst);
                         release.notified().await;
-                        Ok(ResolvedRoute {
+                        Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
                             route: None,
                             response_bytes: 0,
-                        })
+                        }))
                     })
                     .await
             }));
@@ -345,7 +346,10 @@ mod tests {
         }
         release.notify_waiters();
         for task in tasks {
-            assert!(task.await.unwrap().unwrap().is_none());
+            assert!(matches!(
+                task.await.unwrap().unwrap(),
+                RouteLookupOutcome::Resolved(None)
+            ));
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(cache.stats().2, 0);
@@ -365,10 +369,10 @@ mod tests {
             cache
                 .get_or_resolve(key("negative"), || async {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ResolvedRoute {
+                    Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
                         route: None,
                         response_bytes: 0,
-                    })
+                    }))
                 })
                 .await
                 .unwrap();
@@ -378,10 +382,10 @@ mod tests {
         cache
             .get_or_resolve(key("negative"), || async {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ResolvedRoute {
+                Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
                     route: None,
                     response_bytes: 0,
-                })
+                }))
             })
             .await
             .unwrap();
@@ -392,10 +396,10 @@ mod tests {
             cache
                 .get_or_resolve(key("positive"), || async {
                     positive_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ResolvedRoute {
+                    Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
                         route: Some(TopicRouteData::default()),
                         response_bytes: 1,
-                    })
+                    }))
                 })
                 .await
                 .unwrap();
@@ -405,10 +409,10 @@ mod tests {
         cache
             .get_or_resolve(key("positive"), || async {
                 positive_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ResolvedRoute {
+                Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
                     route: Some(TopicRouteData::default()),
                     response_bytes: 1,
-                })
+                }))
             })
             .await
             .unwrap();
@@ -420,7 +424,9 @@ mod tests {
         let cache = Arc::new(ClusterTestLookupCache::new(LookupCacheConfig::default()));
         let error = cache
             .get_or_resolve(key("error"), || async {
-                Err(RocketMQError::network_connection_failed("test", "unreachable"))
+                Err(RocketMQError::Network(Arc::new(rocketmq_error::Error::new(
+                    &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+                ))))
             })
             .await;
         assert!(error.is_err());
@@ -446,6 +452,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn coalesced_failure_retains_the_canonical_network_allocation() {
+        let flight = LookupFlight::new();
+        let canonical = Arc::new(rocketmq_error::Error::caused_by(
+            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+            std::io::Error::other("connection refused"),
+        ));
+        let expected = Arc::clone(&canonical);
+        let shared = SharedRocketMQError::new(RocketMQError::Network(canonical));
+        flight.state.send_replace(FlightState::Complete(Err(shared)));
+
+        let error = wait_for_flight(&flight)
+            .await
+            .expect_err("coalesced failure should be returned");
+        let RocketMQError::Shared(shared) = error else {
+            panic!("coalesced failures must retain the shared typed error");
+        };
+        let RocketMQError::Network(actual) = shared.as_error() else {
+            panic!("coalesced failures must retain the canonical Network error");
+        };
+        assert!(Arc::ptr_eq(actual, &expected));
+        assert!(std::error::Error::source(actual.as_ref()).is_some());
+    }
+
+    #[tokio::test]
+    async fn unavailable_and_cancelled_flights_are_normal_typed_outcomes() {
+        let unavailable = LookupFlight::new();
+        unavailable.state.send_replace(FlightState::Unavailable);
+        assert!(matches!(
+            wait_for_flight(&unavailable).await,
+            Ok(RouteLookupOutcome::Unavailable)
+        ));
+
+        let cancelled = LookupFlight::new();
+        cancelled.state.send_replace(FlightState::Cancelled);
+        assert!(matches!(
+            wait_for_flight(&cancelled).await,
+            Ok(RouteLookupOutcome::Cancelled)
+        ));
+    }
+
+    #[tokio::test]
+    async fn unavailable_resolution_is_not_negative_cached() {
+        let cache = ClusterTestLookupCache::new(LookupCacheConfig::default());
+        let calls = AtomicUsize::new(0);
+
+        for _ in 0..2 {
+            let outcome = cache
+                .get_or_resolve(key("unavailable"), || async {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(RouteLookupOutcome::Unavailable)
+                })
+                .await
+                .expect("endpoint absence is a normal lookup outcome");
+            assert!(matches!(outcome, RouteLookupOutcome::Unavailable));
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(cache.stats(), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn leader_drop_notifies_followers_with_typed_cancellation() {
+        let cache = ClusterTestLookupCache::new(LookupCacheConfig::default());
+        let lookup_key = key("leader-drop");
+        let flight = Arc::new(LookupFlight::new());
+        cache.flights.insert(lookup_key.clone(), Arc::clone(&flight));
+        let _receiver = flight.state.subscribe();
+        let leader = FlightLeaderGuard::new(&cache.flights, lookup_key, Arc::clone(&flight));
+
+        drop(leader);
+
+        assert!(matches!(
+            wait_for_flight(&flight).await,
+            Ok(RouteLookupOutcome::Cancelled)
+        ));
+        assert_eq!(cache.stats(), (0, 0, 0));
+    }
+
+    #[tokio::test]
     async fn entry_count_bytes_and_oversize_bypass_are_bounded() {
         let cache = ClusterTestLookupCache::new(LookupCacheConfig {
             positive_ttl: Duration::from_secs(1),
@@ -456,10 +541,10 @@ mod tests {
         for index in 0..3 {
             cache
                 .get_or_resolve(key(&format!("topic-{index}")), || async {
-                    Ok(ResolvedRoute {
+                    Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
                         route: None,
                         response_bytes: 80,
-                    })
+                    }))
                 })
                 .await
                 .unwrap();
@@ -473,10 +558,10 @@ mod tests {
             cache
                 .get_or_resolve(key("oversize"), || async {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ResolvedRoute {
+                    Ok(RouteLookupOutcome::Resolved(ResolvedRoute {
                         route: None,
                         response_bytes: 301,
-                    })
+                    }))
                 })
                 .await
                 .unwrap();

@@ -222,7 +222,7 @@ impl EmbeddedDispatchErrorSource {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::RocketMQError;
+    use std::io;
 
     use super::*;
     #[test]
@@ -230,7 +230,10 @@ mod tests {
         let secret = "embedded-sensitive-transport-cause";
         let error = EmbeddedDispatchError::response(ResponseOperationalFailure::Transport {
             progress: WriteProgress::PossiblyPartial,
-            source: RocketMQError::network_connection_failed(secret, secret),
+            source: crate::error_helpers::connection_failed(
+                crate::error_helpers::TransportStage::Write,
+                io::Error::other(secret),
+            ),
         });
         assert_eq!(
             error.kind(),

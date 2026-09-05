@@ -22,6 +22,13 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_runtime::common::time_utils::current_millis;
 
+use crate::error_helpers::connection_failed;
+use crate::error_helpers::connection_failed_for_remote;
+use crate::error_helpers::connection_failed_without_source;
+use crate::error_helpers::network;
+use crate::error_helpers::response_timeout_caused_by_for_remote;
+use crate::error_helpers::TransportStage;
+
 /// Global HTTP client with connection pool
 /// Reuses connections across requests for better performance
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -32,7 +39,7 @@ fn build_http_client() -> RocketMQResult<Client> {
         .pool_max_idle_per_host(16)
         .connect_timeout(Duration::from_secs(3))
         .build()
-        .map_err(|e| RocketMQError::network_request_failed("http-client", e.to_string()))
+        .map_err(|source| network(connection_failed(TransportStage::EndpointValidation, source)))
 }
 
 /// Initialize the global HTTP client (called lazily on first use)
@@ -43,9 +50,9 @@ fn get_http_client() -> RocketMQResult<&'static Client> {
 
     let client = build_http_client()?;
     let _ = HTTP_CLIENT.set(client);
-    HTTP_CLIENT.get().ok_or_else(|| {
-        RocketMQError::network_request_failed("http-client", "HTTP client initialization did not complete")
-    })
+    HTTP_CLIENT
+        .get()
+        .ok_or_else(|| network(connection_failed_without_source(TransportStage::EndpointValidation)))
 }
 
 pub struct HttpTinyClient;
@@ -216,11 +223,11 @@ impl HttpTinyClient {
 
         let response = request_builder.send().await.map_err(|e| {
             if e.is_timeout() {
-                RocketMQError::network_timeout(url, Duration::from_millis(read_timeout_ms))
+                network(response_timeout_caused_by_for_remote(url, read_timeout_ms, e))
             } else if e.is_connect() {
-                RocketMQError::network_connection_failed(url, e.to_string())
+                network(connection_failed_for_remote(url, TransportStage::Connect, e))
             } else {
-                RocketMQError::network_request_failed(url, e.to_string())
+                network(connection_failed_for_remote(url, TransportStage::Write, e))
             }
         })?;
 
@@ -268,11 +275,11 @@ impl HttpTinyClient {
 
         let response = request_builder.send().await.map_err(|e| {
             if e.is_timeout() {
-                RocketMQError::network_timeout(url, Duration::from_millis(read_timeout_ms))
+                network(response_timeout_caused_by_for_remote(url, read_timeout_ms, e))
             } else if e.is_connect() {
-                RocketMQError::network_connection_failed(url, e.to_string())
+                network(connection_failed_for_remote(url, TransportStage::Connect, e))
             } else {
-                RocketMQError::network_request_failed(url, e.to_string())
+                network(connection_failed_for_remote(url, TransportStage::Write, e))
             }
         })?;
 

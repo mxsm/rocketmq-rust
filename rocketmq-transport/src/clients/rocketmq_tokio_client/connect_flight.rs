@@ -33,6 +33,8 @@ use crate::clients::client::SessionConnectTarget;
 use crate::clients::nameserver_endpoint::NameServerEndpoint;
 use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::connection_timeout_caused_by;
+use crate::error_helpers::network;
 
 enum ConnectFlightState<PR> {
     Connecting,
@@ -100,10 +102,13 @@ where
             if let ConnectFlightState::Complete(result) = &*self.state.lock() {
                 return (**result).clone().map_err(SharedRocketMQError::into_error);
             }
-            deadline
-                .timeout(changed)
-                .await
-                .map_err(|_| RocketMQError::network_connection_timeout(target.to_string(), deadline.budget_millis()))?;
+            deadline.timeout(changed).await.map_err(|source| {
+                network(connection_timeout_caused_by(
+                    target.to_string(),
+                    deadline.budget_millis(),
+                    source,
+                ))
+            })?;
         }
     }
 }
@@ -174,7 +179,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             }
             Some(addr) => addr,
         };
-        deadline.ensure_before_send(target_addr.to_string())?;
+        deadline.ensure_before_send()?;
 
         if let Some(client) = self.connection_registry.healthy_session(target_addr, None) {
             return Ok(Some(client));
@@ -220,7 +225,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         lease: Option<EndpointLease>,
         deadline: RequestDeadline,
     ) -> RocketMQResult<Option<TransportSession<PR>>> {
-        deadline.ensure_before_send(addr.to_string())?;
+        deadline.ensure_before_send()?;
         if !self.can_commit_endpoint_lease(lease.as_ref()) {
             return Ok(None);
         }
@@ -284,7 +289,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         deadline: RequestDeadline,
         commit_fence: &ConnectionCommitFence,
     ) -> RocketMQResult<Option<TransportSession<PR>>> {
-        deadline.ensure_before_send(addr.to_string())?;
+        deadline.ensure_before_send()?;
         let endpoint_kind = if lease.is_some() { "nameserver" } else { "direct" };
         if !self.matches_connection_commit_fence(commit_fence) {
             return Err(RocketMQError::ClientNotStarted);
@@ -580,9 +585,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn connect_flight_shares_exact_typed_failures_with_leader_and_waiters() {
-        assert_connect_flight_preserves_failure(RocketMQError::network_connection_failed(
-            "127.0.0.1:10911",
-            "connection refused",
+        assert_connect_flight_preserves_failure(crate::error_helpers::network(
+            crate::error_helpers::connection_failed_for_remote(
+                "127.0.0.1:10911",
+                crate::error_helpers::TransportStage::Connect,
+                io::Error::new(io::ErrorKind::ConnectionRefused, "connection refused"),
+            ),
         ))
         .await;
         assert_connect_flight_preserves_failure(RocketMQError::ConfigInvalidValue {

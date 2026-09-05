@@ -119,7 +119,6 @@ pub use recovery::CanonicalCondition;
 pub use recovery::RecoveryHint;
 pub use shared::SharedRocketMQError;
 pub use unified::AuthError;
-pub use unified::NetworkError;
 pub use unified::ProtocolError;
 pub use unified::RocketMQError;
 pub use unified::RocketMQResult;

@@ -29,25 +29,29 @@ are dependency-light values consumed by boundary adapters.
 ## Quick Start
 
 ```rust
+use std::sync::Arc;
+
+use rocketmq_error::Error;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::TRANSPORT_ENDPOINT_INVALID;
 
-fn validate_broker_addr(addr: &str) -> RocketMQResult<()> {
+fn validate_transport_endpoint(addr: &str) -> RocketMQResult<()> {
     if addr.is_empty() {
-        return Err(RocketMQError::Network(
-            rocketmq_error::NetworkError::InvalidAddress {
-                addr: addr.to_owned(),
-            },
-        ));
+        return Err(RocketMQError::Network(Arc::new(Error::new(
+            &TRANSPORT_ENDPOINT_INVALID,
+        ))));
     }
 
     Ok(())
 }
 ```
 
-Nested domain errors such as `NetworkError`, `SerializationError`,
-`ProtocolError`, `RpcClientError`, `AuthError`, `ControllerError`,
-`ToolsError`, `FilterError`, `ObservabilityError`, and
+The `Network` variant carries one canonical `SharedError`, so transport
+descriptor identity, context, and a typed physical source can cross crate
+boundaries without reconstruction. Retained domain errors such as
+`SerializationError`, `ProtocolError`, `RpcClientError`, `AuthError`,
+`ControllerError`, `ToolsError`, `FilterError`, `ObservabilityError`, and
 `UnifiedServiceError` convert to `RocketMQError` through `From`.
 
 ## Canonical Descriptors

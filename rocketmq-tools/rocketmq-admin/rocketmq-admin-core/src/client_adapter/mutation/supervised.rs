@@ -1587,6 +1587,20 @@ mod tests {
 
     use rocketmq_runtime::RuntimeContext;
 
+    fn canonical_connection_failure(message: &'static str) -> RocketMQError {
+        let context = rocketmq_error::ErrorContext::new()
+            .with_text(rocketmq_error::fields::PHASE, "connect")
+            .with_secret_presence(rocketmq_error::fields::REMOTE_ADDR_PRESENT)
+            .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT);
+        RocketMQError::Network(std::sync::Arc::new(
+            rocketmq_error::Error::caused_by(
+                &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+                std::io::Error::other(message),
+            )
+            .with_context(context),
+        ))
+    }
+
     struct CountingMutationAdmin {
         cluster_info: ClusterInfo,
         route: TopicRouteData,
@@ -2077,10 +2091,7 @@ mod tests {
         ) -> rocketmq_error::RocketMQResult<i64> {
             self.verify_calls.fetch_add(1, Ordering::SeqCst);
             if self.offset_fail_postread.load(Ordering::SeqCst) && self.reset_calls.load(Ordering::SeqCst) > 0 {
-                return Err(RocketMQError::network_connection_failed(
-                    "test-broker",
-                    "test offset postread failure",
-                ));
+                return Err(canonical_connection_failure("test offset postread failure"));
             }
             self.offsets
                 .lock()
@@ -2241,10 +2252,7 @@ mod tests {
             if self.request_mode_fail_postread.load(Ordering::SeqCst)
                 && self.request_mode_writes.load(Ordering::SeqCst) > 0
             {
-                return Err(RocketMQError::network_connection_failed(
-                    "test-broker",
-                    "test request-mode postread failure",
-                ));
+                return Err(canonical_connection_failure("test request-mode postread failure"));
             }
             Ok(*self.request_mode.lock().expect("request mode"))
         }

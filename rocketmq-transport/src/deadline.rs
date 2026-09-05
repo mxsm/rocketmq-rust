@@ -17,7 +17,6 @@
 use std::future::Future;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 
 /// One absolute deadline frozen at the public request boundary.
@@ -99,11 +98,18 @@ impl RequestDeadline {
     /// # Errors
     ///
     /// Returns a typed before-send error once the immutable deadline has elapsed.
-    pub fn ensure_before_send(self, addr: impl Into<String>) -> RocketMQResult<()> {
+    pub fn ensure_before_send(self) -> RocketMQResult<()> {
         if self.is_expired() {
-            Err(RocketMQError::network_deadline_exceeded_before_send(addr))
+            Err(self.elapsed_error())
         } else {
             Ok(())
+        }
+    }
+
+    pub(crate) fn elapsed_error(self) -> rocketmq_error::RocketMQError {
+        rocketmq_error::RocketMQError::Timeout {
+            operation: "transport_before_send",
+            timeout_ms: self.budget_millis(),
         }
     }
 

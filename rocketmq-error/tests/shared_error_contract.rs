@@ -16,12 +16,14 @@ use std::error::Error as _;
 use std::io;
 
 use rocketmq_error::DomainError;
+use rocketmq_error::Error;
 use rocketmq_error::FilterCompileError;
 use rocketmq_error::FilterCompileErrorKind;
 use rocketmq_error::FilterCompileSource;
 use rocketmq_error::FilterCompileStage;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::SharedRocketMQError;
+use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 
 fn assert_shared_contract(error: RocketMQError) {
     let expected_kind = error.kind();
@@ -77,10 +79,9 @@ fn assert_shared_contract(error: RocketMQError) {
 
 #[test]
 fn shared_error_clones_preserve_typed_metadata_and_source_chains() {
-    assert_shared_contract(RocketMQError::network_connection_failed(
-        "127.0.0.1:10911",
-        "connection refused",
-    ));
+    assert_shared_contract(RocketMQError::Network(std::sync::Arc::new(Error::new(
+        &TRANSPORT_CONNECTION_FAILED,
+    ))));
     let config_invalid_value = RocketMQError::ConfigInvalidValue {
         key: "connect.timeout",
         value: "invalid".to_owned(),

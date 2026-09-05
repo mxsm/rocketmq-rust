@@ -15,7 +15,6 @@
 //! Canonical request and one-way execution for the Tokio transport client.
 
 use cheetah_string::CheetahString;
-use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::RpcClientError;
@@ -31,6 +30,10 @@ use super::SendReceipt;
 use super::TransportClient;
 use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::connection_failed_without_source_for_remote;
+use crate::error_helpers::network;
+use crate::error_helpers::response_timeout_for_remote;
+use crate::error_helpers::TransportStage;
 use crate::telemetry::TransportGoAwayOutcome;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -79,15 +82,15 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         deadline: RequestDeadline,
         permit: Option<ResourcePermit>,
     ) -> RocketMQResult<()> {
-        deadline.ensure_before_send(addr.to_string())?;
+        deadline.ensure_before_send()?;
         if self.is_stopping() {
             return Err(RocketMQError::ClientNotStarted);
         }
         let Some(mut client) = self.get_and_create_client_until(Some(addr), deadline).await? else {
-            return Err(RocketMQError::network_connection_failed(
-                addr.to_string(),
-                "one-way client unavailable",
-            ));
+            return Err(network(connection_failed_without_source_for_remote(
+                addr,
+                TransportStage::Closed,
+            )));
         };
         if self.is_stopping() {
             return Err(RocketMQError::ClientNotStarted);
@@ -103,7 +106,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 Some(&mut request),
             )?;
         }
-        deadline.ensure_before_send(remote_address.to_string())?;
+        deadline.ensure_before_send()?;
         request.mark_oneway_rpc_ref();
         match permit {
             Some(permit) => client.send_until_with_permit(request, deadline, permit).await,
@@ -144,12 +147,12 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             }
             RequestTarget::NameServer => {
                 let started_at = time::Instant::now();
-                deadline.ensure_before_send("<nameserver>")?;
+                deadline.ensure_before_send()?;
                 let Some(selection) = self.get_and_create_nameserver_client_until(deadline).await? else {
-                    return Err(RocketMQError::network_connection_failed(
+                    return Err(network(connection_failed_without_source_for_remote(
                         "<nameserver>",
-                        "one-way nameserver client unavailable",
-                    ));
+                        TransportStage::Closed,
+                    )));
                 };
                 let metric_identity = selection.identity.clone();
                 let metric_lease = selection.lease.clone();
@@ -203,7 +206,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         } else {
             addr.map_or_else(|| "<nameserver>".to_string(), ToString::to_string)
         };
-        deadline.ensure_before_send(target.clone())?;
+        deadline.ensure_before_send()?;
         let nameserver_diagnostics = nameserver_request.then(|| self.endpoint_state.load());
         let nameserver_selection = if nameserver_request {
             self.get_and_create_nameserver_client_until(deadline).await?
@@ -237,7 +240,10 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 error!("Failed to get client for direct endpoint");
             }
 
-            RocketMQError::network_connection_failed(target.clone(), "Failed to connect")
+            network(connection_failed_without_source_for_remote(
+                &target,
+                TransportStage::Connect,
+            ))
         })?;
 
         if self.is_stopping() {
@@ -246,7 +252,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
 
         let mut request = request;
         let initial_remote_address = client.remote_address();
-        deadline.ensure_before_send(initial_remote_address.to_string())?;
+        deadline.ensure_before_send()?;
         let hooks = self.cmd_handler.hook_snapshot();
         let request_for_after = if let Some(hooks) = hooks {
             request.make_custom_header_to_net();
@@ -255,7 +261,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 initial_remote_address,
                 Some(&mut request),
             )?;
-            deadline.ensure_before_send(initial_remote_address.to_string())?;
+            deadline.ensure_before_send()?;
             Some((request.clone(), hooks))
         } else {
             None
@@ -271,10 +277,10 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     )?;
                 }
                 if deadline.is_expired() {
-                    return Err(RocketMQError::network_response_timeout(
+                    return Err(network(response_timeout_for_remote(
                         remote_address.to_string(),
                         timeout_millis,
-                    ));
+                    )));
                 }
                 Ok(response)
             };
@@ -335,7 +341,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     }
 
                     attempted_retry = true;
-                    if let Err(error) = deadline.ensure_before_send(identity.to_string()) {
+                    if let Err(error) = deadline.ensure_before_send() {
                         self.telemetry.record_go_away(TransportGoAwayOutcome::RetryFailed);
                         self.record_nameserver_outcome(
                             nameserver_metric_addr.as_ref(),
@@ -347,10 +353,10 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     }
                     let replacement = match self.get_and_create_client_until(addr, deadline).await {
                         Ok(Some(replacement)) => Ok(replacement),
-                        Ok(None) => Err(RocketMQError::network_connection_failed(
-                            identity.to_string(),
-                            "GO_AWAY replacement connection unavailable",
-                        )),
+                        Ok(None) => Err(network(connection_failed_without_source_for_remote(
+                            &identity,
+                            TransportStage::Closed,
+                        ))),
                         Err(error) => Err(error),
                     };
                     client = match replacement {
@@ -402,12 +408,18 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     return Ok(response);
                 }
                 Err(error) => {
-                    if matches!(
-                        error,
-                        RocketMQError::Network(
-                            NetworkError::WriteTimeout { .. } | NetworkError::ResponseTimeout { .. }
-                        )
-                    ) {
+                    let descriptor_code = match &error {
+                        RocketMQError::Network(source) => Some(source.code()),
+                        RocketMQError::Shared(shared) => match shared.as_error() {
+                            RocketMQError::Network(source) => Some(source.code()),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if descriptor_code.is_some_and(|code| {
+                        code == rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code()
+                            || code == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
+                    }) {
                         client.retire_after_timeout().await;
                         self.remove_cached_session_if_matches(&identity, &client);
                     }

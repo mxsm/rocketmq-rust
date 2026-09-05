@@ -153,15 +153,6 @@ impl TransportError {
     }
 
     #[track_caller]
-    pub(crate) fn request_timeout(operation: RequestOperation, source: impl StdError + Send + Sync + 'static) -> Self {
-        Self::new(
-            &rocketmq_error::TRANSPORT_REQUEST_TIMEOUT,
-            operation.transport_operation(),
-            source,
-        )
-    }
-
-    #[track_caller]
     pub(crate) fn close(
         cause: crate::server::SessionCloseCause,
         source: impl StdError + Send + Sync + 'static,
@@ -275,7 +266,7 @@ impl fmt::Debug for TransportError {
             .field("code", &self.code())
             .field("condition", &self.condition())
             .field("operation", &self.operation)
-            .field("source_present", &true)
+            .field("source_present", &self.error.source().is_some())
             .finish()
     }
 }

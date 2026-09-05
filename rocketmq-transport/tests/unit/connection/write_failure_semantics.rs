@@ -26,7 +26,6 @@ use std::task::Poll;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -41,7 +40,6 @@ use super::classify_writer_failure;
 use super::Connection;
 use super::ConnectionState;
 use super::FrameLimits;
-use super::LegacyWriterReason;
 use super::RequestStopPolicy;
 use super::SessionLifecycle;
 use crate::admission::AdmissionClass;
@@ -112,7 +110,11 @@ fn assert_operational_failure(outcome: ResponseSendOutcome, expected: WriteProgr
             assert_eq!(error.operation(), operation);
             assert_eq!(error.write_progress(), expected);
             let source = Error::source(&error).expect("operational response failure source");
-            assert!(source.downcast_ref::<RocketMQError>().is_some());
+            match operation {
+                "encode" => assert!(source.downcast_ref::<RocketMQError>().is_some()),
+                "transport" => assert!(source.downcast_ref::<rocketmq_error::Error>().is_some()),
+                other => panic!("unexpected response operation {other}"),
+            }
         }
         ResponseSendOutcome::Written => panic!("{operation} unexpectedly completed"),
         ResponseSendOutcome::Rejected(completion) => {
@@ -136,16 +138,12 @@ fn assert_not_started_prewrite_operational(outcome: ResponseSendOutcome) {
     assert_eq!(error.operation(), "transport");
     assert_eq!(error.write_progress(), WriteProgress::NotStarted);
     let source = Error::source(&error).expect("pre-write operational failure source");
-    let RocketMQError::Shared(shared) = source
-        .downcast_ref::<RocketMQError>()
-        .expect("pre-write failure retains RocketMQ error")
-    else {
-        panic!("pre-write failure retains the shared writer source")
-    };
-    assert!(matches!(
-        shared.as_error(),
-        RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })
-    ));
+    let canonical = source
+        .downcast_ref::<rocketmq_error::Error>()
+        .expect("pre-write failure retains the canonical writer error");
+    assert_eq!(canonical.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
+    assert_eq!(canonical.context().to_string(), "phase=<redacted>, timeout_ms=10");
+    assert!(canonical.source().is_none());
 }
 
 fn explicit_sendfile_payload() -> OutboundPayload {
@@ -678,7 +676,7 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
     let (transport, _peer) = tokio::io::duplex(4096);
     let mut legacy_connection =
         Connection::new_with_tls_stream(transport).with_file_region_io(blocking, FileTransferMode::Sendfile);
-    let legacy = legacy_connection
+    let canonical = legacy_connection
         .send_payload_inner(
             explicit_sendfile_payload(),
             AdmissionClass::Data,
@@ -691,12 +689,12 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
         )
         .await
         .expect_err("TLS sendfile preflight must fail")
-        .into_legacy();
-    assert!(matches!(
-        legacy,
-        RocketMQError::Network(NetworkError::ConnectionFailed { addr, reason })
-            if addr == "legacy-sendfile-target" && reason.contains("sendfile")
-    ));
+        .into_error();
+    let RocketMQError::Network(source) = canonical else {
+        panic!("sendfile preflight must use the canonical Network carrier")
+    };
+    assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
+    assert!(source.source().is_some());
     assert_eq!(legacy_connection.state(), ConnectionState::Healthy);
 }
 
@@ -779,8 +777,10 @@ async fn direct_preflight_deadline_is_not_started_and_keeps_the_writer_healthy()
     let (legacy_connection, result) = legacy_send.await.expect("legacy direct send task");
     assert!(matches!(
         result,
-        Err(RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { addr }))
-            if addr == "legacy-direct-target"
+        Err(RocketMQError::Timeout {
+            operation: "transport_before_send",
+            timeout_ms: 10,
+        })
     ));
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
@@ -926,43 +926,25 @@ async fn micro_batch_preflight_deadline_only_rejects_the_member_that_caused_the_
         .await
         .expect("undeadlined member completion")
         .expect_err("undeadlined member shares the pre-write batch failure");
-    assert!(std::ptr::eq(
-        short_failure.source().as_error(),
-        late_failure.source().as_error()
+    assert!(Arc::ptr_eq(
+        short_failure.error().expect("short operational failure"),
+        late_failure.error().expect("late operational failure")
     ));
-    assert!(std::ptr::eq(
-        short_failure.source().as_error(),
-        no_deadline_failure.source().as_error()
+    assert!(Arc::ptr_eq(
+        short_failure.error().expect("short operational failure"),
+        no_deadline_failure.error().expect("undeadlined operational failure")
     ));
 
     tokio::time::advance(std::time::Duration::from_millis(80)).await;
     assert_normal_rejection(
-        classify_writer_failure(
-            "short-member".to_string(),
-            short_failure,
-            LegacyWriterReason::CanonicalWriter,
-            Some(short_deadline),
-        )
-        .into_response(),
+        classify_writer_failure("short-member".to_string(), short_failure, Some(short_deadline)).into_response(),
         ResponseCompletionOutcome::DeadlineExpired,
     );
     assert_not_started_prewrite_operational(
-        classify_writer_failure(
-            "late-member".to_string(),
-            late_failure,
-            LegacyWriterReason::CanonicalWriter,
-            Some(late_deadline),
-        )
-        .into_response(),
+        classify_writer_failure("late-member".to_string(), late_failure, Some(late_deadline)).into_response(),
     );
     assert_not_started_prewrite_operational(
-        classify_writer_failure(
-            "undeadlined-member".to_string(),
-            no_deadline_failure,
-            LegacyWriterReason::CanonicalWriter,
-            None,
-        )
-        .into_response(),
+        classify_writer_failure("undeadlined-member".to_string(), no_deadline_failure, None).into_response(),
     );
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
@@ -1026,13 +1008,7 @@ async fn prewrite_stall_without_an_owner_deadline_remains_a_typed_failure() {
         .expect_err("writer stall must fail before socket I/O");
     tokio::time::advance(std::time::Duration::from_secs(1)).await;
     assert_not_started_prewrite_operational(
-        classify_writer_failure(
-            "stalled-member".to_string(),
-            failure,
-            LegacyWriterReason::CanonicalWriter,
-            None,
-        )
-        .into_response(),
+        classify_writer_failure("stalled-member".to_string(), failure, None).into_response(),
     );
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
@@ -1223,16 +1199,10 @@ async fn queued_control_does_not_reclassify_a_dropped_completion_after_its_later
     assert_eq!(error.operation(), "transport");
     assert_eq!(error.write_progress(), WriteProgress::NotStarted);
     let source = Error::source(&error).expect("dropped completion source");
-    let RocketMQError::Shared(shared) = source
-        .downcast_ref::<RocketMQError>()
-        .expect("dropped completion retains RocketMQ error")
-    else {
-        panic!("dropped completion retains the shared writer source")
-    };
-    assert!(matches!(
-        shared.as_error(),
-        RocketMQError::Network(NetworkError::ConnectionFailed { .. })
-    ));
+    let canonical = source
+        .downcast_ref::<rocketmq_error::Error>()
+        .expect("dropped completion retains the canonical writer error");
+    assert_eq!(canonical.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
     assert_eq!(connection.state(), ConnectionState::Healthy);
@@ -1265,7 +1235,7 @@ async fn queued_control_does_not_reclassify_a_dropped_completion_after_its_later
 }
 
 #[tokio::test]
-async fn direct_legacy_facade_retains_the_callers_target_and_network_failure_shape() {
+async fn direct_facade_preserves_the_canonical_writer_error_and_typed_source() {
     let writes = Arc::new(AtomicUsize::new(0));
     let mut connection = Connection::new_with_plaintext_stream(FailingResponseTransport {
         writes,
@@ -1280,11 +1250,14 @@ async fn direct_legacy_facade_retains_the_callers_target_and_network_failure_sha
         .await
         .expect_err("injected direct write failure");
 
-    assert!(matches!(
-        error,
-        RocketMQError::Network(NetworkError::ConnectionFailed { addr, reason })
-            if addr == "direct-caller-target" && reason == "canonical writer failure"
-    ));
+    let RocketMQError::Network(source) = error else {
+        panic!("direct writer failure must use the canonical Network carrier")
+    };
+    assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
+    assert!(source
+        .source()
+        .and_then(|source| source.downcast_ref::<io::Error>())
+        .is_some());
 }
 
 #[tokio::test]
@@ -1344,7 +1317,7 @@ async fn queued_typed_transport_failure_matches_direct_possibly_partial_classifi
 }
 
 #[tokio::test]
-async fn queued_legacy_facade_reprojects_the_shared_writer_source_for_its_caller_target() {
+async fn queued_facade_preserves_the_shared_canonical_writer_source() {
     let controller = AdmissionController::new(AdmissionLimits::default());
     let admission = controller
         .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
@@ -1390,9 +1363,12 @@ async fn queued_legacy_facade_reprojects_the_shared_writer_source_for_its_caller
         .expect_err("injected queued write failure");
     writer.await.expect("writer task must exit after poisoning");
 
-    assert!(matches!(
-        error,
-        RocketMQError::Network(NetworkError::ConnectionFailed { addr, reason })
-            if addr == "queued-caller-target" && reason == "canonical writer failure"
-    ));
+    let RocketMQError::Network(source) = error else {
+        panic!("queued writer failure must use the canonical Network carrier")
+    };
+    assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
+    assert!(source
+        .source()
+        .and_then(|source| source.downcast_ref::<io::Error>())
+        .is_some());
 }

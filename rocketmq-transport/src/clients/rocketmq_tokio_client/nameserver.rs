@@ -364,7 +364,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         &self,
         deadline: RequestDeadline,
     ) -> RocketMQResult<Option<NameServerSession<PR>>> {
-        deadline.ensure_before_send("<nameserver>")?;
+        deadline.ensure_before_send()?;
         let state = self.endpoint_state.load();
         let cached_addr = state.chosen().cloned();
 
@@ -440,7 +440,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
 
         let mut last_error = None;
         for identity in candidates {
-            deadline.ensure_before_send(identity.to_string())?;
+            deadline.ensure_before_send()?;
             let Some(endpoint) = Self::name_server_endpoint(&state, &identity) else {
                 continue;
             };

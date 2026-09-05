@@ -717,7 +717,10 @@ async fn async_send_callback_exception_runs_in_owned_send_task() {
         tx.send((result.is_some(), error.map(ToString::to_string)))
             .expect("test receiver should be alive");
     });
-    let error = RocketMQError::network_request_failed("broker-a", "callback failure");
+    let error = RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::caused_by(
+        &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+        std::io::Error::other("callback failure"),
+    )));
 
     MQClientAPIImpl::notify_send_callback_exception(&ClientCallbackExecutor::new(1), &Some(callback), &error).await;
 
@@ -726,6 +729,9 @@ async fn async_send_callback_exception_runs_in_owned_send_task() {
         .expect("callback should execute in the owned send task");
     assert!(!has_result);
     assert!(error
+        .as_deref()
+        .is_some_and(|message| message.contains("Transport connection operation failed")));
+    assert!(!error
         .as_deref()
         .is_some_and(|message| message.contains("callback failure")));
 }
@@ -1185,11 +1191,14 @@ fn reset_offset_table_from_response_decodes_java_body() {
 #[test]
 fn async_send_retries_transient_network_failures_only() {
     let connection_failed =
-        rocketmq_error::RocketMQError::network_connection_failed("broker-a:10911", "connection failed");
-    let send_failed = rocketmq_error::RocketMQError::Network(rocketmq_error::NetworkError::send_failed(
-        "broker-a:10911",
-        "write failed",
-    ));
+        rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::caused_by(
+            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+            std::io::Error::other("connection failed"),
+        )));
+    let send_failed = rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::caused_by(
+        &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+        std::io::Error::other("write failed"),
+    )));
 
     let retry_response_codes = HashSet::new();
     assert!(MQClientAPIImpl::should_retry_async_producer_send_error(
@@ -1224,14 +1233,12 @@ fn async_send_does_not_retry_timeout_backpressure_or_stopped_client() {
         operation: "send_request",
         timeout_ms: 3_000,
     };
-    let request_timeout = rocketmq_error::RocketMQError::Network(rocketmq_error::NetworkError::RequestTimeout {
-        addr: "broker-a:10911".to_string(),
-        timeout_ms: 3_000,
-    });
-    let too_many_requests = rocketmq_error::RocketMQError::Network(rocketmq_error::NetworkError::TooManyRequests {
-        addr: "broker-a:10911".to_string(),
-        limit: 1,
-    });
+    let connection_timeout = rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::new(
+        &rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT,
+    )));
+    let too_many_requests = rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::new(
+        &rocketmq_error::TRANSPORT_REMOTE_RATE_LIMITED,
+    )));
 
     let retry_response_codes = HashSet::new();
     assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
@@ -1239,7 +1246,7 @@ fn async_send_does_not_retry_timeout_backpressure_or_stopped_client() {
         &retry_response_codes,
     ));
     assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
-        &request_timeout,
+        &connection_timeout,
         &retry_response_codes,
     ));
     assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(

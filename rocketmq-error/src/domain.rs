@@ -26,7 +26,6 @@ use crate::ErrorSeverity;
 use crate::Exposure;
 use crate::FilterCompileError;
 use crate::FilterError;
-use crate::NetworkError;
 use crate::ObservabilityError;
 use crate::ProtocolError;
 use crate::RecoveryHint;
@@ -113,20 +112,6 @@ impl DomainError for AuthError {
 
     fn context(&self) -> ErrorContext {
         AuthError::context(self)
-    }
-}
-
-impl DomainError for NetworkError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Network
-    }
-
-    fn descriptor(&self) -> &'static ErrorDescriptor {
-        NetworkError::descriptor(self)
-    }
-
-    fn context(&self) -> ErrorContext {
-        NetworkError::context(self)
     }
 }
 

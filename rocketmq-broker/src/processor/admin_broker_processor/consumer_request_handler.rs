@@ -847,8 +847,8 @@ impl ConsumerRequestHandler {
                 response = response.set_code(code).set_remark(remark);
                 Ok(Some(response))
             }
-            Err(error) => {
-                let (code, remark) = consumer_request_failure_response(error.code());
+            Err(_) => {
+                let (code, remark) = consumer_request_failure_response();
                 response = response.set_code(code).set_remark(remark);
                 Ok(Some(response))
             }
@@ -1001,12 +1001,8 @@ const fn consumer_request_rejection_response() -> (ResponseCode, &'static str) {
     (ResponseCode::SystemError, "consumer request rejected")
 }
 
-fn consumer_request_failure_response(code: rocketmq_error::ErrorCode) -> (ResponseCode, &'static str) {
-    if code == rocketmq_error::TRANSPORT_REQUEST_TIMEOUT.code() {
-        (ResponseCode::ConsumeMsgTimeout, "consumer request timed out")
-    } else {
-        (ResponseCode::SystemError, "consumer request failed")
-    }
+const fn consumer_request_failure_response() -> (ResponseCode, &'static str) {
+    (ResponseCode::SystemError, "consumer request failed")
 }
 
 #[cfg(test)]
@@ -1054,14 +1050,8 @@ mod tests {
     use crate::broker_runtime::BrokerRuntime;
 
     #[test]
-    fn consumer_request_transport_outcomes_keep_the_timeout_wire_split() {
-        let (timeout_code, timeout_remark) =
-            super::consumer_request_failure_response(rocketmq_error::TRANSPORT_REQUEST_TIMEOUT.code());
-        assert_eq!(timeout_code as i32, 207);
-        assert_eq!(timeout_remark, "consumer request timed out");
-
-        let (failure_code, failure_remark) =
-            super::consumer_request_failure_response(rocketmq_error::TRANSPORT_SESSION_FAILED.code());
+    fn consumer_request_transport_outcomes_keep_safe_system_error_fallbacks() {
+        let (failure_code, failure_remark) = super::consumer_request_failure_response();
         assert_eq!(failure_code as i32, 1);
         assert_eq!(failure_remark, "consumer request failed");
 

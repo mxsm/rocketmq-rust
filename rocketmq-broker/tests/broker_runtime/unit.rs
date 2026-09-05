@@ -3409,12 +3409,7 @@ async fn successive_runtime_policy_reconciliation_converges_on_latest_generation
                 })
                 .await
                 .map(|_| ())
-                .map_err(|error| {
-                    rocketmq_error::RocketMQError::network_connection_failed(
-                        "runtime-registration-generation-test",
-                        error.to_string(),
-                    )
-                })
+                .or_else(|error| error.into_coordination_result("runtime registration generation test"))
         })
     });
     let first_admin = admin.clone();

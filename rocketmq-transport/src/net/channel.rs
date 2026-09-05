@@ -43,6 +43,13 @@ use crate::base::pending_request_table::PendingRequestToken;
 use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::admission_queue_saturated;
+use crate::error_helpers::connection_failed;
+use crate::error_helpers::connection_failed_without_source;
+use crate::error_helpers::network;
+use crate::error_helpers::response_timeout_caused_by;
+use crate::error_helpers::write_timeout_caused_by;
+use crate::error_helpers::TransportStage;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
 use crate::proxy_protocol::ProxyProtocolMetadata;
@@ -403,14 +410,16 @@ impl OutboundProgress {
         self.0.store(stage, Ordering::Release);
     }
 
-    fn deadline_error(&self, deadline: RequestDeadline) -> RocketMQError {
+    fn deadline_error(&self, deadline: RequestDeadline, source: tokio::time::error::Elapsed) -> RocketMQError {
         match self.0.load(Ordering::Acquire) {
-            OUTBOUND_QUEUED | OUTBOUND_FAILED_BEFORE_SEND => {
-                RocketMQError::network_deadline_exceeded_before_send("channel")
-            }
-            OUTBOUND_WRITING => RocketMQError::network_write_timeout("channel", deadline.budget_millis()),
-            OUTBOUND_SENT => RocketMQError::network_response_timeout("channel", deadline.budget_millis()),
-            _ => RocketMQError::network_response_timeout("channel", deadline.budget_millis()),
+            OUTBOUND_QUEUED | OUTBOUND_FAILED_BEFORE_SEND => deadline.elapsed_error(),
+            OUTBOUND_WRITING => network(write_timeout_caused_by(
+                TransportStage::Writing,
+                deadline.budget_millis(),
+                source,
+            )),
+            OUTBOUND_SENT => network(response_timeout_caused_by(deadline.budget_millis(), source)),
+            _ => network(response_timeout_caused_by(deadline.budget_millis(), source)),
         }
     }
 }
@@ -527,15 +536,11 @@ async fn handle_send(
                 let mut connection = match deadline.timeout(connection.lock()).await {
                     Ok(connection) => connection,
                     Err(_) => {
-                        complete_send_error(
-                            reservation,
-                            &response_table,
-                            RocketMQError::network_deadline_exceeded_before_send("channel"),
-                        );
+                        complete_send_error(reservation, &response_table, deadline.elapsed_error());
                         continue;
                     }
                 };
-                if let Err(error) = deadline.ensure_before_send("channel") {
+                if let Err(error) = deadline.ensure_before_send() {
                     if let Some(progress) = progress.as_ref() {
                         progress.set(OUTBOUND_FAILED_BEFORE_SEND);
                     }
@@ -556,10 +561,7 @@ async fn handle_send(
                 }
             }
             Err(error) => {
-                if matches!(
-                    error,
-                    RocketMQError::Network(rocketmq_error::NetworkError::DeadlineExceededBeforeSend { .. })
-                ) {
+                if matches!(error, RocketMQError::Timeout { .. }) {
                     if let Some(progress) = progress.as_ref() {
                         progress.set(OUTBOUND_FAILED_BEFORE_SEND);
                     }
@@ -675,12 +677,7 @@ impl ChannelInner {
                         "remoting.channel.send",
                         handle_send(connection.clone(), outbound_queue_rx, response_table.clone()),
                     )
-                    .map_err(|error| {
-                        RocketMQError::network_connection_failed(
-                            "channel",
-                            format!("failed to spawn ChannelInner send task: {error}"),
-                        )
-                    })?,
+                    .map_err(|source| network(connection_failed(TransportStage::Closed, source)))?,
             )
         } else {
             drop(outbound_queue_rx);
@@ -715,7 +712,7 @@ impl ChannelInner {
         report.elapsed = started_at.elapsed();
         if let Some(owner) = self.pending_request_owner.as_ref() {
             self.response_table.close_owner(owner, || {
-                RocketMQError::network_connection_failed("channel", "connection closed")
+                network(connection_failed_without_source(TransportStage::Closed))
             });
         }
         report.log_if_unhealthy();
@@ -731,7 +728,7 @@ impl Drop for ChannelInner {
         }
         if let Some(owner) = self.pending_request_owner.as_ref() {
             self.response_table.close_owner(owner, || {
-                RocketMQError::network_connection_failed("channel", "connection dropped")
+                network(connection_failed_without_source(TransportStage::Closed))
             });
         }
     }
@@ -754,7 +751,7 @@ impl ChannelInner {
             .lock()
             .as_ref()
             .cloned()
-            .ok_or_else(|| RocketMQError::network_connection_failed("channel", "outbound queue is closed"))
+            .ok_or_else(|| network(connection_failed_without_source(TransportStage::Closed)))
     }
 
     // === Connection Accessors ===
@@ -872,31 +869,29 @@ impl ChannelInner {
         let (response_tx, mut response_rx) =
             tokio::sync::oneshot::channel::<rocketmq_error::RocketMQResult<RemotingCommand>>();
         let opaque = request.opaque();
-        let owner = self.pending_request_owner.as_ref().ok_or_else(|| {
-            RocketMQError::network_connection_failed("channel", "request-response requires a network session owner")
-        })?;
+        let owner = self
+            .pending_request_owner
+            .as_ref()
+            .ok_or_else(|| network(connection_failed_without_source(TransportStage::Closed)))?;
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
         let guard =
             self.response_table
                 .register_for_owner_with_bytes(owner, opaque, deadline, retained_bytes, response_tx)?;
         let reservation = ResponseReservation::Pending(guard.token());
 
-        deadline.ensure_before_send("channel")?;
+        deadline.ensure_before_send()?;
         if let Some(connection) = self.direct_network_connection() {
             let mut connection = deadline
                 .timeout(connection.lock())
                 .await
-                .map_err(|_| RocketMQError::network_deadline_exceeded_before_send("channel"))?;
-            deadline.ensure_before_send("channel")?;
+                .map_err(|_| deadline.elapsed_error())?;
+            deadline.ensure_before_send()?;
             progress.set(OUTBOUND_WRITING);
             if let Err(error) = connection
                 .send_command_with_deadline(request, deadline, "channel")
                 .await
             {
-                if matches!(
-                    error,
-                    RocketMQError::Network(rocketmq_error::NetworkError::DeadlineExceededBeforeSend { .. })
-                ) {
+                if matches!(error, RocketMQError::Timeout { .. }) {
                     progress.set(OUTBOUND_FAILED_BEFORE_SEND);
                 }
                 return Err(error);
@@ -908,9 +903,9 @@ impl ChannelInner {
             outbound_queue_tx
                 .try_send((request, Some(reservation), Some(deadline), Some(progress.clone())))
                 .map_err(|error| match error {
-                    flume::TrySendError::Full(_) => RocketMQError::network_queue_full("channel"),
+                    flume::TrySendError::Full(_) => network(admission_queue_saturated("channel")),
                     flume::TrySendError::Disconnected(_) => {
-                        RocketMQError::network_connection_failed("channel", "outbound queue is closed")
+                        network(connection_failed_without_source(TransportStage::Closed))
                     }
                 })?;
         }
@@ -919,16 +914,17 @@ impl ChannelInner {
         match deadline.timeout(&mut response_rx).await {
             Ok(result) => match result {
                 Ok(response) => response,
-                Err(e) => Err(RocketMQError::network_connection_failed(
-                    "channel",
-                    format!("connection dropped: {}", e),
-                )),
+                Err(source) => Err(network(connection_failed(TransportStage::Closed, source))),
             },
-            Err(_) => {
-                let stage_error = progress.deadline_error(deadline);
-                // Timeout expired
-                guard.expire("channel");
-                Err(stage_error)
+            Err(source) => {
+                let stage_error = progress.deadline_error(deadline, source);
+                match stage_error {
+                    RocketMQError::Network(source) => Err(guard.expire_with_network(source)),
+                    error => {
+                        guard.complete(Err(deadline.elapsed_error()));
+                        Err(error)
+                    }
+                }
             }
         }
     }
@@ -962,21 +958,21 @@ impl ChannelInner {
             let mut connection = deadline
                 .timeout(connection.lock())
                 .await
-                .map_err(|_| RocketMQError::network_deadline_exceeded_before_send("channel"))?;
-            deadline.ensure_before_send("channel")?;
+                .map_err(|_| deadline.elapsed_error())?;
+            deadline.ensure_before_send()?;
             return connection
                 .send_command_with_deadline(request, deadline, "channel")
                 .await;
         }
 
         let outbound_queue_tx = self.outbound_queue_sender()?;
-        deadline.ensure_before_send("channel")?;
+        deadline.ensure_before_send()?;
         outbound_queue_tx
             .try_send((request, None, Some(deadline), None))
             .map_err(|error| match error {
-                flume::TrySendError::Full(_) => RocketMQError::network_queue_full("channel"),
+                flume::TrySendError::Full(_) => network(admission_queue_saturated("channel")),
                 flume::TrySendError::Disconnected(_) => {
-                    RocketMQError::network_connection_failed("channel", "outbound queue is closed")
+                    network(connection_failed_without_source(TransportStage::Closed))
                 }
             })
     }
@@ -1002,14 +998,14 @@ impl ChannelInner {
     ) -> rocketmq_error::RocketMQResult<()> {
         let deadline = timeout_millis.map(RequestDeadline::from_timeout_millis);
         if let Some(deadline) = deadline {
-            deadline.ensure_before_send("channel")?;
+            deadline.ensure_before_send()?;
         }
         if let Some(connection) = self.direct_network_connection() {
             let mut connection = match deadline {
                 Some(deadline) => deadline
                     .timeout(connection.lock())
                     .await
-                    .map_err(|_| RocketMQError::network_deadline_exceeded_before_send("channel"))?,
+                    .map_err(|_| deadline.elapsed_error())?,
                 None => connection.lock().await,
             };
             return match deadline {
@@ -1025,9 +1021,9 @@ impl ChannelInner {
         outbound_queue_tx
             .try_send((request, None, deadline, None))
             .map_err(|error| match error {
-                flume::TrySendError::Full(_) => RocketMQError::network_queue_full("channel"),
+                flume::TrySendError::Full(_) => network(admission_queue_saturated("channel")),
                 flume::TrySendError::Disconnected(_) => {
-                    RocketMQError::network_connection_failed("channel", "outbound queue is closed")
+                    network(connection_failed_without_source(TransportStage::Closed))
                 }
             })
     }
@@ -1048,9 +1044,10 @@ impl ChannelInner {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use super::*;
     use crate::base::pending_request_table::PendingRequestTable;
-    use rocketmq_error::NetworkError;
     use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
     use tokio::net::TcpStream;
@@ -1060,6 +1057,47 @@ mod tests {
             .service_context("channel-inner-service")
             .task_group()
             .clone()
+    }
+
+    async fn elapsed_timeout_source() -> tokio::time::error::Elapsed {
+        tokio::time::timeout(Duration::ZERO, std::future::pending::<()>())
+            .await
+            .expect_err("pending future must exceed a zero timeout")
+    }
+
+    #[tokio::test]
+    async fn deadline_error_preserves_elapsed_only_for_operational_stages() {
+        let deadline = RequestDeadline::from_timeout_millis(25);
+        let queued = OutboundProgress::queued().deadline_error(deadline, elapsed_timeout_source().await);
+        assert!(matches!(
+            queued,
+            RocketMQError::Timeout {
+                operation: "transport_before_send",
+                timeout_ms: 25,
+            }
+        ));
+
+        let writing = OutboundProgress::queued();
+        writing.set(OUTBOUND_WRITING);
+        let RocketMQError::Network(writing) = writing.deadline_error(deadline, elapsed_timeout_source().await) else {
+            panic!("writing timeout must be a canonical Network error");
+        };
+        assert_eq!(writing.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
+        assert!(writing
+            .source()
+            .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())
+            .is_some());
+
+        let sent = OutboundProgress::queued();
+        sent.set(OUTBOUND_SENT);
+        let RocketMQError::Network(sent) = sent.deadline_error(deadline, elapsed_timeout_source().await) else {
+            panic!("response timeout must be a canonical Network error");
+        };
+        assert_eq!(sent.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());
+        assert!(sent
+            .source()
+            .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())
+            .is_some());
     }
 
     #[tokio::test]
@@ -1236,7 +1274,10 @@ mod tests {
         assert!(
             matches!(
                 error,
-                RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { .. })
+                RocketMQError::Timeout {
+                    operation: "transport_before_send",
+                    timeout_ms: 50,
+                }
             ),
             "unexpected error: {error:?}"
         );

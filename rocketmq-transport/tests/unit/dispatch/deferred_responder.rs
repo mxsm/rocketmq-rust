@@ -22,7 +22,6 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -46,6 +45,8 @@ use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::ResponseSendOutcome;
 use crate::dispatch::ResponseStateOutcome;
 use crate::dispatch::ResponseTerminalState;
+use crate::error_helpers::connection_failed_for_remote;
+use crate::error_helpers::TransportStage;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
 use crate::session_view::EmbeddedSessionRecord;
@@ -498,14 +499,28 @@ async fn immutable_binding_failure_terminates_not_started_and_preserves_its_sour
 #[test]
 fn response_operational_failures_preserve_typed_sources_but_redact_source_text() {
     let secret = "opaque=991 principal=alice token=secret body=payload session=77";
+    let canonical =
+        connection_failed_for_remote("deferred_test", TransportStage::Connect, std::io::Error::other(secret));
     let error = ResponseOperationalFailure::Transport {
         progress: WriteProgress::PossiblyPartial,
-        source: RocketMQError::network_connection_failed("deferred_test", secret),
+        source: Arc::clone(&canonical),
     };
     assert_eq!(error.operation(), "transport");
     assert_eq!(error.write_progress(), WriteProgress::PossiblyPartial);
     assert!(!error.retryable());
-    assert!(error.source().is_some());
+    assert_eq!(canonical.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
+    assert_eq!(canonical.fault(), rocketmq_error::FaultAttribution::Dependency);
+    assert_eq!(canonical.projection().remoting().code.as_i32(), 2);
+    let source = error.source().expect("transport failure retains its canonical source");
+    let typed = source
+        .downcast_ref::<rocketmq_error::Error>()
+        .expect("transport source remains the canonical error");
+    assert!(std::ptr::eq(typed, canonical.as_ref()));
+    let physical = typed
+        .source()
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .expect("canonical error retains the typed I/O source");
+    assert_eq!(physical.to_string(), secret);
     for rendered in [format!("{error}"), format!("{error:?}")] {
         assert!(!rendered.contains("991"));
         assert!(!rendered.contains("alice"));

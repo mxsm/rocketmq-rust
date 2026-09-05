@@ -24,6 +24,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::FullPolicy;
@@ -35,6 +36,12 @@ use rocketmq_runtime::ResourcePermit;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::admission_queue_saturated;
+use crate::error_helpers::connection_failed_without_source;
+use crate::error_helpers::network;
+use crate::error_helpers::response_timeout;
+use crate::error_helpers::response_timeout_for_remote;
+use crate::error_helpers::TransportStage;
 
 static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -333,13 +340,10 @@ impl PendingRequestTable {
         sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
     ) -> RocketMQResult<PendingRequestGuard> {
         let deadline = deadline.capped(self.inner.max_request_age);
-        deadline.ensure_before_send("pending_request")?;
+        deadline.ensure_before_send()?;
         self.validate_owner(owner)?;
         if !owner.accepting.load(Ordering::Acquire) {
-            return Err(RocketMQError::network_connection_failed(
-                "pending_request",
-                "connection owner is retired; reconnect before sending another request",
-            ));
+            return Err(network(connection_failed_without_source(TransportStage::Closed)));
         }
         let permit = self.inner.budget.try_acquire_data(retained_bytes).map_err(|error| {
             match error.dimension() {
@@ -350,7 +354,7 @@ impl PendingRequestTable {
                     self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            RocketMQError::network_queue_full("pending_request")
+            network(admission_queue_saturated("pending_request"))
         })?;
         let reservation = self.inner.next_reservation.fetch_add(1, Ordering::Relaxed);
         let key = PendingRequestKey {
@@ -379,24 +383,15 @@ impl PendingRequestTable {
                     deadline,
                 })
             }
-            Entry::Occupied(_) => Err(RocketMQError::network_connection_failed(
-                "pending_request",
-                format!("opaque {opaque} is already reserved on this connection"),
-            )),
+            Entry::Occupied(_) => Err(network(connection_failed_without_source(TransportStage::Closed))),
         };
         if result.is_ok() && !owner.accepting.load(Ordering::Acquire) {
             if let Some(pending) = self.take_token(token) {
                 pending
                     .completion
-                    .complete(Err(RocketMQError::network_connection_failed(
-                        "pending_request",
-                        "connection owner retired while registering request",
-                    )));
+                    .complete(Err(network(connection_failed_without_source(TransportStage::Closed))));
             }
-            return Err(RocketMQError::network_connection_failed(
-                "pending_request",
-                "connection owner is retired; reconnect before sending another request",
-            ));
+            return Err(network(connection_failed_without_source(TransportStage::Closed)));
         }
         result
     }
@@ -556,13 +551,7 @@ impl PendingRequestTable {
         let mut completed = 0;
         for (token, timeout_millis, owner) in expired {
             owner.retire();
-            if self.complete_token(
-                token,
-                Err(RocketMQError::network_response_timeout(
-                    "pending_request",
-                    timeout_millis,
-                )),
-            ) {
+            if self.complete_token(token, Err(network(response_timeout(timeout_millis)))) {
                 completed += 1;
             }
         }
@@ -582,10 +571,7 @@ impl PendingRequestTable {
         if owner.table_id == self.inner.table_id {
             Ok(())
         } else {
-            Err(RocketMQError::network_connection_failed(
-                "pending_request",
-                "connection owner belongs to a different pending request table",
-            ))
+            Err(network(connection_failed_without_source(TransportStage::Closed)))
         }
     }
 
@@ -644,19 +630,20 @@ impl PendingRequestGuard {
     }
 
     #[doc(hidden)]
-    pub fn expire(mut self, addr: impl Into<String>) -> RocketMQError {
+    pub fn expire(self, addr: impl Into<String>) -> RocketMQError {
+        let source = response_timeout_for_remote(addr.into(), self.deadline.budget_millis());
+        self.expire_with_network(source)
+    }
+
+    pub(crate) fn expire_with_network(mut self, source: SharedError) -> RocketMQError {
         let token = self
             .token
             .take()
             .expect("active pending request guard must have a token");
-        let addr = addr.into();
-        let timeout_millis = self.deadline.budget_millis();
-        let error = RocketMQError::network_response_timeout(addr.clone(), timeout_millis);
+        let error = network(Arc::clone(&source));
         if let Some(pending) = self.table.take_token(token) {
             pending.owner.retire();
-            pending
-                .completion
-                .complete(Err(RocketMQError::network_response_timeout(addr, timeout_millis)));
+            pending.completion.complete(Err(network(source)));
         }
         error
     }
@@ -667,10 +654,7 @@ impl Drop for PendingRequestGuard {
         if let Some(token) = self.token.take() {
             self.table.complete_token(
                 token,
-                Err(RocketMQError::network_connection_failed(
-                    "pending_request",
-                    "reservation dropped before completion",
-                )),
+                Err(network(connection_failed_without_source(TransportStage::Closed))),
             );
         }
     }

@@ -17,7 +17,6 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
@@ -37,6 +36,16 @@ use crate::config::SocketOptions;
 use crate::config::TlsConfig;
 use crate::connection::Connection;
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::admission_queue_saturated;
+use crate::error_helpers::connection_failed_for_remote;
+use crate::error_helpers::connection_failed_without_source_for_remote;
+use crate::error_helpers::connection_timeout_caused_by;
+use crate::error_helpers::dns_failed;
+use crate::error_helpers::dns_failed_without_source;
+use crate::error_helpers::endpoint_invalid;
+use crate::error_helpers::network;
+use crate::error_helpers::response_timeout_caused_by_for_remote;
+use crate::error_helpers::TransportStage;
 #[cfg(feature = "socks")]
 use crate::runtime::config::client_config::TransportClientConfig;
 use crate::security::TransportSecurity;
@@ -237,10 +246,10 @@ async fn connect_legacy_address_with_options_and_telemetry(
     .await?;
     socket_options
         .apply(&stream)
-        .map_err(|error| RocketMQError::network_connection_failed(address, error.to_string()))?;
+        .map_err(|source| network(connection_failed_for_remote(address, TransportStage::Connect, source)))?;
     let socket_nodelay = stream
         .nodelay()
-        .map_err(|error| RocketMQError::network_connection_failed(address, error.to_string()))?;
+        .map_err(|source| network(connection_failed_for_remote(address, TransportStage::Connect, source)))?;
     let local_addr = stream.local_addr()?;
     let remote_addr = stream.peer_addr()?;
     let negotiated_tls = tls_config.enable;
@@ -251,7 +260,7 @@ async fn connect_legacy_address_with_options_and_telemetry(
             let tls_stream = deadline
                 .timeout(connect_tls_stream(stream, &server_name, tls_config))
                 .await
-                .map_err(|_| RocketMQError::network_connection_timeout(address, deadline.budget_millis()))??;
+                .map_err(|source| network(connection_timeout_caused_by(address, deadline.budget_millis(), source)))??;
             Connection::new_with_tls_stream_and_limits(tls_stream, frame_limits).with_telemetry(telemetry)
         }
         #[cfg(not(feature = "tls"))]
@@ -296,10 +305,10 @@ async fn connect_physical_with_options_and_telemetry(
     .await?;
     socket_options
         .apply(&stream)
-        .map_err(|error| RocketMQError::network_connection_failed(authority, error.to_string()))?;
+        .map_err(|source| network(connection_failed_for_remote(authority, TransportStage::Connect, source)))?;
     let socket_nodelay = stream
         .nodelay()
-        .map_err(|error| RocketMQError::network_connection_failed(authority, error.to_string()))?;
+        .map_err(|source| network(connection_failed_for_remote(authority, TransportStage::Connect, source)))?;
     let local_addr = stream.local_addr()?;
     let remote_addr = stream.peer_addr()?;
     let negotiated_tls = tls_config.enable;
@@ -309,7 +318,13 @@ async fn connect_physical_with_options_and_telemetry(
             let tls_stream = deadline
                 .timeout(connect_tls_stream(stream, tls_server_name, tls_config))
                 .await
-                .map_err(|_| RocketMQError::network_connection_timeout(authority, deadline.budget_millis()))??;
+                .map_err(|source| {
+                    network(connection_timeout_caused_by(
+                        authority,
+                        deadline.budget_millis(),
+                        source,
+                    ))
+                })??;
             Connection::new_with_tls_stream_and_limits(tls_stream, frame_limits).with_telemetry(telemetry)
         }
         #[cfg(not(feature = "tls"))]
@@ -339,11 +354,54 @@ async fn connect_legacy_tcp(
     if let Some(socks_proxy) = socks_proxy.filter(|config| !config.is_empty()) {
         return crate::socks::connect_target(socks_proxy, address, None, deadline).await;
     }
-    deadline
-        .timeout(tokio::net::TcpStream::connect(address))
+    if !valid_legacy_authority(address) {
+        return Err(network(endpoint_invalid(!address.is_empty())));
+    }
+    if let Ok(socket_addr) = address.parse::<SocketAddr>() {
+        return deadline
+            .timeout(tokio::net::TcpStream::connect(socket_addr))
+            .await
+            .map_err(|source| network(connection_timeout_caused_by(address, deadline.budget_millis(), source)))?
+            .map_err(|source| network(connection_failed_for_remote(address, TransportStage::Connect, source)));
+    }
+
+    let resolved = deadline
+        .timeout(tokio::net::lookup_host(address))
         .await
-        .map_err(|_| RocketMQError::network_connection_timeout(address, deadline.budget_millis()))?
-        .map_err(|error| RocketMQError::network_connection_failed(address, error.to_string()))
+        .map_err(|source| network(connection_timeout_caused_by(address, deadline.budget_millis(), source)))?
+        .map_err(|source| network(dns_failed(source)))?;
+    let mut last_connect_error = None;
+    for socket_addr in resolved {
+        match deadline.timeout(tokio::net::TcpStream::connect(socket_addr)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(source)) => last_connect_error = Some(source),
+            Err(source) => {
+                return Err(network(connection_timeout_caused_by(
+                    address,
+                    deadline.budget_millis(),
+                    source,
+                )))
+            }
+        }
+    }
+    match last_connect_error {
+        Some(source) => Err(network(connection_failed_for_remote(
+            address,
+            TransportStage::Connect,
+            source,
+        ))),
+        None => Err(network(dns_failed_without_source())),
+    }
+}
+
+fn valid_legacy_authority(address: &str) -> bool {
+    if address.parse::<SocketAddr>().is_ok() {
+        return true;
+    }
+    let Some((host, port)) = address.rsplit_once(':') else {
+        return false;
+    };
+    !host.is_empty() && !host.as_bytes().contains(&0) && port.parse::<u16>().is_ok()
 }
 
 async fn connect_physical_tcp(
@@ -359,8 +417,14 @@ async fn connect_physical_tcp(
     deadline
         .timeout(tokio::net::TcpStream::connect(socket_addr))
         .await
-        .map_err(|_| RocketMQError::network_connection_timeout(authority, deadline.budget_millis()))?
-        .map_err(|error| RocketMQError::network_connection_failed(authority, error.to_string()))
+        .map_err(|source| {
+            network(connection_timeout_caused_by(
+                authority,
+                deadline.budget_millis(),
+                source,
+            ))
+        })?
+        .map_err(|source| network(connection_failed_for_remote(authority, TransportStage::Connect, source)))
 }
 
 #[cfg(feature = "tls")]
@@ -497,11 +561,15 @@ impl OneShotTransportClient {
         let (mut connection, local_addr, remote_addr, negotiated_tls) = connected.into_parts_with_tls();
         let scope = AdmissionScope::new(remote_addr.ip()).with_session(remote_addr.port() as u64);
         let peer = PeerInfo::new(remote_addr, negotiated_tls);
-        deadline.ensure_before_send(address.to_string())?;
-        self.security
-            .sign(&mut request, Some(&peer))
-            .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
-        deadline.ensure_before_send(address.to_string())?;
+        deadline.ensure_before_send()?;
+        self.security.sign(&mut request, Some(&peer)).map_err(|source| {
+            network(connection_failed_for_remote(
+                address.to_string(),
+                TransportStage::Connect,
+                source,
+            ))
+        })?;
+        deadline.ensure_before_send()?;
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
         let _connection_permit = self
             .admission
@@ -512,7 +580,7 @@ impl OneShotTransportClient {
                 AdmissionClass::Data,
             )
             .into_result()
-            .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
+            .map_err(|_| network(admission_queue_saturated(address.to_string())))?;
         let _inflight_permit = self
             .admission
             .try_acquire(
@@ -522,7 +590,7 @@ impl OneShotTransportClient {
                 AdmissionClass::Data,
             )
             .into_result()
-            .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
+            .map_err(|_| network(admission_queue_saturated(address.to_string())))?;
 
         let owner = self.pending.new_owner();
         let opaque = self.next_opaque.fetch_add(1, Ordering::Relaxed);
@@ -539,7 +607,10 @@ impl OneShotTransportClient {
             guard.complete(Err(error));
             let _ = deadline.timeout(connection.shutdown()).await;
             return receiver.await.map_err(|_| {
-                RocketMQError::network_connection_failed(address.to_string(), "send completion dropped")
+                network(connection_failed_without_source_for_remote(
+                    address.to_string(),
+                    TransportStage::Closed,
+                ))
             })?;
         }
 
@@ -550,10 +621,10 @@ impl OneShotTransportClient {
                     .pending
                     .complete_response_for_owner(&owner, response_opaque, response)
                 {
-                    guard.complete(Err(RocketMQError::network_connection_failed(
+                    guard.complete(Err(network(connection_failed_without_source_for_remote(
                         address.to_string(),
-                        format!("unexpected response opaque {response_opaque}; expected {opaque}"),
-                    )));
+                        TransportStage::Closed,
+                    ))));
                 }
             }
             Ok(Some(Err(error))) => {
@@ -561,16 +632,129 @@ impl OneShotTransportClient {
             }
             Ok(None) => {
                 self.pending.close_owner(&owner, || {
-                    RocketMQError::network_connection_failed(address.to_string(), "connection closed before response")
+                    network(connection_failed_without_source_for_remote(
+                        address.to_string(),
+                        TransportStage::Closed,
+                    ))
                 });
             }
-            Err(_) => {
-                guard.expire(address.to_string());
+            Err(source) => {
+                let source =
+                    response_timeout_caused_by_for_remote(address.to_string(), deadline.budget_millis(), source);
+                guard.expire_with_network(source);
             }
         }
         let _ = deadline.timeout(connection.shutdown()).await;
-        receiver
+        receiver.await.map_err(|_| {
+            network(connection_failed_without_source_for_remote(
+                address.to_string(),
+                TransportStage::Closed,
+            ))
+        })?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+    use std::time::Duration;
+
+    use rocketmq_error::RocketMQError;
+
+    use super::*;
+
+    #[test]
+    fn legacy_authority_validation_accepts_existing_direct_address_forms() {
+        for address in ["127.0.0.1:9876", "broker.example:9876", "[::1]:9876", "::1:9876"] {
+            assert!(valid_legacy_authority(address), "valid authority: {address}");
+        }
+        for address in [
+            "",
+            "broker.example",
+            ":9876",
+            "broker.example:bad",
+            "broker.example:65536",
+            "host\0name:9876",
+        ] {
+            assert!(!valid_legacy_authority(address), "invalid authority: {address:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_invalid_authority_uses_source_free_endpoint_descriptor() {
+        for (address, expected_context_len) in [
+            ("", 0),
+            ("broker.example", 1),
+            ("broker.example:65536", 1),
+            ("host\0name:9876", 1),
+        ] {
+            let error = match connect_with_config(
+                address,
+                &TlsConfig::default(),
+                FrameLimits::default(),
+                RequestDeadline::after(Duration::from_secs(1)),
+            )
             .await
-            .map_err(|_| RocketMQError::network_connection_failed(address.to_string(), "response completion dropped"))?
+            {
+                Ok(_) => panic!("invalid direct authority must fail before DNS or connect"),
+                Err(error) => error,
+            };
+            let RocketMQError::Network(error) = error else {
+                panic!("invalid direct authority must use the canonical Network carrier")
+            };
+            assert_eq!(error.code(), rocketmq_error::TRANSPORT_ENDPOINT_INVALID.code());
+            assert_eq!(error.context().len(), expected_context_len);
+            assert!(error.source().is_none());
+            assert!(error
+                .public_view()
+                .expect("endpoint context matches its descriptor")
+                .fields()
+                .next()
+                .is_none());
+            assert_eq!(error.projection().remoting().code.as_i32(), 2);
+        }
+    }
+
+    #[cfg(feature = "socks")]
+    #[tokio::test]
+    async fn socks_invalid_target_keeps_the_existing_configuration_error() {
+        let config = crate::socks::SocksProxyConfig::parse_java_json(r#"{"example.com":{"addr":"127.0.0.1:1080"}}"#)
+            .expect("valid SOCKS fixture");
+        let error = connect_legacy_tcp("", Some(&config), RequestDeadline::after(Duration::from_secs(1)))
+            .await
+            .expect_err("SOCKS target parser must reject the invalid authority");
+        assert_eq!(error.boundary_view().remoting().code.as_i32(), 29);
+        assert!(matches!(
+            error,
+            RocketMQError::ConfigInvalidValue {
+                key: "com.rocketmq.socks.proxy.config",
+                ..
+            }
+        ));
+    }
+
+    #[cfg(feature = "socks")]
+    #[tokio::test]
+    async fn socks_pre_resolver_invalid_host_uses_source_free_endpoint_descriptor() {
+        let config = crate::socks::SocksProxyConfig::parse_java_json(r#"{"example.com":{"addr":"127.0.0.1:1080"}}"#)
+            .expect("valid SOCKS fixture");
+        for authority in [":9876", "host\0name:9876"] {
+            let error = connect_legacy_tcp(authority, Some(&config), RequestDeadline::after(Duration::from_secs(1)))
+                .await
+                .expect_err("SOCKS host must fail before resolver selection");
+            let RocketMQError::Network(error) = error else {
+                panic!("pre-resolver SOCKS host rejection must use Network")
+            };
+            assert_eq!(error.code(), rocketmq_error::TRANSPORT_ENDPOINT_INVALID.code());
+            assert_eq!(error.context().len(), 1);
+            assert!(error.source().is_none());
+            assert!(error
+                .public_view()
+                .expect("endpoint context matches its descriptor")
+                .fields()
+                .next()
+                .is_none());
+            assert_eq!(error.projection().remoting().code.as_i32(), 2);
+        }
     }
 }

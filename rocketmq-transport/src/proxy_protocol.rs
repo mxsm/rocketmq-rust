@@ -368,8 +368,10 @@ fn parse_tlvs(input: &[u8], config: &ProxyProtocolConfig) -> RocketMQResult<BTre
     Ok(tlvs)
 }
 
-fn protocol_error(reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::network_connection_failed("proxy-protocol", reason.into())
+fn protocol_error(_reason: impl Into<String>) -> RocketMQError {
+    crate::error_helpers::network(crate::error_helpers::connection_failed_without_source(
+        crate::error_helpers::TransportStage::EndpointValidation,
+    ))
 }
 
 fn config_error(key: &'static str, reason: &'static str) -> RocketMQError {

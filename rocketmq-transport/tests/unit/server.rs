@@ -1235,6 +1235,15 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
     let timeout_error = expect_server_request_error(timed_out.await, "missing response must expire absolute deadline");
     assert_eq!(timeout_error.code(), TRANSPORT_SESSION_FAILED.code());
     assert_transport_operation(&timeout_error, "request_await_response");
+    let timeout_stage = timeout_error
+        .source()
+        .and_then(|source| source.downcast_ref::<rocketmq_error::SharedError>())
+        .expect("session wrapper must retain the canonical response-timeout source");
+    assert_eq!(timeout_stage.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());
+    assert!(timeout_stage
+        .source()
+        .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())
+        .is_some());
     assert!(registry.capabilities(first_session).is_none());
     assert!(registry.server_request_sender(first_session).is_none());
 
@@ -1485,6 +1494,81 @@ async fn next_connected_session(events: &mut tokio::sync::broadcast::Receiver<Se
             SessionEvent::Disconnected(_) => {}
         }
     }
+}
+
+#[tokio::test]
+async fn prewrite_deadline_cleanup_keeps_the_server_request_session_usable() {
+    let runtime = TestRuntime::new("transport-server-request-prewrite-deadline");
+    let registry = Arc::new(SessionRegistry::new());
+    let mut events = registry.subscribe();
+    let write_checked = Arc::new(tokio::sync::Notify::new());
+    let resume_write = Arc::new(tokio::sync::Notify::new());
+    let server = TransportServer::new(
+        loopback_server_config(),
+        runtime.service_context(),
+        TcpProcessor {
+            state: Arc::new(ProcessorState::default()),
+            admission: None,
+        },
+    )
+    .with_session_registry(Arc::clone(&registry))
+    .with_write_preflight_barrier(crate::write_strategy::WritePreflightBarrier::new(
+        Arc::clone(&write_checked),
+        resume_write,
+    ));
+    let (mut client, _address, mut running) = start_server(runtime, server).await;
+    client
+        .send_command(RemotingCommand::create_remoting_command(701).mark_oneway_rpc())
+        .await
+        .expect("send one-way session establishment request");
+    let session_id = next_connected_session(&mut events).await;
+    let sender = registry
+        .server_request_sender(session_id)
+        .expect("connected server-request sender");
+    let request = {
+        let sender = sender.clone();
+        tokio::spawn(async move {
+            sender
+                .request(consumer_status_request(), Duration::from_millis(50))
+                .await
+        })
+    };
+
+    tokio::time::timeout(Duration::from_secs(1), write_checked.notified())
+        .await
+        .expect("server request reaches writer preflight after pending registration");
+    assert_eq!(sender.pending_usage().count, 1);
+    let outcome = tokio::time::timeout(Duration::from_secs(1), request)
+        .await
+        .expect("prewrite deadline completion")
+        .expect("server request task")
+        .expect("prewrite caller deadline is a normal outcome");
+    assert!(matches!(outcome, ServerRequestOutcome::DeadlineExpired));
+    assert_eq!(sender.pending_usage().count, 0);
+    assert!(registry.contains(session_id));
+    assert!(registry.server_request_sender(session_id).is_some());
+
+    let retry = sender.request(consumer_status_request(), Duration::from_secs(1));
+    tokio::pin!(retry);
+    let wire = tokio::select! {
+        result = &mut retry => panic!("healthy retry completed before its client response: {}", result.is_ok()),
+        frame = client.receive_command() => frame
+            .expect("healthy client connection")
+            .expect("healthy retry frame"),
+    };
+    client
+        .send_command(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(wire.opaque()),
+        )
+        .await
+        .expect("send healthy retry response");
+    assert!(matches!(
+        retry.await.expect("healthy retry result"),
+        ServerRequestOutcome::Responded(_)
+    ));
+
+    running.begin_shutdown();
+    running.finish().await;
 }
 
 #[tokio::test]

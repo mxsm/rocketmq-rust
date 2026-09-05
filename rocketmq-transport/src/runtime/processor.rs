@@ -635,7 +635,10 @@ mod tests {
             Duration::from_micros(11),
             Err(ResponseOperationalFailure::Transport {
                 progress: WriteProgress::PossiblyPartial,
-                source: RocketMQError::illegal_argument("transport source must not be retained"),
+                source: crate::error_helpers::connection_failed(
+                    crate::error_helpers::TransportStage::Write,
+                    std::io::Error::other("transport source must not be retained"),
+                ),
             }),
         );
         assert_eq!(
