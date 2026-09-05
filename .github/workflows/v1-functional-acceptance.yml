@@ -28,14 +28,14 @@ jobs:
   prepare-draft:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
@@ -50,7 +50,7 @@ jobs:
           --candidate-control-bundle target/candidate-input/control/CANDIDATE_CONTROL_BUNDLE.tar
           --output-root target/v1-publication-handoff
           --draft-bundle-output target/HANDOFF_DRAFT_TRANSFER.tar
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/HANDOFF_DRAFT_TRANSFER.tar
@@ -60,20 +60,20 @@ jobs:
     needs: prepare-draft
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/draft
@@ -85,7 +85,7 @@ jobs:
           --draft-bundle target/draft/HANDOFF_DRAFT_TRANSFER.tar
           --platform linux --result-id H01-LINUX
           --platform-bundle-output target/H01-LINUX
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: H01-LINUX-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/H01-LINUX
@@ -95,20 +95,20 @@ jobs:
     needs: prepare-draft
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/draft
@@ -121,7 +121,7 @@ jobs:
           -DraftBundle target/draft/HANDOFF_DRAFT_TRANSFER.tar
           -Platform windows -ResultId H01-WINDOWS
           -PlatformBundleOutput target/H01-WINDOWS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: H01-WINDOWS-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/H01-WINDOWS
@@ -131,20 +131,20 @@ jobs:
     needs: prepare-draft
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/draft
@@ -156,7 +156,7 @@ jobs:
           --draft-bundle target/draft/HANDOFF_DRAFT_TRANSFER.tar
           --platform macos --result-id H01-MACOS
           --platform-bundle-output target/H01-MACOS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: H01-MACOS-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/H01-MACOS
@@ -167,7 +167,7 @@ jobs:
     needs: [prepare-draft, platform-linux, platform-windows, platform-macos]
     runs-on: [self-hosted, linux, x64, rocketmq-release-candidate]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Require the complete platform denominator
         shell: bash
         run: |
@@ -175,21 +175,21 @@ jobs:
           [[ '${{ needs.platform-linux.result }}' == 'success' ]]
           [[ '${{ needs.platform-windows.result }}' == 'success' ]]
           [[ '${{ needs.platform-macos.result }}' == 'success' ]]
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: H01-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/platform-results
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: handoff-draft-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/draft
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_source_artifact }}
           path: target/candidate-input/source
           github-token: ${{ github.token }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
@@ -203,7 +203,7 @@ jobs:
           --draft-bundle target/draft/HANDOFF_DRAFT_TRANSFER.tar
           --platform-bundles-root target/platform-results
           --output-root target/v1-publication-handoff
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: publication-handoff-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/v1-publication-handoff
@@ -215,9 +215,9 @@ jobs:
     needs: [prepare-draft, platform-linux, platform-windows, platform-macos, aggregate-handoff]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download selected candidate control
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.candidate_control_artifact }}
           path: target/candidate-input/control
@@ -225,7 +225,7 @@ jobs:
           run-id: ${{ inputs.candidate_artifact_run_id }}
       - name: Download committed handoff state
         if: needs.aggregate-handoff.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: publication-handoff-${{ github.run_id }}-${{ github.run_attempt }}
           path: target/publication-handoff
@@ -308,7 +308,7 @@ jobs:
           echo "series_control=$output_root/series/RELEASE_SERIES_CONTROL_BUNDLE.tar" >> "$GITHUB_OUTPUT"
       - name: Upload terminal candidate control
         if: steps.terminal.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: handoff-terminal-candidate-control-g${{ steps.terminal.outputs.candidate_generation }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.terminal.outputs.candidate_control }}
@@ -316,7 +316,7 @@ jobs:
           retention-days: 30
       - name: Upload terminal release-series control
         if: steps.terminal.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: handoff-terminal-release-series-control-g${{ steps.terminal.outputs.series_generation }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.terminal.outputs.series_control }}

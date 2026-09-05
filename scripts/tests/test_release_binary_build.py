@@ -60,7 +60,7 @@ class ReleaseBinaryBuildTests(unittest.TestCase):
         self.assertIn("-Mode Aggregate", source)
         self.assertIn("import-build-control", source)
         self.assertIn("actions/upload-artifact@v7", source)
-        self.assertIn("actions/download-artifact@v7", source)
+        self.assertIn("actions/download-artifact@v8", source)
 
 
 if __name__ == "__main__":
