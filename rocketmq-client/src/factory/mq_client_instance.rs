@@ -600,7 +600,7 @@ impl MQClientInstance {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = state;
     }
 
-    /// Returns a reference to the [`ConsumerStatsManager`] held by this instance.
+    /// Returns a reference to the `ConsumerStatsManager` held by this instance.
     pub fn consumer_stats_manager(&self) -> &ConsumerStatsManager {
         &self.consumer_stats_manager
     }
@@ -2523,7 +2523,7 @@ impl MQClientInstance {
 
     /// Removes the current producer registration unconditionally by group.
     ///
-    /// Producer lifecycle cleanup should use [`Self::unregister_producer_if_owner`]
+    /// Producer lifecycle cleanup should use `Self::unregister_producer_if_owner`
     /// so a delayed cleanup cannot remove a replacement producer.
     pub async fn unregister_producer(&self, group: impl Into<CheetahString>) -> bool {
         let group = group.into();

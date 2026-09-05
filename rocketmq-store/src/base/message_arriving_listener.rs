@@ -26,8 +26,8 @@ pub trait MessageArrivingListener {
     /// * `logic_offset` - An i64 that represents the logical offset of the message in the queue.
     /// * `tags_code` - An i64 that represents the tags associated with the message.
     /// * `msg_store_time` - An i64 that represents the time when the message was stored.
-    /// * `filter_bit_map` - A Vec<u8> that represents the filter bit map for the message.
-    /// * `properties` - An Option containing a reference to a HashMap<String, String> that holds
+    /// * `filter_bit_map` - A `Vec<u8>` that represents the filter bit map for the message.
+    /// * `properties` - An `Option` containing a reference to a `HashMap<String, String>` that holds
     ///   the properties of the message.
     fn arriving(
         &self,

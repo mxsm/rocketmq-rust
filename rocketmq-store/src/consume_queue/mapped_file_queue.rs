@@ -1633,7 +1633,7 @@ impl MappedFileQueue {
     /// Create an iterator over mapped files
     ///
     /// # Returns
-    /// Iterator that yields Arc<DefaultMappedFile>
+    /// Iterator that yields `Arc<DefaultMappedFile>`
     ///
     /// # Example
     /// ```ignore
@@ -1650,7 +1650,7 @@ impl MappedFileQueue {
     /// Iterates from newest to oldest file.
     ///
     /// # Returns
-    /// Reversed iterator that yields Arc<DefaultMappedFile>
+    /// Reversed iterator that yields `Arc<DefaultMappedFile>`
     ///
     /// # Example
     /// ```ignore

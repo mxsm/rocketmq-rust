@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **docs:** Fix Rustdoc generic type markup, broken public links, and references to private items across the workspace ([#10030](https://github.com/mxsm/rocketmq-rust/issues/10030))
 - **fix(transport):** Remove unused `RuntimeConfig` imports that break Linux sendfile test and benchmark compilation with warnings denied ([#10026](https://github.com/mxsm/rocketmq-rust/issues/10026))
 
 ### Added

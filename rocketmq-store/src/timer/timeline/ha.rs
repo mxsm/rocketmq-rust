@@ -126,7 +126,7 @@ impl TimelinePromotionGate {
 /// Source-free result of evaluating an Extended Timeline role promotion.
 ///
 /// Every non-promotable variant is a deterministic rejection; operational promotion failures
-/// are returned separately as [`StoreError`].
+/// are returned separately as [`StoreError`](crate::StoreError).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TimelinePromotionOutcome {
     /// Promotion prerequisites are satisfied.

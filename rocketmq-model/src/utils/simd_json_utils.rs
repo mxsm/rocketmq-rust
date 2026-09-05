@@ -229,7 +229,7 @@ impl SimdJsonUtils {
     ///
     /// # Arguments
     ///
-    /// * `writer` - A mutable reference to a Vec<u8> to write JSON into
+    /// * `writer` - A mutable reference to a `Vec<u8>` to write JSON into
     /// * `value` - A reference to the value to serialize
     ///
     /// # Returns

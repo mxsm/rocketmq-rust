@@ -23,7 +23,7 @@ use dashmap::DashMap;
 
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
-/// Filter server table: BrokerAddrInfo -> List<FilterServer>
+/// Filter server table: `BrokerAddrInfo -> List<FilterServer>`
 ///
 /// This table maintains the mapping from broker addresses to their associated
 /// filter servers. Filter servers are used for message filtering in RocketMQ.

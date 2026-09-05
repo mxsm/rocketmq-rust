@@ -661,7 +661,7 @@ pub fn build_server_acceptor(tls_config: &TlsConfig) -> RocketMQResult<tokio_rus
 
 /// Builds a server acceptor from exactly the supplied snapshot.
 ///
-/// Unlike [`build_server_acceptor`], this entry point does not merge the Java-compatible
+/// Unlike `build_server_acceptor`, this entry point does not merge the Java-compatible
 /// transport TLS properties file. It is intended for callers that already own an atomic,
 /// validated configuration generation.
 #[cfg(feature = "tls")]
