@@ -20,7 +20,7 @@ use rocketmq_store_api::StoreError;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestControlView;
-use rocketmq_transport::api::ResponseBuildError;
+use rocketmq_transport::api::TransportContractViolation;
 
 #[derive(Clone)]
 pub(crate) enum StoreAwaitControl {
@@ -28,7 +28,7 @@ pub(crate) enum StoreAwaitControl {
     Request(RequestControlView),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("request lifecycle stopped while awaiting the message store")]
 pub(crate) struct StoreAwaitStopped;
 
@@ -53,12 +53,12 @@ where
     Ok(result)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum StructuredStoreReplyError {
     #[error("request lifecycle stopped while awaiting the message store")]
     Cancelled,
     #[error("store response construction failed: {0}")]
-    ResponseConstruction(#[from] ResponseBuildError),
+    ResponseConstruction(#[from] TransportContractViolation),
 }
 
 /// Affine hook-completion token owned by exactly one structured store reply.

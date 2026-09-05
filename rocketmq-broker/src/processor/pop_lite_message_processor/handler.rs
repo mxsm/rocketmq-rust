@@ -20,12 +20,11 @@ use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::command_from_error_with_factory_remark_and_opaque;
 use rocketmq_transport::api::internal_error_with_factory_and_opaque;
 use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::DeferredAdmissionAcquireErrorKind;
+use rocketmq_transport::api::DeferredResponderOutcome;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::TakeDeferredResponderError;
 
 use super::core::PopLiteCoreResult;
 use super::response::PopLiteResponseKind;
@@ -143,9 +142,7 @@ where
             {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingFull)
             }
-            PopLiteDeferredPrepareError::Admission(error)
-                if !matches!(error.kind(), DeferredAdmissionAcquireErrorKind::RetainedSizeOverflow) =>
-            {
+            PopLiteDeferredPrepareError::Admission(_) => {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingFull)
             }
             PopLiteDeferredPrepareError::EmbeddedOrigin
@@ -158,7 +155,7 @@ where
             PopLiteDeferredPrepareError::InvalidExpiryMargins
             | PopLiteDeferredPrepareError::RetainedSizeOverflow
             | PopLiteDeferredPrepareError::Index(_)
-            | PopLiteDeferredPrepareError::Admission(_) => {
+            | PopLiteDeferredPrepareError::Contract(_) => {
                 self.internal_reply("the deferred POP Lite request could not be prepared", 0)
             }
         }
@@ -170,18 +167,48 @@ where
         error: PopLiteDeferredRegisterError,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         match error {
-            PopLiteDeferredRegisterError::ServiceClosed => self.reply_with_code(
-                ResponseCode::ServiceNotAvailable,
-                "the deferred POP Lite service is unavailable",
-            ),
-            PopLiteDeferredRegisterError::Responder(TakeDeferredResponderError::OneWayRequest) => {
+            PopLiteDeferredRegisterError::ServiceClosed | PopLiteDeferredRegisterError::ServiceClosedAfterTake => self
+                .reply_with_code(
+                    ResponseCode::ServiceNotAvailable,
+                    "the deferred POP Lite service is unavailable",
+                ),
+            PopLiteDeferredRegisterError::ProvenanceMismatch => {
+                self.internal_reply("the deferred POP Lite request could not be registered", 0)
+            }
+            PopLiteDeferredRegisterError::Responder(DeferredResponderOutcome::OneWayRequest) => {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingTimeout)
             }
-            PopLiteDeferredRegisterError::Responder(TakeDeferredResponderError::Unavailable) => self.reply_with_code(
+            PopLiteDeferredRegisterError::Responder(DeferredResponderOutcome::Unavailable) => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "a deferred POP Lite responder is unavailable",
             ),
-            error => Err(RocketMQError::internal("register deferred POP Lite request", error)),
+            PopLiteDeferredRegisterError::Responder(
+                DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
+            ) => self.internal_reply("the deferred POP Lite request could not be registered", 0),
+            PopLiteDeferredRegisterError::Responder(DeferredResponderOutcome::Taken(responder)) => {
+                drop(responder);
+                self.internal_reply("the deferred POP Lite request could not be registered", 0)
+            }
+            PopLiteDeferredRegisterError::Expiry { outcome: _, parts } => {
+                drop(parts);
+                self.internal_reply("the deferred POP Lite request could not be registered", 0)
+            }
+            PopLiteDeferredRegisterError::RegistryRejected => {
+                self.internal_reply("the deferred POP Lite request could not be registered", 0)
+            }
+            PopLiteDeferredRegisterError::RegistryIdentityExhausted => {
+                self.internal_reply("the deferred POP Lite request exceeded registry capacity", 0)
+            }
+            PopLiteDeferredRegisterError::RegistryContract(violation) => {
+                Err(RocketMQError::internal("register deferred POP Lite request", violation))
+            }
+            PopLiteDeferredRegisterError::RegistryOperational(error) => {
+                Err(RocketMQError::internal("register deferred POP Lite request", error))
+            }
+            PopLiteDeferredRegisterError::Contract { violation, parts } => {
+                drop(parts);
+                Err(RocketMQError::internal("register deferred POP Lite request", violation))
+            }
         }
     }
 

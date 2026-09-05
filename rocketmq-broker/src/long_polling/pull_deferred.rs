@@ -22,6 +22,7 @@ pub(crate) use data::PullMatchCriteria;
 pub(crate) use data::PullSessionClientLookup;
 pub(crate) use index::PullCandidateReservation;
 pub(crate) use index::PullCriteriaLimits;
+pub(crate) use service::PullDeferredRegisterError;
 pub(crate) use service::PullDeferredService;
 pub(crate) use service::PullPendingArrivalReservation;
 pub(crate) use service::PullPendingOffsetReservation;

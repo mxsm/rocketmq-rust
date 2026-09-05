@@ -42,6 +42,7 @@ use rocketmq_security_api::SigningError;
 use rocketmq_transport::api::AdmissionClass;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::AdmissionOutcome;
 use rocketmq_transport::api::AdmissionResource;
 use rocketmq_transport::api::AdmissionScope;
 use rocketmq_transport::api::FrameLimits;
@@ -917,12 +918,14 @@ async fn canonical_control_response_inherits_request_class_for_writer_reserve() 
     let address = listener.local_addr().unwrap();
     let admission = Arc::new(AdmissionController::new(limits));
     let scope = AdmissionScope::new(address.ip());
-    let _data_one = admission
-        .try_acquire(AdmissionResource::Queued, scope, 1, AdmissionClass::Data)
-        .unwrap();
-    let _data_two = admission
-        .try_acquire(AdmissionResource::Queued, scope, 1, AdmissionClass::Data)
-        .unwrap();
+    let _data_one = match admission.try_acquire(AdmissionResource::Queued, scope, 1, AdmissionClass::Data) {
+        AdmissionOutcome::Acquired(permit) => permit,
+        AdmissionOutcome::Rejected(rejection) => panic!("first data admission was rejected: {rejection:?}"),
+    };
+    let _data_two = match admission.try_acquire(AdmissionResource::Queued, scope, 1, AdmissionClass::Data) {
+        AdmissionOutcome::Acquired(permit) => permit,
+        AdmissionOutcome::Rejected(rejection) => panic!("second data admission was rejected: {rejection:?}"),
+    };
     let transport = TransportListener::new(
         listener,
         service.task_group().clone(),

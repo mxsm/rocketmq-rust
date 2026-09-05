@@ -18,7 +18,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestControlView;
-use rocketmq_transport::api::ResponseBuildError;
+use rocketmq_transport::api::TransportContractViolation;
 use tokio::sync::OwnedSemaphorePermit;
 
 use crate::latency::broker_fast_failure::BrokerFastFailure;
@@ -317,7 +317,7 @@ impl FastFailureRejection {
         self.response
     }
 
-    pub(super) fn into_remoting_response(mut self) -> Result<RemotingResponse, ResponseBuildError> {
+    pub(super) fn into_remoting_response(mut self) -> Result<RemotingResponse, TransportContractViolation> {
         match self.response.take_body() {
             Some(body) => RemotingResponse::bytes(self.response, body),
             None => RemotingResponse::command(self.response),

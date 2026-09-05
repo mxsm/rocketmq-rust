@@ -14,16 +14,31 @@
 
 use super::*;
 
+fn expect_completed(
+    result: Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+    context: &str,
+) -> ResponseReceipt {
+    match result {
+        Ok(ResponseCompletionOutcome::Completed(receipt)) => receipt,
+        Ok(other) => panic!("{context}: unexpected normal response outcome {other:?}"),
+        Err(error) => panic!("{context}: unexpected operational response failure {error:?}"),
+    }
+}
+
+fn is_completed(result: &Result<ResponseCompletionOutcome, ResponseOperationalFailure>) -> bool {
+    matches!(result, Ok(ResponseCompletionOutcome::Completed(_)))
+}
+
 #[tokio::test]
 async fn local_hands_off_all_body_owners_without_encoding_or_copying_storage() {
     let (harness, control) = ControlHarness::new("local-response-four-bodies", None);
 
     let empty = RemotingResponse::command(response_head(71, 700)).expect("empty remoting response");
     let (sink, receiver) = ResponseSink::local(control.clone());
-    let receipt = sink
-        .send_response(bind(empty, 701, 701))
-        .await
-        .expect("empty response handoff");
+    let receipt = expect_completed(
+        sink.send_response(bind(empty, 701, 701)).await,
+        "empty response handoff",
+    );
     assert_eq!(receipt.request_id().owner_id(), 701);
     assert_eq!(receipt.disposition(), ResponseDisposition::InProcessAccepted);
     let received = receiver.receive().await.expect("receive empty response");
@@ -34,9 +49,10 @@ async fn local_hands_off_all_body_owners_without_encoding_or_copying_storage() {
     let bytes_pointer = bytes.as_ptr();
     let bytes_response = RemotingResponse::bytes(response_head(72, 710), bytes).expect("bytes remoting response");
     let (sink, receiver) = ResponseSink::local(control.clone());
-    sink.send_response(bind(bytes_response, 702, 702))
-        .await
-        .expect("bytes response handoff");
+    expect_completed(
+        sink.send_response(bind(bytes_response, 702, 702)).await,
+        "bytes response handoff",
+    );
     let received = receiver.receive().await.expect("receive bytes response");
     let ResponseBody::Bytes(bytes) = received.test_body() else {
         panic!("bytes owner should remain contiguous");
@@ -54,9 +70,10 @@ async fn local_hands_off_all_body_owners_without_encoding_or_copying_storage() {
         _ => panic!("segments response should own segments"),
     };
     let (sink, receiver) = ResponseSink::local(control.clone());
-    sink.send_response(bind(segments_response, 703, 703))
-        .await
-        .expect("segments response handoff");
+    expect_completed(
+        sink.send_response(bind(segments_response, 703, 703)).await,
+        "segments response handoff",
+    );
     let received = receiver.receive().await.expect("receive segments response");
     let ResponseBody::Segments(segments) = received.test_body() else {
         panic!("segments owner should remain segmented");
@@ -77,9 +94,10 @@ async fn local_hands_off_all_body_owners_without_encoding_or_copying_storage() {
     let response = RemotingResponse::file_regions(response_head(74, 730), FileRegionSequence::single(region))
         .expect("file remoting response");
     let (sink, receiver) = ResponseSink::local(control);
-    sink.send_response(bind(response, 704, 704))
-        .await
-        .expect("file response handoff");
+    expect_completed(
+        sink.send_response(bind(response, 704, 704)).await,
+        "file response handoff",
+    );
     let received = receiver.receive().await.expect("receive file response");
     assert_eq!(received.body_kind(), ResponseBodyKind::FileRegions);
     assert_eq!(received.body_len(), 9);
@@ -100,9 +118,10 @@ async fn local_never_invokes_the_header_encoder() {
     let response = RemotingResponse::bytes(head, Bytes::from_static(b"body")).expect("remoting response");
     let (sink, receiver) = ResponseSink::local(control);
 
-    sink.send_response(bind(response, 705, 705))
-        .await
-        .expect("local response handoff");
+    expect_completed(
+        sink.send_response(bind(response, 705, 705)).await,
+        "local response handoff",
+    );
     assert_eq!(encodes.load(Ordering::SeqCst), 0);
     drop(receiver.receive().await.expect("receive response"));
     assert_eq!(encodes.load(Ordering::SeqCst), 0);
@@ -124,7 +143,7 @@ async fn local_receiver_and_sender_drop_publish_closed_once() {
             706,
         ))
         .await,
-        Err(ResponseError::SessionClosed)
+        Ok(ResponseCompletionOutcome::SessionClosed)
     ));
     assert!(matches!(
         duplicate
@@ -134,16 +153,19 @@ async fn local_receiver_and_sender_drop_publish_closed_once() {
                 707,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Closed
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Closed
+        ))
     ));
 
     let (sink, receiver) = ResponseSink::local(control);
     let clone = sink.clone();
     drop(sink);
     drop(clone);
-    assert!(matches!(receiver.receive().await, Err(ResponseError::SessionClosed)));
+    assert!(matches!(
+        receiver.receive().await,
+        Err(ResponseCompletionOutcome::SessionClosed)
+    ));
 
     harness.shutdown().await;
 }
@@ -165,7 +187,10 @@ async fn local_parent_cancellation_after_claim_prevents_handoff_and_resolves_dup
     checked.notified().await;
 
     harness.parent.cancel();
-    assert!(matches!(receiver.receive().await, Err(ResponseError::Cancelled)));
+    assert!(matches!(
+        receiver.receive().await,
+        Err(ResponseCompletionOutcome::Cancelled)
+    ));
     let duplicate = tokio::spawn(duplicate.send_response(bind(
         RemotingResponse::command(response_head(92, 831)).expect("duplicate remoting response"),
         722,
@@ -177,14 +202,14 @@ async fn local_parent_cancellation_after_claim_prevents_handoff_and_resolves_dup
     resume.notify_one();
     assert!(matches!(
         active.await.expect("active task"),
-        Err(ResponseError::Cancelled)
+        Ok(ResponseCompletionOutcome::Cancelled)
     ));
     assert_eq!(handoff_attempts.load(Ordering::SeqCst), 0);
     assert!(matches!(
         duplicate.await.expect("duplicate task"),
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Cancelled
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Cancelled
+        ))
     ));
     assert!(matches!(
         final_duplicate
@@ -194,9 +219,9 @@ async fn local_parent_cancellation_after_claim_prevents_handoff_and_resolves_dup
                 723,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Cancelled
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Cancelled
+        ))
     ));
 
     harness.shutdown().await;
@@ -230,14 +255,14 @@ async fn local_receiver_drop_after_claim_prevents_handoff_without_primary_close_
     resume.notify_one();
     assert!(matches!(
         active.await.expect("active task"),
-        Err(ResponseError::SessionClosed)
+        Ok(ResponseCompletionOutcome::SessionClosed)
     ));
     assert_eq!(handoff_attempts.load(Ordering::SeqCst), 0);
     assert!(matches!(
         duplicate.await.expect("duplicate task"),
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Closed
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Closed
+        ))
     ));
     assert!(matches!(
         final_duplicate
@@ -247,9 +272,9 @@ async fn local_receiver_drop_after_claim_prevents_handoff_without_primary_close_
                 726,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Closed
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Closed
+        ))
     ));
 
     harness.shutdown().await;
@@ -260,13 +285,15 @@ async fn local_sequential_and_concurrent_duplicates_observe_the_exact_terminal_s
     let (harness, control) = ControlHarness::new("local-response-duplicates", None);
     let (sink, receiver) = ResponseSink::local(control.clone());
     let duplicate = sink.clone();
-    sink.send_response(bind(
-        RemotingResponse::command(response_head(78, 760)).expect("remoting response"),
-        708,
-        708,
-    ))
-    .await
-    .expect("first handoff");
+    expect_completed(
+        sink.send_response(bind(
+            RemotingResponse::command(response_head(78, 760)).expect("remoting response"),
+            708,
+            708,
+        ))
+        .await,
+        "first handoff",
+    );
     assert!(matches!(
         duplicate
             .send_response(bind(
@@ -275,9 +302,9 @@ async fn local_sequential_and_concurrent_duplicates_observe_the_exact_terminal_s
                 709,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Completed
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Completed
+        ))
     ));
     drop(receiver);
 
@@ -294,13 +321,16 @@ async fn local_sequential_and_concurrent_duplicates_observe_the_exact_terminal_s
     )));
     let first = first.await.expect("first task");
     let second = second.await.expect("second task");
-    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
-    let duplicate = if first.is_err() { first } else { second };
+    assert_eq!(
+        usize::from(is_completed(&first)) + usize::from(is_completed(&second)),
+        1
+    );
+    let duplicate = if is_completed(&first) { second } else { first };
     assert!(matches!(
         duplicate,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Completed
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Completed
+        ))
     ));
     drop(receiver);
 
@@ -321,7 +351,7 @@ async fn local_preserves_cancel_session_deadline_priority_and_terminal_states() 
             712,
         ))
         .await,
-        Err(ResponseError::DeadlineExceeded)
+        Ok(ResponseCompletionOutcome::DeadlineExpired)
     ));
     assert!(matches!(
         duplicate
@@ -331,11 +361,11 @@ async fn local_preserves_cancel_session_deadline_priority_and_terminal_states() 
                 713,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
-        })
+        ))
     ));
     deadline_harness.shutdown().await;
 
@@ -349,7 +379,7 @@ async fn local_preserves_cancel_session_deadline_priority_and_terminal_states() 
             714,
         ))
         .await,
-        Err(ResponseError::Cancelled)
+        Ok(ResponseCompletionOutcome::Cancelled)
     ));
     cancel_harness.shutdown().await;
 
@@ -366,7 +396,7 @@ async fn local_preserves_cancel_session_deadline_priority_and_terminal_states() 
             715,
         ))
         .await,
-        Err(ResponseError::SessionClosed)
+        Ok(ResponseCompletionOutcome::SessionClosed)
     ));
     closed_harness.shutdown().await;
 }
@@ -376,17 +406,22 @@ async fn local_receiver_is_cancellation_first_without_reopening_a_completed_hand
     let (harness, control) = ControlHarness::new("local-response-receiver-cancel", None);
     let (sink, receiver) = ResponseSink::local(control);
     let duplicate = sink.clone();
-    sink.send_response(bind(
-        RemotingResponse::bytes(response_head(87, 820), Bytes::from_static(b"already handed off"))
-            .expect("remoting response"),
-        717,
-        717,
-    ))
-    .await
-    .expect("handoff should complete");
+    expect_completed(
+        sink.send_response(bind(
+            RemotingResponse::bytes(response_head(87, 820), Bytes::from_static(b"already handed off"))
+                .expect("remoting response"),
+            717,
+            717,
+        ))
+        .await,
+        "handoff should complete",
+    );
     harness.parent.cancel();
 
-    assert!(matches!(receiver.receive().await, Err(ResponseError::Cancelled)));
+    assert!(matches!(
+        receiver.receive().await,
+        Err(ResponseCompletionOutcome::Cancelled)
+    ));
     assert!(matches!(
         duplicate
             .send_response(bind(
@@ -395,9 +430,9 @@ async fn local_receiver_is_cancellation_first_without_reopening_a_completed_hand
                 718,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Completed
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Completed
+        ))
     ));
 
     harness.shutdown().await;
@@ -409,7 +444,10 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
     let (deadline_harness, deadline_control) = ControlHarness::new("local-receiver-deadline", Some(deadline));
     let (sink, receiver) = ResponseSink::local(deadline_control);
     tokio::time::advance(Duration::from_secs(1)).await;
-    assert!(matches!(receiver.receive().await, Err(ResponseError::DeadlineExceeded)));
+    assert!(matches!(
+        receiver.receive().await,
+        Err(ResponseCompletionOutcome::DeadlineExpired)
+    ));
     assert!(matches!(
         sink.send_response(bind(
             RemotingResponse::command(response_head(88, 821)).expect("remoting response"),
@@ -417,18 +455,21 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
             718,
         ))
         .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
-        })
+        ))
     ));
     deadline_harness.shutdown().await;
 
     let (cancel_harness, cancel_control) = ControlHarness::new("local-receiver-cancel", None);
     let (sink, receiver) = ResponseSink::local(cancel_control);
     cancel_harness.parent.cancel();
-    assert!(matches!(receiver.receive().await, Err(ResponseError::Cancelled)));
+    assert!(matches!(
+        receiver.receive().await,
+        Err(ResponseCompletionOutcome::Cancelled)
+    ));
     assert!(matches!(
         sink.send_response(bind(
             RemotingResponse::command(response_head(89, 822)).expect("remoting response"),
@@ -436,9 +477,9 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
             719,
         ))
         .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Cancelled
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Cancelled
+        ))
     ));
     cancel_harness.shutdown().await;
 
@@ -448,7 +489,10 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
         .closed_tx
         .send(true)
         .expect("session close publisher should remain open");
-    assert!(matches!(receiver.receive().await, Err(ResponseError::SessionClosed)));
+    assert!(matches!(
+        receiver.receive().await,
+        Err(ResponseCompletionOutcome::SessionClosed)
+    ));
     assert!(matches!(
         sink.send_response(bind(
             RemotingResponse::command(response_head(90, 823)).expect("remoting response"),
@@ -456,9 +500,9 @@ async fn local_receiver_stop_reasons_publish_their_exact_terminal_states() {
             720,
         ))
         .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Closed
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Closed
+        ))
     ));
     closed_harness.shutdown().await;
 }
@@ -482,9 +526,10 @@ async fn local_file_response_preserves_the_exact_lease_without_restatting_or_clo
     assert_eq!(Arc::strong_count(&lease), 2);
     let (sink, receiver) = ResponseSink::local(control);
 
-    sink.send_response(bind(response, 716, 716))
-        .await
-        .expect("file response handoff");
+    expect_completed(
+        sink.send_response(bind(response, 716, 716)).await,
+        "file response handoff",
+    );
     assert_eq!(accesses.load(Ordering::SeqCst), 1);
     assert_eq!(Arc::strong_count(&lease), 2);
     let received = receiver.receive().await.expect("receive file response");

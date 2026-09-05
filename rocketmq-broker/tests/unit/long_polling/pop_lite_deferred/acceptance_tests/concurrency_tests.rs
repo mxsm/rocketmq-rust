@@ -157,11 +157,14 @@ async fn pop_lite_deferred_different_clients_resume_and_write_in_parallel() {
 
     release.add_permits(2);
     for _ in 0..2 {
-        receipt_rx
-            .recv()
-            .await
-            .expect("parallel receipt")
-            .expect("parallel canonical write");
+        assert!(matches!(
+            receipt_rx
+                .recv()
+                .await
+                .expect("parallel receipt")
+                .expect("parallel canonical write"),
+            rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        ));
     }
     let mut opaqueness = HashSet::new();
     for _ in 0..2 {
@@ -247,26 +250,32 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
     event_started.notified().await;
     assert_eq!(service.resource_snapshot().active_client_gates, 1);
 
-    let mut timeout_claim = service
+    let DeferredClaimOutcome::Claimed(mut timeout_claim) = service
         .registry
         .claim(timeout_id, DeferredWakeReason::Timeout)
         .await
-        .expect("claim same-client timeout independently of event gate");
+        .expect("claim same-client timeout independently of event gate")
+    else {
+        panic!("same-client timeout must retain the claimed request");
+    };
     drop(timeout_claim.resume_data_mut().take_index_lease());
-    service
-        .resume_claimed(
-            timeout_claim,
-            DeferredResumeRetainedSize::new(41),
-            move |_resume, reason| async move {
-                assert_eq!(reason, DeferredWakeReason::Timeout);
-                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
-                    ResponseCode::PollingTimeout,
-                ))
-                .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
-            },
-        )
-        .await
-        .expect("same-client timeout writes while event remains active");
+    assert!(matches!(
+        service
+            .resume_claimed(
+                timeout_claim,
+                DeferredResumeRetainedSize::new(41),
+                move |_resume, reason| async move {
+                    assert_eq!(reason, DeferredWakeReason::Timeout);
+                    RemotingResponse::command(RemotingCommand::create_response_command_with_code(
+                        ResponseCode::PollingTimeout,
+                    ))
+                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                },
+            )
+            .await
+            .expect("same-client timeout writes while event remains active"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
 
     let timeout_response = client
         .receive_command()
@@ -280,10 +289,13 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
     assert_eq!(while_event_is_blocked.resume_execution_count, 1);
 
     event_release.notify_one();
-    event_receipt_rx
-        .await
-        .expect("event receipt observer")
-        .expect("event response writes after release");
+    assert!(matches!(
+        event_receipt_rx
+            .await
+            .expect("event receipt observer")
+            .expect("event response writes after release"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
     let event_response = client
         .receive_command()
         .await

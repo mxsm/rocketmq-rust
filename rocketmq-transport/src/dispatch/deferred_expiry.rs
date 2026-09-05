@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
-use std::fmt;
 use std::time::Duration;
 
 use tokio::time::Instant;
 
-use super::DeferredParts;
 use super::RequestControlView;
-use super::RequestId;
+use crate::contract::TransportContractViolation;
 
 /// Explicit safety margins reserved before the canonical request-owner deadline.
 ///
@@ -31,6 +28,34 @@ use super::RequestId;
 pub struct DeferredExpiryMargins {
     recovery: Duration,
     write: Duration,
+}
+
+impl DeferredExpiryMargins {
+    pub(super) const fn validate(self) -> Result<(), TransportContractViolation> {
+        if self.recovery.is_zero() {
+            return Err(TransportContractViolation::DeferredExpiryZeroRecoveryMargin);
+        }
+        if self.write.is_zero() {
+            return Err(TransportContractViolation::DeferredExpiryZeroWriteMargin);
+        }
+        Ok(())
+    }
+}
+
+/// Result of attaching expiry policy to deferred response ownership.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub enum DeferredExpiryOutcome {
+    /// Expiry policy was attached.
+    Attached,
+    /// Expiry policy was already attached and remains unchanged.
+    AlreadyAttached,
+    /// The owner deadline cannot accommodate both configured margins.
+    OwnerBudgetInsufficient,
+    /// The protocol expiry was already reached.
+    ProtocolAlreadyExpired,
+    /// The canonical owner deadline was already reached.
+    OwnerAlreadyExpired,
 }
 
 impl DeferredExpiryMargins {
@@ -86,21 +111,14 @@ pub struct DeferredExpiry {
 }
 
 impl DeferredExpiry {
-    pub(crate) fn try_from_control(
+    pub(super) fn try_from_control(
         control: &RequestControlView,
         protocol_at: Instant,
         margins: DeferredExpiryMargins,
-    ) -> Result<Self, DeferredExpiryErrorKind> {
-        if margins.recovery.is_zero() {
-            return Err(DeferredExpiryErrorKind::ZeroRecoveryMargin);
-        }
-        if margins.write.is_zero() {
-            return Err(DeferredExpiryErrorKind::ZeroWriteMargin);
-        }
-
+    ) -> Result<Self, ExpiryRejection> {
         let now = Instant::now();
         if protocol_at <= now {
-            return Err(DeferredExpiryErrorKind::ProtocolAlreadyExpired);
+            return Err(ExpiryRejection::ProtocolAlreadyExpired);
         }
 
         let Some(owner_at) = control.deadline().map(|deadline| deadline.instant()) else {
@@ -111,16 +129,16 @@ impl DeferredExpiry {
             });
         };
         if owner_at <= now {
-            return Err(DeferredExpiryErrorKind::OwnerAlreadyExpired);
+            return Err(ExpiryRejection::OwnerAlreadyExpired);
         }
         let write_cutoff = owner_at
             .checked_sub(margins.write)
-            .ok_or(DeferredExpiryErrorKind::OwnerBudgetInsufficient)?;
+            .ok_or(ExpiryRejection::OwnerBudgetInsufficient)?;
         let resume_cutoff = write_cutoff
             .checked_sub(margins.recovery)
-            .ok_or(DeferredExpiryErrorKind::OwnerBudgetInsufficient)?;
+            .ok_or(ExpiryRejection::OwnerBudgetInsufficient)?;
         if write_cutoff <= now || resume_cutoff <= now {
-            return Err(DeferredExpiryErrorKind::OwnerBudgetInsufficient);
+            return Err(ExpiryRejection::OwnerBudgetInsufficient);
         }
         Ok(Self {
             protocol_at,
@@ -166,89 +184,12 @@ impl DeferredExpiry {
     }
 }
 
-/// Stable category for a deferred expiry attachment failure.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum DeferredExpiryErrorKind {
-    /// Expiry ownership was already attached to these affine parts.
-    AlreadyAttached,
-    /// The business recovery margin was zero.
-    ZeroRecoveryMargin,
-    /// The response-write margin was zero.
-    ZeroWriteMargin,
-    /// Checked owner-cutoff arithmetic could not be represented.
+pub(super) enum ExpiryRejection {
     OwnerBudgetInsufficient,
-    /// The protocol expiry was already reached when ownership was attached.
     ProtocolAlreadyExpired,
-    /// The canonical owner deadline was already reached when ownership was attached.
     OwnerAlreadyExpired,
 }
-
-impl DeferredExpiryErrorKind {
-    /// Returns a stable low-cardinality label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::AlreadyAttached => "already_attached",
-            Self::ZeroRecoveryMargin => "zero_recovery_margin",
-            Self::ZeroWriteMargin => "zero_write_margin",
-            Self::OwnerBudgetInsufficient => "owner_budget_insufficient",
-            Self::ProtocolAlreadyExpired => "protocol_already_expired",
-            Self::OwnerAlreadyExpired => "owner_already_expired",
-        }
-    }
-}
-
-/// Typed, redacted failure to attach protocol expiry to affine deferred parts.
-pub struct DeferredExpiryError {
-    kind: DeferredExpiryErrorKind,
-    request_id: RequestId,
-    parts: Box<DeferredParts>,
-}
-
-impl DeferredExpiryError {
-    pub(crate) fn new(kind: DeferredExpiryErrorKind, request_id: RequestId, parts: DeferredParts) -> Self {
-        Self {
-            kind,
-            request_id,
-            parts: Box::new(parts),
-        }
-    }
-
-    /// Returns the stable failure category.
-    #[must_use]
-    pub const fn kind(&self) -> DeferredExpiryErrorKind {
-        self.kind
-    }
-
-    /// Returns the trusted request identity without exposing protocol timing.
-    #[must_use]
-    pub const fn request_id(&self) -> RequestId {
-        self.request_id
-    }
-
-    /// Recovers the exact affine parts supplied to the failed attachment.
-    pub fn into_parts(self) -> DeferredParts {
-        *self.parts
-    }
-}
-
-impl fmt::Debug for DeferredExpiryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DeferredExpiryError")
-            .field("kind", &self.kind.as_str())
-            .field("request_id", &self.request_id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl fmt::Display for DeferredExpiryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "deferred expiry attachment failed: {}", self.kind.as_str())
-    }
-}
-
-impl Error for DeferredExpiryError {}
 
 #[cfg(test)]
 mod tests {
@@ -339,21 +280,19 @@ mod tests {
         let (_runtime, control) = control(None);
         let protocol_at = Instant::now() + Duration::from_secs(1);
         assert_eq!(
-            DeferredExpiry::try_from_control(
-                &control,
-                protocol_at,
-                DeferredExpiryMargins::new(Duration::ZERO, Duration::from_millis(1)),
-            ),
-            Err(DeferredExpiryErrorKind::ZeroRecoveryMargin)
+            DeferredExpiryMargins::new(Duration::ZERO, Duration::from_millis(1)).validate(),
+            Err(TransportContractViolation::DeferredExpiryZeroRecoveryMargin)
         );
         assert_eq!(
-            DeferredExpiry::try_from_control(
-                &control,
-                protocol_at,
-                DeferredExpiryMargins::new(Duration::from_millis(1), Duration::ZERO),
-            ),
-            Err(DeferredExpiryErrorKind::ZeroWriteMargin)
+            DeferredExpiryMargins::new(Duration::from_millis(1), Duration::ZERO).validate(),
+            Err(TransportContractViolation::DeferredExpiryZeroWriteMargin)
         );
+        assert!(DeferredExpiry::try_from_control(
+            &control,
+            protocol_at,
+            DeferredExpiryMargins::new(Duration::from_millis(1), Duration::from_millis(1)),
+        )
+        .is_ok());
     }
 }
 

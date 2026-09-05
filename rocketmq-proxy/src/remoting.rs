@@ -102,8 +102,10 @@ use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::ServerPushCommand;
+use rocketmq_transport::api::ServerPushOutcome;
 use rocketmq_transport::api::SessionId;
 use rocketmq_transport::api::SessionRegistry;
+use rocketmq_transport::api::TransportContractViolation;
 use rocketmq_transport::api::TransportServer;
 use rocketmq_transport::api::TransportTelemetry;
 use tokio::net::TcpListener;
@@ -427,6 +429,18 @@ where
 
     fn reject_request(&self, _code: i32) -> RejectRequestDecision {
         RejectRequestDecision::Proceed
+    }
+}
+
+fn protocol_no_response_contract_error(error: TransportContractViolation) -> RocketMQError {
+    match error {
+        TransportContractViolation::ProtocolNoResponseOneWayRequest => {
+            RocketMQError::illegal_argument("protocol no-response is unavailable for one-way requests")
+        }
+        TransportContractViolation::ProtocolNoResponseUnsupported { .. } => {
+            RocketMQError::illegal_argument("protocol no-response reason is unsupported")
+        }
+        _ => RocketMQError::illegal_argument("protocol no-response contract is invalid"),
     }
 }
 
@@ -961,7 +975,7 @@ where
                 Ok(EmbeddedDispatchOutcome::NoReply { reason, .. }) => request
                     .protocol_no_response(reason)
                     .map(HandlerOutcome::NoReply)
-                    .map_err(Into::into),
+                    .map_err(protocol_no_response_contract_error),
                 Ok(EmbeddedDispatchOutcome::Deferred { .. }) => Err(RocketMQError::invariant_violated(
                     "terminal Proxy backend route returned an unresolved deferred outcome",
                 )),
@@ -1304,7 +1318,7 @@ where
             );
         }
         let mut forwarded = 0usize;
-        for (client_id, capability) in bindings {
+        for (_client_id, capability) in bindings {
             let push = ServerPushCommand::NotifyConsumerIdsChanged {
                 header: NotifyConsumerIdsChangedRequestHeader {
                     consumer_group: header.consumer_group.clone(),
@@ -1312,16 +1326,24 @@ where
                 },
                 opaque: Some(request.opaque()),
             };
-            if let Err(error) = capability.send(push, Duration::from_millis(10)).await {
-                return response_with_code(
-                    &self.command_factory,
-                    request.opaque(),
-                    ResponseCode::SystemError,
-                    format!(
-                        "forward notifyConsumerIdsChanged failed for group {}, clientId {}: {}",
-                        header.consumer_group, client_id, error
-                    ),
-                );
+            match capability.send(push, Duration::from_millis(10)).await {
+                Ok(ServerPushOutcome::Sent(_)) => {}
+                Ok(_) => {
+                    return response_with_code(
+                        &self.command_factory,
+                        request.opaque(),
+                        ResponseCode::SystemError,
+                        "server push rejected",
+                    );
+                }
+                Err(error) => {
+                    return response_with_code(
+                        &self.command_factory,
+                        request.opaque(),
+                        ResponseCode::SystemError,
+                        format!("server push failed: {error}"),
+                    );
+                }
             }
             forwarded += 1;
         }
@@ -1375,22 +1397,28 @@ where
                 ),
             );
         };
-        let client_id = header.client_id.clone();
-        let consumer_group = header.consumer_group.clone();
         let push = ServerPushCommand::NotifyUnsubscribeLite {
             header,
             opaque: Some(request.opaque()),
         };
-        if let Err(error) = capability.send(push, Duration::from_millis(100)).await {
-            return response_with_code(
-                &self.command_factory,
-                request.opaque(),
-                ResponseCode::SystemError,
-                format!(
-                    "forward notifyUnsubscribeLite failed for group {}, clientId {}: {}",
-                    consumer_group, client_id, error
-                ),
-            );
+        match capability.send(push, Duration::from_millis(100)).await {
+            Ok(ServerPushOutcome::Sent(_)) => {}
+            Ok(_) => {
+                return response_with_code(
+                    &self.command_factory,
+                    request.opaque(),
+                    ResponseCode::SystemError,
+                    "server push rejected",
+                );
+            }
+            Err(error) => {
+                return response_with_code(
+                    &self.command_factory,
+                    request.opaque(),
+                    ResponseCode::SystemError,
+                    format!("server push failed: {error}"),
+                );
+            }
         }
         self.command_factory
             .create_response_command_with_code(ResponseCode::Success)

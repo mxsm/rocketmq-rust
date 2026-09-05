@@ -35,17 +35,18 @@ use super::OriginalRequestIdentity;
 use super::RequestContext;
 use crate::admission::AdmissionClass;
 use crate::admission::AdmissionController;
-use crate::admission::AdmissionError;
+use crate::admission::AdmissionRejection;
 use crate::admission::AdmissionScopeHandle;
 use crate::admission::FullPolicy;
 use crate::admission::PartialFramePermit;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestTable;
+use crate::error::TransportError;
 use crate::request_ordering::RequestOrdering;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
-use crate::session_executor::SessionDispatchError;
+use crate::session_executor::SessionDispatchAttempt;
 use crate::session_executor::SessionExecutor;
 use crate::telemetry::TransportTelemetry;
 
@@ -64,6 +65,16 @@ pub(crate) enum DispatchOutcome {
     Accepted(TaskId),
     /// Authorization, deadline, or reject-policy admission produced a response.
     Rejected,
+    /// Admission policy requires the owning connection to close the session.
+    CloseSession,
+    /// The session lifecycle closed before the request could be accepted.
+    SessionClosed,
+}
+
+impl DispatchOutcome {
+    pub(crate) const fn keeps_session_open(self) -> bool {
+        matches!(self, Self::Accepted(_) | Self::Rejected)
+    }
 }
 
 /// Security and admission capabilities shared by all command entry adapters.
@@ -257,7 +268,7 @@ where
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
         session_cleanup: crate::dispatch::DeferredSessionCleanupRegistration,
-    ) -> Result<DispatchOutcome, AuthorizedDispatchError> {
+    ) -> Result<DispatchOutcome, TransportError> {
         self.core
             .dispatch_network(
                 authorized_session,
@@ -271,6 +282,7 @@ where
                 Some(session_cleanup),
             )
             .await
+            .map_err(TransportError::dispatch)
     }
 
     pub(crate) fn open_network_session(&self) -> crate::dispatch::NetworkSession {
@@ -321,7 +333,7 @@ impl AuthorizedDispatchSession {
         ordering: RequestOrdering,
         response_session: crate::server::SessionHandle,
         execute: F,
-    ) -> rocketmq_error::RocketMQResult<DispatchOutcome>
+    ) -> Result<DispatchOutcome, TransportError>
     where
         F: FnOnce(OperationContext, RemotingCommand) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
@@ -331,15 +343,15 @@ impl AuthorizedDispatchSession {
             || original_request_identity.request_id().owner_id() != response_session.session_id()
             || !original_request_identity.matches_command(&command)
         {
-            return Err(handler_dispatch_error(
-                "request identity does not match its network session",
-            ));
+            return Err(TransportError::dispatch(AuthorizedDispatchError::SessionMismatch));
         }
         let opaque = original_request_identity.original_opaque();
         let request_code = original_request_identity.original_code();
         let is_one_way = original_request_identity.is_one_way();
         if context.deadline().is_some_and(|deadline| deadline.is_expired()) {
-            send_handler_boundary_response(&response_session, is_one_way, deadline_response(opaque)).await?;
+            send_handler_boundary_response(&response_session, is_one_way, deadline_response(opaque))
+                .await
+                .map_err(TransportError::dispatch)?;
             return Ok(DispatchOutcome::Rejected);
         }
         if let Decision::Deny { reason } = self.boundary.security.authorize_for_dispatch(
@@ -358,7 +370,8 @@ impl AuthorizedDispatchSession {
                 )
                 .set_opaque(opaque),
             )
-            .await?;
+            .await
+            .map_err(TransportError::dispatch)?;
             return Ok(DispatchOutcome::Rejected);
         }
 
@@ -387,24 +400,29 @@ impl AuthorizedDispatchSession {
                         .await;
             },
         ) {
-            Ok(task_id) => Ok(DispatchOutcome::Accepted(task_id)),
-            Err(SessionDispatchError::Admission {
-                error,
+            Ok(SessionDispatchAttempt::Accepted(task_id)) => Ok(DispatchOutcome::Accepted(task_id)),
+            Ok(SessionDispatchAttempt::AdmissionRejected {
+                rejection,
                 retained_partial,
-            }) if error.policy() == FullPolicy::Reject => {
+            }) if rejection.policy() == FullPolicy::Reject => {
                 drop(retained_partial);
-                send_handler_boundary_response(&response_session, is_one_way, admission_response(opaque, &error))
-                    .await?;
+                send_handler_boundary_response(&response_session, is_one_way, admission_response(opaque, &rejection))
+                    .await
+                    .map_err(TransportError::dispatch)?;
                 Ok(DispatchOutcome::Rejected)
             }
-            Err(SessionDispatchError::Admission {
-                error,
+            Ok(SessionDispatchAttempt::AdmissionRejected {
+                rejection: _,
                 retained_partial,
             }) => {
                 drop(retained_partial);
-                Err(handler_dispatch_error(error))
+                Ok(DispatchOutcome::CloseSession)
             }
-            Err(SessionDispatchError::Closing(error)) => Err(handler_dispatch_error(error)),
+            Ok(SessionDispatchAttempt::SessionClosed { retained_partial }) => {
+                drop(retained_partial);
+                Ok(DispatchOutcome::SessionClosed)
+            }
+            Err(error) => Err(TransportError::dispatch(AuthorizedDispatchError::Closing(error))),
         }
     }
 
@@ -423,26 +441,26 @@ impl AuthorizedDispatchSession {
 async fn send_handler_response(
     session: &crate::server::SessionHandle,
     command: RemotingCommand,
-) -> rocketmq_error::RocketMQResult<()> {
-    session.connection().send_command(command).await
+) -> Result<(), AuthorizedDispatchError> {
+    session
+        .connection()
+        .send_command(command)
+        .await
+        .map_err(AuthorizedDispatchError::BoundaryResponse)
 }
 
 async fn send_handler_boundary_response(
     session: &crate::server::SessionHandle,
     is_one_way: bool,
     command: RemotingCommand,
-) -> rocketmq_error::RocketMQResult<()> {
+) -> Result<(), AuthorizedDispatchError> {
     if is_one_way {
         return Ok(());
     }
     send_handler_response(session, command).await
 }
 
-fn handler_dispatch_error(error: impl std::fmt::Display) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::response_process_failed("connection_handler_dispatch", error.to_string())
-}
-
-pub(super) fn admission_response(opaque: i32, error: &AdmissionError) -> RemotingCommand {
+pub(super) fn admission_response(opaque: i32, error: &AdmissionRejection) -> RemotingCommand {
     RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemBusy, error.to_string())
         .set_opaque(opaque)
 }

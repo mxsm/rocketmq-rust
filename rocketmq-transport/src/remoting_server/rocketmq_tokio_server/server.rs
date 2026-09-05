@@ -16,6 +16,7 @@ use super::connection_handler::ConnectionHandler;
 use super::shutdown::new_remoting_server_context;
 use super::*;
 use crate::dispatch::AuthorizedCommandDispatcher;
+use crate::error::TransportError;
 use crate::runtime::processor::RequestProcessor;
 
 /// Network server for the explicit request-processor contract.
@@ -217,7 +218,7 @@ where
     /// # Errors
     ///
     /// Returns a typed startup error for binding, capability, or lifecycle failures.
-    pub async fn try_run_with_shutdown_report<S>(self, shutdown: S) -> Result<ShutdownReport, ServerStartError>
+    pub async fn try_run_with_shutdown_report<S>(self, shutdown: S) -> Result<ShutdownReport, TransportError>
     where
         S: Future,
     {
@@ -232,8 +233,8 @@ where
     pub async fn try_run_with_shutdown_report_and_startup<S>(
         self,
         shutdown: S,
-        startup: oneshot::Sender<Result<SocketAddr, ServerStartError>>,
-    ) -> Result<ShutdownReport, ServerStartError>
+        startup: oneshot::Sender<Result<SocketAddr, TransportError>>,
+    ) -> Result<ShutdownReport, TransportError>
     where
         S: Future,
     {
@@ -250,7 +251,7 @@ where
         listener: TcpListener,
         conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
         shutdown: S,
-    ) -> Result<ShutdownReport, ServerStartError>
+    ) -> Result<ShutdownReport, TransportError>
     where
         S: Future,
     {
@@ -268,8 +269,8 @@ where
         listener: TcpListener,
         conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
         shutdown: S,
-        startup: oneshot::Sender<Result<SocketAddr, ServerStartError>>,
-    ) -> Result<ShutdownReport, ServerStartError>
+        startup: oneshot::Sender<Result<SocketAddr, TransportError>>,
+    ) -> Result<ShutdownReport, TransportError>
     where
         S: Future,
     {
@@ -280,8 +281,8 @@ where
     async fn try_run_with_shutdown_report_inner<S>(
         self,
         shutdown: S,
-        mut startup: Option<oneshot::Sender<Result<SocketAddr, ServerStartError>>>,
-    ) -> Result<ShutdownReport, ServerStartError>
+        mut startup: Option<oneshot::Sender<Result<SocketAddr, TransportError>>>,
+    ) -> Result<ShutdownReport, TransportError>
     where
         S: Future,
     {
@@ -289,11 +290,7 @@ where
         let listener = match TcpListener::bind(&address).await {
             Ok(listener) => listener,
             Err(error) => {
-                let error = ServerStartError::Bind {
-                    stage: "listener.bind",
-                    address,
-                    detail: error.to_string(),
-                };
+                let error = TransportError::start(error);
                 notify_startup(&mut startup, Err(error.clone()));
                 return Err(error);
             }
@@ -301,11 +298,7 @@ where
         let local_address = match listener.local_addr() {
             Ok(address) => address,
             Err(error) => {
-                let error = ServerStartError::LocalAddress {
-                    stage: "listener.local_addr",
-                    address,
-                    detail: error.to_string(),
-                };
+                let error = TransportError::start(error);
                 notify_startup(&mut startup, Err(error.clone()));
                 return Err(error);
             }
@@ -326,19 +319,15 @@ where
         listener: TcpListener,
         conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
         shutdown: S,
-        mut startup: Option<oneshot::Sender<Result<SocketAddr, ServerStartError>>>,
-    ) -> Result<ShutdownReport, ServerStartError>
+        mut startup: Option<oneshot::Sender<Result<SocketAddr, TransportError>>>,
+    ) -> Result<ShutdownReport, TransportError>
     where
         S: Future,
     {
         let address = match listener.local_addr() {
             Ok(address) => address,
             Err(error) => {
-                let error = ServerStartError::LocalAddress {
-                    stage: "listener.local_addr",
-                    address: "pre-bound listener".to_owned(),
-                    detail: error.to_string(),
-                };
+                let error = TransportError::start(error);
                 notify_startup(&mut startup, Err(error.clone()));
                 return Err(error);
             }
@@ -354,7 +343,7 @@ where
         serve(listener, shutdown, conn_disconnect_notify, prepared).await
     }
 
-    async fn prepare(mut self) -> Result<PreparedServer<P>, ServerStartError> {
+    async fn prepare(mut self) -> Result<PreparedServer<P>, TransportError> {
         self.frame_limits
             .validate()
             .map_err(|error| configuration_error("frame_limits", error))?;
@@ -400,12 +389,8 @@ where
                     ..limits.handshakes
                 };
                 Arc::new(
-                    AdmissionController::try_new_with_budget(limits, &self.service_context.process_budget()).map_err(
-                        |error| ServerStartError::Admission {
-                            stage: "admission.initialize",
-                            detail: error.to_string(),
-                        },
-                    )?,
+                    AdmissionController::try_new_with_budget(limits, &self.service_context.process_budget())
+                        .map_err(TransportError::start)?,
                 )
             }
         };
@@ -447,10 +432,7 @@ where
         let tls_runtime =
             TlsServerRuntime::initialize_with_service_context(self.config.tls_config.clone(), &remoting_context)
                 .await
-                .map_err(|error| ServerStartError::Tls {
-                    stage: "tls.initialize",
-                    detail: error.to_string(),
-                })?;
+                .map_err(TransportError::start)?;
 
         // Hook mutation is deliberately the final preparation step. Failed
         // validation and boundary conflicts cannot contaminate a shared dispatcher.
@@ -478,23 +460,19 @@ where
 }
 
 fn notify_startup(
-    startup: &mut Option<oneshot::Sender<Result<SocketAddr, ServerStartError>>>,
-    result: Result<SocketAddr, ServerStartError>,
+    startup: &mut Option<oneshot::Sender<Result<SocketAddr, TransportError>>>,
+    result: Result<SocketAddr, TransportError>,
 ) {
     if let Some(startup) = startup.take() {
         let _ = startup.send(result);
     }
 }
 
-fn configuration_error(stage: &'static str, error: RocketMQError) -> ServerStartError {
-    ServerStartError::Configuration {
-        stage,
-        detail: error.to_string(),
-        source: SharedRocketMQError::new(error),
-    }
+fn configuration_error(_stage: &'static str, error: RocketMQError) -> TransportError {
+    TransportError::start(error)
 }
 
-fn configuration_message(stage: &'static str, detail: &'static str) -> ServerStartError {
+fn configuration_message(stage: &'static str, detail: &'static str) -> TransportError {
     configuration_error(
         stage,
         RocketMQError::ConfigInvalidValue {
@@ -510,7 +488,7 @@ async fn serve<P>(
     shutdown: impl Future,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
     prepared: PreparedServer<P>,
-) -> Result<ShutdownReport, ServerStartError>
+) -> Result<ShutdownReport, TransportError>
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {

@@ -38,19 +38,37 @@ use crate::admission::AdmissionLimits;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::admission::ResourceLimit;
+use crate::contract::TransportContractViolation;
 use crate::dispatch::AuthenticationState;
-use crate::dispatch::EmbeddedDispatchErrorKind;
+use crate::dispatch::DeferredResponderOutcome;
 use crate::dispatch::HandlerOutcome;
 use crate::dispatch::ProtocolNoResponseReason;
 use crate::dispatch::RemotingRequest;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponseBody;
+use crate::dispatch::ResponseCompletionOutcome;
 use crate::dispatch::ResponseDisposition;
+use crate::error::TransportError;
 use crate::runtime::processor::RejectRequestDecision;
 use crate::runtime::processor::ResponseWriteObservation;
 use crate::runtime::processor::ResponseWriteOutcome;
 use crate::security::TransportSecurity;
+
+fn assert_dispatch_error(error: TransportError) {
+    assert_eq!(error.code(), rocketmq_error::TRANSPORT_DISPATCH_FAILED.code());
+    assert!(std::error::Error::source(&error).is_some());
+}
+
+fn assert_dispatch_contract(error: &TransportError, expected: TransportContractViolation) {
+    let dispatch_error = std::error::Error::source(error)
+        .and_then(|source| source.downcast_ref::<EmbeddedDispatchError>())
+        .expect("transport facade retains the private embedded dispatch source");
+    let contract = std::error::Error::source(dispatch_error)
+        .and_then(|source| source.downcast_ref::<TransportContractViolation>())
+        .expect("embedded dispatch source retains the canonical contract");
+    assert_eq!(contract, &expected);
+}
 #[path = "embedded_dispatcher/lifecycle.rs"]
 mod lifecycle;
 #[path = "embedded_dispatcher/ownership.rs"]
@@ -162,12 +180,14 @@ impl RequestProcessor for TestProcessor {
             }
             Behavior::Error => Err(RocketMQError::illegal_argument("embedded processor failure")),
             Behavior::NoReply => Ok(HandlerOutcome::NoReply(
-                request.protocol_no_response(ProtocolNoResponseReason::CallbackHandled)?,
+                request
+                    .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
+                    .map_err(|_| RocketMQError::illegal_argument("protocol no-response contract failed"))?,
             )),
             Behavior::Deferred => {
                 assert!(matches!(
                     request.take_deferred_responder(),
-                    Err(crate::dispatch::TakeDeferredResponderError::Unavailable)
+                    DeferredResponderOutcome::Unavailable
                 ));
                 Ok(HandlerOutcome::Reply(
                     RemotingResponse::bytes(
@@ -482,14 +502,14 @@ async fn one_way_discards_pre_admission_deadline_security_and_admission_plans_wi
 }
 
 #[tokio::test]
-async fn expired_reply_maps_once_to_deadline_with_one_failed_observation_and_typed_source() {
+async fn expired_reply_maps_once_to_deadline_with_one_failed_observation() {
     let fixture = EmbeddedFixture::new("embedded-deadline-error");
     let (processor, state, _) = TestProcessor::new(Behavior::Reply);
     let dispatcher = fixture.dispatcher(
         processor,
         Arc::new(AdmissionController::new(AdmissionLimits::default())),
     );
-    let error = dispatcher
+    let outcome = dispatcher
         .dispatch_embedded(
             &fixture.task_group,
             Principal::new("broker-proxy"),
@@ -497,18 +517,16 @@ async fn expired_reply_maps_once_to_deadline_with_one_failed_observation_and_typ
             request(false).0,
         )
         .await
-        .expect_err("expired reply handoff must fail");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::DeadlineExceeded);
-    assert!(std::error::Error::source(&error).is_some());
-    assert!(!format!("{error:?}").contains("broker-proxy"));
+        .expect("expired reply handoff is a normal deadline outcome");
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
     {
         let observations = state.observations.lock().expect("observation lock");
         assert_eq!(observations.len(), 1);
         assert!(matches!(
             observations[0].outcome(),
             ResponseWriteOutcome::Failed {
-                kind: crate::dispatch::ResponseErrorKind::DeadlineExceeded,
-                ..
+                completion: Some(ResponseCompletionOutcome::DeadlineExpired),
+                progress: Some(crate::dispatch::WriteProgress::NotStarted),
             }
         ));
     }
@@ -557,7 +575,7 @@ async fn embedded_deferred_take_is_unavailable_while_protocol_no_reply_stays_obs
 }
 
 #[tokio::test]
-async fn malformed_request_and_affine_handler_contracts_map_to_unique_public_kinds() {
+async fn malformed_request_and_affine_handler_contracts_map_to_the_dispatch_descriptor() {
     let fixture = EmbeddedFixture::new("embedded-contract-errors");
 
     let (processor, state, _) = TestProcessor::new(Behavior::UnclaimedDeferred);
@@ -574,7 +592,7 @@ async fn malformed_request_and_affine_handler_contracts_map_to_unique_public_kin
         )
         .await
         .expect_err("unclaimed deferred proof must fail");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::HandlerContract);
+    assert_dispatch_error(error);
     assert!(state.observations.lock().expect("observation lock").is_empty());
 
     let (processor, state, _) = TestProcessor::new(Behavior::ForgedDeferred);
@@ -591,7 +609,8 @@ async fn malformed_request_and_affine_handler_contracts_map_to_unique_public_kin
         )
         .await
         .expect_err("one-way deferred proof must fail");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::OneWayContract);
+    assert_dispatch_contract(&error, TransportContractViolation::OneWayDeferredHandlerOutcome);
+    assert_dispatch_error(error);
     assert!(state.observations.lock().expect("observation lock").is_empty());
 
     let (processor, state, _) = TestProcessor::new(Behavior::OneWayNoReply);
@@ -608,7 +627,8 @@ async fn malformed_request_and_affine_handler_contracts_map_to_unique_public_kin
         )
         .await
         .expect_err("one-way no-reply proof must fail");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::OneWayContract);
+    assert_dispatch_contract(&error, TransportContractViolation::OneWayNoReplyHandlerOutcome);
+    assert_dispatch_error(error);
     assert!(state.observations.lock().expect("observation lock").is_empty());
 
     for behavior in [Behavior::CrossRequestDeferred, Behavior::CrossRequestNoReply] {
@@ -626,7 +646,7 @@ async fn malformed_request_and_affine_handler_contracts_map_to_unique_public_kin
             )
             .await
             .expect_err("cross-request one-way proof must fail closed");
-        assert_eq!(error.kind(), EmbeddedDispatchErrorKind::HandlerContract);
+        assert_dispatch_error(error);
         assert_eq!(state.processes.load(Ordering::SeqCst), 1);
         assert!(state.observations.lock().expect("observation lock").is_empty());
     }
@@ -645,7 +665,7 @@ async fn malformed_request_and_affine_handler_contracts_map_to_unique_public_kin
         )
         .await
         .expect_err("response-shaped ingress must fail request construction");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::RequestConstruction);
+    assert_dispatch_error(error);
     assert_eq!(state.processes.load(Ordering::SeqCst), 0);
     fixture.shutdown().await;
 }

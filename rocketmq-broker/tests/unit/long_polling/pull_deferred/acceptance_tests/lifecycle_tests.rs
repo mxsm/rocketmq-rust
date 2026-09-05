@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::api::DeferredClaimErrorKind;
+use rocketmq_transport::api::DeferredClaimOutcome;
 
 use super::*;
 
@@ -55,17 +55,15 @@ async fn message_arrival_and_timeout_have_exactly_one_claim_winner() {
         service.claim(registration.id, DeferredWakeReason::Timeout),
     );
     match (arrival, timeout) {
-        (Ok(winner), Err(loser)) => {
+        (Ok(DeferredClaimOutcome::Claimed(winner)), Ok(DeferredClaimOutcome::AlreadyClaimed)) => {
             assert_eq!(winner.reason(), DeferredWakeReason::MessageArrived);
-            assert_eq!(loser.kind(), DeferredClaimErrorKind::AlreadyClaimed);
             drop(winner);
         }
-        (Err(loser), Ok(winner)) => {
+        (Ok(DeferredClaimOutcome::AlreadyClaimed), Ok(DeferredClaimOutcome::Claimed(winner))) => {
             assert_eq!(winner.reason(), DeferredWakeReason::Timeout);
-            assert_eq!(loser.kind(), DeferredClaimErrorKind::AlreadyClaimed);
             drop(winner);
         }
-        (arrival, timeout) => panic!("one Pull claim must win: {arrival:?}, {timeout:?}"),
+        _ => panic!("exactly one concurrent reason must retain the Pull claim"),
     }
     assert_released(&service);
     running.finish().await;
@@ -115,12 +113,14 @@ async fn stale_arrival_bounded_continuation_claims_every_matching_waiter() {
 
     let mut claims = Vec::new();
     for candidate in submitted.into_iter().flatten() {
-        claims.push(
-            service
-                .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
-                .await
-                .expect("each affine candidate claims once"),
-        );
+        let DeferredClaimOutcome::Claimed(claim) = service
+            .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
+            .await
+            .expect("each affine candidate has a normal claim outcome")
+        else {
+            panic!("each affine candidate must retain its claimed Pull request");
+        };
+        claims.push(claim);
     }
     assert_eq!(claims.len(), 3);
     assert_eq!(service.index_snapshot(), PullIndexSnapshot::default());
@@ -161,10 +161,13 @@ async fn producer_rejection_restores_candidate_without_spinning() {
     assert_eq!(calls, 1);
     assert_eq!(service.index_snapshot().live(), 1);
     assert_eq!(service.index_snapshot().candidates(), 0);
-    let claim = service
+    let DeferredClaimOutcome::Claimed(claim) = service
         .claim(registration.id, DeferredWakeReason::ForcedRefresh)
         .await
-        .expect("restored waiter remains claimable for shutdown owner");
+        .expect("restored waiter has a normal claim outcome")
+    else {
+        panic!("restored waiter must retain its claimed Pull request");
+    };
     drop(claim);
     assert_released(&service);
     running.finish().await;

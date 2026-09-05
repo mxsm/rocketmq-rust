@@ -21,7 +21,7 @@ use crate::dispatch::BoundResponse;
 use crate::dispatch::RequestId;
 use crate::dispatch::ResponseBody;
 use crate::dispatch::ResponseBodyKind;
-use crate::dispatch::ResponseError;
+use crate::dispatch::ResponseOperationalFailure;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::PreparedStructuredResponseBody;
 use crate::write_strategy::StructuredResponseFrame;
@@ -102,7 +102,10 @@ impl PreparedResponseMetadata {
     dead_code,
     reason = "the later private response sink invokes this RSP-04 preparation seam"
 )]
-pub(crate) fn prepare_response(bound: BoundResponse, limits: FrameLimits) -> Result<PreparedResponse, ResponseError> {
+pub(crate) fn prepare_response(
+    bound: BoundResponse,
+    limits: FrameLimits,
+) -> Result<PreparedResponse, ResponseOperationalFailure> {
     let opaque_was_corrected = bound.opaque_was_corrected();
     let (request_id, head, body) = bound.into_parts();
     let response_code = head.code();
@@ -192,8 +195,8 @@ enum PreparedBody {
     dead_code,
     reason = "the later private response preparation seam retains typed encoding failures"
 )]
-fn encode_error(source: rocketmq_error::RocketMQError) -> ResponseError {
-    ResponseError::Encode { source }
+fn encode_error(source: rocketmq_error::RocketMQError) -> ResponseOperationalFailure {
+    ResponseOperationalFailure::encode(source)
 }
 
 #[cfg(test)]
@@ -527,7 +530,7 @@ mod tests {
         ) else {
             panic!("known body overflow should fail before serialization");
         };
-        assert!(matches!(error, ResponseError::Encode { .. }));
+        assert!(matches!(error, ResponseOperationalFailure::Encode { .. }));
         assert_eq!(lower_bound_count.load(Ordering::SeqCst), 0);
 
         let post_encode_count = Arc::new(AtomicUsize::new(0));
@@ -549,7 +552,7 @@ mod tests {
         ) else {
             panic!("exact header overflow should fail after one serialization");
         };
-        assert!(matches!(error, ResponseError::Encode { .. }));
+        assert!(matches!(error, ResponseOperationalFailure::Encode { .. }));
         assert_eq!(post_encode_count.load(Ordering::SeqCst), 1);
     }
 
@@ -614,7 +617,7 @@ mod tests {
             ) else {
                 panic!("one-byte excess should fail");
             };
-            assert!(matches!(error, ResponseError::Encode { .. }));
+            assert!(matches!(error, ResponseOperationalFailure::Encode { .. }));
         }
     }
 
@@ -661,7 +664,7 @@ mod tests {
         ) else {
             panic!("header above the 24-bit field must fail");
         };
-        assert!(matches!(error, ResponseError::Encode { .. }));
+        assert!(matches!(error, ResponseOperationalFailure::Encode { .. }));
     }
 
     #[test]
@@ -708,7 +711,7 @@ mod tests {
         ) else {
             panic!("frame above the signed i32 payload limit must fail");
         };
-        assert!(matches!(error, ResponseError::Encode { .. }));
+        assert!(matches!(error, ResponseOperationalFailure::Encode { .. }));
     }
 
     struct CountingLease {
@@ -792,7 +795,7 @@ mod tests {
         ) else {
             panic!("body lower bound should reject preparation");
         };
-        assert!(matches!(error, ResponseError::Encode { .. }));
+        assert!(matches!(error, ResponseOperationalFailure::Encode { .. }));
         assert_eq!(file_accesses.load(Ordering::SeqCst), 2);
         assert_eq!(Arc::strong_count(&lease), 1);
         drop(lease);

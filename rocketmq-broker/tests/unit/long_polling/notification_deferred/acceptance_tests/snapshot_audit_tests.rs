@@ -110,10 +110,13 @@ async fn notification_deferred_snapshot_tracks_accepted_resume_count_and_bytes_u
     assert_eq!(active.index().live(), 0);
 
     release.notify_one();
-    receipt_rx
-        .await
-        .expect("observed resume receipt channel")
-        .expect("observed resume writes canonically");
+    assert!(matches!(
+        receipt_rx
+            .await
+            .expect("observed resume receipt channel")
+            .expect("observed resume writes canonically"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
     let response = client
         .receive_command()
         .await

@@ -20,8 +20,8 @@ use rocketmq_security_api::Principal;
 
 use crate::deadline::RequestDeadline;
 use crate::dispatch::AuthorizedCommandDispatcher;
-use crate::dispatch::EmbeddedDispatchError;
 use crate::dispatch::EmbeddedDispatchOutcome;
+use crate::error::TransportError;
 use crate::runtime::processor::RequestProcessor;
 
 /// Socket-free fixture for exercising the public embedded dispatch boundary.
@@ -51,7 +51,7 @@ where
         &self,
         deadline: Option<RequestDeadline>,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, EmbeddedDispatchError> {
+    ) -> Result<EmbeddedDispatchOutcome, TransportError> {
         self.dispatcher
             .dispatch_embedded(&self.task_group, self.principal.clone(), deadline, command)
             .await

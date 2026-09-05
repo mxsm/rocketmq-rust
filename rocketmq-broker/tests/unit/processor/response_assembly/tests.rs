@@ -84,21 +84,21 @@ fn response_parts_reject_every_invalid_head_before_storing_an_owner() {
     assert!(matches!(
         BrokerResponseParts::command(with_body),
         Err(BrokerResponseBuildError::ResponseConstruction(
-            ResponseBuildError::HeadHasBody
+            TransportContractViolation::ResponseHeadHasBody
         ))
     ));
 
     assert!(matches!(
         BrokerResponseParts::command(RemotingCommand::create_remoting_command(11)),
         Err(BrokerResponseBuildError::ResponseConstruction(
-            ResponseBuildError::RequestHead
+            TransportContractViolation::ResponseRequestHead
         ))
     ));
 
     assert!(matches!(
         BrokerResponseParts::command(response_head().mark_oneway_rpc()),
         Err(BrokerResponseBuildError::ResponseConstruction(
-            ResponseBuildError::OneWayHead
+            TransportContractViolation::ResponseOneWayHead
         ))
     ));
 }

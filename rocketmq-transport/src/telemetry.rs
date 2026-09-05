@@ -27,9 +27,9 @@ use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponseBodyKind;
+use crate::dispatch::ResponseCompletionOutcome;
 #[cfg(any(test, feature = "observability"))]
 use crate::dispatch::ResponseDisposition;
-use crate::dispatch::ResponseErrorKind;
 use crate::dispatch::ResponseReceipt;
 use crate::dispatch::WriteProgress;
 use crate::runtime::processor::ResponseMetadata;
@@ -225,7 +225,7 @@ impl Drop for RequestObservationInner {
             None,
             ResponseObservationMode::NoResponse,
             ResponseObservationOutcome::Failed {
-                kind: None,
+                completion: None,
                 progress: Some(WriteProgress::NotStarted),
             },
         );
@@ -342,14 +342,11 @@ impl RequestObservation {
         response_code: i32,
         body_kind: ResponseBodyKind,
         write_elapsed: Duration,
-        result: Result<ResponseReceipt, (ResponseErrorKind, Option<WriteProgress>)>,
+        result: Result<ResponseReceipt, (Option<ResponseCompletionOutcome>, Option<WriteProgress>)>,
     ) {
         let outcome = match result {
             Ok(receipt) => ResponseObservationOutcome::Written(receipt),
-            Err((kind, progress)) => ResponseObservationOutcome::Failed {
-                kind: Some(kind),
-                progress,
-            },
+            Err((completion, progress)) => ResponseObservationOutcome::Failed { completion, progress },
         };
         self.complete(
             ResponseMetadata::new(
@@ -418,7 +415,10 @@ impl RequestObservation {
                 response_code,
                 body_kind,
                 mode,
-                ResponseObservationOutcome::Failed { kind: None, progress },
+                ResponseObservationOutcome::Failed {
+                    completion: None,
+                    progress,
+                },
             ),
             None,
         );
@@ -503,10 +503,10 @@ impl RequestObservation {
                     .span
                     .record("response_disposition", receipt.disposition().as_str());
             }
-            ResponseObservationOutcome::Failed { kind, progress } => {
+            ResponseObservationOutcome::Failed { completion, progress } => {
                 if rejection.is_none() {
-                    if let Some(kind) = kind {
-                        self.inner.span.record("error_kind", kind.as_str());
+                    if let Some(completion) = completion {
+                        self.inner.span.record("error_kind", completion.as_str());
                     }
                 }
                 if let Some(progress) = progress {

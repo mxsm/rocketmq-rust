@@ -70,22 +70,25 @@ async fn pop_lite_deferred_execution_admission_rejects_before_processor_and_writ
         .expect("execution-reject waiter is claimable");
     let executions = Arc::new(AtomicUsize::new(0));
     let executions_for_handler = Arc::clone(&executions);
-    service
-        .resume_event_claim(
-            claim,
-            DeferredResumeRetainedSize::new(AdmissionLimits::default().queued.bytes),
-            move |_resume, _reason, reservation| async move {
-                executions_for_handler.fetch_add(1, Ordering::SeqCst);
-                let batch = reservation.commit();
-                batch.complete(&HashSet::new());
-                RemotingResponse::command(RemotingCommand::create_response_command_with_code(
-                    ResponseCode::Success,
-                ))
-                .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
-            },
-        )
-        .await
-        .expect("bounded execution rejection writes its canonical error response");
+    assert!(matches!(
+        service
+            .resume_event_claim(
+                claim,
+                DeferredResumeRetainedSize::new(AdmissionLimits::default().queued.bytes),
+                move |_resume, _reason, reservation| async move {
+                    executions_for_handler.fetch_add(1, Ordering::SeqCst);
+                    let batch = reservation.commit();
+                    batch.complete(&HashSet::new());
+                    RemotingResponse::command(RemotingCommand::create_response_command_with_code(
+                        ResponseCode::Success,
+                    ))
+                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                },
+            )
+            .await
+            .expect("bounded execution rejection writes its canonical error response"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
 
     let response = client
         .receive_command()
@@ -147,21 +150,24 @@ async fn pop_lite_deferred_handler_failure_drops_body_owner_once_and_rolls_back_
         .expect("owner-failure waiter is claimable");
     let owner_drops = Arc::new(AtomicUsize::new(0));
     let owner_drops_for_handler = Arc::clone(&owner_drops);
-    service
-        .resume_event_claim(
-            claim,
-            DeferredResumeRetainedSize::default(),
-            move |_resume, reason, _reservation| async move {
-                assert_eq!(reason, DeferredWakeReason::MessageArrived);
-                let _body = Bytes::from_owner(CountingBodyOwner {
-                    body: b"owner-backed-pop-lite-failure".to_vec(),
-                    drops: owner_drops_for_handler,
-                });
-                Err::<RemotingResponse, _>(RocketMQError::illegal_argument("PopLite owner failure"))
-            },
-        )
-        .await
-        .expect("handler failure writes its canonical typed error response");
+    assert!(matches!(
+        service
+            .resume_event_claim(
+                claim,
+                DeferredResumeRetainedSize::default(),
+                move |_resume, reason, _reservation| async move {
+                    assert_eq!(reason, DeferredWakeReason::MessageArrived);
+                    let _body = Bytes::from_owner(CountingBodyOwner {
+                        body: b"owner-backed-pop-lite-failure".to_vec(),
+                        drops: owner_drops_for_handler,
+                    });
+                    Err::<RemotingResponse, _>(RocketMQError::illegal_argument("PopLite owner failure"))
+                },
+            )
+            .await
+            .expect("handler failure writes its canonical typed error response"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
 
     let response = client
         .receive_command()

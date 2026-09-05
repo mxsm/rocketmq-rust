@@ -24,16 +24,16 @@ use std::sync::Weak;
 use std::time::Duration;
 
 use rocketmq_transport::api::ServerPushCommand;
-use rocketmq_transport::api::ServerPushError;
-use rocketmq_transport::api::ServerPushReceipt;
+use rocketmq_transport::api::ServerPushOutcome;
 use rocketmq_transport::api::ServerPushSender;
-use rocketmq_transport::api::SessionCloseError;
 use rocketmq_transport::api::SessionCloseHandle;
+use rocketmq_transport::api::SessionCloseOutcome;
 use rocketmq_transport::api::SessionCloseReason;
 use rocketmq_transport::api::SessionId;
 use rocketmq_transport::api::SessionLifecycleListener;
 use rocketmq_transport::api::SessionRegistry;
 use rocketmq_transport::api::SessionView;
+use rocketmq_transport::api::TransportError;
 
 use crate::context::ProxyContext;
 
@@ -76,24 +76,21 @@ impl RemotingSessionCapability {
 
     /// Sends one explicitly permitted server notification.
     ///
-    /// # Errors
-    ///
-    /// Returns [`ServerPushError`] when the canonical session writer rejects
-    /// encoding, admission, its deadline, or the socket write.
+    /// Normal admission and lifecycle rejections remain explicit outcomes;
+    /// transport operations that cannot complete return [`TransportError`].
     pub async fn send(
         &self,
         command: ServerPushCommand,
         timeout: Duration,
-    ) -> Result<ServerPushReceipt, ServerPushError> {
+    ) -> Result<ServerPushOutcome, TransportError> {
         self.push.send(command, timeout).await
     }
 
     /// Gracefully retires the bound transport session.
     ///
-    /// # Errors
-    ///
-    /// Returns [`SessionCloseError`] when transport-owned retirement fails.
-    pub async fn close(&self, reason: SessionCloseReason) -> Result<(), SessionCloseError> {
+    /// An already-closed session is a normal outcome. Transport operations
+    /// that cannot complete return [`TransportError`].
+    pub async fn close(&self, reason: SessionCloseReason) -> Result<SessionCloseOutcome, TransportError> {
         self.close.close(reason).await
     }
 }
@@ -148,13 +145,11 @@ impl RetiredRemotingSession {
     /// already-committed replacement heartbeat can complete.
     pub(crate) async fn retire(self) -> RetiredSessionRetirement {
         debug_assert_eq!(self.capability.session_id(), self.binding.session_id);
-        if self
-            .capability
-            .close(SessionCloseReason::ClientBindingRetired)
-            .await
-            .is_ok()
-        {
-            return RetiredSessionRetirement::Graceful;
+        match self.capability.close(SessionCloseReason::ClientBindingRetired).await {
+            Ok(SessionCloseOutcome::Closed | SessionCloseOutcome::AlreadyClosed) => {
+                return RetiredSessionRetirement::Graceful;
+            }
+            Err(_) => {}
         }
         if self
             .registry

@@ -44,7 +44,9 @@ use crate::codec::PreparedResponse;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::DeferredTransportDropHandle;
 use crate::dispatch::RequestControlView;
-use crate::dispatch::ResponseError;
+use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseOperationalFailure;
+use crate::dispatch::ResponseSendOutcome;
 use crate::dispatch::ResponseTransportDropHandle;
 use crate::dispatch::WriteProgress;
 use crate::file_region::FileRegion;
@@ -221,13 +223,30 @@ impl SendFailure {
         }
     }
 
-    fn into_response(self) -> ResponseError {
+    fn into_response(self) -> ResponseSendOutcome {
         match self {
-            Self::DeadlineExceeded { .. } => ResponseError::DeadlineExceeded,
-            Self::SessionClosed { .. } => ResponseError::SessionClosed,
-            Self::Cancelled { .. } => ResponseError::Cancelled,
-            Self::QueueSaturated { .. } => ResponseError::QueueSaturated,
-            Self::Writer { failure, .. } => failure.into_response(),
+            Self::DeadlineExceeded { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::DeadlineExpired),
+            Self::SessionClosed { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed),
+            Self::Cancelled { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::Cancelled),
+            Self::QueueSaturated { .. } => ResponseSendOutcome::Rejected(ResponseCompletionOutcome::QueueSaturated),
+            Self::Writer { failure, .. } => ResponseSendOutcome::OperationalFailure(failure.into_response()),
+        }
+    }
+}
+
+fn classify_writer_failure(
+    target: String,
+    failure: WriterFailure,
+    legacy_reason: LegacyWriterReason,
+    owner_deadline: Option<RequestDeadline>,
+) -> SendFailure {
+    if owner_deadline.is_some_and(|deadline| failure.was_caused_by(deadline)) {
+        SendFailure::DeadlineExceeded { target }
+    } else {
+        SendFailure::Writer {
+            target,
+            failure,
+            legacy_reason,
         }
     }
 }
@@ -1064,19 +1083,22 @@ impl Connection {
                 )
                 .with_response_queue_wait_observation(response_queue_wait_observation),
             ) {
-                Ok(()) => {
+                crate::writer_runtime::WriterEnqueueOutcome::Enqueued => {
                     queued.writer_diagnostics.record_accepted();
                     self.telemetry.record_outbound_accepted_plaintext_bytes(encoded_len);
                 }
-                Err(error) => {
+                rejection => {
                     queued.writer_diagnostics.record_rejected(Some(encoded_len));
-                    return Err(match error {
-                        crate::writer_runtime::WriterEnqueueError::Full => {
+                    return Err(match rejection {
+                        crate::writer_runtime::WriterEnqueueOutcome::Full(write) => {
+                            drop(write);
                             SendFailure::QueueSaturated { target: target.clone() }
                         }
-                        crate::writer_runtime::WriterEnqueueError::Closed => {
+                        crate::writer_runtime::WriterEnqueueOutcome::Closed(write) => {
+                            drop(write);
                             SendFailure::SessionClosed { target: target.clone() }
                         }
+                        crate::writer_runtime::WriterEnqueueOutcome::Enqueued => unreachable!(),
                     });
                 }
             }
@@ -1120,10 +1142,8 @@ impl Connection {
                 result.await
             };
             let outcome = outcome.map_err(|_| {
-                if !progress.write_started() {
-                    if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
-                        return stop_failure(reason, target.clone());
-                    }
+                if let Some(reason) = progress.cancellation_reason() {
+                    return stop_failure(reason, target.clone());
                 }
                 let progress = if progress.write_started() {
                     WriteProgress::PossiblyPartial
@@ -1140,18 +1160,7 @@ impl Connection {
                 drop_guard.complete();
             }
             let outcome = outcome?;
-            return outcome.map_err(|failure| {
-                if failure.progress() == WriteProgress::NotStarted {
-                    if let Some(reason) = control.and_then(|control| current_request_stop(control, stop_policy)) {
-                        return stop_failure(reason, target.clone());
-                    }
-                }
-                SendFailure::Writer {
-                    target,
-                    failure,
-                    legacy_reason,
-                }
-            });
+            return outcome.map_err(|failure| classify_writer_failure(target, failure, legacy_reason, deadline));
         }
         if self.state() == ConnectionState::Closed {
             return Err(SendFailure::SessionClosed { target });
@@ -1181,7 +1190,7 @@ impl Connection {
                 Err(_) => Err(if write_started.load(Ordering::Acquire) {
                     WriterFailure::write_timeout(deadline.budget_millis())
                 } else {
-                    WriterFailure::deadline_exceeded_before_send()
+                    WriterFailure::deadline_exceeded_before_send(Some(deadline.instant()))
                 }),
             }
         } else {
@@ -1211,11 +1220,7 @@ impl Connection {
                     let _ = writer.shutdown().await;
                     let _ = self.state_tx.send(ConnectionState::Closed);
                 }
-                Err(SendFailure::Writer {
-                    target,
-                    failure,
-                    legacy_reason,
-                })
+                Err(classify_writer_failure(target, failure, legacy_reason, deadline))
             }
         }
     }
@@ -1227,12 +1232,12 @@ impl Connection {
         &mut self,
         prepared: PreparedResponse,
         control: &RequestControlView,
-    ) -> Result<(), ResponseError> {
+    ) -> ResponseSendOutcome {
         if self.queued_writer().is_none() {
-            return Err(ResponseError::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
         }
         let Some(class) = self.response_class() else {
-            return Err(ResponseError::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
         self.send_payload_inner_with_response_observation(
@@ -1247,7 +1252,7 @@ impl Connection {
             "transport-session-writer".to_string(),
         )
         .await
-        .map_err(SendFailure::into_response)
+        .map_or_else(SendFailure::into_response, |_| ResponseSendOutcome::Written)
     }
 
     pub(crate) async fn send_prepared_deferred_response(
@@ -1255,15 +1260,15 @@ impl Connection {
         prepared: PreparedResponse,
         control: &RequestControlView,
         deferred_drop: DeferredTransportDropHandle,
-    ) -> Result<(), ResponseError> {
+    ) -> ResponseSendOutcome {
         if self.queued_writer().is_none() {
-            return Err(ResponseError::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
         }
         if self.response_drop.is_none() {
-            return Err(ResponseError::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
         }
         let Some(class) = self.response_class() else {
-            return Err(ResponseError::SessionClosed);
+            return ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed);
         };
         let (_, payload) = prepared.into_parts();
         self.send_payload_inner_with_response_observation(
@@ -1278,20 +1283,20 @@ impl Connection {
             "transport-session-writer".to_string(),
         )
         .await
-        .map_err(SendFailure::into_response)
+        .map_or_else(SendFailure::into_response, |_| ResponseSendOutcome::Written)
     }
 
     /// Sends a server response through the canonical writer with a stage-aware
     /// completion error. This is intentionally crate-private while the public
     /// response receipt/context API is introduced separately.
-    pub(crate) async fn send_response(&mut self, command: RemotingCommand) -> Result<(), ResponseError> {
+    pub(crate) async fn send_response(&mut self, command: RemotingCommand) -> ResponseSendOutcome {
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
-        let frame = self
-            .limits
-            .encode_command(command)
-            .map_err(|source| ResponseError::Encode { source })?;
+        let frame = match self.limits.encode_command(command) {
+            Ok(frame) => frame,
+            Err(source) => return ResponseSendOutcome::OperationalFailure(ResponseOperationalFailure::encode(source)),
+        };
         self.send_payload_inner_with_response_observation(
             OutboundPayload::Frame(frame),
             class,
@@ -1304,7 +1309,7 @@ impl Connection {
             "transport-session-writer".to_string(),
         )
         .await
-        .map_err(SendFailure::into_response)
+        .map_or_else(SendFailure::into_response, |_| ResponseSendOutcome::Written)
     }
 
     /// Sends a `RemotingCommand` to the peer (consumes command).

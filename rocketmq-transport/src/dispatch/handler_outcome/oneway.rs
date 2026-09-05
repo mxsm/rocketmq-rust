@@ -16,11 +16,11 @@
 
 use super::protocol_no_response_allowed;
 use super::DeferredRegistration;
-use super::HandlerOutcomeContractError;
 use super::InlineResponseSlot;
 use super::InlineResponseState;
 use super::OriginalRequestIdentity;
 use super::ProtocolNoResponse;
+use crate::contract::TransportContractViolation;
 
 impl InlineResponseSlot {
     /// Atomically consumes and validates a deferred proof that is forbidden
@@ -29,22 +29,22 @@ impl InlineResponseSlot {
         &mut self,
         original: OriginalRequestIdentity,
         registration: DeferredRegistration,
-    ) -> Result<(), HandlerOutcomeContractError> {
+    ) -> Result<(), TransportContractViolation> {
         let state = std::mem::replace(&mut self.state, InlineResponseState::Completed);
         drop(self.deferred_seed.take());
         match state {
             InlineResponseState::Open => {
                 if registration.request_id() != original.request_id() {
-                    return Err(HandlerOutcomeContractError::DeferredRegistrationRequestMismatch {
+                    return Err(TransportContractViolation::DeferredRegistrationRequestMismatch {
                         expected: original.request_id(),
                         actual: registration.request_id(),
                     });
                 }
                 Ok(())
             }
-            InlineResponseState::OpenWithDeferred => Err(HandlerOutcomeContractError::DeferredUnavailable),
-            InlineResponseState::DeferredTaken => Err(HandlerOutcomeContractError::DeferredAlreadyTaken),
-            InlineResponseState::Completed => Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted),
+            InlineResponseState::OpenWithDeferred => Err(TransportContractViolation::DeferredResponderUnavailable),
+            InlineResponseState::DeferredTaken => Err(TransportContractViolation::DeferredResponderAlreadyTaken),
+            InlineResponseState::Completed => Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted),
         }
     }
 
@@ -54,14 +54,14 @@ impl InlineResponseSlot {
         &mut self,
         original: OriginalRequestIdentity,
         marker: ProtocolNoResponse,
-    ) -> Result<(), HandlerOutcomeContractError> {
+    ) -> Result<(), TransportContractViolation> {
         let state = std::mem::replace(&mut self.state, InlineResponseState::Completed);
         drop(self.deferred_seed.take());
         match state {
             InlineResponseState::Open => validate_oneway_marker(&marker, original),
-            InlineResponseState::OpenWithDeferred => Err(HandlerOutcomeContractError::DeferredUnavailable),
-            InlineResponseState::DeferredTaken => Err(HandlerOutcomeContractError::NoReplyAfterDeferredTaken),
-            InlineResponseState::Completed => Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted),
+            InlineResponseState::OpenWithDeferred => Err(TransportContractViolation::DeferredResponderUnavailable),
+            InlineResponseState::DeferredTaken => Err(TransportContractViolation::NoReplyAfterDeferredTaken),
+            InlineResponseState::Completed => Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted),
         }
     }
 }
@@ -69,12 +69,12 @@ impl InlineResponseSlot {
 fn validate_oneway_marker(
     marker: &ProtocolNoResponse,
     original: OriginalRequestIdentity,
-) -> Result<(), HandlerOutcomeContractError> {
+) -> Result<(), TransportContractViolation> {
     if marker.request_id != original.request_id() || marker.original_code != original.original_code() {
-        return Err(HandlerOutcomeContractError::NoResponseIdentityMismatch);
+        return Err(TransportContractViolation::NoResponseIdentityMismatch);
     }
     if !protocol_no_response_allowed(original.original_code(), marker.reason) {
-        return Err(HandlerOutcomeContractError::NoResponsePolicyMismatch {
+        return Err(TransportContractViolation::NoResponsePolicyMismatch {
             request_code: original.original_code(),
             reason: marker.reason,
         });
@@ -137,7 +137,7 @@ mod tests {
                 original,
                 DeferredRegistration::with_drop_probe(original.request_id(), Arc::clone(&drops)),
             ),
-            Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted)
+            Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted)
         );
         assert_eq!(drops.load(Ordering::SeqCst), 2);
 
@@ -147,7 +147,7 @@ mod tests {
                 original,
                 DeferredRegistration::with_drop_probe(foreign.request_id(), Arc::clone(&drops)),
             ),
-            Err(HandlerOutcomeContractError::DeferredRegistrationRequestMismatch { .. })
+            Err(TransportContractViolation::DeferredRegistrationRequestMismatch { .. })
         ));
         assert_eq!(drops.load(Ordering::SeqCst), 3);
         assert_eq!(
@@ -155,7 +155,7 @@ mod tests {
                 original,
                 DeferredRegistration::with_drop_probe(original.request_id(), Arc::clone(&drops)),
             ),
-            Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted)
+            Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted)
         );
         assert_eq!(drops.load(Ordering::SeqCst), 4);
 
@@ -175,7 +175,7 @@ mod tests {
                     ProtocolNoResponseReason::CallbackHandled,
                 ),
             ),
-            Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted)
+            Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted)
         );
 
         let mut cross_no_reply = InlineResponseSlot::disabled();
@@ -188,7 +188,7 @@ mod tests {
                     ProtocolNoResponseReason::CallbackHandled,
                 ),
             ),
-            Err(HandlerOutcomeContractError::NoResponseIdentityMismatch)
+            Err(TransportContractViolation::NoResponseIdentityMismatch)
         );
         assert_eq!(
             cross_no_reply.consume_oneway_no_reply(
@@ -199,7 +199,7 @@ mod tests {
                     ProtocolNoResponseReason::CallbackHandled,
                 ),
             ),
-            Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted)
+            Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted)
         );
     }
 }

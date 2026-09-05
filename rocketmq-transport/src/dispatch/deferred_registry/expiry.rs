@@ -25,7 +25,7 @@ use super::internal::RegistryInner;
 use super::internal::RegistryLifecycle;
 use super::ClaimStart;
 use super::ClaimedDeferred;
-use super::DeferredClaimErrorKind;
+use super::DeferredClaimRejection;
 use super::DeferredExpiry;
 use super::DeferredId;
 use super::DeferredWakeReason;
@@ -258,8 +258,8 @@ where
                     claims.push(claimed);
                     stats.long_poll_claims += 1;
                 }
-                ClaimStart::Error(error) => {
-                    if error.kind() == DeferredClaimErrorKind::RegistryInvariant {
+                ClaimStart::Rejected(rejection) => {
+                    if matches!(rejection, DeferredClaimRejection::Operational(_)) {
                         stats.invariant_failures += 1;
                     }
                 }

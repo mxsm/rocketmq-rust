@@ -14,15 +14,70 @@
 
 use super::*;
 use crate::dispatch::DeferredAdmission;
+use crate::dispatch::DeferredAdmissionAcquireOutcome;
+use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredId;
 use crate::dispatch::DeferredParts;
 use crate::dispatch::DeferredRegistry;
+use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
+use crate::dispatch::DeferredResponder;
+use crate::dispatch::DeferredResponderOutcome;
+use crate::dispatch::DeferredResumeOutcome;
 use crate::dispatch::DeferredResumeRetainedSize;
 use crate::dispatch::DeferredRetainedSizeParts;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
 use crate::telemetry::TransportTelemetry;
+
+fn terminal_responder(outcome: DeferredResponderOutcome) -> DeferredResponder {
+    match outcome {
+        DeferredResponderOutcome::Taken(responder) => responder,
+        DeferredResponderOutcome::OneWayRequest
+        | DeferredResponderOutcome::Unavailable
+        | DeferredResponderOutcome::AlreadyTaken
+        | DeferredResponderOutcome::OutcomeCompleted => panic!("terminal wait owns the deferred responder"),
+    }
+}
+
+fn terminal_permit(outcome: DeferredAdmissionAcquireOutcome) -> crate::dispatch::DeferredWaitPermit {
+    match outcome {
+        DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
+        | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
+        | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            panic!("terminal wait capacity is available")
+        }
+    }
+}
+
+fn terminal_registration(outcome: DeferredRegistryOutcome<()>) -> crate::dispatch::DeferredRegistration {
+    match outcome {
+        DeferredRegistryOutcome::Registered(registration) => registration,
+        DeferredRegistryOutcome::DuplicateRequest(_)
+        | DeferredRegistryOutcome::IdentityExhausted(_)
+        | DeferredRegistryOutcome::ParentCancelled
+        | DeferredRegistryOutcome::SessionClosed
+        | DeferredRegistryOutcome::DeadlineExpired
+        | DeferredRegistryOutcome::ContractViolation { .. }
+        | DeferredRegistryOutcome::OperationalFailure { .. } => {
+            panic!("terminal wait registration succeeds")
+        }
+        DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
+    }
+}
+
+fn terminal_claim(outcome: DeferredClaimOutcome<()>) -> crate::dispatch::ClaimedDeferred<()> {
+    match outcome {
+        DeferredClaimOutcome::Claimed(claim) => claim,
+        DeferredClaimOutcome::NotFound
+        | DeferredClaimOutcome::AlreadyClaimed
+        | DeferredClaimOutcome::AlreadyCompleted
+        | DeferredClaimOutcome::ParentCancelled
+        | DeferredClaimOutcome::SessionClosed
+        | DeferredClaimOutcome::DeadlineExpired => panic!("terminal wait registration is claimable"),
+    }
+}
 
 #[derive(Clone)]
 struct TerminalDeferredProcessor {
@@ -62,19 +117,14 @@ impl TerminalDeferredProcessor {
 
 impl RequestProcessor for TerminalDeferredProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let responder = request
-            .take_deferred_responder()
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let responder = terminal_responder(request.take_deferred_responder());
         let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let permit = self
-            .admission
-            .try_reserve(retained)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let mut registration = self
-            .registry
-            .register(DeferredRequest::new((), DeferredParts::new(responder, permit)))
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let permit = terminal_permit(self.admission.try_reserve(retained));
+        let mut registration = terminal_registration(
+            self.registry
+                .register(DeferredRequest::new((), DeferredParts::new(responder, permit))),
+        );
         if let Some(checkpoint) = self.commit_checkpoint.clone() {
             registration.set_commit_checkpoint(move || checkpoint());
         }
@@ -189,11 +239,13 @@ async fn terminal_wait_commits_resumes_and_returns_the_final_plan_with_compositi
     assert_eq!(resources.queued.current_count, 0);
     assert_eq!(resources.inflight.current_count, 0);
     assert_eq!(resources.processors.current_count, 0);
-    let claim = registry
-        .claim(id, DeferredWakeReason::MessageArrived)
-        .await
-        .expect("claim committed embedded wait");
-    claim
+    let claim = terminal_claim(
+        registry
+            .claim(id, DeferredWakeReason::MessageArrived)
+            .await
+            .expect("claim committed embedded wait"),
+    );
+    let resume = claim
         .resume(DeferredResumeRetainedSize::new(0), |(), reason| async move {
             assert_eq!(reason, DeferredWakeReason::MessageArrived);
             RemotingResponse::bytes(
@@ -204,6 +256,7 @@ async fn terminal_wait_commits_resumes_and_returns_the_final_plan_with_compositi
         })
         .await
         .expect("resume final embedded response");
+    assert!(matches!(resume, DeferredResumeOutcome::Completed(_)));
     let outcome = dispatch
         .await
         .expect("terminal dispatch join")
@@ -248,11 +301,11 @@ async fn terminal_wait_deadline_closes_the_committed_registry_entry_and_releases
 
     let id = observer.registered_id().await;
     wait_until_active(&registry, id).await;
-    let error = dispatch
+    let outcome = dispatch
         .await
         .expect("terminal deadline join")
-        .expect_err("terminal deadline must stop the embedded wait");
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::DeadlineExceeded);
+        .expect("terminal deadline is a normal outcome");
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
     assert_released(&fixture, controller.as_ref(), &admission, &registry);
     fixture.shutdown().await;
 }
@@ -303,19 +356,15 @@ async fn parent_cancel_during_commit_fails_closed_and_rolls_back_every_owner() {
         TransportTelemetry::noop(),
     ));
 
-    let error = dispatcher
+    let result = dispatcher
         .dispatch_embedded_wait_response(
             &fixture.task_group,
             Principal::new("broker-proxy"),
             None,
             request(false).0,
         )
-        .await
-        .expect_err("cancellation at commit must fail closed");
-    assert!(matches!(
-        error.kind(),
-        EmbeddedDispatchErrorKind::Cancelled | EmbeddedDispatchErrorKind::DeferredCommit
-    ));
+        .await;
+    assert!(matches!(result, Ok(EmbeddedDispatchOutcome::Cancelled)));
     let _ = observer.registered_id().await;
     assert_released(&fixture, controller.as_ref(), &admission, &registry);
     fixture.shutdown().await;

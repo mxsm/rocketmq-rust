@@ -25,8 +25,8 @@ use tokio::sync::oneshot;
 
 use super::RequestProcessor;
 use super::ServerConfig;
-use super::ServerStartError;
 use super::TransportServer;
+use crate::error::TransportError;
 
 pub(super) struct TestRuntime {
     owner: RuntimeOwner,
@@ -77,7 +77,7 @@ impl TestRuntime {
 pub(super) struct RunningServer {
     owner: RuntimeOwner,
     shutdown: Option<oneshot::Sender<()>>,
-    result: oneshot::Receiver<Result<ShutdownReport, ServerStartError>>,
+    result: oneshot::Receiver<Result<ShutdownReport, TransportError>>,
 }
 
 impl RunningServer {
@@ -99,7 +99,7 @@ impl RunningServer {
         report
     }
 
-    async fn finish_start_error(mut self) -> ServerStartError {
+    async fn finish_start_error(mut self) -> TransportError {
         self.shutdown.take();
         let error = self
             .result
@@ -151,7 +151,7 @@ where
     (client, address, running, shutdown_observed)
 }
 
-pub(super) async fn expect_start_error<P>(runtime: TestRuntime, server: TransportServer<P>) -> ServerStartError
+pub(super) async fn expect_start_error<P>(runtime: TestRuntime, server: TransportServer<P>) -> TransportError
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
@@ -161,7 +161,13 @@ where
         .expect("failed-start startup channel")
         .expect_err("startup must fail");
     let result_error = running.finish_start_error().await;
-    assert_eq!(startup_error.to_string(), result_error.to_string());
+    assert_eq!(startup_error.code(), result_error.code());
+    let startup_source = std::error::Error::source(&startup_error).expect("startup publication retains typed source");
+    let result_source = std::error::Error::source(&result_error).expect("startup return retains typed source");
+    assert!(
+        std::ptr::eq(startup_source, result_source),
+        "readiness and returned failures must share one original typed source"
+    );
     result_error
 }
 
@@ -169,7 +175,7 @@ fn spawn_server<P>(
     runtime: TestRuntime,
     server: TransportServer<P>,
     shutdown_seen: Option<oneshot::Sender<()>>,
-) -> (oneshot::Receiver<Result<SocketAddr, ServerStartError>>, RunningServer)
+) -> (oneshot::Receiver<Result<SocketAddr, TransportError>>, RunningServer)
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {

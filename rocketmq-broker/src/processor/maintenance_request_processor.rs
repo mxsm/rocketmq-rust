@@ -697,7 +697,7 @@ mod tests {
         processor: MaintenanceRequestProcessor,
         principal: &'static str,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::EmbeddedDispatchError> {
+    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
         dispatch_request_with_hooks(processor, principal, command, Vec::new()).await
     }
 
@@ -706,7 +706,7 @@ mod tests {
         principal: &'static str,
         command: RemotingCommand,
         hooks: Vec<Arc<dyn RPCHook>>,
-    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::EmbeddedDispatchError> {
+    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             hooks,

@@ -100,7 +100,8 @@ where
         retained_bytes: usize,
         partial_frame_permit: Option<PartialFramePermit>,
     ) -> bool {
-        self.dispatcher
+        match self
+            .dispatcher
             .dispatch_network(
                 authorized_session,
                 state.endpoint.clone(),
@@ -113,7 +114,10 @@ where
                 state.deferred_cleanup.registration(),
             )
             .await
-            .is_ok()
+        {
+            Ok(outcome) => outcome.keeps_session_open(),
+            Err(_) => false,
+        }
     }
 
     fn close_pending(

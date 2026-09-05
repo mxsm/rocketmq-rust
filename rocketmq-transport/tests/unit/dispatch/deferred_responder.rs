@@ -41,6 +41,11 @@ use crate::connection::SessionWriterDiagnostics;
 use crate::dispatch::InlineResponseSlot;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::ResponseBody;
+use crate::dispatch::ResponseCompletionOutcome;
+use crate::dispatch::ResponseOperationalFailure;
+use crate::dispatch::ResponseSendOutcome;
+use crate::dispatch::ResponseStateOutcome;
+use crate::dispatch::ResponseTerminalState;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
 use crate::session_view::EmbeddedSessionRecord;
@@ -63,6 +68,27 @@ fn identity_with_code(owner: u64, opaque: i32, one_way: bool, code: i32) -> Orig
 fn remoting_response(opaque: i32) -> RemotingResponse {
     RemotingResponse::command(RemotingCommand::create_response_command_with_code(0).set_opaque(opaque))
         .expect("remoting response")
+}
+
+fn expect_applied<T>(result: Result<ResponseStateOutcome<T>, TransportContractViolation>) -> T {
+    match result.expect("response state transition remains valid") {
+        ResponseStateOutcome::Applied(value) => value,
+        ResponseStateOutcome::AlreadyCompleted { .. } => panic!("response state unexpectedly terminal"),
+    }
+}
+
+fn expect_taken(outcome: DeferredResponderOutcome) -> DeferredResponder {
+    match outcome {
+        DeferredResponderOutcome::Taken(responder) => responder,
+        _ => panic!("deferred response ownership should be available"),
+    }
+}
+
+fn expect_completed(outcome: DeferredResponseOutcome) -> ResponseReceipt {
+    match outcome {
+        DeferredResponseOutcome::Completed(receipt) => receipt,
+        _ => panic!("deferred response should complete"),
+    }
 }
 
 struct ControlHarness {
@@ -143,7 +169,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     let mut unavailable = InlineResponseSlot::disabled();
     assert!(matches!(
         unavailable.take_deferred_responder(ordinary),
-        Err(TakeDeferredResponderError::Unavailable)
+        DeferredResponderOutcome::Unavailable
     ));
     assert_eq!(deferred_state_allocations(), before);
 
@@ -152,17 +178,15 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
     let mut slot = InlineResponseSlot::with_deferred_seed(seed);
     assert!(matches!(
         slot.take_deferred_responder(one_way),
-        Err(TakeDeferredResponderError::OneWayRequest)
+        DeferredResponderOutcome::OneWayRequest
     ));
     assert_eq!(deferred_state_allocations(), before);
 
-    let responder = slot
-        .take_deferred_responder(ordinary)
-        .expect("failed one-way take must retain the seed");
+    let responder = expect_taken(slot.take_deferred_responder(ordinary));
     assert_eq!(deferred_state_allocations(), before + 1);
     assert!(matches!(
         slot.take_deferred_responder(ordinary),
-        Err(TakeDeferredResponderError::AlreadyTaken)
+        DeferredResponderOutcome::AlreadyTaken
     ));
     assert_eq!(deferred_state_allocations(), before + 1);
     drop(responder);
@@ -176,7 +200,7 @@ async fn take_failures_are_exact_and_only_a_success_allocates_deferred_state() {
         .expect("inline reply completes the slot");
     assert!(matches!(
         completed.take_deferred_responder(ordinary),
-        Err(TakeDeferredResponderError::OutcomeCompleted)
+        DeferredResponderOutcome::OutcomeCompleted
     ));
     assert_eq!(deferred_state_allocations(), before + 1);
     harness.shutdown().await;
@@ -196,9 +220,12 @@ async fn explicit_cancel_and_abandoned_drop_record_only_the_winning_cas() {
     assert!(explicit
         .control()
         .same_lifecycle_owner(harness.session.view().state(), &harness.parent));
-    explicit.register().expect("registry transition");
-    explicit.claim().expect("resume claim transition");
-    explicit.cancel().expect("open responder cancels");
+    expect_applied(explicit.register());
+    expect_applied(explicit.claim());
+    assert_eq!(
+        explicit.cancel().expect("open responder cancels"),
+        DeferredResponseOutcome::Cancelled
+    );
     assert_eq!(explicit_state.terminal_state(), Some(ResponseTerminalState::Cancelled));
     assert_eq!(explicit_state.terminal_reason(), Some(DeferredTerminalReason::Explicit));
 
@@ -216,10 +243,13 @@ async fn explicit_cancel_and_abandoned_drop_record_only_the_winning_cas() {
         DeferredResponseSeed::new(sink.clone(), telemetry.clone(), harness.session_id(), control.clone())
             .into_responder(original);
     already_closed.state.close().expect("close wins before explicit cancel");
-    assert!(already_closed.cancel().is_err());
+    assert_eq!(
+        already_closed.cancel().expect("prior terminal is a normal outcome"),
+        DeferredResponseOutcome::AlreadyCompleted
+    );
 
     let sending = DeferredResponseSeed::new(sink, telemetry, harness.session_id(), control).into_responder(original);
-    let send_claim = sending.state.begin_sending().expect("begin sending");
+    let send_claim = expect_applied(sending.state.begin_sending());
     drop(sending);
     drop(send_claim);
     assert_eq!(
@@ -247,19 +277,22 @@ async fn caller_receiver_drop_closes_once_and_reports_the_prior_reason() {
     let responder = DeferredResponseSeed::new(sink, telemetry, harness.session_id(), control).into_responder(original);
     let state = Arc::clone(&responder.state);
 
-    responder
-        .cancel_with_reason(DeferredCancellationReason::ReceiverDropped)
-        .expect("caller-owned receiver drop closes the response");
+    assert_eq!(
+        responder
+            .cancel_with_reason(DeferredCancellationReason::ReceiverDropped)
+            .expect("caller-owned receiver drop closes the response"),
+        DeferredResponseOutcome::Cancelled
+    );
 
     assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Closed));
     assert_eq!(state.terminal_reason(), Some(DeferredTerminalReason::ReceiverDropped));
-    let duplicate = state.cancel().expect_err("the terminal winner is immutable");
-    let error = DeferredResponseError::from_state(duplicate);
-    assert_eq!(error.prior_terminal_state(), Some(ResponseTerminalState::Closed));
-    assert_eq!(
-        error.prior_terminal_reason(),
-        Some(DeferredTerminalReason::ReceiverDropped)
-    );
+    assert!(matches!(
+        state.cancel().expect("prior terminal is a normal outcome"),
+        ResponseStateOutcome::AlreadyCompleted {
+            state: ResponseTerminalState::Closed,
+            reason: Some(DeferredTerminalReason::ReceiverDropped),
+        }
+    ));
     assert_eq!(terminals.lock().as_slice(), [("pull_message", "receiver_dropped")]);
     harness.shutdown().await;
 }
@@ -274,16 +307,18 @@ async fn local_response_binds_original_opaque_and_moves_body_once() {
     let responder = DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control.clone())
         .into_responder(original);
     let state = Arc::clone(&responder.state);
-    let receipt = responder
-        .respond(
-            RemotingResponse::bytes(
-                RemotingCommand::create_response_command_with_code(71).set_opaque(999),
-                bytes,
+    let receipt = expect_completed(
+        responder
+            .respond(
+                RemotingResponse::bytes(
+                    RemotingCommand::create_response_command_with_code(71).set_opaque(999),
+                    bytes,
+                )
+                .expect("bytes plan"),
             )
-            .expect("bytes plan"),
-        )
-        .await
-        .expect("local trusted owner accepts deferred plan");
+            .await
+            .expect("local trusted owner accepts deferred plan"),
+    );
     assert_eq!(receipt.request_id(), original.request_id());
     assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Completed));
 
@@ -309,11 +344,13 @@ async fn local_response_binds_original_opaque_and_moves_body_once() {
         _ => panic!("segments plan must retain its representation"),
     };
     let (sink, receiver) = ResponseSink::local(control.clone());
-    DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control.clone())
-        .into_responder(original)
-        .respond(segments_plan)
-        .await
-        .expect("segments plan handoff");
+    let segments_outcome =
+        DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control.clone())
+            .into_responder(original)
+            .respond(segments_plan)
+            .await
+            .expect("segments plan handoff");
+    assert!(matches!(segments_outcome, DeferredResponseOutcome::Completed(_)));
     let received = receiver.receive().await.expect("receive segments plan");
     let ResponseBody::Segments(segments) = received.test_body() else {
         panic!("deferred segments must retain their representation");
@@ -333,11 +370,12 @@ async fn local_response_binds_original_opaque_and_moves_body_once() {
     )
     .expect("file remoting response");
     let (sink, receiver) = ResponseSink::local(control.clone());
-    DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control)
+    let file_outcome = DeferredResponseSeed::new(sink, TransportTelemetry::noop(), harness.session_id(), control)
         .into_responder(original)
         .respond(plan)
         .await
         .expect("file plan handoff");
+    assert!(matches!(file_outcome, DeferredResponseOutcome::Completed(_)));
     assert_eq!(Arc::strong_count(&file), 2);
     let received = receiver.receive().await.expect("receive file plan");
     let ResponseBody::FileRegions(regions) = received.test_body() else {
@@ -358,19 +396,19 @@ async fn direct_remoting_response_fails_closed_before_io_and_finishes_not_starte
     let prepared = crate::codec::prepare_response(bound, crate::codec::remoting_command_codec::FrameLimits::default())
         .expect("prepared response");
     let state = Arc::new(ResponseState::open());
-    let mut claim = state.begin_sending().expect("deferred send claim");
+    let mut claim = expect_applied(state.begin_sending());
     let delegated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let transport_drop = claim.observe_transport_drop(delegated);
     let mut connection = crate::connection::Connection::new_with_plaintext_stream(PanicOnWrite);
 
-    let error = connection
+    let outcome = connection
         .send_prepared_deferred_response(prepared, &control, transport_drop)
-        .await
-        .expect_err("direct remoting-response writer must fail closed");
-    assert!(matches!(&error, ResponseError::SessionClosed));
-    claim
-        .fail(error.write_progress().unwrap_or(WriteProgress::NotStarted))
-        .expect("outer claim owns the pre-I/O failure");
+        .await;
+    assert!(matches!(
+        outcome,
+        ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed)
+    ));
+    expect_applied(claim.fail(WriteProgress::NotStarted));
     assert_eq!(
         state.terminal_state(),
         Some(ResponseTerminalState::Failed {
@@ -388,7 +426,7 @@ async fn queued_response_without_canonical_plan_context_fails_before_enqueue() {
     let prepared = crate::codec::prepare_response(bound, crate::codec::remoting_command_codec::FrameLimits::default())
         .expect("prepared response");
     let state = Arc::new(ResponseState::open());
-    let mut claim = state.begin_sending().expect("deferred send claim");
+    let mut claim = expect_applied(state.begin_sending());
     let delegated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let transport_drop = claim.observe_transport_drop(delegated);
 
@@ -413,15 +451,15 @@ async fn queued_response_without_canonical_plan_context_fails_before_enqueue() {
         TransportTelemetry::noop(),
     );
 
-    let error = connection
+    let outcome = connection
         .send_prepared_deferred_response(prepared, &control, transport_drop)
-        .await
-        .expect_err("a response class without the canonical plan context must fail closed");
-    assert!(matches!(&error, ResponseError::SessionClosed));
+        .await;
+    assert!(matches!(
+        outcome,
+        ResponseSendOutcome::Rejected(ResponseCompletionOutcome::SessionClosed)
+    ));
     assert_eq!(diagnostics.snapshot().accepted, 0);
-    claim
-        .fail(error.write_progress().unwrap_or(WriteProgress::NotStarted))
-        .expect("outer claim owns the pre-enqueue failure");
+    expect_applied(claim.fail(WriteProgress::NotStarted));
     assert_eq!(
         state.terminal_state(),
         Some(ResponseTerminalState::Failed {
@@ -446,8 +484,7 @@ async fn immutable_binding_failure_terminates_not_started_and_preserves_its_sour
         .respond(remoting_response(1))
         .await
         .expect_err("immutable one-way identity must fail binding");
-    assert_eq!(error.kind(), DeferredResponseErrorKind::Binding);
-    assert_eq!(error.write_progress(), Some(WriteProgress::NotStarted));
+    assert_eq!(error.code(), rocketmq_error::TRANSPORT_RESPONSE_FAILED.code());
     assert!(error.source().is_some());
     assert_eq!(
         state.terminal_state(),
@@ -459,14 +496,14 @@ async fn immutable_binding_failure_terminates_not_started_and_preserves_its_sour
 }
 
 #[test]
-fn deferred_errors_preserve_typed_sources_but_redact_source_text() {
+fn response_operational_failures_preserve_typed_sources_but_redact_source_text() {
     let secret = "opaque=991 principal=alice token=secret body=payload session=77";
-    let error = DeferredResponseError::from_response(ResponseError::Transport {
+    let error = ResponseOperationalFailure::Transport {
         progress: WriteProgress::PossiblyPartial,
         source: RocketMQError::network_connection_failed("deferred_test", secret),
-    });
-    assert_eq!(error.kind(), DeferredResponseErrorKind::Transport);
-    assert_eq!(error.write_progress(), Some(WriteProgress::PossiblyPartial));
+    };
+    assert_eq!(error.operation(), "transport");
+    assert_eq!(error.write_progress(), WriteProgress::PossiblyPartial);
     assert!(!error.retryable());
     assert!(error.source().is_some());
     for rendered in [format!("{error}"), format!("{error:?}")] {

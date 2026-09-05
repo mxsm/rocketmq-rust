@@ -21,6 +21,7 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_transport::api::AdmissionClass;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::api::AdmissionOutcome;
 use rocketmq_transport::api::AdmissionResource;
 use rocketmq_transport::api::AdmissionScope;
 use rocketmq_transport::api::ResourceLimit;
@@ -46,16 +47,22 @@ fn transport_controllers_share_the_injected_process_ceiling() {
     let second = AdmissionController::try_new_with_budget(limits, &process_budget).expect("second controller");
     let scope = AdmissionScope::new(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
-    let permit = first
-        .try_acquire(AdmissionResource::Inflight, scope, 8, AdmissionClass::Data)
-        .expect("first controller reservation");
-    assert!(second
-        .try_acquire(AdmissionResource::Inflight, scope, 8, AdmissionClass::Data)
-        .is_err());
+    let permit = match first.try_acquire(AdmissionResource::Inflight, scope, 8, AdmissionClass::Data) {
+        AdmissionOutcome::Acquired(permit) => permit,
+        AdmissionOutcome::Rejected(rejection) => {
+            panic!("first controller reservation unexpectedly rejected: {rejection:?}")
+        }
+    };
+    let rejection = match second.try_acquire(AdmissionResource::Inflight, scope, 8, AdmissionClass::Data) {
+        AdmissionOutcome::Acquired(_) => panic!("second controller reservation unexpectedly acquired"),
+        AdmissionOutcome::Rejected(rejection) => rejection,
+    };
+    assert_eq!(rejection.resource(), AdmissionResource::Inflight);
     assert_eq!(process_budget.snapshot().current_bytes, 8);
 
     drop(permit);
-    assert!(second
-        .try_acquire(AdmissionResource::Inflight, scope, 8, AdmissionClass::Data)
-        .is_ok());
+    assert!(matches!(
+        second.try_acquire(AdmissionResource::Inflight, scope, 8, AdmissionClass::Data),
+        AdmissionOutcome::Acquired(_)
+    ));
 }

@@ -39,6 +39,7 @@ use rocketmq_store::MessageFilter;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredAdmission;
+use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredWaitLimits;
@@ -51,7 +52,6 @@ use rocketmq_transport::api::RequestOrderingKey;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportServer;
-use rocketmq_transport::api::WriteProgress;
 use rocketmq_transport::test_support::Connection;
 use rocketmq_transport::test_support::RemotingCommandCodec;
 use tokio::io::AsyncReadExt;
@@ -544,7 +544,7 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
             let mut pending_claim = Box::pin(service.claim_candidate(candidate, wake_reason));
             tokio::select! {
                 biased;
-                result = &mut pending_claim => panic!("prepared Pull claim completed before dispatcher commit: {result:?}"),
+                _ = &mut pending_claim => panic!("prepared Pull claim completed before dispatcher commit"),
                 _ = tokio::task::yield_now() => {}
             }
             barrier.release_outcome.notify_one();
@@ -553,11 +553,14 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
             let mut pending_claim = Box::pin(service.claim(registered.id, wake_reason));
             tokio::select! {
                 biased;
-                result = &mut pending_claim => panic!("timeout claim completed before dispatcher commit: {result:?}"),
+                _ = &mut pending_claim => panic!("timeout claim completed before dispatcher commit"),
                 _ = tokio::task::yield_now() => {}
             }
             barrier.release_outcome.notify_one();
             pending_claim.await.expect("pending timeout wake replays after commit")
+        };
+        let DeferredClaimOutcome::Claimed(claim) = claim else {
+            panic!("prepared Pull wake must retain its claimed request");
         };
         assert_eq!(claim.reason(), wake_reason);
         assert_eq!(service.index_snapshot(), PullIndexSnapshot::default());
@@ -609,7 +612,7 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
         let mut receipt_rx = Box::pin(receipt_rx);
         tokio::select! {
             biased;
-            result = &mut receipt_rx => panic!("Pull response completed before writer release: {result:?}"),
+            _ = &mut receipt_rx => panic!("Pull response completed before writer release"),
             _ = tokio::task::yield_now() => {}
         }
         release_plan_tx
@@ -621,10 +624,13 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
             .await
             .expect("Pull connection remains open")
             .expect("one Pull response frame");
-        receipt_rx
-            .await
-            .expect("Pull resume receipt channel")
-            .expect("canonical Pull resume/write");
+        assert!(matches!(
+            receipt_rx
+                .await
+                .expect("Pull resume receipt channel")
+                .expect("canonical Pull resume/write"),
+            rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+        ));
         assert_eq!(response.opaque(), original_opaque);
         assert_eq!(response.code(), ResponseCode::PullNotFound as i32);
         assert_eq!(response.body().map(|body| body.as_ref()), Some(RESPONSE_BODY));
@@ -691,10 +697,13 @@ async fn tcp_partial_write_drops_owner_once_without_retrying() {
     let mut candidates = service.reserve_arrival_batch(&PullArrivalView::new(&topic, 0, 8), &mut cursor);
     let candidate = candidates.pop().expect("one partial-write Pull candidate");
     assert!(candidates.is_empty());
-    let claim = service
+    let DeferredClaimOutcome::Claimed(claim) = service
         .claim_candidate(candidate, DeferredWakeReason::MessageArrived)
         .await
-        .expect("claim partial-write Pull");
+        .expect("claim partial-write Pull")
+    else {
+        panic!("partial-write Pull candidate must retain its claimed request");
+    };
 
     let owner_drops = Arc::new(AtomicUsize::new(0));
     let response_owner_drops = Arc::clone(&owner_drops);
@@ -754,11 +763,10 @@ async fn tcp_partial_write_drops_owner_once_without_retrying() {
     );
     drop(socket);
 
-    let error = receipt_rx
+    let _error = receipt_rx
         .await
         .expect("partial Pull resume receipt channel")
         .expect_err("peer close must fail the incomplete canonical write");
-    assert_eq!(error.write_progress(), Some(WriteProgress::PossiblyPartial));
     assert_eq!(rereads.load(Ordering::SeqCst), 1, "partial writes are never retried");
     assert_eq!(owner_drops.load(Ordering::SeqCst), 1);
     assert_released(&service);

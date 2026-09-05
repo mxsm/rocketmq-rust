@@ -18,8 +18,6 @@ use rocketmq_security_api::Decision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::DeferredExpiryErrorKind;
-use rocketmq_transport::api::DeferredRegistryErrorKind;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
@@ -384,12 +382,12 @@ async fn notification_deferred_post_take_close_expiry_and_registry_fail_closed_w
         (
             "expiry",
             NotificationRegisterFault::Expiry,
-            NotificationDeferredRegisterErrorKind::Expiry(DeferredExpiryErrorKind::ProtocolAlreadyExpired),
+            NotificationDeferredRegisterErrorKind::Expiry,
         ),
         (
             "registry",
             NotificationRegisterFault::Builder,
-            NotificationDeferredRegisterErrorKind::Registry(DeferredRegistryErrorKind::ParentCancelled),
+            NotificationDeferredRegisterErrorKind::Registry,
         ),
     ];
 

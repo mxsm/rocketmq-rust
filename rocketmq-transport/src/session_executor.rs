@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt;
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -23,64 +22,37 @@ use std::time::Instant;
 
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeOperation;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 
 use crate::admission::AdmissionClass;
-use crate::admission::AdmissionError;
+use crate::admission::AdmissionRejection;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
-use crate::dispatch::deferred_resume::DeferredResumeSubmitError;
+use crate::dispatch::deferred_resume::DeferredResumeEnqueueOutcome;
 use crate::dispatch::deferred_resume::ResumeJobCell;
 use crate::request_ordering::RequestOrdering;
 use crate::request_ordering::RequestSequencer;
 
-/// Error returned before a request can enter its session-owned execution task.
+/// Result of attempting to enter a session-owned execution task.
+#[must_use]
 #[derive(Debug)]
-pub(crate) enum SessionDispatchError {
-    Admission {
-        error: AdmissionError,
+pub(crate) enum SessionDispatchAttempt {
+    Accepted(TaskId),
+    AdmissionRejected {
+        rejection: AdmissionRejection,
         retained_partial: Option<Box<PartialFramePermit>>,
     },
-    Closing(RuntimeError),
-}
-
-impl fmt::Display for SessionDispatchError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Admission { error, .. } => error.fmt(formatter),
-            Self::Closing(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl std::error::Error for SessionDispatchError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Admission { error, .. } => Some(error),
-            Self::Closing(error) => Some(error),
-        }
-    }
-}
-
-impl From<AdmissionError> for SessionDispatchError {
-    fn from(error: AdmissionError) -> Self {
-        Self::Admission {
-            error,
-            retained_partial: None,
-        }
-    }
-}
-
-impl From<RuntimeError> for SessionDispatchError {
-    fn from(error: RuntimeError) -> Self {
-        Self::Closing(error)
-    }
+    SessionClosed {
+        retained_partial: Option<Box<PartialFramePermit>>,
+    },
 }
 
 /// Owns bounded request tasks for one transport session.
@@ -127,17 +99,17 @@ impl SessionExecutor {
         ordering: RequestOrdering,
         execute: F,
         reject: R,
-    ) -> Result<TaskId, SessionDispatchError>
+    ) -> Result<SessionDispatchAttempt, RuntimeError>
     where
         F: FnOnce(OperationContext) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
-        R: FnOnce(OperationContext, AdmissionError) -> Rejected + Send + 'static,
+        R: FnOnce(OperationContext, AdmissionRejection) -> Rejected + Send + 'static,
         Rejected: Future<Output = ()> + Send + 'static,
     {
         if !self.inner.accepting.load(Ordering::Acquire) {
-            return Err(SessionDispatchError::Closing(RuntimeError::context_unavailable(
-                rocketmq_runtime::RuntimeOperation::SessionExecutor,
-            )));
+            return Ok(SessionDispatchAttempt::SessionClosed {
+                retained_partial: partial_frame.map(Box::new),
+            });
         }
         let queued = match self
             .inner
@@ -145,9 +117,9 @@ impl SessionExecutor {
             .try_acquire(AdmissionResource::Queued, retained_bytes, class)
         {
             Ok(queued) => queued,
-            Err(error) => {
-                return Err(SessionDispatchError::Admission {
-                    error,
+            Err(rejection) => {
+                return Ok(SessionDispatchAttempt::AdmissionRejected {
+                    rejection,
                     retained_partial: partial_frame.map(Box::new),
                 });
             }
@@ -156,18 +128,27 @@ impl SessionExecutor {
             Some(partial_frame) => {
                 match partial_frame.try_rebind(&self.inner.admission, AdmissionResource::Inflight, class) {
                     Ok(inflight) => inflight,
-                    Err((retained_partial, error)) => {
-                        return Err(SessionDispatchError::Admission {
-                            error,
+                    Err((retained_partial, rejection)) => {
+                        return Ok(SessionDispatchAttempt::AdmissionRejected {
+                            rejection,
                             retained_partial: Some(retained_partial),
                         });
                     }
                 }
             }
-            None => self
+            None => match self
                 .inner
                 .admission
-                .try_acquire(AdmissionResource::Inflight, retained_bytes, class)?,
+                .try_acquire(AdmissionResource::Inflight, retained_bytes, class)
+            {
+                Ok(inflight) => inflight,
+                Err(rejection) => {
+                    return Ok(SessionDispatchAttempt::AdmissionRejected {
+                        rejection,
+                        retained_partial: None,
+                    });
+                }
+            },
         };
         let admission = self.inner.admission.clone();
         let sequencer = self.inner.sequencer.clone();
@@ -175,8 +156,10 @@ impl SessionExecutor {
         let request_operation_for_task = request_operation.clone();
         let spawn_group = self.inner.request_group.clone();
         let task_count = SessionTaskCountGuard::inline(Arc::clone(&self.inner.task_counts));
-        spawn_group
-            .spawn_draining_operation(&request_operation, "rocketmq.transport.session.request", async move {
+        match spawn_group.spawn_draining_operation(
+            &request_operation,
+            "rocketmq.transport.session.request",
+            async move {
                 let _task_count = task_count;
                 let ordering_guard = sequencer.acquire(ordering).await;
                 let processor = match admission.try_acquire(AdmissionResource::Processor, retained_bytes, class) {
@@ -193,8 +176,20 @@ impl SessionExecutor {
                 let _processor = processor;
                 let _ordering_guard = ordering_guard;
                 execute(request_operation_for_task).await;
-            })
-            .map_err(SessionDispatchError::Closing)
+            },
+        ) {
+            Ok(task_id) => Ok(SessionDispatchAttempt::Accepted(task_id)),
+            Err(error) if error.operation() == RuntimeOperation::SpawnOperation => {
+                Ok(SessionDispatchAttempt::SessionClosed { retained_partial: None })
+            }
+            Err(error)
+                if error.operation() == RuntimeOperation::SpawnTaskGroupTask
+                    && self.inner.request_group.lifecycle_state() != TaskGroupLifecycleState::Open =>
+            {
+                Ok(SessionDispatchAttempt::SessionClosed { retained_partial: None })
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn stop_admission(&self) {
@@ -327,40 +322,30 @@ impl DeferredResumeExecutor {
         Self { inner: Weak::new() }
     }
 
-    pub(crate) fn try_execute_resume(&self, cell: Arc<ResumeJobCell>) -> Result<TaskId, DeferredResumeSubmitError> {
+    pub(crate) fn try_execute_resume(&self, cell: Arc<ResumeJobCell>) -> DeferredResumeEnqueueOutcome {
         let Some(inner) = self.inner.upgrade() else {
-            return Err(DeferredResumeSubmitError::Closing {
-                source: RuntimeError::context_unavailable(
-                    rocketmq_runtime::RuntimeOperation::DeferredResumeSessionExecutor,
-                ),
-                cell,
-            });
+            return DeferredResumeEnqueueOutcome::ExecutorClosing { cell };
         };
         if !inner.accepting.load(Ordering::Acquire) {
-            return Err(DeferredResumeSubmitError::Closing {
-                source: RuntimeError::context_unavailable(
-                    rocketmq_runtime::RuntimeOperation::DeferredResumeSessionExecutor,
-                ),
-                cell,
-            });
+            return DeferredResumeEnqueueOutcome::ExecutorClosing { cell };
         }
         let retained_bytes = cell.retained_bytes();
         let class = cell.class();
         let ordering = cell.ordering();
-        let queued = inner
+        let queued = match inner
             .admission
             .try_acquire(AdmissionResource::Queued, retained_bytes, class)
-            .map_err(|error| DeferredResumeSubmitError::Admission {
-                error,
-                cell: Arc::clone(&cell),
-            })?;
-        let inflight = inner
+        {
+            Ok(permit) => permit,
+            Err(error) => return DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell },
+        };
+        let inflight = match inner
             .admission
             .try_acquire(AdmissionResource::Inflight, retained_bytes, class)
-            .map_err(|error| DeferredResumeSubmitError::Admission {
-                error,
-                cell: Arc::clone(&cell),
-            })?;
+        {
+            Ok(permit) => permit,
+            Err(error) => return DeferredResumeEnqueueOutcome::AdmissionRejected { error, cell },
+        };
         let admission = inner.admission.clone();
         let sequencer = inner.sequencer.clone();
         let operation = inner.operation.clone();
@@ -372,8 +357,10 @@ impl DeferredResumeExecutor {
         if inner.close_resume_operation_before_spawn.swap(false, Ordering::AcqRel) {
             operation.close_admission();
         }
-        spawn_group
-            .spawn_draining_operation(&operation, "rocketmq.transport.session.deferred-resume", async move {
+        match spawn_group.spawn_draining_operation(
+            &operation,
+            "rocketmq.transport.session.deferred-resume",
+            async move {
                 let _task_count = task_count;
                 #[cfg(test)]
                 task_cell.wait_first_poll_gate().await;
@@ -429,7 +416,19 @@ impl DeferredResumeExecutor {
                 let _processor = processor;
                 let _ordering_guard = ordering_guard;
                 job.execute(operation_for_task).await;
-            })
-            .map_err(|source| DeferredResumeSubmitError::Closing { source, cell })
+            },
+        ) {
+            Ok(task_id) => DeferredResumeEnqueueOutcome::Submitted(task_id),
+            Err(source) if source.operation() == RuntimeOperation::SpawnOperation => {
+                DeferredResumeEnqueueOutcome::ExecutorClosing { cell }
+            }
+            Err(source)
+                if source.operation() == RuntimeOperation::SpawnTaskGroupTask
+                    && inner.request_group.lifecycle_state() != TaskGroupLifecycleState::Open =>
+            {
+                DeferredResumeEnqueueOutcome::ExecutorClosing { cell }
+            }
+            Err(source) => DeferredResumeEnqueueOutcome::OperationalFailure { source, cell },
+        }
     }
 }

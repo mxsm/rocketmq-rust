@@ -20,7 +20,8 @@ use std::sync::Arc;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::SharedRocketMQError;
 
-use crate::dispatch::ResponseError;
+use crate::deadline::RequestDeadline;
+use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::WriteProgress;
 
 /// Result returned by the sole session-writer owner.
@@ -38,6 +39,7 @@ pub(crate) struct WriterFailure {
     progress: WriteProgress,
     source: SharedRocketMQError,
     legacy: LegacyWriterFailure,
+    prewrite_deadline_cutoff: Option<tokio::time::Instant>,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +58,7 @@ impl WriterFailure {
             progress,
             source: SharedRocketMQError::new(RocketMQError::from(error)),
             legacy: LegacyWriterFailure::ConnectionFailed,
+            prewrite_deadline_cutoff: None,
         }
     }
 
@@ -68,16 +71,18 @@ impl WriterFailure {
                 reason.as_ref(),
             )),
             legacy: LegacyWriterFailure::ConnectionFailed,
+            prewrite_deadline_cutoff: None,
         }
     }
 
-    pub(crate) fn deadline_exceeded_before_send() -> Self {
+    pub(crate) fn deadline_exceeded_before_send(cutoff: Option<tokio::time::Instant>) -> Self {
         Self {
             progress: WriteProgress::NotStarted,
             source: SharedRocketMQError::new(RocketMQError::network_deadline_exceeded_before_send(
                 "transport-session-writer",
             )),
             legacy: LegacyWriterFailure::DeadlineExceededBeforeSend,
+            prewrite_deadline_cutoff: cutoff,
         }
     }
 
@@ -89,6 +94,7 @@ impl WriterFailure {
                 timeout_millis,
             )),
             legacy: LegacyWriterFailure::WriteTimeout { timeout_millis },
+            prewrite_deadline_cutoff: None,
         }
     }
 
@@ -100,6 +106,13 @@ impl WriterFailure {
         self.progress
     }
 
+    pub(crate) fn was_caused_by(&self, owner_deadline: RequestDeadline) -> bool {
+        matches!(self.legacy, LegacyWriterFailure::DeadlineExceededBeforeSend)
+            && self
+                .prewrite_deadline_cutoff
+                .is_some_and(|cutoff| owner_deadline.instant() <= cutoff)
+    }
+
     /// Returns the immutable canonical cause shared by every completion in a
     /// failed writer micro-batch.
     #[cfg(test)]
@@ -107,11 +120,8 @@ impl WriterFailure {
         &self.source
     }
 
-    pub(crate) fn into_response(self) -> ResponseError {
-        ResponseError::Transport {
-            progress: self.progress,
-            source: self.source.into_error(),
-        }
+    pub(crate) fn into_response(self) -> ResponseOperationalFailure {
+        ResponseOperationalFailure::transport(self.progress, self.source.into_error())
     }
 
     pub(crate) fn into_legacy_for_target(
@@ -143,7 +153,7 @@ mod tests {
     use rocketmq_error::RocketMQError;
 
     use super::WriterFailure;
-    use crate::dispatch::ResponseError;
+    use crate::dispatch::ResponseOperationalFailure;
     use crate::dispatch::WriteProgress;
 
     #[derive(Debug)]
@@ -165,15 +175,15 @@ mod tests {
 
         assert!(matches!(
             &response,
-            ResponseError::Transport {
+            ResponseOperationalFailure::Transport {
                 progress: WriteProgress::PossiblyPartial,
                 ..
             }
         ));
-        let ResponseError::Transport { source, .. } = &response else {
+        let ResponseOperationalFailure::Transport { source, .. } = &response else {
             panic!("writer failure must become a transport response error")
         };
-        let ResponseError::Transport {
+        let ResponseOperationalFailure::Transport {
             source: second_source, ..
         } = &second_response
         else {
@@ -226,7 +236,7 @@ mod tests {
                 if addr == "dropped-target" && reason == "writer completion dropped"
         ));
         assert!(matches!(
-            WriterFailure::deadline_exceeded_before_send()
+            WriterFailure::deadline_exceeded_before_send(None)
                 .into_legacy_for_target("deadline-target".to_string(), "unused connection reason"),
             RocketMQError::Network(NetworkError::DeadlineExceededBeforeSend { addr }) if addr == "deadline-target"
         ));

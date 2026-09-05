@@ -16,6 +16,7 @@ use std::future::Future;
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -47,11 +48,16 @@ use crate::admission::AdmissionScope;
 use crate::dispatch::AuthenticationState;
 use crate::dispatch::ClaimedDeferred;
 use crate::dispatch::DeferredAdmission;
+use crate::dispatch::DeferredAdmissionAcquireOutcome;
+use crate::dispatch::DeferredClaimOutcome;
 use crate::dispatch::DeferredParts;
 use crate::dispatch::DeferredRegistry;
+use crate::dispatch::DeferredRegistryOutcome;
 use crate::dispatch::DeferredRequest;
-use crate::dispatch::DeferredResumeErrorKind;
+use crate::dispatch::DeferredResumeOutcome;
+use crate::dispatch::DeferredResumeSubmitOutcome;
 use crate::dispatch::DeferredRetainedSizeParts;
+use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::DeferredWakeReason;
 use crate::dispatch::OriginalRequestIdentity;
@@ -60,11 +66,63 @@ use crate::dispatch::RequestControlView;
 use crate::dispatch::RequestMeta;
 use crate::dispatch::RequestOrigin;
 use crate::dispatch::ResponseSink;
+use crate::dispatch::ResponseState;
+use crate::dispatch::ResponseStateOutcome;
+use crate::dispatch::ResponseTerminalState;
 use crate::request_ordering::RequestOrdering;
 use crate::session_executor::DeferredResumeExecutor;
 use crate::session_executor::SessionExecutor;
 use crate::session_view::EmbeddedSessionRecord;
 use crate::telemetry::TransportTelemetry;
+
+fn acquired(outcome: DeferredAdmissionAcquireOutcome) -> crate::dispatch::DeferredWaitPermit {
+    match outcome {
+        DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
+        | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
+        | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            panic!("terminal ownership wait capacity is available")
+        }
+    }
+}
+
+fn registered<R>(outcome: DeferredRegistryOutcome<R>) -> crate::dispatch::DeferredRegistration
+where
+    R: Send + 'static,
+{
+    match outcome {
+        DeferredRegistryOutcome::Registered(registration) => registration,
+        DeferredRegistryOutcome::DuplicateRequest(_)
+        | DeferredRegistryOutcome::IdentityExhausted(_)
+        | DeferredRegistryOutcome::ParentCancelled
+        | DeferredRegistryOutcome::SessionClosed
+        | DeferredRegistryOutcome::DeadlineExpired
+        | DeferredRegistryOutcome::ContractViolation { .. }
+        | DeferredRegistryOutcome::OperationalFailure { .. } => {
+            panic!("terminal ownership registration succeeds")
+        }
+        DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
+    }
+}
+
+async fn claimed<R>(registry: &DeferredRegistry<R>, id: crate::dispatch::DeferredId) -> ClaimedDeferred<R>
+where
+    R: Send + 'static,
+{
+    match registry
+        .claim(id, DeferredWakeReason::MessageArrived)
+        .await
+        .expect("terminal ownership claim has no operational failure")
+    {
+        DeferredClaimOutcome::Claimed(claim) => claim,
+        DeferredClaimOutcome::NotFound
+        | DeferredClaimOutcome::AlreadyClaimed
+        | DeferredClaimOutcome::AlreadyCompleted
+        | DeferredClaimOutcome::ParentCancelled
+        | DeferredClaimOutcome::SessionClosed
+        | DeferredClaimOutcome::DeadlineExpired => panic!("terminal ownership registration is claimable"),
+    }
+}
 
 struct FixedSpanSubscriber {
     entered: Arc<AtomicUsize>,
@@ -115,17 +173,12 @@ async fn claimed_for_terminal_test(
         .expect("terminal ownership admission");
     let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
         .expect("terminal ownership retained size");
-    let permit = admission.try_reserve(retained).expect("terminal ownership wait permit");
+    let permit = acquired(admission.try_reserve(retained));
     let registry = DeferredRegistry::new();
-    let registration = registry
-        .register(DeferredRequest::new((), DeferredParts::new(responder, permit)))
-        .expect("terminal ownership registration");
+    let registration = registered(registry.register(DeferredRequest::new((), DeferredParts::new(responder, permit))));
     let id = registration.deferred_id();
     registration.commit().expect("publish terminal ownership registration");
-    let claim = registry
-        .claim(id, DeferredWakeReason::MessageArrived)
-        .await
-        .expect("claim terminal ownership registration");
+    let claim = claimed(&registry, id).await;
     (claim, admission)
 }
 
@@ -184,17 +237,12 @@ async fn claimed_resume_handler_reenters_the_original_request_span() {
         .expect("request span admission");
     let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
         .expect("request span retained size");
-    let permit = admission.try_reserve(retained).expect("request span wait permit");
+    let permit = acquired(admission.try_reserve(retained));
     let registry = DeferredRegistry::new();
-    let registration = registry
-        .register(DeferredRequest::new((), DeferredParts::new(responder, permit)))
-        .expect("request span registration");
+    let registration = registered(registry.register(DeferredRequest::new((), DeferredParts::new(responder, permit))));
     let id = registration.deferred_id();
     registration.commit().expect("publish request span registration");
-    let claim = registry
-        .claim(id, DeferredWakeReason::MessageArrived)
-        .await
-        .expect("claim request span registration");
+    let claim = claimed(&registry, id).await;
     let parts = claim.into_execution_parts();
     let stop_view = ResumeStopView::from_execution_parts(&parts);
     let work: Box<dyn DeferredResumeWork> = Box::new(ResumeWorkImpl {
@@ -203,7 +251,7 @@ async fn claimed_resume_handler_reenters_the_original_request_span() {
         stop_view,
     });
 
-    work.execute().await.expect("claimed resume response");
+    assert!(matches!(work.execute().await, super::ResumeAttempt::Completed(_)));
     assert!(
         entered.load(Ordering::Acquire) > 0,
         "claimed resume work must enter the observation's original request span"
@@ -224,6 +272,88 @@ impl Future for ReadyRetainedFuture {
 }
 
 impl Drop for ReadyRetainedFuture {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PublishedTerminalWinner {
+    SessionClosed,
+    ReceiverDropped,
+    ProcessorUnavailable,
+    ServiceStopping,
+}
+
+impl PublishedTerminalWinner {
+    const fn reason(self) -> DeferredTerminalReason {
+        match self {
+            Self::SessionClosed => DeferredTerminalReason::SessionClosed,
+            Self::ReceiverDropped => DeferredTerminalReason::ReceiverDropped,
+            Self::ProcessorUnavailable => DeferredTerminalReason::ProcessorUnavailable,
+            Self::ServiceStopping => DeferredTerminalReason::ServiceStopping,
+        }
+    }
+
+    const fn state(self) -> ResponseTerminalState {
+        match self {
+            Self::SessionClosed | Self::ReceiverDropped => ResponseTerminalState::Closed,
+            Self::ProcessorUnavailable | Self::ServiceStopping => ResponseTerminalState::Cancelled,
+        }
+    }
+
+    const fn resume_outcome(self) -> DeferredResumeOutcome {
+        match self {
+            Self::SessionClosed | Self::ReceiverDropped => DeferredResumeOutcome::SessionClosed,
+            Self::ProcessorUnavailable | Self::ServiceStopping => DeferredResumeOutcome::Cancelled,
+        }
+    }
+
+    fn publish(self, state: &ResponseState) {
+        let outcome = match self {
+            Self::SessionClosed => {
+                state.close_with_reason(crate::dispatch::deferred_response::DeferredSystemCloseReason::SESSION_CLOSED)
+            }
+            Self::ReceiverDropped => state.cancel_receiver_dropped(),
+            Self::ProcessorUnavailable => state.cancel_with_reason(
+                crate::dispatch::deferred_response::DeferredSystemCancellationReason::PROCESSOR_UNAVAILABLE,
+            ),
+            Self::ServiceStopping => state.cancel_with_reason(
+                crate::dispatch::deferred_response::DeferredSystemCancellationReason::SERVICE_STOPPING,
+            ),
+        };
+        assert_eq!(
+            outcome,
+            Ok(ResponseStateOutcome::Applied(())),
+            "{self:?} must publish the sole response terminal winner"
+        );
+    }
+}
+
+struct TerminalWinnerFuture {
+    state: Arc<ResponseState>,
+    winner: PublishedTerminalWinner,
+    output: Option<RocketMQResult<RemotingResponse>>,
+    polls: Arc<AtomicUsize>,
+    drops: Arc<AtomicUsize>,
+}
+
+impl Future for TerminalWinnerFuture {
+    type Output = RocketMQResult<RemotingResponse>;
+
+    fn poll(mut self: Pin<&mut Self>, _context: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        let this = self.as_mut().get_mut();
+        assert_eq!(
+            this.polls.fetch_add(1, Ordering::AcqRel),
+            0,
+            "the resumed handler future is polled exactly once"
+        );
+        this.winner.publish(&this.state);
+        std::task::Poll::Ready(this.output.take().expect("terminal winner future is polled once"))
+    }
+}
+
+impl Drop for TerminalWinnerFuture {
     fn drop(&mut self) {
         self.drops.fetch_add(1, Ordering::AcqRel);
     }
@@ -260,17 +390,12 @@ async fn completed_handler_future_is_retained_until_canonical_response_handoff_t
         .expect("handler-owner admission");
     let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
         .expect("handler-owner retained size");
-    let permit = admission.try_reserve(retained).expect("handler-owner wait permit");
+    let permit = acquired(admission.try_reserve(retained));
     let registry = DeferredRegistry::new();
-    let registration = registry
-        .register(DeferredRequest::new((), DeferredParts::new(responder, permit)))
-        .expect("handler-owner registration");
+    let registration = registered(registry.register(DeferredRequest::new((), DeferredParts::new(responder, permit))));
     let id = registration.deferred_id();
     registration.commit().expect("publish handler-owner registration");
-    let claim = registry
-        .claim(id, DeferredWakeReason::MessageArrived)
-        .await
-        .expect("claim handler-owner registration");
+    let claim = claimed(&registry, id).await;
     let parts = claim.into_execution_parts();
     let stop_view = ResumeStopView::from_execution_parts(&parts);
     let drops = Arc::new(AtomicUsize::new(0));
@@ -294,10 +419,10 @@ async fn completed_handler_future_is_retained_until_canonical_response_handoff_t
         "a ready handler future still owns affine terminal resources while response delivery is blocked"
     );
     release.notify_one();
-    execution
-        .await
-        .expect("handler-owner execution task")
-        .expect("canonical local response handoff");
+    assert!(matches!(
+        execution.await.expect("handler-owner execution task"),
+        super::ResumeAttempt::Completed(_)
+    ));
     assert_eq!(drops.load(Ordering::Acquire), 1);
     assert_eq!(admission.snapshot().waiting_count(), 0);
 }
@@ -352,10 +477,13 @@ async fn blocked_writer_is_owned_by_session_after_producer_submit_and_observer_r
         })
         .expect("spawn producer submitter");
 
-    submitted_rx
-        .await
-        .expect("producer submit result")
-        .expect("session accepts claimed execution");
+    assert_eq!(
+        submitted_rx
+            .await
+            .expect("producer submit result")
+            .expect("session accepts claimed execution"),
+        DeferredResumeSubmitOutcome::Submitted
+    );
     checked.notified().await;
     assert_eq!(terminal_calls.load(Ordering::Acquire), 0);
     let producer_report = producer_group
@@ -381,7 +509,7 @@ async fn blocked_writer_is_owned_by_session_after_producer_submit_and_observer_r
 }
 
 #[tokio::test]
-async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_sync_rejection() {
+async fn submit_observer_is_exactly_once_for_session_and_receiver_close_and_sync_rejection() {
     let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("deferred-submit-terminal-failures"))
         .expect("test runtime configuration is valid")
         .build()
@@ -414,24 +542,32 @@ async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_s
         )
         .await;
         let calls = Arc::new(AtomicUsize::new(0));
-        let observed_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed_outcome = Arc::new(AtomicU8::new(0));
         let signal = Arc::new(Notify::new());
-        claim
-            .submit(
-                crate::dispatch::DeferredResumeRetainedSize::default(),
-                |(), _reason| async { remoting_response() },
-                {
-                    let calls = Arc::clone(&calls);
-                    let observed_failure = Arc::clone(&observed_failure);
-                    let signal = Arc::clone(&signal);
-                    move |result| {
-                        calls.fetch_add(1, Ordering::AcqRel);
-                        observed_failure.store(result.is_err(), Ordering::Release);
-                        signal.notify_one();
-                    }
-                },
-            )
-            .expect("failure case is accepted by the session owner");
+        assert_eq!(
+            claim
+                .submit(
+                    crate::dispatch::DeferredResumeRetainedSize::default(),
+                    |(), _reason| async { remoting_response() },
+                    {
+                        let calls = Arc::clone(&calls);
+                        let observed_outcome = Arc::clone(&observed_outcome);
+                        let signal = Arc::clone(&signal);
+                        move |result| {
+                            calls.fetch_add(1, Ordering::AcqRel);
+                            let outcome = match result {
+                                Ok(DeferredResumeOutcome::SessionClosed) => 1,
+                                Ok(other) => panic!("unexpected source-free resume outcome: {other:?}"),
+                                Err(_) => panic!("known close must not become an operational error"),
+                            };
+                            observed_outcome.store(outcome, Ordering::Release);
+                            signal.notify_one();
+                        }
+                    },
+                )
+                .expect("failure case is accepted by the session owner"),
+            DeferredResumeSubmitOutcome::Submitted
+        );
         checked.notified().await;
         if cancel_session {
             session.close();
@@ -441,7 +577,7 @@ async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_s
         release.notify_one();
         signal.notified().await;
         assert_eq!(calls.load(Ordering::Acquire), 1);
-        assert!(observed_failure.load(Ordering::Acquire));
+        assert_eq!(observed_outcome.load(Ordering::Acquire), 1);
         assert!(attempts.load(Ordering::Acquire) <= 1);
         assert_eq!(admission.snapshot().waiting_count(), 0);
         if cancel_session {
@@ -464,7 +600,7 @@ async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_s
     let (claim, admission) = claimed_for_terminal_test(sink, &session, control, None, 837).await;
     let calls = Arc::new(AtomicUsize::new(0));
     let handler_calls = Arc::new(AtomicUsize::new(0));
-    let error = claim
+    let outcome = claim
         .submit(
             crate::dispatch::DeferredResumeRetainedSize::default(),
             {
@@ -481,8 +617,8 @@ async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_s
                 }
             },
         )
-        .expect_err("missing session executor rejects synchronously");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::ExecutorClosing);
+        .expect("missing session executor is a normal lifecycle cancellation");
+    assert_eq!(outcome, DeferredResumeSubmitOutcome::Cancelled);
     assert_eq!(calls.load(Ordering::Acquire), 1);
     assert_eq!(handler_calls.load(Ordering::Acquire), 0);
     assert_eq!(admission.snapshot().waiting_count(), 0);
@@ -491,4 +627,108 @@ async fn submit_observer_is_exactly_once_for_session_cancel_writer_failure_and_s
         .drain_until(ShutdownDeadline::after(std::time::Duration::from_secs(1)))
         .await;
     assert!(session_report.is_healthy());
+}
+
+#[tokio::test]
+async fn terminal_winner_before_resumed_response_handoff_converges_without_transport_error() {
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("deferred-resume-terminal-winner"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("terminal winner runtime");
+    let component = runtime.root_context().component("terminal-winner");
+
+    for (index, winner) in [
+        PublishedTerminalWinner::SessionClosed,
+        PublishedTerminalWinner::ReceiverDropped,
+        PublishedTerminalWinner::ProcessorUnavailable,
+        PublishedTerminalWinner::ServiceStopping,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let session_id = 98_340 + u64::try_from(index).expect("small terminal winner index");
+        let controller = AdmissionController::new(AdmissionLimits::default());
+        let scope = controller
+            .prepare_scope(AdmissionScope::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)).with_session(session_id))
+            .expect("terminal winner session executor scope");
+        let executor = SessionExecutor::try_new(component.task_group(), scope).expect("terminal winner executor");
+        let session = EmbeddedSessionRecord::new(session_id);
+        let control = RequestControlView::from_meta(
+            &RequestMeta::new(Instant::now(), None),
+            session.view().state().clone(),
+            component.task_group(),
+        );
+        let checked = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let (sink, receiver, attempts) =
+            ResponseSink::local_with_handoff_gate(control.clone(), Arc::clone(&checked), Arc::clone(&release));
+        // A stored permit makes an accidental handoff complete and fail the exact zero-attempt assertion,
+        // instead of leaving this regression test blocked at the handoff gate.
+        release.notify_one();
+        let (claim, admission) = claimed_for_terminal_test(
+            sink,
+            &session,
+            control,
+            Some(executor.deferred_resume_executor()),
+            840 + i32::try_from(index).expect("small terminal winner index"),
+        )
+        .await;
+        let state = claim.response_state_for_test();
+        let handler_calls = Arc::new(AtomicUsize::new(0));
+        let future_polls = Arc::new(AtomicUsize::new(0));
+        let future_drops = Arc::new(AtomicUsize::new(0));
+        let handler_state = Arc::clone(&state);
+        let handler_calls_for_future = Arc::clone(&handler_calls);
+        let future_polls_for_handler = Arc::clone(&future_polls);
+        let future_drops_for_handler = Arc::clone(&future_drops);
+
+        let result = super::resume_claimed(
+            claim,
+            crate::dispatch::DeferredResumeRetainedSize::default(),
+            move |(), _reason| {
+                handler_calls_for_future.fetch_add(1, Ordering::AcqRel);
+                TerminalWinnerFuture {
+                    state: Arc::clone(&handler_state),
+                    winner,
+                    output: Some(remoting_response()),
+                    polls: Arc::clone(&future_polls_for_handler),
+                    drops: Arc::clone(&future_drops_for_handler),
+                }
+            },
+        )
+        .await;
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(_) => panic!("{winner:?} is a source-free normal resume outcome, not a transport error"),
+        };
+
+        assert_eq!(outcome, winner.resume_outcome());
+        assert_eq!(state.terminal_state(), Some(winner.state()));
+        assert_eq!(state.terminal_reason(), Some(winner.reason()));
+        assert_eq!(handler_calls.load(Ordering::Acquire), 1);
+        assert_eq!(future_polls.load(Ordering::Acquire), 1);
+        assert_eq!(future_drops.load(Ordering::Acquire), 1);
+        assert_eq!(
+            attempts.load(Ordering::Acquire),
+            0,
+            "{winner:?} must win before the canonical local response handoff"
+        );
+        assert_eq!(admission.snapshot().waiting_count(), 0);
+        assert_eq!(admission.snapshot().retained_bytes(), 0);
+        drop(receiver);
+        assert_eq!(attempts.load(Ordering::Acquire), 0);
+
+        let session_report = executor
+            .drain_until(ShutdownDeadline::after(std::time::Duration::from_secs(1)))
+            .await;
+        assert_eq!(session_report.aborted, 0);
+        assert!(session_report.is_healthy());
+        let snapshot = controller.snapshot();
+        assert_eq!(snapshot.queued.current_count, 0);
+        assert_eq!(snapshot.queued.current_bytes, 0);
+        assert_eq!(snapshot.inflight.current_count, 0);
+        assert_eq!(snapshot.inflight.current_bytes, 0);
+        assert_eq!(snapshot.processors.current_count, 0);
+        assert_eq!(snapshot.processors.current_bytes, 0);
+    }
 }

@@ -21,23 +21,20 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use super::request_control::LazyExtensions;
 use super::AuthenticationState;
-use super::DeferredResponder;
+use super::DeferredResponderOutcome;
 use super::HandlerOutcome;
-use super::HandlerOutcomeContractError;
 use super::InlineResponseSlot;
 use super::OriginalRequestIdentity;
 use super::ProtocolNoResponse;
-use super::ProtocolNoResponseError;
 use super::ProtocolNoResponseReason;
 use super::RequestControlView;
 use super::RequestMeta;
 use super::RequestOrigin;
-use super::TakeDeferredResponderError;
+use crate::contract::TransportContractViolation;
 use crate::session_view::SessionView;
 
 mod builder;
 
-pub(crate) use builder::RemotingRequestBuildError;
 pub(crate) use builder::RemotingRequestBuilder;
 pub(crate) use builder::RequestLifecycleProvenance;
 
@@ -153,17 +150,18 @@ impl RemotingRequest {
     ///
     /// # Errors
     ///
-    /// Returns [`ProtocolNoResponseError::OneWayRequest`] for every original
-    /// one-way request. Returns [`ProtocolNoResponseError::Unsupported`] when
-    /// the original raw request code and supplied reason are not allowlisted.
+    /// Returns a contract violation when the request is one-way or the original
+    /// request code and supplied reason are not allowlisted.
     ///
     /// ```
-    /// use rocketmq_error::RocketMQResult;
     /// use rocketmq_transport::api::{
     ///     HandlerOutcome, ProtocolNoResponseReason, RemotingRequest,
+    ///     TransportContractViolation,
     /// };
     ///
-    /// fn callback_outcome(request: &RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    /// fn callback_outcome(
+    ///     request: &RemotingRequest,
+    /// ) -> Result<HandlerOutcome, TransportContractViolation> {
     ///     let marker = request.protocol_no_response(ProtocolNoResponseReason::CallbackHandled)?;
     ///     Ok(HandlerOutcome::NoReply(marker))
     /// }
@@ -171,7 +169,7 @@ impl RemotingRequest {
     pub fn protocol_no_response(
         &self,
         reason: ProtocolNoResponseReason,
-    ) -> Result<ProtocolNoResponse, ProtocolNoResponseError> {
+    ) -> Result<ProtocolNoResponse, TransportContractViolation> {
         ProtocolNoResponse::from_original(self.original, reason)
     }
 
@@ -182,12 +180,9 @@ impl RemotingRequest {
     /// transport writer. Failed takes leave the response contract available
     /// for its honest current state and allocate no deferred response state.
     ///
-    /// # Errors
-    ///
-    /// Returns one of the four stable [`TakeDeferredResponderError`] variants
-    /// for one-way, unsupported transport, duplicate-take, or completed-outcome
-    /// state.
-    pub fn take_deferred_responder(&mut self) -> Result<DeferredResponder, TakeDeferredResponderError> {
+    /// Returns a source-free outcome for one-way, unsupported transport,
+    /// duplicate-take, or completed-outcome state.
+    pub fn take_deferred_responder(&mut self) -> DeferredResponderOutcome {
         self.inline_response.take_deferred_responder(self.original)
     }
 
@@ -241,21 +236,21 @@ impl RemotingRequest {
     }
 
     #[cfg(test)]
-    pub(crate) fn mark_deferred_response_taken(&mut self) -> Result<(), HandlerOutcomeContractError> {
+    pub(crate) fn mark_deferred_response_taken(&mut self) -> Result<(), TransportContractViolation> {
         self.inline_response.mark_deferred_taken(self.original)
     }
 
     pub(crate) fn resolve_handler_outcome(
         &mut self,
         outcome: HandlerOutcome,
-    ) -> Result<HandlerOutcome, HandlerOutcomeContractError> {
+    ) -> Result<HandlerOutcome, TransportContractViolation> {
         self.inline_response.resolve(self.original, outcome)
     }
 
     pub(crate) fn consume_oneway_deferred(
         &mut self,
         registration: crate::dispatch::DeferredRegistration,
-    ) -> Result<(), HandlerOutcomeContractError> {
+    ) -> Result<(), TransportContractViolation> {
         self.inline_response
             .consume_oneway_deferred(self.original, registration)
     }
@@ -263,7 +258,7 @@ impl RemotingRequest {
     pub(crate) fn consume_oneway_no_reply(
         &mut self,
         marker: crate::dispatch::ProtocolNoResponse,
-    ) -> Result<(), HandlerOutcomeContractError> {
+    ) -> Result<(), TransportContractViolation> {
         self.inline_response.consume_oneway_no_reply(self.original, marker)
     }
 

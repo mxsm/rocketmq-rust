@@ -14,7 +14,7 @@
 
 use parking_lot::Mutex;
 use rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLiteMessageResponseHeader;
-use rocketmq_transport::api::DeferredAdmissionAcquireErrorKind;
+use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 
 use super::*;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexErrorKind;
@@ -27,14 +27,28 @@ use crate::processor::pop_lite_message_processor::response::PopLiteResponseKind;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CapacityFailure {
     Index(PopLiteIndexErrorKind),
-    Admission(DeferredAdmissionAcquireErrorKind),
+    WaiterCapacity,
+    RetainedByteCapacity,
+    ParentCapacity,
 }
 
 fn capacity_failure(error: PopLiteDeferredPrepareError) -> CapacityFailure {
     match error {
         PopLiteDeferredPrepareError::Index(error) => CapacityFailure::Index(error.kind()),
-        PopLiteDeferredPrepareError::Admission(error) => CapacityFailure::Admission(error.kind()),
-        error => panic!("unexpected PopLite capacity failure: {error:?}"),
+        PopLiteDeferredPrepareError::Admission(DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)) => {
+            CapacityFailure::WaiterCapacity
+        }
+        PopLiteDeferredPrepareError::Admission(DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)) => {
+            CapacityFailure::RetainedByteCapacity
+        }
+        PopLiteDeferredPrepareError::Admission(DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_)) => {
+            CapacityFailure::ParentCapacity
+        }
+        PopLiteDeferredPrepareError::Admission(DeferredAdmissionAcquireOutcome::Acquired(permit)) => {
+            drop(permit);
+            panic!("PopLite capacity preparation must not return an acquired permit as an error")
+        }
+        _ => panic!("unexpected PopLite capacity failure"),
     }
 }
 
@@ -133,13 +147,13 @@ async fn pop_lite_deferred_capacity_matrix_writes_exact_polling_full_frame() {
             index_limits: PopLiteIndexLimits::new(nonzero(4), nonzero(4), nonzero(4)),
             wait_limits: DeferredWaitLimits::new(1, 4 * 1024 * 1024),
             clients: &["wait-count-a", "wait-count-b"],
-            expected: CapacityFailure::Admission(DeferredAdmissionAcquireErrorKind::WaiterCapacityExhausted),
+            expected: CapacityFailure::WaiterCapacity,
         },
         CapacityCase {
             index_limits: PopLiteIndexLimits::new(nonzero(4), nonzero(4), nonzero(4)),
             wait_limits: DeferredWaitLimits::new(4, 1),
             clients: &["wait-bytes"],
-            expected: CapacityFailure::Admission(DeferredAdmissionAcquireErrorKind::RetainedByteCapacityExhausted),
+            expected: CapacityFailure::RetainedByteCapacity,
         },
     ];
 
@@ -196,7 +210,9 @@ async fn pop_lite_deferred_capacity_matrix_writes_exact_polling_full_frame() {
         let rejected = service.resource_snapshot();
         match case.expected {
             CapacityFailure::Index(_) => assert_eq!(rejected.admission.rejected_count(), 0),
-            CapacityFailure::Admission(_) => assert_eq!(rejected.admission.rejected_count(), 1),
+            CapacityFailure::WaiterCapacity
+            | CapacityFailure::RetainedByteCapacity
+            | CapacityFailure::ParentCapacity => assert_eq!(rejected.admission.rejected_count(), 1),
         }
         if case.clients.len() > 1 {
             assert_eq!(rejected.prepared_registrations, 1);

@@ -18,8 +18,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crate::contract::TransportContractViolation;
 use crate::dispatch::DeferredAdmission;
-use crate::dispatch::DeferredAdmissionConfigError;
 use crate::dispatch::DeferredWaitLimits;
 use crate::dispatch::EmbeddedCaller;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -192,7 +192,7 @@ pub struct AdmissionSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AdmissionOutcome {
+enum AdmissionEventOutcome {
     Acquired,
     Rejected,
     Released,
@@ -202,66 +202,64 @@ pub enum AdmissionOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdmissionEvent {
     pub resource: AdmissionResource,
-    pub outcome: AdmissionOutcome,
+    outcome: AdmissionEventOutcome,
     pub bytes: usize,
 }
 
+#[cfg(test)]
+impl AdmissionEvent {
+    pub(crate) const fn is_release(self) -> bool {
+        matches!(self.outcome, AdmissionEventOutcome::Released)
+    }
+}
+
+/// Result of a capacity-controlled Transport admission attempt.
+#[must_use]
+pub enum AdmissionOutcome<T> {
+    /// Capacity was acquired and ownership is returned to the caller.
+    Acquired(T),
+    /// Capacity was unavailable under the configured policy.
+    Rejected(AdmissionRejection),
+}
+
+impl<T> AdmissionOutcome<T> {
+    pub(crate) fn into_result(self) -> Result<T, AdmissionRejection> {
+        match self {
+            Self::Acquired(value) => Ok(value),
+            Self::Rejected(rejection) => Err(rejection),
+        }
+    }
+}
+
+impl fmt::Display for AdmissionRejection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("transport admission rejected")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AdmissionError {
+pub struct AdmissionRejection {
     resource: AdmissionResource,
     policy: FullPolicy,
 }
 
-impl AdmissionError {
+impl AdmissionRejection {
+    /// Returns the resource whose bounded capacity rejected the request.
+    #[must_use]
+    pub const fn resource(&self) -> AdmissionResource {
+        self.resource
+    }
+
+    /// Returns the configured full-capacity disposition.
+    #[must_use]
     pub fn policy(&self) -> FullPolicy {
         self.policy
     }
 }
 
-impl fmt::Display for AdmissionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{:?} admission capacity exhausted", self.resource)
-    }
-}
-
-impl std::error::Error for AdmissionError {}
-
-#[derive(Debug)]
-pub enum AdmissionConfigError {
-    Budget(RuntimeContractViolation),
-    ZeroScopeCapacity {
-        scope: &'static str,
-        dimension: BudgetDimension,
-    },
-    ZeroMaxScopeKeys,
-}
-
-impl fmt::Display for AdmissionConfigError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Budget(error) => error.fmt(formatter),
-            Self::ZeroScopeCapacity { scope, dimension } => {
-                write!(formatter, "{scope} admission limit has zero {dimension:?} capacity")
-            }
-            Self::ZeroMaxScopeKeys => {
-                formatter.write_str("transport admission max_scope_keys must be greater than zero")
-            }
-        }
-    }
-}
-
-impl std::error::Error for AdmissionConfigError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Budget(error) => Some(error),
-            Self::ZeroScopeCapacity { .. } | Self::ZeroMaxScopeKeys => None,
-        }
-    }
-}
-
-impl From<RuntimeContractViolation> for AdmissionConfigError {
+impl From<RuntimeContractViolation> for TransportContractViolation {
     fn from(error: RuntimeContractViolation) -> Self {
-        Self::Budget(error)
+        Self::AdmissionBudget(error)
     }
 }
 
@@ -275,7 +273,7 @@ struct GlobalBudgets {
 }
 
 impl GlobalBudgets {
-    fn new(limits: AdmissionLimits, process_budget: &ResourceBudget) -> Result<Self, AdmissionConfigError> {
+    fn new(limits: AdmissionLimits, process_budget: &ResourceBudget) -> Result<Self, TransportContractViolation> {
         let resources = [
             limits.connections,
             limits.handshakes,
@@ -406,20 +404,20 @@ impl PartialFramePermit {
         handle: &AdmissionScopeHandle,
         resource: AdmissionResource,
         class: AdmissionClass,
-    ) -> Result<AdmissionPermit, (Box<Self>, AdmissionError)> {
+    ) -> Result<AdmissionPermit, (Box<Self>, AdmissionRejection)> {
         if class == AdmissionClass::Control {
             self.permit._permit.promote_to_control();
         }
         let budget = handle.budget(resource);
         if self.permit._permit.try_rebind(&budget).is_err() {
-            let error = AdmissionError {
+            let error = AdmissionRejection {
                 resource,
                 policy: policy_for(resource),
             };
             if let Some(observer) = &handle.observer {
                 let _ = observer.try_send(AdmissionEvent {
                     resource,
-                    outcome: AdmissionOutcome::Rejected,
+                    outcome: AdmissionEventOutcome::Rejected,
                     bytes: self.permit.bytes,
                 });
             }
@@ -428,12 +426,12 @@ impl PartialFramePermit {
         if let Some(observer) = &self.permit.observer {
             let _ = observer.try_send(AdmissionEvent {
                 resource: self.permit.resource,
-                outcome: AdmissionOutcome::Released,
+                outcome: AdmissionEventOutcome::Released,
                 bytes: self.permit.bytes,
             });
             let _ = observer.try_send(AdmissionEvent {
                 resource,
-                outcome: AdmissionOutcome::Acquired,
+                outcome: AdmissionEventOutcome::Acquired,
                 bytes: self.permit.bytes,
             });
         }
@@ -481,20 +479,20 @@ impl AdmissionScopeHandle {
         resource: AdmissionResource,
         bytes: usize,
         class: AdmissionClass,
-    ) -> Result<AdmissionPermit, AdmissionError> {
+    ) -> Result<AdmissionPermit, AdmissionRejection> {
         let budget = self.budget(resource);
         let budget_class = match class {
             AdmissionClass::Data => BudgetClass::Data,
             AdmissionClass::Control => BudgetClass::Control,
         };
         let permit = budget.try_acquire(bytes, budget_class).map_err(|_| {
-            self.observe(resource, AdmissionOutcome::Rejected, bytes);
-            AdmissionError {
+            self.observe(resource, AdmissionEventOutcome::Rejected, bytes);
+            AdmissionRejection {
                 resource,
                 policy: policy_for(resource),
             }
         })?;
-        self.observe(resource, AdmissionOutcome::Acquired, bytes);
+        self.observe(resource, AdmissionEventOutcome::Acquired, bytes);
         Ok(AdmissionPermit {
             _permit: permit,
             observer: self.observer.clone(),
@@ -507,17 +505,17 @@ impl AdmissionScopeHandle {
         &self,
         resource: AdmissionResource,
         mut permit: ResourcePermit,
-    ) -> Result<AdmissionPermit, AdmissionError> {
+    ) -> Result<AdmissionPermit, AdmissionRejection> {
         let budget = self.budget(resource);
         permit.try_rebind(&budget).map_err(|_| {
-            self.observe(resource, AdmissionOutcome::Rejected, permit.bytes());
-            AdmissionError {
+            self.observe(resource, AdmissionEventOutcome::Rejected, permit.bytes());
+            AdmissionRejection {
                 resource,
                 policy: policy_for(resource),
             }
         })?;
         let bytes = permit.bytes();
-        self.observe(resource, AdmissionOutcome::Acquired, bytes);
+        self.observe(resource, AdmissionEventOutcome::Acquired, bytes);
         Ok(AdmissionPermit {
             _permit: permit,
             observer: self.observer.clone(),
@@ -526,7 +524,7 @@ impl AdmissionScopeHandle {
         })
     }
 
-    fn observe(&self, resource: AdmissionResource, outcome: AdmissionOutcome, bytes: usize) {
+    fn observe(&self, resource: AdmissionResource, outcome: AdmissionEventOutcome, bytes: usize) {
         if let Some(observer) = &self.observer {
             let _ = observer.try_send(AdmissionEvent {
                 resource,
@@ -552,7 +550,7 @@ impl Drop for AdmissionPermit {
         if let Some(observer) = &self.observer {
             let _ = observer.try_send(AdmissionEvent {
                 resource: self.resource,
-                outcome: AdmissionOutcome::Released,
+                outcome: AdmissionEventOutcome::Released,
                 bytes: self.bytes,
             });
         }
@@ -580,7 +578,7 @@ impl AdmissionController {
         Self::try_new(limits).unwrap_or_else(|error| panic!("invalid transport admission limits: {error}"))
     }
 
-    pub fn try_new(limits: AdmissionLimits) -> Result<Self, AdmissionConfigError> {
+    pub fn try_new(limits: AdmissionLimits) -> Result<Self, TransportContractViolation> {
         let process_budget = standalone_process_budget(limits)?;
         Self::build(limits, &process_budget, None)
     }
@@ -594,7 +592,7 @@ impl AdmissionController {
     pub fn try_new_with_budget(
         limits: AdmissionLimits,
         process_budget: &ResourceBudget,
-    ) -> Result<Self, AdmissionConfigError> {
+    ) -> Result<Self, TransportContractViolation> {
         Self::build(limits, process_budget, None)
     }
 
@@ -611,7 +609,7 @@ impl AdmissionController {
     pub fn try_with_observer(
         limits: AdmissionLimits,
         observer: tokio::sync::mpsc::Sender<AdmissionEvent>,
-    ) -> Result<Self, AdmissionConfigError> {
+    ) -> Result<Self, TransportContractViolation> {
         let process_budget = standalone_process_budget(limits)?;
         Self::build(limits, &process_budget, Some(observer))
     }
@@ -625,7 +623,7 @@ impl AdmissionController {
         limits: AdmissionLimits,
         process_budget: &ResourceBudget,
         observer: tokio::sync::mpsc::Sender<AdmissionEvent>,
-    ) -> Result<Self, AdmissionConfigError> {
+    ) -> Result<Self, TransportContractViolation> {
         Self::build(limits, process_budget, Some(observer))
     }
 
@@ -633,7 +631,7 @@ impl AdmissionController {
         limits: AdmissionLimits,
         process_budget: &ResourceBudget,
         observer: Option<tokio::sync::mpsc::Sender<AdmissionEvent>>,
-    ) -> Result<Self, AdmissionConfigError> {
+    ) -> Result<Self, TransportContractViolation> {
         validate_scope_limits(limits)?;
         Ok(Self {
             limits,
@@ -648,7 +646,7 @@ impl AdmissionController {
     pub(crate) fn configure_deferred_admission(
         &self,
         limits: DeferredWaitLimits,
-    ) -> Result<DeferredAdmission, DeferredAdmissionConfigError> {
+    ) -> Result<DeferredAdmission, TransportContractViolation> {
         let mut configured = self
             .deferred_admission
             .lock()
@@ -657,7 +655,7 @@ impl AdmissionController {
             return if admission.limits() == limits {
                 Ok(admission.clone())
             } else {
-                Err(DeferredAdmissionConfigError::conflict())
+                Err(TransportContractViolation::DeferredAdmissionConflict)
             };
         }
         let admission = DeferredAdmission::try_new(&self.process_budget, limits)?;
@@ -678,31 +676,37 @@ impl AdmissionController {
         scope: AdmissionScope,
         bytes: usize,
         class: AdmissionClass,
-    ) -> Result<AdmissionPermit, AdmissionError> {
+    ) -> AdmissionOutcome<AdmissionPermit> {
         let policy = policy_for(resource);
-        let budget = self.scoped_budget(resource, scope)?;
+        let budget = match self.scoped_budget(resource, scope) {
+            Ok(budget) => budget,
+            Err(rejection) => return AdmissionOutcome::Rejected(rejection),
+        };
         let class = match class {
             AdmissionClass::Data => BudgetClass::Data,
             AdmissionClass::Control => BudgetClass::Control,
         };
-        let permit = budget.try_acquire(bytes, class).map_err(|_| {
-            if let Some(observer) = &self.observer {
-                let _ = observer.try_send(AdmissionEvent {
-                    resource,
-                    outcome: AdmissionOutcome::Rejected,
-                    bytes,
-                });
+        let permit = match budget.try_acquire(bytes, class) {
+            Ok(permit) => permit,
+            Err(_) => {
+                if let Some(observer) = &self.observer {
+                    let _ = observer.try_send(AdmissionEvent {
+                        resource,
+                        outcome: AdmissionEventOutcome::Rejected,
+                        bytes,
+                    });
+                }
+                return AdmissionOutcome::Rejected(AdmissionRejection { resource, policy });
             }
-            AdmissionError { resource, policy }
-        })?;
+        };
         if let Some(observer) = &self.observer {
             let _ = observer.try_send(AdmissionEvent {
                 resource,
-                outcome: AdmissionOutcome::Acquired,
+                outcome: AdmissionEventOutcome::Acquired,
                 bytes,
             });
         }
-        Ok(AdmissionPermit {
+        AdmissionOutcome::Acquired(AdmissionPermit {
             _permit: permit,
             observer: self.observer.clone(),
             resource,
@@ -710,7 +714,7 @@ impl AdmissionController {
         })
     }
 
-    pub(crate) fn prepare_scope(&self, scope: AdmissionScope) -> Result<AdmissionScopeHandle, AdmissionError> {
+    pub(crate) fn prepare_scope(&self, scope: AdmissionScope) -> Result<AdmissionScopeHandle, AdmissionRejection> {
         let session_id = scope.session;
         Ok(AdmissionScopeHandle {
             budgets: Arc::new(PreparedScopeBudgets {
@@ -730,7 +734,7 @@ impl AdmissionController {
         &self,
         caller: EmbeddedCaller,
         session_id: u64,
-    ) -> Result<AdmissionScopeHandle, AdmissionError> {
+    ) -> Result<AdmissionScopeHandle, AdmissionRejection> {
         Ok(AdmissionScopeHandle {
             budgets: Arc::new(PreparedScopeBudgets {
                 connection: self.embedded_scoped_budget(AdmissionResource::Connection, caller, session_id)?,
@@ -750,7 +754,7 @@ impl AdmissionController {
         resource: AdmissionResource,
         caller: EmbeddedCaller,
         session_id: u64,
-    ) -> Result<ResourceBudget, AdmissionError> {
+    ) -> Result<ResourceBudget, AdmissionRejection> {
         let mut scoped = self.scoped.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let global = self.global.get(resource);
         let scoped_reserve = reserve_for(resource, self.limits.control_reserve);
@@ -763,7 +767,7 @@ impl AdmissionController {
             missing_scope_count = scope_keys.into_iter().filter(|key| !scoped.contains_key(key)).count();
         }
         if scoped.len().saturating_add(missing_scope_count) > self.limits.max_scope_keys {
-            return Err(AdmissionError {
+            return Err(AdmissionRejection {
                 resource,
                 policy: policy_for(resource),
             });
@@ -794,7 +798,7 @@ impl AdmissionController {
         &self,
         resource: AdmissionResource,
         scope: AdmissionScope,
-    ) -> Result<ResourceBudget, AdmissionError> {
+    ) -> Result<ResourceBudget, AdmissionRejection> {
         let mut scoped = self.scoped.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let global = self.global.get(resource);
         let scoped_reserve = reserve_for(resource, self.limits.control_reserve);
@@ -818,7 +822,7 @@ impl AdmissionController {
                 .count();
         }
         if scoped.len().saturating_add(missing_scope_count) > self.limits.max_scope_keys {
-            return Err(AdmissionError {
+            return Err(AdmissionRejection {
                 resource,
                 policy: policy_for(resource),
             });
@@ -875,7 +879,7 @@ impl AdmissionController {
     }
 }
 
-fn standalone_process_budget(limits: AdmissionLimits) -> Result<ResourceBudget, AdmissionConfigError> {
+fn standalone_process_budget(limits: AdmissionLimits) -> Result<ResourceBudget, TransportContractViolation> {
     let resources = [
         limits.connections,
         limits.handshakes,
@@ -947,12 +951,12 @@ fn scoped_child(
     requested: ResourceLimit,
     requested_reserve: ResourceLimit,
     resource: AdmissionResource,
-) -> Result<ResourceBudget, AdmissionError> {
+) -> Result<ResourceBudget, AdmissionRejection> {
     if let Some(budget) = scoped.get(&key) {
         return Ok(budget.clone());
     }
     if scoped.len() >= max_scope_keys {
-        return Err(AdmissionError {
+        return Err(AdmissionRejection {
             resource,
             policy: policy_for(resource),
         });
@@ -972,7 +976,7 @@ fn scoped_child(
             BudgetLimit::new(limit.count, limit.bytes, parent.limit().full_policy)
                 .with_control_reserve(BudgetCapacity::new(reserve.count, reserve.bytes)),
         )
-        .map_err(|_| AdmissionError {
+        .map_err(|_| AdmissionRejection {
             resource,
             policy: policy_for(resource),
         })?;
@@ -980,9 +984,9 @@ fn scoped_child(
     Ok(budget)
 }
 
-fn validate_scope_limits(limits: AdmissionLimits) -> Result<(), AdmissionConfigError> {
+fn validate_scope_limits(limits: AdmissionLimits) -> Result<(), TransportContractViolation> {
     if limits.max_scope_keys == 0 {
-        return Err(AdmissionConfigError::ZeroMaxScopeKeys);
+        return Err(TransportContractViolation::AdmissionZeroMaxScopeKeys);
     }
     for (scope, limit) in [
         ("per_ip", limits.per_ip),
@@ -990,13 +994,13 @@ fn validate_scope_limits(limits: AdmissionLimits) -> Result<(), AdmissionConfigE
         ("per_session", limits.per_session),
     ] {
         if limit.count == 0 {
-            return Err(AdmissionConfigError::ZeroScopeCapacity {
+            return Err(TransportContractViolation::AdmissionZeroScopeCapacity {
                 scope,
                 dimension: BudgetDimension::Count,
             });
         }
         if limit.bytes == 0 {
-            return Err(AdmissionConfigError::ZeroScopeCapacity {
+            return Err(TransportContractViolation::AdmissionZeroScopeCapacity {
                 scope,
                 dimension: BudgetDimension::Bytes,
             });

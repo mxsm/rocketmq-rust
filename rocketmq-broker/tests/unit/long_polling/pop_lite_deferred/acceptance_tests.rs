@@ -38,11 +38,11 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DeferredAdmission;
+use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredId;
-use rocketmq_transport::api::DeferredResumeErrorKind;
+use rocketmq_transport::api::DeferredResumeOutcome;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
-use rocketmq_transport::api::DeferredTerminalReason;
 use rocketmq_transport::api::DeferredWaitLimits;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::HandlerOutcome;
@@ -382,10 +382,13 @@ async fn pop_lite_deferred_event_claim_writes_one_frame() {
             let _ = receipt_tx.send(result);
         })
         .expect("spawn PopLite resume");
-    receipt_rx
-        .await
-        .expect("PopLite receipt channel")
-        .expect("canonical PopLite write");
+    assert!(matches!(
+        receipt_rx
+            .await
+            .expect("PopLite receipt channel")
+            .expect("canonical PopLite write"),
+        DeferredResumeOutcome::Completed(_)
+    ));
 
     let response = client
         .receive_command()
@@ -448,16 +451,23 @@ async fn pop_lite_deferred_claim_failure_rolls_back_event_order_and_permits() {
         ),
         2
     );
-    let claimed_elsewhere = service
+    let DeferredClaimOutcome::Claimed(claimed_elsewhere) = service
         .registry
         .claim(id, DeferredWakeReason::Timeout)
         .await
-        .expect("test owner claims registry entry first");
+        .expect("test owner receives a normal claim outcome")
+    else {
+        panic!("test owner must retain the claimed registry entry");
+    };
 
-    match service.claim_event(&client_id).await {
-        Err(_) => {}
-        Ok(_) => panic!("stale PopLite index claim must fail at the registry"),
-    }
+    assert!(
+        service
+            .claim_event(&client_id)
+            .await
+            .expect("stale PopLite registry claim is a normal lifecycle outcome")
+            .is_none(),
+        "stale PopLite index claim must restore the pending event without a second claim"
+    );
     assert_eq!(dispatcher.pending_events(&client_id), vec![first, second]);
     assert_eq!(dispatcher.budget_snapshot().current_count, 2);
     assert_eq!(dispatcher.reservation_snapshot().events, 0);

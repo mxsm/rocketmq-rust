@@ -6339,15 +6339,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::admission::AdmissionConfigError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::admission::AdmissionConfigError",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::admission::AdmissionController",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::admission::AdmissionController",
           "owner": "transport",
@@ -6359,6 +6350,24 @@
           "category": "stable",
           "declaration": "pub use crate::admission::AdmissionLimits",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::admission::AdmissionLimits",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::admission::AdmissionOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::admission::AdmissionOutcome",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::admission::AdmissionRejection",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::admission::AdmissionRejection",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -6708,6 +6717,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::contract::TransportContractViolation",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::contract::TransportContractViolation",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::deadline::RequestDeadline",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::deadline::RequestDeadline",
           "owner": "transport",
@@ -6798,35 +6816,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredAdmissionAcquireError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredAdmissionAcquireError",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredAdmissionAcquireErrorKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredAdmissionAcquireErrorKind",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredAdmissionConfigError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredAdmissionConfigError",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredAdmissionConfigErrorKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredAdmissionConfigErrorKind",
+          "declaration": "pub use crate::dispatch::DeferredAdmissionAcquireOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredAdmissionAcquireOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -6852,17 +6843,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredClaimError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredClaimError",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredClaimErrorKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredClaimErrorKind",
+          "declaration": "pub use crate::dispatch::DeferredClaimOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredClaimOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -6897,24 +6879,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredExpiryError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredExpiryError",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredExpiryErrorKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredExpiryErrorKind",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::dispatch::DeferredExpiryKind",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredExpiryKind",
           "owner": "transport",
@@ -6926,6 +6890,15 @@
           "category": "stable",
           "declaration": "pub use crate::dispatch::DeferredExpiryMargins",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredExpiryMargins",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::dispatch::DeferredExpiryOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredExpiryOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -6969,8 +6942,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredRegistryError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredRegistryError",
+          "declaration": "pub use crate::dispatch::DeferredRegistryOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredRegistryOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -6978,8 +6951,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredRegistryErrorKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredRegistryErrorKind",
+          "declaration": "pub use crate::dispatch::DeferredRegistryRecovery",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredRegistryRecovery",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7023,8 +6996,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredResponseError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResponseError",
+          "declaration": "pub use crate::dispatch::DeferredResponderOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResponderOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7032,8 +7005,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredResponseErrorKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResponseErrorKind",
+          "declaration": "pub use crate::dispatch::DeferredResponseOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResponseOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7041,17 +7014,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredResumeError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResumeError",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::DeferredResumeErrorKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResumeErrorKind",
+          "declaration": "pub use crate::dispatch::DeferredResumeOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResumeOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7061,6 +7025,15 @@
           "category": "stable",
           "declaration": "pub use crate::dispatch::DeferredResumeRetainedSize",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResumeRetainedSize",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::dispatch::DeferredResumeSubmitOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::DeferredResumeSubmitOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7131,24 +7104,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::EmbeddedDispatchError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::EmbeddedDispatchError",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::EmbeddedDispatchErrorKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::EmbeddedDispatchErrorKind",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::dispatch::EmbeddedDispatchOutcome",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::EmbeddedDispatchOutcome",
           "owner": "transport",
@@ -7205,15 +7160,6 @@
           "category": "stable",
           "declaration": "pub use crate::dispatch::ProtocolNoResponse",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ProtocolNoResponse",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::ProtocolNoResponseError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ProtocolNoResponseError",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7293,8 +7239,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::ResponseBuildError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponseBuildError",
+          "declaration": "pub use crate::dispatch::ResponseCompletionOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponseCompletionOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7304,15 +7250,6 @@
           "category": "stable",
           "declaration": "pub use crate::dispatch::ResponseDisposition",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponseDisposition",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::dispatch::ResponseErrorKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::ResponseErrorKind",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7338,8 +7275,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::TakeDeferredResponderError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::TakeDeferredResponderError",
+          "declaration": "pub use crate::dispatch::WriteProgress",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::WriteProgress",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7347,8 +7284,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::dispatch::WriteProgress",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::dispatch::WriteProgress",
+          "declaration": "pub use crate::error::TransportError",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error::TransportError",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7632,15 +7569,6 @@
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "trusted ingress configuration for PROXY v1/v2 source identity",
           "removal_condition": "retain while trusted PROXY ingress remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::remoting_server::rocketmq_tokio_server::ServerStartError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::remoting_server::rocketmq_tokio_server::ServerStartError",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
         },
         {
           "category": "stable",
@@ -7932,8 +7860,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::session_registry::ServerPushError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerPushError",
+          "declaration": "pub use crate::session_registry::ServerPushKind",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerPushKind",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7941,8 +7869,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::session_registry::ServerPushKind",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerPushKind",
+          "declaration": "pub use crate::session_registry::ServerPushOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerPushOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -7977,26 +7905,17 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::session_registry::ServerRequestError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerRequestError",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::session_registry::ServerRequestErrorStage",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerRequestErrorStage",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::session_registry::ServerRequestKind",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerRequestKind",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::session_registry::ServerRequestOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::ServerRequestOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -8022,8 +7941,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::session_registry::SessionCloseError",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::SessionCloseError",
+          "declaration": "pub use crate::session_registry::SessionCloseHandle",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::SessionCloseHandle",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -8031,8 +7950,8 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::session_registry::SessionCloseHandle",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::SessionCloseHandle",
+          "declaration": "pub use crate::session_registry::SessionCloseOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::session_registry::SessionCloseOutcome",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -8192,7 +8111,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 219
+      "maximum_exports": 210
     }
   },
   "policy": "Every deliberate export is classified; additions and count growth fail closed.",

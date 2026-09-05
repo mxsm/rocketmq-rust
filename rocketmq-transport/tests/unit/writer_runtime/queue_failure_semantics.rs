@@ -38,7 +38,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::run_session_writer;
 use super::writer_lanes;
+use super::ActiveBatchDropGuard;
 use super::MicroBatchConfig;
+use super::WriterEnqueueOutcome;
 use super::WriterEvent;
 use super::WriterQueueConfig;
 use crate::admission::AdmissionClass;
@@ -58,8 +60,23 @@ use crate::telemetry::TransportTelemetry;
 use crate::write_result::WriterFailure;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
+use crate::write_strategy::QueuedWriteCancellation;
 use crate::write_strategy::QueuedWriteProgress;
 use crate::write_strategy::ResponseQueueWaitObservation;
+
+fn expect_enqueued(outcome: WriterEnqueueOutcome, context: &str) {
+    match outcome {
+        WriterEnqueueOutcome::Enqueued => {}
+        WriterEnqueueOutcome::Full(write) => {
+            drop(write);
+            panic!("{context}: writer lane is full")
+        }
+        WriterEnqueueOutcome::Closed(write) => {
+            drop(write);
+            panic!("{context}: writer lane is closed")
+        }
+    }
+}
 
 struct DropLease {
     file: std::fs::File,
@@ -311,6 +328,35 @@ fn queued_deadline_cancellation_cannot_race_a_later_writer_claim() {
     assert!(progress.write_started());
 }
 
+#[test]
+fn active_batch_drop_records_only_a_claimed_session_owner_abort() {
+    let controller = AdmissionController::new(AdmissionLimits::default());
+    let admission = controller
+        .prepare_scope(AdmissionScope::new("127.0.0.1".parse().expect("loopback")))
+        .expect("prepare scope");
+    let progress = Arc::new(QueuedWriteProgress::waiting());
+    let (write, completion) =
+        queued_write_with_completion(&admission, "claimed-owner-abort", 16, Arc::clone(&progress));
+    let ready = vec![write];
+    assert!(progress.claim_for_writer());
+
+    let owner_shutdown = CancellationToken::new();
+    drop(ActiveBatchDropGuard::new(&owner_shutdown, &ready));
+    assert_eq!(progress.cancellation_reason(), None);
+
+    owner_shutdown.cancel();
+    drop(ActiveBatchDropGuard::new(&owner_shutdown, &ready));
+    assert_eq!(
+        progress.cancellation_reason(),
+        Some(QueuedWriteCancellation::SessionClosed)
+    );
+    progress.start_write();
+    assert!(!progress.write_started());
+    drop(ready);
+    drop(completion);
+    assert_eq!(controller.snapshot().queued.current_count, 0);
+}
+
 #[tokio::test]
 async fn active_batch_failure_shares_source_and_drains_followers_without_a_second_socket_attempt() {
     let controller = AdmissionController::new(AdmissionLimits::default());
@@ -342,13 +388,9 @@ async fn active_batch_failure_shares_source_and_drains_followers_without_a_secon
         16,
         Arc::new(QueuedWriteProgress::waiting()),
     );
-    lanes.try_send(AdmissionClass::Data, first).expect("first queued write");
-    lanes
-        .try_send(AdmissionClass::Data, second)
-        .expect("second queued write");
-    lanes
-        .try_send(AdmissionClass::Data, follower)
-        .expect("follower queued write");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, first), "first queued write");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, second), "second queued write");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, follower), "follower queued write");
     drop(lanes);
 
     let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
@@ -413,12 +455,8 @@ async fn active_file_failure_and_poison_drain_release_each_file_lease_once() {
     let (active, active_completion, active_drops) = queued_file_write_with_completion(&admission, "active-file");
     let (follower, follower_completion, follower_drops) =
         queued_file_write_with_completion(&admission, "follower-file");
-    lanes
-        .try_send(AdmissionClass::Data, active)
-        .expect("active file queued");
-    lanes
-        .try_send(AdmissionClass::Data, follower)
-        .expect("follower file queued");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, active), "active file queued");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, follower), "follower file queued");
     drop(lanes);
     let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
     let (state, _) = watch::channel(ConnectionState::Healthy);
@@ -477,9 +515,7 @@ async fn successful_file_write_releases_its_lease_once_after_completion() {
     config.data_max_bytes = NonZeroUsize::new(1024).expect("non-zero");
     let (lanes, receivers) = writer_lanes(config);
     let (write, completion, drops) = queued_file_write_with_completion(&admission, "successful-file");
-    lanes
-        .try_send(AdmissionClass::Data, write)
-        .expect("successful file queued");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, write), "successful file queued");
     drop(lanes);
     let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
     let (state, _) = watch::channel(ConnectionState::Healthy);
@@ -528,15 +564,14 @@ async fn response_queue_wait_metric_excludes_non_response_writes() {
         16,
         Arc::new(QueuedWriteProgress::waiting()),
     );
-    lanes
-        .try_send(AdmissionClass::Data, generic)
-        .expect("generic write queued");
-    lanes
-        .try_send(
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, generic), "generic write queued");
+    expect_enqueued(
+        lanes.try_send(
             AdmissionClass::Data,
             response.with_response_queue_wait_observation(ResponseQueueWaitObservation::Response),
-        )
-        .expect("response write queued");
+        ),
+        "response write queued",
+    );
     drop(lanes);
     let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
     let (state, _) = watch::channel(ConnectionState::Healthy);
@@ -582,7 +617,7 @@ async fn queued_file_cancellation_releases_its_lease_before_socket_progress() {
     let (lanes, receivers) = writer_lanes(config);
     let (write, completion, drops) = queued_file_write_with_completion(&admission, "cancelled-file");
     let progress = Arc::clone(&write.progress);
-    lanes.try_send(AdmissionClass::Data, write).expect("file queued");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, write), "file queued");
     assert!(progress.cancel_before_start());
     drop(lanes);
     let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
@@ -617,7 +652,7 @@ async fn dropping_a_queued_file_envelope_releases_its_lease_once() {
     let (lanes, mut receivers) = writer_lanes(config);
     let (write, completion, drops) = queued_file_write_with_completion(&admission, "dropped-file");
     drop(completion);
-    lanes.try_send(AdmissionClass::Data, write).expect("file queued");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, write), "file queued");
     drop(lanes);
 
     let WriterEvent::Write(envelope) = receivers.recv().await else {
@@ -648,7 +683,7 @@ async fn queued_cancellation_wins_before_writer_start_and_never_touches_the_sock
     let (lanes, receivers) = writer_lanes(config);
     let progress = Arc::new(QueuedWriteProgress::waiting());
     let (write, completion) = queued_write_with_completion(&admission, "deadline-target", 16, Arc::clone(&progress));
-    lanes.try_send(AdmissionClass::Data, write).expect("queued write");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, write), "queued write");
     assert!(progress.cancel_before_start());
     drop(lanes);
 
@@ -687,7 +722,7 @@ async fn dropped_completion_before_writer_start_is_not_started_and_releases_its_
     let (write, completion) =
         queued_write_with_completion(&admission, "dropped-before-start", 16, Arc::clone(&progress));
     drop(completion);
-    lanes.try_send(AdmissionClass::Data, write).expect("queued write");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, write), "queued write");
     drop(lanes);
 
     let WriterEvent::Write(envelope) = receivers.recv().await else {
@@ -722,7 +757,7 @@ async fn dropped_active_completion_is_possibly_partial_and_releases_its_permit()
     let progress = Arc::new(QueuedWriteProgress::waiting());
     let (write, completion) =
         queued_write_with_completion(&admission, "dropped-after-start", 16, Arc::clone(&progress));
-    lanes.try_send(AdmissionClass::Data, write).expect("queued write");
+    expect_enqueued(lanes.try_send(AdmissionClass::Data, write), "queued write");
     drop(lanes);
     let diagnostics = Arc::new(SessionWriterDiagnostics::new(config.total_capacity()));
     let (state, _) = watch::channel(ConnectionState::Healthy);

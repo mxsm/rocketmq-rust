@@ -49,6 +49,7 @@ use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::SessionView;
+use rocketmq_transport::api::TransportContractViolation;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -111,7 +112,22 @@ impl RequestProcessor for ClientRemotingProcessor {
                 )));
             }
         };
-        Ok(HandlerOutcome::NoReply(request.protocol_no_response(reason)?))
+        let no_response = request
+            .protocol_no_response(reason)
+            .map_err(protocol_no_response_contract_error)?;
+        Ok(HandlerOutcome::NoReply(no_response))
+    }
+}
+
+fn protocol_no_response_contract_error(error: TransportContractViolation) -> rocketmq_error::RocketMQError {
+    match error {
+        TransportContractViolation::ProtocolNoResponseOneWayRequest => {
+            rocketmq_error::RocketMQError::illegal_argument("protocol no-response is unavailable for one-way requests")
+        }
+        TransportContractViolation::ProtocolNoResponseUnsupported { .. } => {
+            rocketmq_error::RocketMQError::illegal_argument("protocol no-response reason is unsupported")
+        }
+        _ => rocketmq_error::RocketMQError::illegal_argument("protocol no-response contract is invalid"),
     }
 }
 

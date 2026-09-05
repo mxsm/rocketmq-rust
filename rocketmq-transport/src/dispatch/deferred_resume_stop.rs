@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use tokio::time::Instant;
 
-use crate::admission::AdmissionError;
+use crate::admission::AdmissionRejection;
 
 use super::ResumeResult;
 use crate::dispatch::deferred_registry::ClaimExecutionParts;
@@ -24,8 +24,6 @@ use crate::dispatch::deferred_registry::ClaimMarker;
 use crate::dispatch::deferred_response::DeferredSystemCancellationReason;
 use crate::dispatch::deferred_response::DeferredSystemCloseReason;
 use crate::dispatch::ClaimedDeferred;
-use crate::dispatch::DeferredResumeError;
-use crate::dispatch::DeferredResumeErrorKind;
 use crate::dispatch::DeferredTerminalReason;
 use crate::dispatch::RequestControlView;
 
@@ -39,6 +37,7 @@ pub(crate) enum ResumeStop {
 }
 
 impl ResumeStop {
+    #[cfg(test)]
     pub(super) const fn terminal_reason(self) -> DeferredTerminalReason {
         match self {
             Self::ParentCancelled => DeferredTerminalReason::ParentCancelled,
@@ -151,8 +150,8 @@ impl ResumeStopView {
 }
 
 pub(super) fn finish_lifecycle<R>(
-    id: crate::dispatch::DeferredId,
-    request_id: crate::dispatch::RequestId,
+    _id: crate::dispatch::DeferredId,
+    _request_id: crate::dispatch::RequestId,
     responder: crate::dispatch::DeferredResponder,
     marker: Arc<ClaimMarker<R>>,
     stop: ResumeStop,
@@ -161,50 +160,40 @@ pub(super) fn finish_lifecycle<R>(
 where
     R: Send + 'static,
 {
-    let (kind, result) = match stop {
-        ResumeStop::ParentCancelled => (
-            DeferredResumeErrorKind::Cancelled,
-            responder.cancel_with_system_reason(DeferredSystemCancellationReason::PARENT_CANCELLED),
-        ),
-        ResumeStop::SessionClosed => (
-            DeferredResumeErrorKind::SessionClosed,
-            responder.close_with_reason(DeferredSystemCloseReason::SESSION_CLOSED),
-        ),
-        ResumeStop::OwnerDeadline => (
-            DeferredResumeErrorKind::Cancelled,
-            responder.cancel_with_system_reason(DeferredSystemCancellationReason::OWNER_DEADLINE),
-        ),
-        ResumeStop::ProcessorUnavailable => (
-            DeferredResumeErrorKind::ExecutorClosing,
-            responder.cancel_with_system_reason(DeferredSystemCancellationReason::PROCESSOR_UNAVAILABLE),
-        ),
-        ResumeStop::ServiceStopping => (
-            DeferredResumeErrorKind::ExecutorClosing,
-            responder.cancel_with_system_reason(DeferredSystemCancellationReason::SERVICE_STOPPING),
-        ),
+    let result = match stop {
+        ResumeStop::ParentCancelled => {
+            responder.cancel_with_system_reason(DeferredSystemCancellationReason::PARENT_CANCELLED)
+        }
+        ResumeStop::SessionClosed => responder.close_with_reason(DeferredSystemCloseReason::SESSION_CLOSED),
+        ResumeStop::OwnerDeadline => {
+            responder.cancel_with_system_reason(DeferredSystemCancellationReason::OWNER_DEADLINE)
+        }
+        ResumeStop::ProcessorUnavailable => {
+            responder.cancel_with_system_reason(DeferredSystemCancellationReason::PROCESSOR_UNAVAILABLE)
+        }
+        ResumeStop::ServiceStopping => {
+            responder.cancel_with_system_reason(DeferredSystemCancellationReason::SERVICE_STOPPING)
+        }
     };
     drop(marker);
     match result {
-        Ok(()) => Err(DeferredResumeError::new_with_reason(
-            kind,
-            id,
-            request_id,
-            None,
-            Some(stop.terminal_reason()),
-            None,
-            source,
-        )),
-        Err(terminal) => Err(DeferredResumeError::new_with_reason(
-            terminal
-                .prior_terminal_reason()
-                .map_or(kind, resume_error_kind_for_reason),
-            id,
-            request_id,
-            terminal.prior_terminal_state(),
-            terminal.prior_terminal_reason(),
-            terminal.write_progress(),
-            Some(Box::new(terminal)),
-        )),
+        Ok(crate::dispatch::ResponseStateOutcome::Applied(())) => match stop {
+            ResumeStop::ParentCancelled | ResumeStop::OwnerDeadline => super::ResumeAttempt::Cancelled,
+            ResumeStop::SessionClosed => super::ResumeAttempt::SessionClosed,
+            ResumeStop::ProcessorUnavailable | ResumeStop::ServiceStopping => source
+                .map_or(super::ResumeAttempt::Cancelled, |source| {
+                    super::ResumeAttempt::Operational(super::ResumeOperationalFailure::ExecutorClosing { source })
+                }),
+        },
+        Ok(crate::dispatch::ResponseStateOutcome::AlreadyCompleted { reason, .. }) => match (reason, source) {
+            (
+                Some(DeferredTerminalReason::ProcessorUnavailable | DeferredTerminalReason::ServiceStopping),
+                Some(source),
+            ) => super::ResumeAttempt::Operational(super::ResumeOperationalFailure::ExecutorClosing { source }),
+            (Some(reason), _) => resume_attempt_for_reason(reason),
+            (None, _) => super::ResumeAttempt::Cancelled,
+        },
+        Err(error) => super::ResumeAttempt::Operational(super::ResumeOperationalFailure::Contract(error)),
     }
 }
 
@@ -233,13 +222,13 @@ where
     result
 }
 
-pub(super) fn finish_parts_admission<R>(parts: ClaimExecutionParts<R>, source: AdmissionError) -> ResumeResult
+pub(super) fn finish_parts_admission<R>(parts: ClaimExecutionParts<R>, _source: AdmissionRejection) -> ResumeResult
 where
     R: Send + 'static,
 {
     let ClaimExecutionParts {
-        id,
-        request_id,
+        id: _,
+        request_id: _,
         resume,
         responder,
         mut permit,
@@ -253,26 +242,11 @@ where
     }
     drop(resume);
     match terminal {
-        Ok(()) => Err(DeferredResumeError::new_with_reason(
-            DeferredResumeErrorKind::Admission,
-            id,
-            request_id,
-            None,
-            Some(DeferredTerminalReason::ProcessorUnavailable),
-            None,
-            Some(Box::new(source)),
-        )),
-        Err(terminal) => Err(DeferredResumeError::new_with_reason(
-            terminal
-                .prior_terminal_reason()
-                .map_or(DeferredResumeErrorKind::Admission, resume_error_kind_for_reason),
-            id,
-            request_id,
-            terminal.prior_terminal_state(),
-            terminal.prior_terminal_reason(),
-            terminal.write_progress(),
-            Some(Box::new(terminal)),
-        )),
+        Ok(crate::dispatch::ResponseStateOutcome::Applied(())) => super::ResumeAttempt::AdmissionRejected,
+        Ok(crate::dispatch::ResponseStateOutcome::AlreadyCompleted { reason, .. }) => {
+            reason.map_or(super::ResumeAttempt::Cancelled, resume_attempt_for_reason)
+        }
+        Err(error) => super::ResumeAttempt::Operational(super::ResumeOperationalFailure::Contract(error)),
     }
 }
 
@@ -287,18 +261,18 @@ where
     finish_parts_stop(claimed.into_execution_parts(), stop, source)
 }
 
-pub(super) fn resume_error_kind_for_reason(reason: DeferredTerminalReason) -> DeferredResumeErrorKind {
+pub(super) fn resume_attempt_for_reason(reason: DeferredTerminalReason) -> super::ResumeAttempt {
     match reason {
         DeferredTerminalReason::SessionClosed | DeferredTerminalReason::ReceiverDropped => {
-            DeferredResumeErrorKind::SessionClosed
+            super::ResumeAttempt::SessionClosed
         }
         DeferredTerminalReason::ProcessorUnavailable | DeferredTerminalReason::ServiceStopping => {
-            DeferredResumeErrorKind::ExecutorClosing
+            super::ResumeAttempt::Cancelled
         }
         DeferredTerminalReason::Explicit
         | DeferredTerminalReason::Abandoned
         | DeferredTerminalReason::ClaimDropped
         | DeferredTerminalReason::OwnerDeadline
-        | DeferredTerminalReason::ParentCancelled => DeferredResumeErrorKind::Cancelled,
+        | DeferredTerminalReason::ParentCancelled => super::ResumeAttempt::Cancelled,
     }
 }

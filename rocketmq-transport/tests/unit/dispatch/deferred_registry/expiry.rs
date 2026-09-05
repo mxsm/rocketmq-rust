@@ -14,6 +14,11 @@
 
 use super::*;
 
+use crate::dispatch::DeferredAdmissionAcquireOutcome;
+use crate::dispatch::DeferredClaimOutcome;
+use crate::dispatch::DeferredExpiryOutcome;
+use crate::dispatch::DeferredRegistryOutcome;
+
 fn assert_expiry_registry_released<R>(registry: &DeferredRegistry<R>, harness: &Harness)
 where
     R: Send + 'static,
@@ -47,8 +52,55 @@ where
     let responder = sink
         .deferred_seed_for_test(telemetry, harness.session.view().id(), control)
         .into_responder(original);
-    let permit = harness.admission.try_reserve(retained).expect("telemetry wait permit");
+    let permit = match harness.admission.try_reserve(retained) {
+        DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+        DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
+            panic!("telemetry wait permit unexpectedly exhausted waiter capacity")
+        }
+        DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => {
+            panic!("telemetry wait permit unexpectedly exhausted retained-byte capacity")
+        }
+        DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
+            panic!("telemetry wait permit unexpectedly exhausted parent capacity")
+        }
+    };
     DeferredParts::new(responder, permit)
+}
+
+fn expect_registered<R>(outcome: DeferredRegistryOutcome<R>, context: &str) -> crate::dispatch::DeferredRegistration
+where
+    R: Send + 'static,
+{
+    match outcome {
+        DeferredRegistryOutcome::Registered(registration) => registration,
+        DeferredRegistryOutcome::DuplicateRequest(_) => panic!("{context}: duplicate request"),
+        DeferredRegistryOutcome::IdentityExhausted(_) => panic!("{context}: identity exhausted"),
+        DeferredRegistryOutcome::ParentCancelled => panic!("{context}: parent cancelled"),
+        DeferredRegistryOutcome::SessionClosed => panic!("{context}: session closed"),
+        DeferredRegistryOutcome::DeadlineExpired => panic!("{context}: deadline expired"),
+        DeferredRegistryOutcome::BuilderRejected { .. } => panic!("{context}: builder rejected"),
+        DeferredRegistryOutcome::ContractViolation { .. } => panic!("{context}: contract violation"),
+        DeferredRegistryOutcome::OperationalFailure { .. } => panic!("{context}: operational failure"),
+    }
+}
+
+fn expect_claimed<R>(
+    result: Result<DeferredClaimOutcome<R>, crate::error::TransportError>,
+    context: &str,
+) -> crate::dispatch::ClaimedDeferred<R>
+where
+    R: Send + 'static,
+{
+    match result {
+        Ok(DeferredClaimOutcome::Claimed(claimed)) => claimed,
+        Ok(DeferredClaimOutcome::NotFound) => panic!("{context}: request not found"),
+        Ok(DeferredClaimOutcome::AlreadyClaimed) => panic!("{context}: request already claimed"),
+        Ok(DeferredClaimOutcome::AlreadyCompleted) => panic!("{context}: request already completed"),
+        Ok(DeferredClaimOutcome::ParentCancelled) => panic!("{context}: parent cancelled"),
+        Ok(DeferredClaimOutcome::SessionClosed) => panic!("{context}: session closed"),
+        Ok(DeferredClaimOutcome::DeadlineExpired) => panic!("{context}: deadline expired"),
+        Err(_) => panic!("{context}: operational claim failure"),
+    }
 }
 
 #[derive(Debug)]
@@ -137,16 +189,19 @@ async fn deferred_expiry_long_poll_uses_the_unified_timeout_claim() {
     let harness = Harness::new("deferred-expiry-protocol-claim", 98190);
     let registry = DeferredRegistry::<u64>::new();
     let protocol_at = tokio::time::Instant::now() + Duration::from_secs(10);
-    let parts = expiring_parts::<u64>(&harness, harness.identity(301), None, None)
-        .try_with_expiry(
+    let mut parts = expiring_parts::<u64>(&harness, harness.identity(301), None, None);
+    assert_eq!(
+        parts.try_with_expiry(
             protocol_at,
             DeferredExpiryMargins::new(Duration::from_secs(1), Duration::from_secs(1)),
-        )
-        .expect("attach protocol expiry");
+        ),
+        Ok(DeferredExpiryOutcome::Attached)
+    );
     let state = parts.response_state();
-    let registration = registry
-        .register(DeferredRequest::new(41, parts))
-        .expect("register protocol expiry");
+    let registration = expect_registered(
+        registry.register(DeferredRequest::new(41, parts)),
+        "register protocol expiry",
+    );
     registration.commit().expect("publish protocol expiry");
 
     tokio::time::advance(Duration::from_secs(10)).await;
@@ -169,23 +224,26 @@ async fn message_claim_before_expiry_sweep_keeps_message_as_the_immutable_winner
     let harness = Harness::new("deferred-expiry-message-before-sweep", 98206);
     let registry = DeferredRegistry::<u64>::new();
     let protocol_at = tokio::time::Instant::now() + Duration::from_secs(10);
-    let parts = expiring_parts::<u64>(&harness, harness.identity(312), None, None)
-        .try_with_expiry(
+    let mut parts = expiring_parts::<u64>(&harness, harness.identity(312), None, None);
+    assert_eq!(
+        parts.try_with_expiry(
             protocol_at,
             DeferredExpiryMargins::new(Duration::from_secs(1), Duration::from_secs(1)),
-        )
-        .expect("attach message-first expiry");
+        ),
+        Ok(DeferredExpiryOutcome::Attached)
+    );
     let state = parts.response_state();
-    let registration = registry
-        .register(DeferredRequest::new(51, parts))
-        .expect("register message-first expiry");
+    let registration = expect_registered(
+        registry.register(DeferredRequest::new(51, parts)),
+        "register message-first expiry",
+    );
     let id = registration.deferred_id();
     registration.commit().expect("publish message-first expiry");
 
-    let claimed = registry
-        .claim(id, DeferredWakeReason::MessageArrived)
-        .await
-        .expect("message claim wins before sweep");
+    let claimed = expect_claimed(
+        registry.claim(id, DeferredWakeReason::MessageArrived).await,
+        "message claim wins before sweep",
+    );
     assert_eq!(claimed.reason(), DeferredWakeReason::MessageArrived);
     let batch = registry.sweep_expired_at_for_test(protocol_at, NonZeroUsize::new(1).expect("non-zero limit"));
     assert_eq!(batch.stats().examined(), 0);
@@ -193,10 +251,8 @@ async fn message_claim_before_expiry_sweep_keeps_message_as_the_immutable_winner
     let loser = registry
         .claim(id, DeferredWakeReason::Timeout)
         .await
-        .expect_err("timeout observes the message claim marker");
-    assert_eq!(loser.kind(), DeferredClaimErrorKind::AlreadyClaimed);
-    assert_eq!(loser.request_id(), Some(claimed.request_id()));
-    assert_eq!(loser.prior_terminal_reason(), None);
+        .expect("timeout observes the message claim marker as a normal outcome");
+    assert!(matches!(loser, DeferredClaimOutcome::AlreadyClaimed));
     assert_eq!(registry.test_claim_marker_count(), 1);
     assert_eq!(harness.admission.snapshot().waiting_count(), 1);
 
@@ -213,16 +269,19 @@ async fn expiry_sweep_before_message_claim_keeps_timeout_as_the_immutable_winner
     let harness = Harness::new("deferred-expiry-sweep-before-message", 98207);
     let registry = DeferredRegistry::<u64>::new();
     let protocol_at = tokio::time::Instant::now() + Duration::from_secs(10);
-    let parts = expiring_parts::<u64>(&harness, harness.identity(313), None, None)
-        .try_with_expiry(
+    let mut parts = expiring_parts::<u64>(&harness, harness.identity(313), None, None);
+    assert_eq!(
+        parts.try_with_expiry(
             protocol_at,
             DeferredExpiryMargins::new(Duration::from_secs(1), Duration::from_secs(1)),
-        )
-        .expect("attach sweep-first expiry");
+        ),
+        Ok(DeferredExpiryOutcome::Attached)
+    );
     let state = parts.response_state();
-    let registration = registry
-        .register(DeferredRequest::new(52, parts))
-        .expect("register sweep-first expiry");
+    let registration = expect_registered(
+        registry.register(DeferredRequest::new(52, parts)),
+        "register sweep-first expiry",
+    );
     let id = registration.deferred_id();
     registration.commit().expect("publish sweep-first expiry");
 
@@ -236,10 +295,8 @@ async fn expiry_sweep_before_message_claim_keeps_timeout_as_the_immutable_winner
     let loser = registry
         .claim(id, DeferredWakeReason::MessageArrived)
         .await
-        .expect_err("message observes the timeout claim marker");
-    assert_eq!(loser.kind(), DeferredClaimErrorKind::AlreadyClaimed);
-    assert_eq!(loser.request_id(), Some(claimed.request_id()));
-    assert_eq!(loser.prior_terminal_reason(), None);
+        .expect("message observes the timeout claim marker as a normal outcome");
+    assert!(matches!(loser, DeferredClaimOutcome::AlreadyClaimed));
     assert_eq!(registry.test_claim_marker_count(), 1);
     assert_eq!(harness.admission.snapshot().waiting_count(), 1);
 
@@ -259,19 +316,22 @@ async fn deferred_expiry_owner_cutoff_wins_without_a_timeout_claim() {
     let deadline = crate::deadline::RequestDeadline::after(Duration::from_secs(30));
     let parts = expiring_parts::<u64>(&harness, harness.identity(302), Some(deadline), None);
     let state = parts.response_state();
-    let parts = parts
-        .try_with_expiry(
+    let mut parts = parts;
+    assert_eq!(
+        parts.try_with_expiry(
             now + Duration::from_secs(25),
             DeferredExpiryMargins::new(Duration::from_secs(5), Duration::from_secs(5)),
-        )
-        .expect("attach owner-capped expiry");
+        ),
+        Ok(DeferredExpiryOutcome::Attached)
+    );
     assert_eq!(
         parts.expiry().expect("expiry").kind(),
         DeferredExpiryKind::OwnerDeadline
     );
-    let registration = registry
-        .register(DeferredRequest::new(42, parts))
-        .expect("register owner-capped expiry");
+    let registration = expect_registered(
+        registry.register(DeferredRequest::new(42, parts)),
+        "register owner-capped expiry",
+    );
     registration.commit().expect("publish owner-capped expiry");
 
     tokio::time::advance(Duration::from_secs(20)).await;
@@ -292,18 +352,24 @@ async fn deferred_expiry_cursor_does_not_let_provisional_entry_starve_active_ent
     let registry = DeferredRegistry::<u64>::new();
     let protocol_at = tokio::time::Instant::now() + Duration::from_secs(5);
     let margins = DeferredExpiryMargins::new(Duration::from_secs(1), Duration::from_secs(1));
-    let first = expiring_parts::<u64>(&harness, harness.identity(303), None, None)
-        .try_with_expiry(protocol_at, margins)
-        .expect("attach first expiry");
-    let first_registration = registry
-        .register(DeferredRequest::new(43, first))
-        .expect("register provisional expiry");
-    let second = expiring_parts::<u64>(&harness, harness.identity(304), None, None)
-        .try_with_expiry(protocol_at, margins)
-        .expect("attach second expiry");
-    let second_registration = registry
-        .register(DeferredRequest::new(44, second))
-        .expect("register active expiry");
+    let mut first = expiring_parts::<u64>(&harness, harness.identity(303), None, None);
+    assert_eq!(
+        first.try_with_expiry(protocol_at, margins),
+        Ok(DeferredExpiryOutcome::Attached)
+    );
+    let first_registration = expect_registered(
+        registry.register(DeferredRequest::new(43, first)),
+        "register provisional expiry",
+    );
+    let mut second = expiring_parts::<u64>(&harness, harness.identity(304), None, None);
+    assert_eq!(
+        second.try_with_expiry(protocol_at, margins),
+        Ok(DeferredExpiryOutcome::Attached)
+    );
+    let second_registration = expect_registered(
+        registry.register(DeferredRequest::new(44, second)),
+        "register active expiry",
+    );
     second_registration.commit().expect("publish active expiry");
 
     tokio::time::advance(Duration::from_secs(5)).await;
@@ -331,15 +397,16 @@ async fn deferred_expiry_session_close_between_scan_and_claim_wins_deterministic
     let protocol_at = tokio::time::Instant::now() + Duration::from_secs(5);
     let parts = expiring_parts::<u64>(&harness, harness.identity(305), None, Some(&cleanup));
     let state = parts.response_state();
-    let parts = parts
-        .try_with_expiry(
+    let mut parts = parts;
+    assert_eq!(
+        parts.try_with_expiry(
             protocol_at,
             DeferredExpiryMargins::new(Duration::from_secs(1), Duration::from_secs(1)),
-        )
-        .expect("attach raced expiry");
-    let registration = registry
-        .register(DeferredRequest::new(45, parts))
-        .expect("register raced expiry");
+        ),
+        Ok(DeferredExpiryOutcome::Attached)
+    );
+    let registration = registry.register(DeferredRequest::new(45, parts));
+    let registration = expect_registered(registration, "register raced expiry");
     registration.commit().expect("publish raced expiry");
     let close = Arc::clone(&cleanup);
     registry.inner.set_sweep_claim_checkpoint(Box::new(move || {
@@ -368,15 +435,19 @@ async fn shutdown_freezes_parent_over_session_for_ticket_state_and_one_metric() 
     let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
     let parts = parts_with_telemetry::<u64>(&harness, harness.identity(306), telemetry);
     let state = parts.response_state();
-    let registration = registry
-        .register(DeferredRequest::new(46, parts))
-        .expect("register shutdown priority request");
+    let registration = expect_registered(
+        registry.register(DeferredRequest::new(46, parts)),
+        "register shutdown priority request",
+    );
     let id = registration.deferred_id();
     let claim = registry.claim(id, DeferredWakeReason::MessageArrived);
     tokio::pin!(claim);
     tokio::select! {
         biased;
-        result = &mut claim => panic!("provisional claim completed before shutdown: {result:?}"),
+        result = &mut claim => {
+            drop(result);
+            panic!("provisional claim completed before shutdown")
+        },
         () = tokio::task::yield_now() => {}
     }
 
@@ -386,12 +457,10 @@ async fn shutdown_freezes_parent_over_session_for_ticket_state_and_one_metric() 
         registry.shutdown(),
         DeferredRegistryShutdownOutcome::Completed(_)
     ));
-    let error = claim.await.expect_err("shutdown resolves the provisional ticket");
-    assert_eq!(error.kind(), DeferredClaimErrorKind::ParentCancelled);
-    assert_eq!(
-        error.prior_terminal_reason(),
-        Some(crate::dispatch::DeferredTerminalReason::ParentCancelled)
-    );
+    let outcome = claim
+        .await
+        .expect("shutdown resolves the provisional ticket as a normal outcome");
+    assert!(matches!(outcome, DeferredClaimOutcome::ParentCancelled));
     assert_eq!(
         state.terminal_reason(),
         Some(crate::dispatch::DeferredTerminalReason::ParentCancelled)
@@ -415,9 +484,10 @@ async fn assert_owner_sweep_priority(parent: bool, expected: crate::dispatch::De
     let deadline = crate::deadline::RequestDeadline::after(Duration::from_secs(10));
     let parts = expiring_parts::<u64>(&harness, harness.identity(307), Some(deadline), None);
     let state = parts.response_state();
-    let registration = registry
-        .register(DeferredRequest::new(47, parts))
-        .expect("register priority request");
+    let registration = expect_registered(
+        registry.register(DeferredRequest::new(47, parts)),
+        "register priority request",
+    );
     registration.commit().expect("publish priority request");
     if parent {
         harness.parent.cancel();
@@ -522,19 +592,22 @@ async fn delayed_sweep_crossing_long_poll_and_owner_cutoff_chooses_owner() {
     let deadline = crate::deadline::RequestDeadline::after(Duration::from_secs(20));
     let parts = expiring_parts::<u64>(&harness, harness.identity(308), Some(deadline), None);
     let state = parts.response_state();
-    let parts = parts
-        .try_with_expiry(
+    let mut parts = parts;
+    assert_eq!(
+        parts.try_with_expiry(
             now + Duration::from_secs(5),
             DeferredExpiryMargins::new(Duration::from_secs(3), Duration::from_secs(2)),
-        )
-        .expect("attach delayed expiry");
+        ),
+        Ok(DeferredExpiryOutcome::Attached)
+    );
     assert_eq!(
         parts.expiry().expect("expiry policy").kind(),
         DeferredExpiryKind::LongPollTimeout
     );
-    let registration = registry
-        .register(DeferredRequest::new(49, parts))
-        .expect("register delayed expiry");
+    let registration = expect_registered(
+        registry.register(DeferredRequest::new(49, parts)),
+        "register delayed expiry",
+    );
     registration.commit().expect("publish delayed expiry");
 
     tokio::time::advance(Duration::from_secs(15)).await;
@@ -557,15 +630,16 @@ async fn owner_only_claim_marker_uses_canonical_deadline_before_claim_drop() {
     let deadline = crate::deadline::RequestDeadline::after(Duration::from_secs(10));
     let parts = expiring_parts::<u64>(&harness, harness.identity(309), Some(deadline), None);
     let state = parts.response_state();
-    let registration = registry
-        .register(DeferredRequest::new(50, parts))
-        .expect("register owner-only marker");
+    let registration = expect_registered(
+        registry.register(DeferredRequest::new(50, parts)),
+        "register owner-only marker",
+    );
     let id = registration.deferred_id();
     registration.commit().expect("publish owner-only marker");
-    let claimed = registry
-        .claim(id, DeferredWakeReason::MessageArrived)
-        .await
-        .expect("claim before owner deadline");
+    let claimed = expect_claimed(
+        registry.claim(id, DeferredWakeReason::MessageArrived).await,
+        "claim before owner deadline",
+    );
 
     tokio::time::advance(Duration::from_secs(10)).await;
     drop(claimed);

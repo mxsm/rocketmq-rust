@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_transport::api::DeferredExpiryErrorKind;
-
 use super::*;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterErrorKind;
 
@@ -75,7 +73,7 @@ async fn pop_lite_deferred_expiry_attach_after_take_cancels_without_handler_or_f
         .expect("send post-take expiry attachment request");
     assert_eq!(
         observed_rx.recv().await.expect("post-take expiry result"),
-        PopLiteDeferredRegisterErrorKind::Expiry(DeferredExpiryErrorKind::ProtocolAlreadyExpired)
+        PopLiteDeferredRegisterErrorKind::Expiry
     );
     let terminal = service.resource_snapshot();
     assert_eq!(terminal.admission.waiting_count(), 0);

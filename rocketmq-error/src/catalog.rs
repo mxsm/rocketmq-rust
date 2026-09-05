@@ -217,6 +217,96 @@ define_error_catalog! {
             cli: CliExitCode::TEMPORARY_FAILURE,
         },
     }
+    /// A transport request failed with a legacy request or connection timeout.
+    TRANSPORT_REQUEST_TIMEOUT {
+        code: "transport.request.timeout",
+        condition: CanonicalCondition::DeadlineExceeded,
+        public_message: "Transport request timed out",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Backoff,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::SystemBusy,
+            grpc: {
+                payload: GrpcPayloadCode::RequestTimeout,
+                status: GrpcStatusCode::DeadlineExceeded,
+            },
+            http: HttpStatusCode::GATEWAY_TIMEOUT,
+            cli: CliExitCode::TEMPORARY_FAILURE,
+        },
+    }
+    /// Transport server startup failed.
+    TRANSPORT_START_FAILED {
+        code: "transport.start.failed",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Transport server could not be started",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Unavailable,
+            },
+            http: HttpStatusCode::SERVICE_UNAVAILABLE,
+            cli: CliExitCode::UNAVAILABLE,
+        },
+    }
+    /// Transport request dispatch failed.
+    TRANSPORT_DISPATCH_FAILED {
+        code: "transport.dispatch.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Transport request dispatch failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Internal,
+            },
+            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+            cli: CliExitCode::SOFTWARE,
+        },
+    }
+    /// Transport response delivery failed.
+    TRANSPORT_RESPONSE_FAILED {
+        code: "transport.response.failed",
+        condition: CanonicalCondition::Internal,
+        public_message: "Transport response delivery failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::OperatorAction,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Internal,
+            },
+            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
+            cli: CliExitCode::SOFTWARE,
+        },
+    }
+    /// Transport session operation failed.
+    TRANSPORT_SESSION_FAILED {
+        code: "transport.session.failed",
+        condition: CanonicalCondition::Unavailable,
+        public_message: "Transport session operation failed",
+        severity: ErrorSeverity::Error,
+        recovery_hint: RecoveryHint::Backoff,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::SystemError,
+            grpc: {
+                payload: GrpcPayloadCode::InternalError,
+                status: GrpcStatusCode::Unavailable,
+            },
+            http: HttpStatusCode::SERVICE_UNAVAILABLE,
+            cli: CliExitCode::UNAVAILABLE,
+        },
+    }
     /// Storage lifecycle operation attempted before startup completed.
     STORAGE_LIFECYCLE_NOT_STARTED {
         code: "storage.lifecycle.not_started",

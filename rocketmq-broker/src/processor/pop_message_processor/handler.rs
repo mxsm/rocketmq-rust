@@ -32,12 +32,11 @@ use rocketmq_store::BrokerReadWriteStore;
 use rocketmq_transport::api::command_from_error_with_factory_remark_and_opaque;
 use rocketmq_transport::api::internal_error_with_factory_and_opaque;
 use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
-use rocketmq_transport::api::DeferredAdmissionAcquireErrorKind;
+use rocketmq_transport::api::DeferredResponderOutcome;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
-use rocketmq_transport::api::TakeDeferredResponderError;
 #[cfg(feature = "rocksdb_store")]
 use tracing::error;
 use tracing::warn;
@@ -422,9 +421,7 @@ where
                 head.set_code_ref(ResponseCode::PollingFull);
                 BrokerResponseParts::command(head)?.into_handler_outcome()
             }
-            PopDeferredPrepareError::Admission(error)
-                if !matches!(error.kind(), DeferredAdmissionAcquireErrorKind::RetainedSizeOverflow) =>
-            {
+            PopDeferredPrepareError::Admission(_) => {
                 head.set_code_ref(ResponseCode::PollingFull);
                 BrokerResponseParts::command(head)?.into_handler_outcome()
             }
@@ -438,7 +435,7 @@ where
             PopDeferredPrepareError::InvalidExpiryMargins
             | PopDeferredPrepareError::RetainedSizeOverflow
             | PopDeferredPrepareError::Index(_)
-            | PopDeferredPrepareError::Admission(_) => {
+            | PopDeferredPrepareError::Contract(_) => {
                 self.internal_reply("the deferred POP request could not be prepared", 0)
             }
         }
@@ -454,15 +451,44 @@ where
                 ResponseCode::ServiceNotAvailable,
                 "the deferred POP service is unavailable",
             ),
-            PopDeferredRegisterError::Responder(TakeDeferredResponderError::OneWayRequest) => {
+            PopDeferredRegisterError::ProvenanceMismatch => {
+                self.internal_reply("the deferred POP request could not be registered", head.opaque())
+            }
+            PopDeferredRegisterError::Responder(DeferredResponderOutcome::OneWayRequest) => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
                 BrokerResponseParts::command(head)?.into_handler_outcome()
             }
-            PopDeferredRegisterError::Responder(TakeDeferredResponderError::Unavailable) => self.reply_with_code(
+            PopDeferredRegisterError::Responder(DeferredResponderOutcome::Unavailable) => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "a deferred POP responder is unavailable",
             ),
-            error => Err(RocketMQError::internal("register deferred POP request", error)),
+            PopDeferredRegisterError::Responder(
+                DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
+            ) => self.internal_reply("the deferred POP request could not be registered", head.opaque()),
+            PopDeferredRegisterError::Responder(DeferredResponderOutcome::Taken(responder)) => {
+                drop(responder);
+                self.internal_reply("the deferred POP request could not be registered", head.opaque())
+            }
+            PopDeferredRegisterError::Expiry { outcome: _, parts } => {
+                drop(parts);
+                self.internal_reply("the deferred POP request could not be registered", head.opaque())
+            }
+            PopDeferredRegisterError::RegistryRejected => {
+                self.internal_reply("the deferred POP request could not be registered", head.opaque())
+            }
+            PopDeferredRegisterError::RegistryIdentityExhausted => {
+                self.internal_reply("the deferred POP request exceeded registry capacity", head.opaque())
+            }
+            PopDeferredRegisterError::RegistryContract(violation) => {
+                Err(RocketMQError::internal("register deferred POP request", violation))
+            }
+            PopDeferredRegisterError::RegistryOperational(error) => {
+                Err(RocketMQError::internal("register deferred POP request", error))
+            }
+            PopDeferredRegisterError::Contract { violation, parts } => {
+                drop(parts);
+                Err(RocketMQError::internal("register deferred POP request", violation))
+            }
         }
     }
 

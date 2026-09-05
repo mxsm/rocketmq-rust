@@ -17,6 +17,17 @@ use super::*;
 #[path = "network/deferred.rs"]
 mod deferred;
 
+fn expect_completed(
+    result: Result<ResponseCompletionOutcome, ResponseOperationalFailure>,
+    context: &str,
+) -> ResponseReceipt {
+    match result {
+        Ok(ResponseCompletionOutcome::Completed(receipt)) => receipt,
+        Ok(other) => panic!("{context}: unexpected normal response outcome {other:?}"),
+        Err(error) => panic!("{context}: unexpected operational response failure {error:?}"),
+    }
+}
+
 #[tokio::test]
 async fn network_prepares_and_writes_all_four_bodies_before_issuing_receipts() {
     let mut harness = NetworkHarness::new(
@@ -53,10 +64,10 @@ async fn network_prepares_and_writes_all_four_bodies_before_issuing_receipts() {
         let (control, _parent) = harness.control("network-response-four-bodies-control", None);
         let sink = ResponseSink::network(harness.session.clone(), AdmissionClass::Data, control);
         let flushes_before = harness.flushes.load(Ordering::SeqCst);
-        let receipt = sink
-            .send_response(bind(response, owner, 1_001 + index as i32))
-            .await
-            .expect("network response should complete through writer");
+        let receipt = expect_completed(
+            sink.send_response(bind(response, owner, 1_001 + index as i32)).await,
+            "network response should complete through writer",
+        );
         assert_eq!(receipt.request_id().owner_id(), owner);
         assert_eq!(receipt.disposition(), ResponseDisposition::TransportWritten);
         assert!(harness.flushes.load(Ordering::SeqCst) > flushes_before);
@@ -91,7 +102,7 @@ async fn network_flush_failure_reports_exact_progress_and_never_issues_or_retrie
         .expect_err("flush failure must prevent a receipt");
     assert!(matches!(
         error,
-        ResponseError::Transport {
+        ResponseOperationalFailure::Transport {
             progress: WriteProgress::PossiblyPartial,
             ..
         }
@@ -104,11 +115,11 @@ async fn network_flush_failure_reports_exact_progress_and_never_issues_or_retrie
                 1_118,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::PossiblyPartial
             }
-        })
+        ))
     ));
     let frames = harness.close_and_collect_frames().await;
     assert_eq!(frames.len(), 1, "flush failure must write exactly one frame");
@@ -147,7 +158,7 @@ async fn network_rejects_pre_encode_stops_and_preserves_typed_encode_failures() 
     .expect("remoting response");
     assert!(matches!(
         sink.send_response(bind(response, 805, 1_005)).await,
-        Err(ResponseError::DeadlineExceeded)
+        Ok(ResponseCompletionOutcome::DeadlineExpired)
     ));
     assert_eq!(encodes.load(Ordering::SeqCst), 0);
 
@@ -161,7 +172,7 @@ async fn network_rejects_pre_encode_stops_and_preserves_typed_encode_failures() 
         .send_response(bind(response, 806, 1_006))
         .await
         .expect_err("zero header limit should reject encoding");
-    let ResponseError::Encode { source } = error else {
+    let ResponseOperationalFailure::Encode { source } = error else {
         panic!("encoding failure should preserve its typed source");
     };
     assert_eq!(source.kind().code().as_str(), "SERIALIZATION_FAILED");
@@ -216,14 +227,14 @@ async fn network_rechecks_control_after_encoding_without_retrying_the_encoder() 
 
     assert!(matches!(
         send.await.expect("response send task"),
-        Err(ResponseError::Cancelled)
+        Ok(ResponseCompletionOutcome::Cancelled)
     ));
     assert_eq!(encodes.load(Ordering::SeqCst), 1);
     assert!(matches!(
         duplicate.await.expect("duplicate response task"),
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Cancelled
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Cancelled
+        ))
     ));
 
     harness.shutdown().await;
@@ -248,7 +259,7 @@ async fn network_queue_rejection_is_not_started_and_drops_a_file_lease_once() {
 
     assert!(matches!(
         sink.send_response(bind(response, 809, 1_009)).await,
-        Err(ResponseError::QueueSaturated)
+        Ok(ResponseCompletionOutcome::QueueSaturated)
     ));
     assert!(matches!(
         duplicate
@@ -258,11 +269,11 @@ async fn network_queue_rejection_is_not_started_and_drops_a_file_lease_once() {
                 1_010,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
-        })
+        ))
     ));
     assert_eq!(accesses.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
@@ -290,7 +301,7 @@ async fn network_preserves_session_close_before_and_after_encoding() {
     .expect("remoting response");
     assert!(matches!(
         sink.send_response(bind(response, 819, 1_112)).await,
-        Err(ResponseError::SessionClosed)
+        Ok(ResponseCompletionOutcome::SessionClosed)
     ));
     assert_eq!(encodes.load(Ordering::SeqCst), 0);
     assert!(matches!(
@@ -301,9 +312,9 @@ async fn network_preserves_session_close_before_and_after_encoding() {
                 1_113,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Closed
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Closed
+        ))
     ));
     pre_encode.shutdown().await;
 
@@ -333,7 +344,7 @@ async fn network_preserves_session_close_before_and_after_encoding() {
     post_encode.session.abort();
     assert!(matches!(
         send.await.expect("response send task"),
-        Err(ResponseError::SessionClosed)
+        Ok(ResponseCompletionOutcome::SessionClosed)
     ));
     assert_eq!(encodes.load(Ordering::SeqCst), 1);
     post_encode.shutdown().await;
@@ -393,11 +404,11 @@ async fn dropping_a_waiting_network_send_cancels_before_start_and_writes_no_resp
                 1_103,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
-        })
+        ))
     ));
     resume.notify_one();
     blocker.await.expect("blocker task should complete");
@@ -460,11 +471,11 @@ async fn dropping_a_writer_claimed_network_send_is_terminally_possibly_partial_a
                 1_105,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::PossiblyPartial
             }
-        })
+        ))
     ));
     resume.notify_one();
     let received = harness.receive().await;
@@ -509,7 +520,7 @@ async fn session_close_after_writer_claim_but_before_start_stays_closed_and_writ
     harness.session.abort();
     assert!(matches!(
         send.await.expect("response send task"),
-        Err(ResponseError::SessionClosed)
+        Ok(ResponseCompletionOutcome::SessionClosed)
     ));
     let duplicate_result = duplicate
         .send_response(bind(
@@ -521,9 +532,9 @@ async fn session_close_after_writer_claim_but_before_start_stays_closed_and_writ
     assert!(
         matches!(
             duplicate_result,
-            Err(ResponseError::AlreadyCompleted {
-                state: ResponseTerminalState::Closed
-            })
+            Ok(ResponseCompletionOutcome::AlreadyCompleted(
+                ResponseTerminalState::Closed
+            ))
         ),
         "unexpected duplicate result: {duplicate_result:?}"
     );
@@ -577,7 +588,7 @@ async fn session_close_after_writer_start_reports_possibly_partial_and_never_ret
 
     assert!(matches!(
         send.await.expect("response send task"),
-        Err(ResponseError::Transport {
+        Err(ResponseOperationalFailure::Transport {
             progress: WriteProgress::PossiblyPartial,
             ..
         })
@@ -590,11 +601,11 @@ async fn session_close_after_writer_start_reports_possibly_partial_and_never_ret
                 1_120,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::PossiblyPartial
             }
-        })
+        ))
     ));
     let observed = tokio::time::timeout(Duration::from_millis(25), harness.peer.receive_command()).await;
     assert!(
@@ -642,7 +653,7 @@ async fn cancelling_a_waiting_network_send_preserves_the_reason_without_deadline
     parent.cancel();
     assert!(matches!(
         send.await.expect("response send task"),
-        Err(ResponseError::Cancelled)
+        Ok(ResponseCompletionOutcome::Cancelled)
     ));
     assert!(matches!(
         duplicate
@@ -652,9 +663,9 @@ async fn cancelling_a_waiting_network_send_preserves_the_reason_without_deadline
                 1_108,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Cancelled
-        })
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Cancelled
+        ))
     ));
     assert_eq!(accesses.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
@@ -708,7 +719,7 @@ async fn deadline_of_a_waiting_network_send_is_not_started_and_writes_no_respons
     tokio::time::advance(Duration::from_secs(1)).await;
     assert!(matches!(
         send.await.expect("response send task"),
-        Err(ResponseError::DeadlineExceeded)
+        Ok(ResponseCompletionOutcome::DeadlineExpired)
     ));
     assert!(matches!(
         duplicate
@@ -718,11 +729,11 @@ async fn deadline_of_a_waiting_network_send_is_not_started_and_writes_no_respons
                 1_111,
             ))
             .await,
-        Err(ResponseError::AlreadyCompleted {
-            state: ResponseTerminalState::Failed {
+        Ok(ResponseCompletionOutcome::AlreadyCompleted(
+            ResponseTerminalState::Failed {
                 progress: WriteProgress::NotStarted
             }
-        })
+        ))
     ));
 
     resume.notify_one();

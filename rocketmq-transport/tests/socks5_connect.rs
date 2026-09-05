@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![cfg(feature = "socks")]
+
 use std::net::IpAddr;
+#[cfg(feature = "tls")]
 use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::SocksProxyConfig;
+#[cfg(feature = "tls")]
 use rocketmq_transport::api::TlsConfig;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -146,6 +150,7 @@ fn proxy_rules_are_validated_and_choose_the_most_specific_match() {
     assert!(partial_auth.to_string().contains("username and password"));
 }
 
+#[cfg(feature = "tls")]
 #[tokio::test]
 async fn tls_over_socks_uses_the_original_business_host_as_sni() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind fake SOCKS server");

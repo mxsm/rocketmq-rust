@@ -511,6 +511,7 @@ impl OneShotTransportClient {
                 estimated_connection_retained_bytes(),
                 AdmissionClass::Data,
             )
+            .into_result()
             .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
         let _inflight_permit = self
             .admission
@@ -520,6 +521,7 @@ impl OneShotTransportClient {
                 retained_bytes,
                 AdmissionClass::Data,
             )
+            .into_result()
             .map_err(|error| RocketMQError::network_connection_failed(address.to_string(), error.to_string()))?;
 
         let owner = self.pending.new_owner();

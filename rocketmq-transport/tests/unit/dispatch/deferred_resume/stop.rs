@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::dispatch::DeferredTerminalReason;
 
 #[tokio::test(start_paused = true)]
 async fn owner_cutoff_is_live_early_and_terminal_at_equal_and_late_instants() {
@@ -94,30 +95,31 @@ async fn owner_cutoff_cancels_an_ordered_waiter_before_processor_execution() {
     first.release_wait_permit();
     second.release_wait_permit();
     let route = executor.deferred_resume_executor();
-    assert!(route.try_execute_resume(Arc::clone(&first)).is_ok());
+    let first_submitted = route.try_execute_resume(Arc::clone(&first));
+    assert!(is_submitted(&first_submitted));
     drop(first);
     first_entered.notified().await;
-    assert!(route.try_execute_resume(Arc::clone(&second)).is_ok());
+    let second_submitted = route.try_execute_resume(Arc::clone(&second));
+    assert!(is_submitted(&second_submitted));
     drop(second);
     second_before_ordering.notified().await;
 
     tokio::time::advance(Duration::from_millis(10)).await;
-    let error = second_completion
-        .wait()
-        .await
-        .expect_err("owner cutoff terminalizes the ordered waiter");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::ExecutorClosing);
     assert_eq!(
-        error.prior_terminal_reason(),
-        Some(DeferredTerminalReason::OwnerDeadline)
+        second_completion
+            .wait()
+            .await
+            .expect("owner cutoff is a normal cancellation outcome"),
+        DeferredResumeOutcome::Cancelled
     );
     assert_eq!(first_executions.load(Ordering::Acquire), 1);
     assert_eq!(second_executions.load(Ordering::Acquire), 0);
     release_first.notify_one();
-    assert_eq!(
-        first_completion.wait().await.expect_err("probe response").kind(),
-        DeferredResumeErrorKind::Response
-    );
+    let error = first_completion
+        .wait()
+        .await
+        .expect_err("probe work terminates operationally");
+    assert_eq!(error.descriptor(), &rocketmq_error::TRANSPORT_DISPATCH_FAILED);
     let report = executor
         .drain_until(ShutdownDeadline::after(Duration::from_secs(1)))
         .await;

@@ -207,10 +207,13 @@ async fn pop_lite_deferred_requeue_stays_affine_until_canonical_writer_terminal(
     );
     release_writer.wait();
 
-    receipt_rx
-        .await
-        .expect("terminal-owned receipt channel")
-        .expect("terminal-owned canonical response");
+    assert!(matches!(
+        receipt_rx
+            .await
+            .expect("terminal-owned receipt channel")
+            .expect("terminal-owned canonical response"),
+        rocketmq_transport::api::DeferredResumeOutcome::Completed(_)
+    ));
     let response = client
         .receive_command()
         .await
@@ -334,11 +337,11 @@ async fn pop_lite_deferred_staged_requeue_rolls_back_once_when_session_closes_be
         release_handler_tx.send(()).is_err(),
         "session close drops the staged handler before it can produce a plan"
     );
-    let error = receipt_rx
+    let outcome = receipt_rx
         .await
         .expect("staged-cancel receipt channel")
-        .expect_err("closed session rejects staged PopLite response");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::SessionClosed);
+        .expect("closed session is a normal deferred resume outcome");
+    assert!(matches!(outcome, DeferredResumeOutcome::SessionClosed));
     let terminal = service.resource_snapshot();
     assert_eq!(terminal.event_reservations.events, 0);
     assert_eq!(terminal.event_reservations.retained_bytes, 0);
@@ -421,16 +424,11 @@ async fn pop_lite_deferred_parent_shutdown_settles_staged_requeue_without_a_fram
     let _ = service.shutdown();
     release_writer.wait();
 
-    let error = receipt_rx
+    let outcome = receipt_rx
         .await
         .expect("parent-cancel receipt channel")
-        .expect_err("parent shutdown rejects the staged response");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::Cancelled);
-    assert_eq!(
-        error.prior_terminal_reason(),
-        Some(DeferredTerminalReason::ParentCancelled)
-    );
-    assert_eq!(error.write_progress(), None);
+        .expect("parent cancellation is a normal deferred resume outcome");
+    assert!(matches!(outcome, DeferredResumeOutcome::Cancelled));
     let terminal = service.resource_snapshot();
     assert_eq!(terminal.event_reservations.events, 0);
     assert_eq!(terminal.active_client_gates, 0);
@@ -544,11 +542,11 @@ async fn pop_lite_deferred_session_close_rolls_back_claimed_events_and_gate() {
         release_handler_tx.send(()).is_err(),
         "session close cancels the handler before event commit"
     );
-    let error = receipt_rx
+    let outcome = receipt_rx
         .await
         .expect("session-close PopLite receipt channel")
-        .expect_err("closed session rejects the accepted PopLite response");
-    assert_eq!(error.kind(), DeferredResumeErrorKind::SessionClosed);
+        .expect("closed session is a normal deferred resume outcome");
+    assert!(matches!(outcome, DeferredResumeOutcome::SessionClosed));
     assert_eq!(body_drops.load(Ordering::SeqCst), 1);
     assert_eq!(dispatcher.pending_events(&client_id), vec![first, second]);
     assert_eq!(dispatcher.budget_snapshot().current_count, 2);

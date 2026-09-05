@@ -38,31 +38,31 @@ use rocketmq_runtime::TaskId;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_transport::api::ClaimedDeferred;
 use rocketmq_transport::api::DeferredAdmission;
-use rocketmq_transport::api::DeferredAdmissionAcquireError;
+use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 use rocketmq_transport::api::DeferredAdmissionSnapshot;
-use rocketmq_transport::api::DeferredClaimError;
-use rocketmq_transport::api::DeferredClaimErrorKind;
+use rocketmq_transport::api::DeferredClaimOutcome;
 use rocketmq_transport::api::DeferredExpiryBatch;
 use rocketmq_transport::api::DeferredExpiryBatchStats;
-use rocketmq_transport::api::DeferredExpiryError;
-use rocketmq_transport::api::DeferredExpiryErrorKind;
 use rocketmq_transport::api::DeferredExpiryMargins;
+use rocketmq_transport::api::DeferredExpiryOutcome;
 use rocketmq_transport::api::DeferredId;
 use rocketmq_transport::api::DeferredParts;
 use rocketmq_transport::api::DeferredRegistration;
 use rocketmq_transport::api::DeferredRegistry;
-use rocketmq_transport::api::DeferredRegistryError;
-use rocketmq_transport::api::DeferredRegistryErrorKind;
+use rocketmq_transport::api::DeferredRegistryOutcome;
+use rocketmq_transport::api::DeferredRegistryRecovery;
 use rocketmq_transport::api::DeferredRegistryShutdownOutcome;
-use rocketmq_transport::api::DeferredResumeError;
+use rocketmq_transport::api::DeferredResponderOutcome;
+use rocketmq_transport::api::DeferredResumeOutcome;
 use rocketmq_transport::api::DeferredResumeRetainedSize;
+use rocketmq_transport::api::DeferredResumeSubmitOutcome;
 use rocketmq_transport::api::DeferredRetainedSizeParts;
 use rocketmq_transport::api::DeferredWakeReason;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrigin;
-use rocketmq_transport::api::ResponseReceipt;
-use rocketmq_transport::api::TakeDeferredResponderError;
+use rocketmq_transport::api::TransportContractViolation;
+use rocketmq_transport::api::TransportError;
 
 use super::deadline::NotificationWaitDeadline;
 use super::deadline::NotificationWaitDeadlineError;
@@ -248,16 +248,16 @@ impl NotificationDeferredService {
                 .with_secondary_index_bytes(NotificationCriteriaIndex::<DeferredId>::retained_bytes_per_entry())
                 .with_metadata_bytes(retained.metadata_bytes),
         )
-        .map_err(NotificationDeferredPrepareError::Admission)?;
+        .map_err(NotificationDeferredPrepareError::Contract)?;
         let key = NotificationCriteriaKey::from_parts(request.topic(), request.consumer_group(), request.queue_id());
         let reservation = self
             .index
             .reserve_at(key, monotonic_now)
             .map_err(NotificationDeferredPrepareError::Index)?;
-        let permit = self
-            .admission
-            .try_reserve(retained_size)
-            .map_err(NotificationDeferredPrepareError::Admission)?;
+        let permit = match self.admission.try_reserve(retained_size) {
+            DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            outcome => return Err(NotificationDeferredPrepareError::Admission(outcome)),
+        };
         let observation = PreparedObservation::new(Arc::clone(&self.prepared));
         let prepared = PreparedNotificationRegistration {
             request,
@@ -290,9 +290,10 @@ impl NotificationDeferredService {
         if self.closed.load(Ordering::Acquire) {
             return Err(NotificationDeferredRegisterError::ServiceClosedBeforeTake);
         }
-        let responder = request
-            .take_deferred_responder()
-            .map_err(NotificationDeferredRegisterError::Responder)?;
+        let responder = match request.take_deferred_responder() {
+            DeferredResponderOutcome::Taken(responder) => responder,
+            outcome => return Err(NotificationDeferredRegisterError::Responder(outcome)),
+        };
         #[cfg(test)]
         let register_fault = self.register_fault.swap(0, Ordering::AcqRel);
         #[cfg(test)]
@@ -322,21 +323,48 @@ impl NotificationDeferredService {
         };
         #[cfg(not(test))]
         let protocol_at = deadline.protocol_at();
-        let parts = DeferredParts::new(responder, permit)
-            .try_with_expiry(protocol_at, self.expiry_margins)
-            .map_err(NotificationDeferredRegisterError::Expiry)?;
+        let mut parts = DeferredParts::new(responder, permit);
+        match parts.try_with_expiry(protocol_at, self.expiry_margins) {
+            Ok(DeferredExpiryOutcome::Attached) => {}
+            Ok(outcome) => return Err(NotificationDeferredRegisterError::Expiry { outcome, parts }),
+            Err(violation) => {
+                return Err(NotificationDeferredRegisterError::Contract { violation, parts });
+            }
+        };
         #[cfg(test)]
         if register_fault == REGISTER_FAULT_BUILDER_AFTER_TAKE {
             self.closed.store(true, Ordering::Release);
             let _ = self.registry.shutdown();
         }
-        let registration = self
-            .registry
-            .register_with(parts, move |id| {
-                let index_lease = reservation.publish(id, deadline, Arc::clone(&criteria));
-                Ok::<_, Infallible>(ResumeNotification::new(request, criteria, deadline, index_lease))
-            })
-            .map_err(NotificationDeferredRegisterError::Registry);
+        let registration = match self.registry.register_with(parts, move |id| {
+            let index_lease = reservation.publish(id, deadline, Arc::clone(&criteria));
+            Ok::<_, Infallible>(ResumeNotification::new(request, criteria, deadline, index_lease))
+        }) {
+            DeferredRegistryOutcome::Registered(registration) => Ok(registration),
+            DeferredRegistryOutcome::DuplicateRequest(recovery) => {
+                release_deferred_registry_recovery(recovery);
+                Err(NotificationDeferredRegisterError::RegistryRejected)
+            }
+            DeferredRegistryOutcome::IdentityExhausted(recovery) => {
+                release_deferred_registry_recovery(recovery);
+                Err(NotificationDeferredRegisterError::RegistryIdentityExhausted)
+            }
+            DeferredRegistryOutcome::ParentCancelled
+            | DeferredRegistryOutcome::SessionClosed
+            | DeferredRegistryOutcome::DeadlineExpired => Err(NotificationDeferredRegisterError::RegistryRejected),
+            DeferredRegistryOutcome::BuilderRejected { error, parts } => {
+                drop(parts);
+                match error {}
+            }
+            DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
+                release_deferred_registry_recovery(recovery);
+                Err(NotificationDeferredRegisterError::RegistryContract(violation))
+            }
+            DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
+                release_deferred_registry_recovery(recovery);
+                Err(NotificationDeferredRegisterError::RegistryOperational(error))
+            }
+        };
         drop(observation);
         registration
     }
@@ -409,9 +437,9 @@ impl NotificationDeferredService {
         for candidate in candidates {
             let id = candidate.id();
             match self.claim(id, DeferredWakeReason::MessageArrived).await {
-                Ok(claim) => claims.push(claim),
-                Err(error) if is_candidate_race(error.kind()) => {}
-                Err(_) => {}
+                Ok(DeferredClaimOutcome::Claimed(claim)) => claims.push(claim),
+                Ok(outcome) if is_candidate_race(&outcome) => {}
+                Ok(_) | Err(_) => {}
             }
             drop(candidate);
         }
@@ -427,16 +455,20 @@ impl NotificationDeferredService {
         &self,
         id: DeferredId,
         reason: DeferredWakeReason,
-    ) -> Result<ClaimedDeferred<ResumeNotification>, DeferredClaimError> {
-        let mut claimed = self.registry.claim(id, reason).await?;
-        drop(claimed.resume_data_mut().take_index_lease());
-        Ok(claimed)
+    ) -> Result<DeferredClaimOutcome<ResumeNotification>, TransportError> {
+        match self.registry.claim(id, reason).await? {
+            DeferredClaimOutcome::Claimed(mut claimed) => {
+                drop(claimed.resume_data_mut().take_index_lease());
+                Ok(DeferredClaimOutcome::Claimed(claimed))
+            }
+            outcome => Ok(outcome),
+        }
     }
 
     pub(crate) async fn claim_arrival_candidate(
         &self,
         candidate: NotificationCandidateReservation,
-    ) -> Result<ClaimedDeferred<ResumeNotification>, DeferredClaimError> {
+    ) -> Result<DeferredClaimOutcome<ResumeNotification>, TransportError> {
         let result = self.claim(candidate.id(), DeferredWakeReason::MessageArrived).await;
         drop(candidate);
         result
@@ -673,7 +705,7 @@ impl NotificationDeferredService {
         claimed: ClaimedDeferred<ResumeNotification>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<ResponseReceipt, DeferredResumeError>
+    ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumeNotification, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
@@ -698,7 +730,7 @@ impl NotificationDeferredService {
         claimed: ClaimedDeferred<ResumeNotification>,
         handler_retained: DeferredResumeRetainedSize,
         handler: F,
-    ) -> Result<(), DeferredResumeError>
+    ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumeNotification, DeferredWakeReason) -> Fut + Send + 'static,
         Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
@@ -1033,6 +1065,7 @@ pub(crate) enum NotificationDeferredPrepareErrorKind {
     Deadline,
     Index,
     Admission,
+    Contract,
 }
 
 pub(crate) enum NotificationDeferredPrepareError {
@@ -1045,7 +1078,8 @@ pub(crate) enum NotificationDeferredPrepareError {
     RetainedSizeOverflow,
     Deadline(NotificationWaitDeadlineError),
     Index(NotificationIndexError),
-    Admission(DeferredAdmissionAcquireError),
+    Admission(DeferredAdmissionAcquireOutcome),
+    Contract(TransportContractViolation),
 }
 
 impl NotificationDeferredPrepareError {
@@ -1062,6 +1096,7 @@ impl NotificationDeferredPrepareError {
             Self::Deadline(_) => NotificationDeferredPrepareErrorKind::Deadline,
             Self::Index(_) => NotificationDeferredPrepareErrorKind::Index,
             Self::Admission(_) => NotificationDeferredPrepareErrorKind::Admission,
+            Self::Contract(_) => NotificationDeferredPrepareErrorKind::Contract,
         }
     }
 }
@@ -1089,17 +1124,40 @@ pub(crate) enum NotificationDeferredRegisterErrorKind {
     ServiceClosedAfterTake,
     ProvenanceMismatch,
     Responder,
-    Expiry(DeferredExpiryErrorKind),
-    Registry(DeferredRegistryErrorKind),
+    Expiry,
+    Registry,
+    Contract,
 }
 
 pub(crate) enum NotificationDeferredRegisterError {
     ServiceClosedBeforeTake,
     ServiceClosedAfterTake,
     ProvenanceMismatch,
-    Responder(TakeDeferredResponderError),
-    Expiry(DeferredExpiryError),
-    Registry(DeferredRegistryError<ResumeNotification, Infallible>),
+    Responder(DeferredResponderOutcome),
+    Expiry {
+        outcome: DeferredExpiryOutcome,
+        parts: DeferredParts,
+    },
+    RegistryRejected,
+    RegistryIdentityExhausted,
+    RegistryContract(TransportContractViolation),
+    RegistryOperational(TransportError),
+    Contract {
+        violation: TransportContractViolation,
+        parts: DeferredParts,
+    },
+}
+
+fn release_deferred_registry_recovery<R, F>(recovery: DeferredRegistryRecovery<R, F>) {
+    match recovery {
+        DeferredRegistryRecovery::None => {}
+        DeferredRegistryRecovery::Request(request) => drop(request),
+        DeferredRegistryRecovery::Parts(parts) => drop(parts),
+        DeferredRegistryRecovery::Builder { builder, parts } => {
+            drop(builder);
+            drop(parts);
+        }
+    }
 }
 
 impl NotificationDeferredRegisterError {
@@ -1110,8 +1168,12 @@ impl NotificationDeferredRegisterError {
             Self::ServiceClosedAfterTake => NotificationDeferredRegisterErrorKind::ServiceClosedAfterTake,
             Self::ProvenanceMismatch => NotificationDeferredRegisterErrorKind::ProvenanceMismatch,
             Self::Responder(_) => NotificationDeferredRegisterErrorKind::Responder,
-            Self::Expiry(error) => NotificationDeferredRegisterErrorKind::Expiry(error.kind()),
-            Self::Registry(error) => NotificationDeferredRegisterErrorKind::Registry(error.kind()),
+            Self::Expiry { .. } => NotificationDeferredRegisterErrorKind::Expiry,
+            Self::RegistryRejected
+            | Self::RegistryIdentityExhausted
+            | Self::RegistryContract(_)
+            | Self::RegistryOperational(_) => NotificationDeferredRegisterErrorKind::Registry,
+            Self::Contract { .. } => NotificationDeferredRegisterErrorKind::Contract,
         }
     }
 }
@@ -1135,15 +1197,33 @@ impl fmt::Display for NotificationDeferredRegisterError {
     }
 }
 
-impl Error for NotificationDeferredRegisterError {}
+impl Error for NotificationDeferredRegisterError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::RegistryContract(violation) => Some(violation),
+            Self::RegistryOperational(error) => Some(error),
+            Self::Contract { violation, .. } => Some(violation),
+            Self::ServiceClosedBeforeTake
+            | Self::ServiceClosedAfterTake
+            | Self::ProvenanceMismatch
+            | Self::Responder(_)
+            | Self::Expiry { .. }
+            | Self::RegistryRejected
+            | Self::RegistryIdentityExhausted => None,
+        }
+    }
+}
 
-const fn is_candidate_race(kind: DeferredClaimErrorKind) -> bool {
+const fn is_candidate_race<R>(outcome: &DeferredClaimOutcome<R>) -> bool
+where
+    R: Send + 'static,
+{
     matches!(
-        kind,
-        DeferredClaimErrorKind::NotFound
-            | DeferredClaimErrorKind::AlreadyClaimed
-            | DeferredClaimErrorKind::AlreadyCompleted
-            | DeferredClaimErrorKind::SessionClosed
-            | DeferredClaimErrorKind::DeadlineExpired
+        outcome,
+        DeferredClaimOutcome::NotFound
+            | DeferredClaimOutcome::AlreadyClaimed
+            | DeferredClaimOutcome::AlreadyCompleted
+            | DeferredClaimOutcome::SessionClosed
+            | DeferredClaimOutcome::DeadlineExpired
     )
 }

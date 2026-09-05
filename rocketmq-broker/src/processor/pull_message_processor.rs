@@ -859,12 +859,67 @@ where
                     Ok(registration) => Ok(HandlerOutcome::Deferred(registration)),
                     Err(error) => match error.into_pre_take_fallback() {
                         Ok(fallback) => Ok(HandlerOutcome::Reply(fallback)),
-                        Err(error) => Err(rocketmq_error::RocketMQError::internal(
-                            "register deferred Pull request",
-                            error,
-                        )),
+                        Err(error) => self
+                            .register_deferred_pull_error_outcome(request.original_identity().original_opaque(), error),
                     },
                 }
+            }
+        }
+    }
+
+    fn register_deferred_pull_error_outcome(
+        &self,
+        opaque: i32,
+        error: crate::long_polling::pull_deferred::PullDeferredRegisterError,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        use crate::long_polling::pull_deferred::PullDeferredRegisterError;
+
+        match error {
+            PullDeferredRegisterError::PreTake {
+                prepared, source: _, ..
+            } => {
+                let fallback = (*prepared).into_candidate().into_fallback();
+                Ok(HandlerOutcome::Reply(fallback))
+            }
+            PullDeferredRegisterError::Expiry { outcome: _, parts } => {
+                drop(parts);
+                BrokerResponseParts::command(rocketmq_transport::api::internal_error_with_factory_and_opaque(
+                    &self.context.command_factory,
+                    opaque,
+                    "the deferred Pull request could not be registered",
+                ))?
+                .into_handler_outcome()
+            }
+            PullDeferredRegisterError::RegistryRejected => {
+                BrokerResponseParts::command(rocketmq_transport::api::internal_error_with_factory_and_opaque(
+                    &self.context.command_factory,
+                    opaque,
+                    "the deferred Pull request could not be registered",
+                ))?
+                .into_handler_outcome()
+            }
+            PullDeferredRegisterError::RegistryIdentityExhausted => {
+                BrokerResponseParts::command(rocketmq_transport::api::internal_error_with_factory_and_opaque(
+                    &self.context.command_factory,
+                    opaque,
+                    "the deferred Pull request exceeded registry capacity",
+                ))?
+                .into_handler_outcome()
+            }
+            PullDeferredRegisterError::RegistryContract(violation) => Err(rocketmq_error::RocketMQError::internal(
+                "register deferred Pull request",
+                violation,
+            )),
+            PullDeferredRegisterError::RegistryOperational(error) => Err(rocketmq_error::RocketMQError::internal(
+                "register deferred Pull request",
+                error,
+            )),
+            PullDeferredRegisterError::Contract { violation, parts } => {
+                drop(parts);
+                Err(rocketmq_error::RocketMQError::internal(
+                    "register deferred Pull request",
+                    violation,
+                ))
             }
         }
     }

@@ -16,15 +16,14 @@
 
 use std::fmt;
 
-use rocketmq_error::RocketMQError;
+use crate::contract::TransportContractViolation;
 
 use super::DeferredRegistration;
-use super::DeferredResponder;
+use super::DeferredResponderOutcome;
 use super::DeferredResponseSeed;
 use super::OriginalRequestIdentity;
 use super::RemotingResponse;
 use super::RequestId;
-use super::TakeDeferredResponderError;
 
 mod oneway;
 
@@ -88,45 +87,6 @@ pub enum ProtocolNoResponseReason {
     NotificationHandled,
 }
 
-impl ProtocolNoResponseReason {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::CallbackHandled => "callback_handled",
-            Self::NotificationHandled => "notification_handled",
-        }
-    }
-}
-
-/// Failure to create a protocol no-response marker for an inbound request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum ProtocolNoResponseError {
-    /// One-way handling is an ingress property and cannot be claimed as a handler outcome.
-    #[error("protocol no-response is unavailable for one-way requests")]
-    OneWayRequest,
-    /// The original request code does not permit the requested closed reason.
-    #[error("protocol no-response reason {reason:?} is unsupported for request code {request_code}")]
-    Unsupported {
-        /// Original raw request code captured at ingress.
-        request_code: i32,
-        /// Closed reason rejected by the audited protocol policy.
-        reason: ProtocolNoResponseReason,
-    },
-}
-
-impl From<ProtocolNoResponseError> for RocketMQError {
-    fn from(error: ProtocolNoResponseError) -> Self {
-        match error {
-            ProtocolNoResponseError::OneWayRequest => {
-                Self::illegal_argument("protocol_no_response: category=one_way_request")
-            }
-            ProtocolNoResponseError::Unsupported { request_code, reason } => Self::illegal_argument(format!(
-                "protocol_no_response: category=unsupported, request_code={request_code}, reason={}",
-                reason.as_str()
-            )),
-        }
-    }
-}
-
 /// Request-bound proof that the protocol permits no direct response frame.
 ///
 /// Construct markers with [`crate::api::RemotingRequest::protocol_no_response`].
@@ -162,7 +122,7 @@ impl ProtocolNoResponse {
     pub(super) fn from_original(
         original: OriginalRequestIdentity,
         reason: ProtocolNoResponseReason,
-    ) -> Result<Self, ProtocolNoResponseError> {
+    ) -> Result<Self, TransportContractViolation> {
         validate_protocol_no_response(original, reason)?;
         Ok(Self {
             request_id: original.request_id(),
@@ -204,14 +164,14 @@ impl fmt::Debug for ProtocolNoResponse {
 fn validate_protocol_no_response(
     original: OriginalRequestIdentity,
     reason: ProtocolNoResponseReason,
-) -> Result<(), ProtocolNoResponseError> {
+) -> Result<(), TransportContractViolation> {
     if original.is_one_way() {
-        return Err(ProtocolNoResponseError::OneWayRequest);
+        return Err(TransportContractViolation::ProtocolNoResponseOneWayRequest);
     }
     if protocol_no_response_allowed(original.original_code(), reason) {
         Ok(())
     } else {
-        Err(ProtocolNoResponseError::Unsupported {
+        Err(TransportContractViolation::ProtocolNoResponseUnsupported {
             request_code: original.original_code(),
             reason,
         })
@@ -277,40 +237,37 @@ impl InlineResponseSlot {
     pub(crate) fn mark_deferred_taken(
         &mut self,
         original: OriginalRequestIdentity,
-    ) -> Result<(), HandlerOutcomeContractError> {
+    ) -> Result<(), TransportContractViolation> {
         if original.is_one_way() {
-            return Err(HandlerOutcomeContractError::DeferredUnavailable);
+            return Err(TransportContractViolation::DeferredResponderUnavailable);
         }
         match self.state {
-            InlineResponseState::Open => Err(HandlerOutcomeContractError::DeferredUnavailable),
+            InlineResponseState::Open => Err(TransportContractViolation::DeferredResponderUnavailable),
             InlineResponseState::OpenWithDeferred => {
                 drop(self.deferred_seed.take());
                 self.state = InlineResponseState::DeferredTaken;
                 Ok(())
             }
-            InlineResponseState::DeferredTaken => Err(HandlerOutcomeContractError::DeferredAlreadyTaken),
-            InlineResponseState::Completed => Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted),
+            InlineResponseState::DeferredTaken => Err(TransportContractViolation::DeferredResponderAlreadyTaken),
+            InlineResponseState::Completed => Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted),
         }
     }
 
-    pub(crate) fn take_deferred_responder(
-        &mut self,
-        original: OriginalRequestIdentity,
-    ) -> Result<DeferredResponder, TakeDeferredResponderError> {
+    pub(crate) fn take_deferred_responder(&mut self, original: OriginalRequestIdentity) -> DeferredResponderOutcome {
         if original.is_one_way() {
-            return Err(TakeDeferredResponderError::OneWayRequest);
+            return DeferredResponderOutcome::OneWayRequest;
         }
         match self.state {
-            InlineResponseState::Open => Err(TakeDeferredResponderError::Unavailable),
+            InlineResponseState::Open => DeferredResponderOutcome::Unavailable,
             InlineResponseState::OpenWithDeferred => {
                 let Some(seed) = self.deferred_seed.take() else {
-                    return Err(TakeDeferredResponderError::Unavailable);
+                    return DeferredResponderOutcome::Unavailable;
                 };
                 self.state = InlineResponseState::DeferredTaken;
-                Ok(seed.into_responder(original))
+                DeferredResponderOutcome::Taken(seed.into_responder(original))
             }
-            InlineResponseState::DeferredTaken => Err(TakeDeferredResponderError::AlreadyTaken),
-            InlineResponseState::Completed => Err(TakeDeferredResponderError::OutcomeCompleted),
+            InlineResponseState::DeferredTaken => DeferredResponderOutcome::AlreadyTaken,
+            InlineResponseState::Completed => DeferredResponderOutcome::OutcomeCompleted,
         }
     }
 
@@ -318,32 +275,32 @@ impl InlineResponseSlot {
         &mut self,
         original: OriginalRequestIdentity,
         outcome: HandlerOutcome,
-    ) -> Result<HandlerOutcome, HandlerOutcomeContractError> {
+    ) -> Result<HandlerOutcome, TransportContractViolation> {
         let state = std::mem::replace(&mut self.state, InlineResponseState::Completed);
         drop(self.deferred_seed.take());
         match state {
             InlineResponseState::Open | InlineResponseState::OpenWithDeferred => match outcome {
                 outcome @ HandlerOutcome::Reply(_) => Ok(outcome),
-                HandlerOutcome::Deferred(_) => Err(HandlerOutcomeContractError::DeferredResponderNotTaken),
+                HandlerOutcome::Deferred(_) => Err(TransportContractViolation::DeferredResponderNotTaken),
                 HandlerOutcome::NoReply(marker) => {
                     validate_marker(&marker, original)?;
                     Ok(HandlerOutcome::NoReply(marker))
                 }
             },
             InlineResponseState::DeferredTaken => match outcome {
-                HandlerOutcome::Reply(_) => Err(HandlerOutcomeContractError::ReplyAfterDeferredTaken),
+                HandlerOutcome::Reply(_) => Err(TransportContractViolation::ReplyAfterDeferredTaken),
                 HandlerOutcome::Deferred(registration) => {
                     if registration.request_id() != original.request_id() {
-                        return Err(HandlerOutcomeContractError::DeferredRegistrationRequestMismatch {
+                        return Err(TransportContractViolation::DeferredRegistrationRequestMismatch {
                             expected: original.request_id(),
                             actual: registration.request_id(),
                         });
                     }
                     Ok(HandlerOutcome::Deferred(registration))
                 }
-                HandlerOutcome::NoReply(_) => Err(HandlerOutcomeContractError::NoReplyAfterDeferredTaken),
+                HandlerOutcome::NoReply(_) => Err(TransportContractViolation::NoReplyAfterDeferredTaken),
             },
-            InlineResponseState::Completed => Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted),
+            InlineResponseState::Completed => Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted),
         }
     }
 }
@@ -351,43 +308,17 @@ impl InlineResponseSlot {
 fn validate_marker(
     marker: &ProtocolNoResponse,
     original: OriginalRequestIdentity,
-) -> Result<(), HandlerOutcomeContractError> {
+) -> Result<(), TransportContractViolation> {
     if marker.request_id != original.request_id() || marker.original_code != original.original_code() {
-        return Err(HandlerOutcomeContractError::NoResponseIdentityMismatch);
+        return Err(TransportContractViolation::NoResponseIdentityMismatch);
     }
     if original.is_one_way() || !protocol_no_response_allowed(original.original_code(), marker.reason) {
-        return Err(HandlerOutcomeContractError::NoResponsePolicyMismatch {
+        return Err(TransportContractViolation::NoResponsePolicyMismatch {
             request_code: original.original_code(),
             reason: marker.reason,
         });
     }
     Ok(())
-}
-
-/// Failure while consuming one affine handler outcome against inline request state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum HandlerOutcomeContractError {
-    #[error("deferred response capability is unavailable")]
-    DeferredUnavailable,
-    #[error("the deferred responder was already taken")]
-    DeferredAlreadyTaken,
-    #[error("the handler outcome was already completed")]
-    OutcomeAlreadyCompleted,
-    #[error("a deferred registration was supplied before a responder was taken")]
-    DeferredResponderNotTaken,
-    #[error("a reply was supplied after the deferred responder was taken")]
-    ReplyAfterDeferredTaken,
-    #[error("a no-response marker was supplied after the deferred responder was taken")]
-    NoReplyAfterDeferredTaken,
-    #[error("the deferred registration belongs to request {actual:?}, not {expected:?}")]
-    DeferredRegistrationRequestMismatch { expected: RequestId, actual: RequestId },
-    #[error("the protocol no-response marker does not match the original request identity")]
-    NoResponseIdentityMismatch,
-    #[error("protocol no-response reason {reason:?} is invalid for request code {request_code}")]
-    NoResponsePolicyMismatch {
-        request_code: i32,
-        reason: ProtocolNoResponseReason,
-    },
 }
 
 #[cfg(test)]
@@ -468,7 +399,7 @@ mod tests {
         assert!(!disabled.has_deferred_capability());
         assert_eq!(
             disabled.mark_deferred_taken(original),
-            Err(HandlerOutcomeContractError::DeferredUnavailable)
+            Err(TransportContractViolation::DeferredResponderUnavailable)
         );
 
         let mut capable = InlineResponseSlot::deferred_capable();
@@ -477,7 +408,7 @@ mod tests {
         assert!(!capable.has_deferred_capability());
         assert_eq!(
             capable.mark_deferred_taken(original),
-            Err(HandlerOutcomeContractError::DeferredAlreadyTaken)
+            Err(TransportContractViolation::DeferredResponderAlreadyTaken)
         );
         assert_eq!(
             crate::dispatch::deferred_responder::deferred_state_allocations(),
@@ -490,7 +421,7 @@ mod tests {
         ));
         assert_eq!(
             capable.mark_deferred_taken(original),
-            Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted)
+            Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted)
         );
         assert_eq!(
             crate::dispatch::deferred_responder::deferred_state_allocations(),
@@ -557,14 +488,14 @@ mod tests {
         let mut cross_request = InlineResponseSlot::disabled();
         assert!(matches!(
             cross_request.resolve(second, HandlerOutcome::NoReply(marker)),
-            Err(HandlerOutcomeContractError::NoResponseIdentityMismatch)
+            Err(TransportContractViolation::NoResponseIdentityMismatch)
         ));
         assert!(matches!(
             cross_request.resolve(
                 second,
                 HandlerOutcome::Reply(RemotingResponse::command(response_head(9)).expect("reply"))
             ),
-            Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted)
+            Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted)
         ));
 
         let invalid = ProtocolNoResponse {
@@ -575,7 +506,7 @@ mod tests {
         let mut policy = InlineResponseSlot::disabled();
         assert!(matches!(
             policy.resolve(first, HandlerOutcome::NoReply(invalid)),
-            Err(HandlerOutcomeContractError::NoResponsePolicyMismatch { .. })
+            Err(TransportContractViolation::NoResponsePolicyMismatch { .. })
         ));
 
         let legal =
@@ -614,7 +545,7 @@ mod tests {
             let mut slot = InlineResponseSlot::disabled();
             assert!(matches!(
                 slot.resolve(other_owner, HandlerOutcome::NoReply(marker)),
-                Err(HandlerOutcomeContractError::NoResponseIdentityMismatch)
+                Err(TransportContractViolation::NoResponseIdentityMismatch)
             ));
         }
 
@@ -626,7 +557,7 @@ mod tests {
         let mut same_owner = InlineResponseSlot::disabled();
         assert!(matches!(
             same_owner.resolve(second, HandlerOutcome::NoReply(marker)),
-            Err(HandlerOutcomeContractError::NoResponseIdentityMismatch)
+            Err(TransportContractViolation::NoResponseIdentityMismatch)
         ));
 
         let wrong_code = ProtocolNoResponse {
@@ -637,7 +568,7 @@ mod tests {
         let mut raw_code = InlineResponseSlot::disabled();
         assert!(matches!(
             raw_code.resolve(first, HandlerOutcome::NoReply(wrong_code)),
-            Err(HandlerOutcomeContractError::NoResponseIdentityMismatch)
+            Err(TransportContractViolation::NoResponseIdentityMismatch)
         ));
 
         let mut command = RemotingCommand::create_remoting_command(RequestCode::CheckTransactionState.to_i32());
@@ -652,7 +583,7 @@ mod tests {
         let mut one_way_slot = InlineResponseSlot::disabled();
         assert!(matches!(
             one_way_slot.resolve(one_way, HandlerOutcome::NoReply(forged)),
-            Err(HandlerOutcomeContractError::NoResponsePolicyMismatch { .. })
+            Err(TransportContractViolation::NoResponsePolicyMismatch { .. })
         ));
     }
 
@@ -665,7 +596,7 @@ mod tests {
         let mut untaken = InlineResponseSlot::deferred_capable();
         assert!(matches!(
             untaken.resolve(first, HandlerOutcome::Deferred(registration)),
-            Err(HandlerOutcomeContractError::DeferredResponderNotTaken)
+            Err(TransportContractViolation::DeferredResponderNotTaken)
         ));
         assert_eq!(drops.load(Ordering::SeqCst), 1);
 
@@ -674,7 +605,7 @@ mod tests {
         mismatch.mark_deferred_taken(second).expect("take deferred responder");
         assert!(matches!(
             mismatch.resolve(second, HandlerOutcome::Deferred(registration)),
-            Err(HandlerOutcomeContractError::DeferredRegistrationRequestMismatch { .. })
+            Err(TransportContractViolation::DeferredRegistrationRequestMismatch { .. })
         ));
         assert_eq!(drops.load(Ordering::SeqCst), 2);
 
@@ -686,7 +617,7 @@ mod tests {
         same_owner.mark_deferred_taken(second).expect("take deferred responder");
         assert!(matches!(
             same_owner.resolve(second, HandlerOutcome::Deferred(registration)),
-            Err(HandlerOutcomeContractError::DeferredRegistrationRequestMismatch { .. })
+            Err(TransportContractViolation::DeferredRegistrationRequestMismatch { .. })
         ));
         assert_eq!(drops.load(Ordering::SeqCst), 3);
     }
@@ -700,7 +631,7 @@ mod tests {
         slot.mark_deferred_taken(original).expect("take deferred responder");
         assert!(matches!(
             slot.resolve(original, HandlerOutcome::Reply(response)),
-            Err(HandlerOutcomeContractError::ReplyAfterDeferredTaken)
+            Err(TransportContractViolation::ReplyAfterDeferredTaken)
         ));
         assert_eq!(accesses.load(Ordering::SeqCst), 1);
         assert_eq!(drops.load(Ordering::SeqCst), 1);
@@ -712,7 +643,7 @@ mod tests {
                         .expect("legal marker")
                 )
             ),
-            Err(HandlerOutcomeContractError::OutcomeAlreadyCompleted)
+            Err(TransportContractViolation::HandlerOutcomeAlreadyCompleted)
         ));
 
         let mut no_reply = InlineResponseSlot::deferred_capable();
@@ -725,20 +656,26 @@ mod tests {
                         .expect("legal marker")
                 )
             ),
-            Err(HandlerOutcomeContractError::NoReplyAfterDeferredTaken)
+            Err(TransportContractViolation::NoReplyAfterDeferredTaken)
         ));
     }
 
     #[test]
     fn closed_error_mapping_contains_only_stable_contract_fields() {
-        let mapped = RocketMQError::from(ProtocolNoResponseError::Unsupported {
+        let mapped = TransportContractViolation::ProtocolNoResponseUnsupported {
             request_code: -91,
             reason: ProtocolNoResponseReason::NotificationHandled,
-        });
+        };
         let display = mapped.to_string();
-        assert!(display.contains("protocol_no_response"));
-        assert!(display.contains("request_code=-91"));
-        assert!(display.contains("notification_handled"));
+        assert_eq!(
+            display,
+            "protocol no-response reason is unsupported for this request code"
+        );
+        let debug = format!("{mapped:?}");
+        assert!(debug.contains("InvalidArgument"));
+        assert!(debug.contains("protocol no-response reason is unsupported for this request code"));
+        assert!(!debug.contains("-91"));
+        assert!(!debug.contains("notification_handled"));
         assert!(!display.contains("body"));
         assert!(!display.contains("peer"));
         assert!(!display.contains("principal"));

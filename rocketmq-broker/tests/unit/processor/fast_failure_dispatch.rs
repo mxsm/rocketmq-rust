@@ -31,7 +31,6 @@ use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
-use rocketmq_transport::api::EmbeddedDispatchErrorKind;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RejectRequestDecision;
@@ -369,7 +368,7 @@ async fn canonical_deadline_drops_post_mark_run_owner_and_releases_resources() {
         context.task_group().clone(),
         Principal::new("fast-failure-post-mark-test"),
     );
-    let error = {
+    let outcome = {
         let entered_wait = entered.notified();
         let dispatch = harness.dispatch(Some(RequestDeadline::after(Duration::from_secs(1))), request(77));
         tokio::pin!(dispatch);
@@ -379,9 +378,9 @@ async fn canonical_deadline_drops_post_mark_run_owner_and_releases_resources() {
         }
         dispatch
             .await
-            .expect_err("canonical deadline cancels the running processor")
+            .expect("canonical deadline is a source-free dispatch outcome")
     };
-    assert_eq!(error.kind(), EmbeddedDispatchErrorKind::DeadlineExceeded);
+    assert!(matches!(outcome, EmbeddedDispatchOutcome::DeadlineExceeded));
     assert_queue_resources_released(&service);
 
     drop(harness);

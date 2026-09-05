@@ -54,6 +54,7 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
 use rocketmq_transport::api::ServerRequestCommand;
+use rocketmq_transport::api::ServerRequestOutcome;
 use tracing::warn;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
@@ -836,20 +837,19 @@ impl ConsumerRequestHandler {
             .request(command, Duration::from_millis(5_000))
             .await
         {
-            Ok(result) => Ok(Some(result.into_command())),
-            Err(e) => {
-                let (code, error_type) = match e.source_error() {
-                    rocketmq_error::RocketMQError::Network(
-                        rocketmq_error::NetworkError::RequestTimeout { .. }
-                        | rocketmq_error::NetworkError::ConnectionTimeout { .. },
-                    ) => (ResponseCode::ConsumeMsgTimeout, "Timeout"),
-                    _ => (ResponseCode::SystemError, "Exception"),
-                };
-
-                response = response.set_code(code).set_remark(format!(
-                    "consumer <{}> <{}> {}: {:?}",
-                    consumer_group, client_id, error_type, e
-                ));
+            Ok(ServerRequestOutcome::Responded(result)) => Ok(Some(result.into_command())),
+            Ok(
+                ServerRequestOutcome::QueueSaturated
+                | ServerRequestOutcome::DeadlineExpired
+                | ServerRequestOutcome::SessionClosed,
+            ) => {
+                let (code, remark) = consumer_request_rejection_response();
+                response = response.set_code(code).set_remark(remark);
+                Ok(Some(response))
+            }
+            Err(error) => {
+                let (code, remark) = consumer_request_failure_response(error.code());
+                response = response.set_code(code).set_remark(remark);
                 Ok(Some(response))
             }
         }
@@ -997,6 +997,18 @@ impl ConsumerRequestHandler {
     }
 }
 
+const fn consumer_request_rejection_response() -> (ResponseCode, &'static str) {
+    (ResponseCode::SystemError, "consumer request rejected")
+}
+
+fn consumer_request_failure_response(code: rocketmq_error::ErrorCode) -> (ResponseCode, &'static str) {
+    if code == rocketmq_error::TRANSPORT_REQUEST_TIMEOUT.code() {
+        (ResponseCode::ConsumeMsgTimeout, "consumer request timed out")
+    } else {
+        (ResponseCode::SystemError, "consumer request failed")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
@@ -1040,6 +1052,23 @@ mod tests {
 
     use super::ConsumerRequestHandler;
     use crate::broker_runtime::BrokerRuntime;
+
+    #[test]
+    fn consumer_request_transport_outcomes_keep_the_timeout_wire_split() {
+        let (timeout_code, timeout_remark) =
+            super::consumer_request_failure_response(rocketmq_error::TRANSPORT_REQUEST_TIMEOUT.code());
+        assert_eq!(timeout_code as i32, 207);
+        assert_eq!(timeout_remark, "consumer request timed out");
+
+        let (failure_code, failure_remark) =
+            super::consumer_request_failure_response(rocketmq_error::TRANSPORT_SESSION_FAILED.code());
+        assert_eq!(failure_code as i32, 1);
+        assert_eq!(failure_remark, "consumer request failed");
+
+        let (rejection_code, rejection_remark) = super::consumer_request_rejection_response();
+        assert_eq!(rejection_code as i32, 1);
+        assert_eq!(rejection_remark, "consumer request rejected");
+    }
 
     fn temp_test_root(label: &str) -> std::path::PathBuf {
         let millis = SystemTime::now()

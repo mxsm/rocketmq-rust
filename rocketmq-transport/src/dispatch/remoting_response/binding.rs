@@ -18,6 +18,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use super::RemotingResponse;
 use super::ResponseBody;
+use crate::contract::TransportContractViolation;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestId;
 
@@ -53,18 +54,6 @@ impl BoundResponse {
     }
 }
 
-/// Binding failed before a response became eligible for encoding.
-#[allow(
-    dead_code,
-    reason = "the later private dispatcher handles the one-way response omission"
-)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum ResponseBindingError {
-    /// The captured inbound request was one-way and cannot produce a response.
-    #[error("a one-way request cannot produce a bound remoting response")]
-    OneWayRequest,
-}
-
 impl RemotingResponse {
     /// Binds this owned response to the immutable identity captured at ingress.
     ///
@@ -75,9 +64,12 @@ impl RemotingResponse {
         dead_code,
         reason = "the later private dispatcher creates this response binding before encoding"
     )]
-    pub(crate) fn bind(mut self, original: OriginalRequestIdentity) -> Result<BoundResponse, ResponseBindingError> {
+    pub(crate) fn bind(
+        mut self,
+        original: OriginalRequestIdentity,
+    ) -> Result<BoundResponse, TransportContractViolation> {
         if original.is_one_way() {
-            return Err(ResponseBindingError::OneWayRequest);
+            return Err(TransportContractViolation::ResponseBindingOneWayRequest);
         }
 
         let opaque_was_corrected = self.head.opaque() != original.original_opaque();
@@ -171,7 +163,7 @@ mod tests {
 
         assert!(matches!(
             response.bind(one_way_original_identity(123)),
-            Err(ResponseBindingError::OneWayRequest)
+            Err(TransportContractViolation::ResponseBindingOneWayRequest)
         ));
     }
 

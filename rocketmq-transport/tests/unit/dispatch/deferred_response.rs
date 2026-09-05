@@ -62,6 +62,20 @@ const STATES: [u8; 16] = [
     CLOSED_SESSION_CLOSED,
 ];
 
+impl ModelOperation {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Register => "register",
+            Self::Claim => "claim",
+            Self::BeginSending => "begin_sending",
+            Self::Complete => "complete",
+            Self::FailNotStarted | Self::FailPossiblyPartial => "fail",
+            Self::Cancel => "cancel",
+            Self::Close => "close",
+        }
+    }
+}
+
 #[test]
 fn response_state_uses_one_atomic_and_inline_state_does_not_embed_it() {
     let state = ResponseState::open();
@@ -89,13 +103,13 @@ fn every_state_operation_pair_matches_the_reference_model() {
 
             assert_eq!(
                 actual,
-                expected.as_ref().map(|_| ()).map_err(Clone::clone),
+                expected.result,
                 "operation {operation:?} from {:?}",
                 snapshot(initial)
             );
             assert_eq!(
                 state.snapshot(),
-                expected.unwrap_or_else(|_| snapshot(initial)),
+                expected.state,
                 "operation {operation:?} from {:?}",
                 snapshot(initial)
             );
@@ -107,25 +121,27 @@ fn every_state_operation_pair_matches_the_reference_model() {
 #[test]
 fn legal_registered_paths_preserve_both_failure_progress_values() {
     let completed = Arc::new(ResponseState::open());
-    completed.register().expect("register");
-    completed.claim().expect("claim");
-    completed
-        .begin_sending()
-        .expect("send claim")
-        .complete()
-        .expect("complete");
+    expect_applied(completed.register().expect("register contract"), "register");
+    expect_applied(completed.claim().expect("claim contract"), "claim");
+    expect_applied(
+        expect_applied(completed.begin_sending().expect("send-claim contract"), "begin sending")
+            .complete()
+            .expect("complete contract"),
+        "complete",
+    );
     assert_eq!(completed.terminal_state(), Some(ResponseTerminalState::Completed));
     assert_eq!(completed.terminal_reason(), None);
 
     for progress in [WriteProgress::NotStarted, WriteProgress::PossiblyPartial] {
         let failed = Arc::new(ResponseState::open());
-        failed.register().expect("register");
-        failed.claim().expect("claim");
-        failed
-            .begin_sending()
-            .expect("send claim")
-            .fail(progress)
-            .expect("fail");
+        expect_applied(failed.register().expect("register contract"), "register");
+        expect_applied(failed.claim().expect("claim contract"), "claim");
+        expect_applied(
+            expect_applied(failed.begin_sending().expect("send-claim contract"), "begin sending")
+                .fail(progress)
+                .expect("fail contract"),
+            "fail",
+        );
         assert_eq!(
             failed.terminal_state(),
             Some(ResponseTerminalState::Failed { progress })
@@ -159,9 +175,11 @@ fn every_terminal_reason_has_one_atomic_projection() {
 
     for (reason, expected) in cases {
         let state = ResponseState::open();
-        state
-            .stop_with_reason(reason, ResponseTransition::Cancel, |_| {})
-            .expect("the first terminal reason wins");
+        assert_eq!(
+            state.stop_with_reason(reason, ResponseTransition::Cancel, |_| {}),
+            Ok(ResponseStateOutcome::Applied(())),
+            "the first terminal reason wins"
+        );
         assert_eq!(state.terminal_state(), Some(expected));
         assert_eq!(state.terminal_reason(), Some(reason));
         assert_eq!(reason.terminal_state(), expected);
@@ -172,7 +190,7 @@ fn every_terminal_reason_has_one_atomic_projection() {
 
         assert_eq!(
             state.cancel(),
-            Err(ResponseStateError::AlreadyCompleted {
+            Ok(ResponseStateOutcome::AlreadyCompleted {
                 state: expected,
                 reason: Some(reason),
             })
@@ -194,7 +212,11 @@ fn deferred_terminal_metrics_use_only_fixed_request_code_buckets() {
     for (request_code, expected_bucket) in cases {
         let (telemetry, terminals) = TransportTelemetry::with_deferred_terminal_capture();
         let state = ResponseState::observed(telemetry, request_code);
-        state.cancel().expect("the first terminal transition wins");
+        assert_eq!(
+            state.cancel(),
+            Ok(ResponseStateOutcome::Applied(())),
+            "the first terminal transition wins"
+        );
         assert_eq!(
             terminals.lock().as_slice(),
             [(expected_bucket, DeferredTerminalReason::Explicit.as_str())]
@@ -210,13 +232,14 @@ fn delivered_and_failed_responses_do_not_record_non_response_terminal_metrics() 
             telemetry,
             rocketmq_protocol::code::request_code::RequestCode::Notification.to_i32(),
         ));
-        let claim = state.begin_sending().expect("sending starts");
+        let claim = expect_applied(state.begin_sending().expect("begin-sending contract"), "begin sending");
         if complete {
-            claim.complete().expect("response completes");
+            expect_applied(claim.complete().expect("complete contract"), "complete");
         } else {
-            claim
-                .fail(WriteProgress::PossiblyPartial)
-                .expect("response failure completes");
+            expect_applied(
+                claim.fail(WriteProgress::PossiblyPartial).expect("failure contract"),
+                "fail",
+            );
         }
         assert!(terminals.lock().is_empty());
     }
@@ -225,7 +248,10 @@ fn delivered_and_failed_responses_do_not_record_non_response_terminal_metrics() 
 #[test]
 fn send_claim_drop_is_terminal_and_progress_never_downgrades() {
     let not_started = Arc::new(ResponseState::open());
-    drop(not_started.begin_sending().expect("send claim"));
+    drop(expect_applied(
+        not_started.begin_sending().expect("send-claim contract"),
+        "begin sending",
+    ));
     assert_eq!(
         not_started.terminal_state(),
         Some(ResponseTerminalState::Failed {
@@ -234,7 +260,10 @@ fn send_claim_drop_is_terminal_and_progress_never_downgrades() {
     );
 
     let partial_drop = Arc::new(ResponseState::open());
-    let mut claim = partial_drop.begin_sending().expect("send claim");
+    let mut claim = expect_applied(
+        partial_drop.begin_sending().expect("send-claim contract"),
+        "begin sending",
+    );
     claim.mark_possibly_partial();
     drop(claim);
     assert_eq!(
@@ -245,11 +274,15 @@ fn send_claim_drop_is_terminal_and_progress_never_downgrades() {
     );
 
     let partial_explicit = Arc::new(ResponseState::open());
-    let mut claim = partial_explicit.begin_sending().expect("send claim");
+    let mut claim = expect_applied(
+        partial_explicit.begin_sending().expect("send-claim contract"),
+        "begin sending",
+    );
     claim.mark_possibly_partial();
-    claim
-        .fail(WriteProgress::NotStarted)
-        .expect("an explicit failure cannot downgrade progress");
+    expect_applied(
+        claim.fail(WriteProgress::NotStarted).expect("failure contract"),
+        "an explicit failure cannot downgrade progress",
+    );
     assert_eq!(
         partial_explicit.terminal_state(),
         Some(ResponseTerminalState::Failed {
@@ -261,11 +294,16 @@ fn send_claim_drop_is_terminal_and_progress_never_downgrades() {
 #[test]
 fn consuming_completion_disarms_the_claim_drop_path() {
     let state = Arc::new(ResponseState::open());
-    state.begin_sending().expect("send claim").complete().expect("complete");
+    expect_applied(
+        expect_applied(state.begin_sending().expect("send-claim contract"), "begin sending")
+            .complete()
+            .expect("complete contract"),
+        "complete",
+    );
     assert_eq!(state.terminal_state(), Some(ResponseTerminalState::Completed));
     assert_eq!(
         state.close(),
-        Err(ResponseStateError::AlreadyCompleted {
+        Ok(ResponseStateOutcome::AlreadyCompleted {
             state: ResponseTerminalState::Completed,
             reason: None,
         })
@@ -275,7 +313,10 @@ fn consuming_completion_disarms_the_claim_drop_path() {
 fn apply_actual(
     state: &Arc<ResponseState>,
     operation: ModelOperation,
-) -> (Result<(), ResponseStateError>, Option<ResponseSendClaim>) {
+) -> (
+    Result<ResponseStateOutcome, TransportContractViolation>,
+    Option<ResponseSendClaim>,
+) {
     let claim_for_existing_sending = || ResponseSendClaim {
         state: Arc::clone(state),
         drop_progress: WriteProgress::NotStarted,
@@ -286,7 +327,10 @@ fn apply_actual(
         ModelOperation::Register => (state.register(), None),
         ModelOperation::Claim => (state.claim(), None),
         ModelOperation::BeginSending => match state.begin_sending() {
-            Ok(claim) => (Ok(()), Some(claim)),
+            Ok(ResponseStateOutcome::Applied(claim)) => (Ok(ResponseStateOutcome::Applied(())), Some(claim)),
+            Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }) => {
+                (Ok(ResponseStateOutcome::AlreadyCompleted { state, reason }), None)
+            }
             Err(error) => (Err(error), None),
         },
         ModelOperation::Complete => (claim_for_existing_sending().complete(), None),
@@ -299,13 +343,22 @@ fn apply_actual(
     }
 }
 
-fn model_transition(state_code: u8, operation: ModelOperation) -> Result<ResponseStateSnapshot, ResponseStateError> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModelTransition {
+    result: Result<ResponseStateOutcome, TransportContractViolation>,
+    state: ResponseStateSnapshot,
+}
+
+fn model_transition(state_code: u8, operation: ModelOperation) -> ModelTransition {
     let state = snapshot(state_code);
     if let ResponseStateSnapshot::Terminal(state) = state {
-        return Err(ResponseStateError::AlreadyCompleted {
-            state,
-            reason: decode_terminal_reason(state_code),
-        });
+        return ModelTransition {
+            result: Ok(ResponseStateOutcome::AlreadyCompleted {
+                state,
+                reason: decode_terminal_reason(state_code),
+            }),
+            state: ResponseStateSnapshot::Terminal(state),
+        };
     }
 
     let next = match (state, operation) {
@@ -335,24 +388,27 @@ fn model_transition(state_code: u8, operation: ModelOperation) -> Result<Respons
             ResponseStateSnapshot::Open | ResponseStateSnapshot::Registered | ResponseStateSnapshot::Claimed,
             ModelOperation::Close,
         ) => ResponseStateSnapshot::Terminal(ResponseTerminalState::Closed),
-        (state, operation) => {
-            return Err(ResponseStateError::InvalidTransition {
-                transition: model_transition_name(operation),
+        (state, _) => {
+            return ModelTransition {
+                result: Err(TransportContractViolation::DeferredResponseInvalidTransition {
+                    operation: operation.as_str(),
+                    state: state.as_str(),
+                }),
                 state,
-            });
+            };
         }
     };
-    Ok(next)
+    ModelTransition {
+        result: Ok(ResponseStateOutcome::Applied(())),
+        state: next,
+    }
 }
 
-const fn model_transition_name(operation: ModelOperation) -> ResponseTransition {
-    match operation {
-        ModelOperation::Register => ResponseTransition::Register,
-        ModelOperation::Claim => ResponseTransition::Claim,
-        ModelOperation::BeginSending => ResponseTransition::BeginSending,
-        ModelOperation::Complete => ResponseTransition::Complete,
-        ModelOperation::FailNotStarted | ModelOperation::FailPossiblyPartial => ResponseTransition::Fail,
-        ModelOperation::Cancel => ResponseTransition::Cancel,
-        ModelOperation::Close => ResponseTransition::Close,
+fn expect_applied<T>(outcome: ResponseStateOutcome<T>, operation: &str) -> T {
+    match outcome {
+        ResponseStateOutcome::Applied(value) => value,
+        ResponseStateOutcome::AlreadyCompleted { state, reason } => {
+            panic!("{operation} unexpectedly observed terminal state {state:?} with reason {reason:?}");
+        }
     }
 }

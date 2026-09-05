@@ -137,6 +137,19 @@ impl QueuedWriteProgress {
             .is_ok()
     }
 
+    /// Records that the session owner dropped a batch it had already claimed,
+    /// but had not yet advanced to socket I/O.
+    pub(crate) fn cancel_claimed_for_session_close(&self) -> bool {
+        self.0
+            .compare_exchange(
+                QUEUED_WRITE_CLAIMED,
+                QUEUED_WRITE_CANCELLED_BY_SESSION,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
     pub(crate) fn cancellation_reason(&self) -> Option<QueuedWriteCancellation> {
         QueuedWriteCancellation::from_state(self.0.load(Ordering::Acquire))
     }

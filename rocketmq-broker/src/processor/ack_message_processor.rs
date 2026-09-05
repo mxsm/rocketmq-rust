@@ -866,9 +866,9 @@ mod tests {
     use rocketmq_transport::api::AdmissionController;
     use rocketmq_transport::api::AdmissionLimits;
     use rocketmq_transport::api::AuthorizedCommandDispatcher;
-    use rocketmq_transport::api::EmbeddedDispatchError;
     use rocketmq_transport::api::EmbeddedDispatchOutcome;
     use rocketmq_transport::api::ResponseBodyKind;
+    use rocketmq_transport::api::TransportError;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -912,7 +912,7 @@ mod tests {
     async fn dispatch_embedded<P>(
         processor: P,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, EmbeddedDispatchError>
+    ) -> Result<EmbeddedDispatchOutcome, TransportError>
     where
         P: RequestProcessor + Send + 'static,
     {
