@@ -780,6 +780,8 @@ impl FilePersistence {
             .spawn_service(name, async move {
                 let _write_guard = write_guard;
                 let result = store.execute_file_mutation(name, operation).await;
+                // Release the task's directory-lock owner before waking the caller.
+                drop(store);
                 let _ = sender.send(result);
             })
             .map_err(PersistenceError::Runtime)?;
