@@ -3000,7 +3000,8 @@ mod tests {
     fn timed_out_session_touch_rolls_back_before_active_or_reopened_reads() {
         let directory = tempfile::tempdir().expect("temp dir");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::plan(timeout_runtime_config())
+        let owner = RuntimeOwner::new().expect("runtime owner");
+        let mutation_owner = RuntimeOwner::plan(timeout_runtime_config())
             .expect("runtime configuration is valid")
             .build()
             .expect("runtime owner");
@@ -3016,16 +3017,32 @@ mod tests {
                 .create_session(active_session(token_hash, "touch-owner"))
                 .await
                 .expect("seed active session");
+            // Only the blocked touch uses the short deadline; filesystem setup,
+            // reads, and reopen must not depend on the runner's disk latency.
+            let mutation_store = FilePersistence {
+                service_context: mutation_owner
+                    .root_context()
+                    .component("timeout-session-touch-mutation"),
+                ..store.clone()
+            };
             let (started, release) = install_mutation_blocker(&store);
-            let (result, ()) = tokio::join!(
-                store.touch_session(&token_hash, 2),
-                release_mutation_after_storage_timeout(started, release),
-            );
+            let (result, ()) = tokio::join!(mutation_store.touch_session(&token_hash, 2), async {
+                wait_for_mutation_start(started).await;
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while !store.unavailable.load(AtomicOrdering::Acquire) {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .expect("touch owner must observe the storage timeout before release");
+                release.send(()).expect("release timed-out touch mutation");
+            },);
             assert_eq!(
                 runtime_condition(result.expect_err("mutation must time out")),
                 CanonicalCondition::DeadlineExceeded
             );
             store.mutation_blocker.clear();
+            drop(mutation_store);
             assert_eq!(
                 store
                     .find_session(&token_hash)
@@ -3055,6 +3072,9 @@ mod tests {
                 1
             );
         });
+        mutation_owner
+            .shutdown_runtime_blocking()
+            .expect("mutation runtime shutdown");
         owner.shutdown_runtime_blocking().expect("runtime shutdown");
     }
 

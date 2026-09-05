@@ -138,7 +138,14 @@ jobs:
         run: cargo test --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace --all-features
 
       - name: Test PostgreSQL repositories
-        run: cargo test --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked -p rocketmq-sre-control-plane -- --include-ignored
+        # Live S3 and model-provider qualifications require separately injected credentials.
+        run: |
+          cargo test --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked \
+            -p rocketmq-sre-control-plane -- --include-ignored \
+            --skip evidence::blob::tests::s3_compatible_https_live_round_trip_uses_external_secret_references \
+            --skip models::service::live_deepseek::deepseek_answers_one_evidence_cited_conversational_metric_query \
+            --skip models::service::live_deepseek::deepseek_responses_produces_persisted_read_only_sre_diagnosis \
+            --skip models::service::live_provider_failover::transient_primary_falls_back_to_live_deepseek_and_failures_remain_rules_only
 
       - name: Test fenced execution recovery
         run: |
