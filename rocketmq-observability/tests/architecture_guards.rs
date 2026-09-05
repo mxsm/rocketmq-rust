@@ -145,8 +145,6 @@ const METRIC_CONSTANT_CANONICAL_FILES: &[&str] = &[
 const METRIC_CONSTANT_LEGACY_ALLOWLIST: &[&str] = &[];
 
 const SUBSCRIBER_INSTALL_PATTERNS: &[&str] = &[
-    "tracing_subscriber::fmt()",
-    "tracing_subscriber::registry()",
     "tracing::subscriber::set_global_default",
     "tracing_subscriber::subscriber::set_global_default",
 ];
@@ -309,6 +307,53 @@ fn subscriber_installation_detector_ignores_unrelated_init_methods() {
     "#;
 
     assert!(!has_subscriber_installation(source));
+}
+
+#[test]
+fn subscriber_installation_detector_ignores_construction_and_scoped_capture() {
+    for construction in ["tracing_subscriber::fmt().finish()", "tracing_subscriber::registry()"] {
+        for installation in [
+            "",
+            "let _guard = tracing::subscriber::set_default(subscriber);",
+            "tracing::subscriber::with_default(subscriber, || capture_logs());",
+        ] {
+            let source = format!("fn capture() {{ let subscriber = {construction}; {installation} store.init(); }}");
+            assert!(!has_subscriber_installation(&source), "{source}");
+        }
+    }
+}
+
+#[test]
+fn subscriber_installation_detector_catches_global_setters() {
+    for source in [
+        "tracing::subscriber::set_global_default(subscriber).unwrap();",
+        "tracing_subscriber::subscriber::set_global_default(subscriber).unwrap();",
+        "use tracing::subscriber::set_global_default; set_global_default(subscriber).unwrap();",
+    ] {
+        assert!(has_subscriber_installation(source), "{source}");
+    }
+}
+
+#[test]
+fn subscriber_installation_detector_catches_registry_and_bound_subscriber_init() {
+    for construction in ["tracing_subscriber::fmt()", "tracing_subscriber::registry()"] {
+        for method in ["init", "try_init"] {
+            let direct = format!("{construction}.{method}();");
+            assert!(has_subscriber_installation(&direct), "{direct}");
+            let bound = format!("let subscriber = {construction}; subscriber.{method}();");
+            assert!(has_subscriber_installation(&bound), "{bound}");
+        }
+    }
+}
+
+#[test]
+fn subscriber_installation_detector_does_not_let_scoped_capture_hide_global_init() {
+    let source = r#"
+        let subscriber = tracing_subscriber::fmt().finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing_subscriber::registry().with(layer).try_init().unwrap();
+    "#;
+    assert!(has_subscriber_installation(source));
 }
 
 #[test]
@@ -1031,9 +1076,30 @@ fn has_subscriber_installation(source: &str) -> bool {
         return true;
     }
 
-    source
+    if !source.contains("tracing_subscriber") {
+        return false;
+    }
+
+    // A builder can be installed in a later statement; construction alone is not installation.
+    let subscriber_bindings: BTreeSet<_> = source
         .split(';')
-        .any(|statement| subscriber_init_statement_installs_global_subscriber(source, statement))
+        .filter_map(|statement| {
+            let (binding, value) = statement.rsplit_once("let ")?.1.split_once('=')?;
+            if !(value.contains("fmt()") || value.contains("registry()")) {
+                return None;
+            }
+            let mut tokens = binding.split_whitespace();
+            let name = tokens.next()?;
+            Some(if name == "mut" { tokens.next()? } else { name }.trim_end_matches(':'))
+        })
+        .collect();
+
+    source.split(';').any(|statement| {
+        subscriber_init_statement_installs_global_subscriber(source, statement)
+            || subscriber_bindings.iter().any(|name| {
+                statement.contains(&format!("{name}.init(")) || statement.contains(&format!("{name}.try_init("))
+            })
+    })
 }
 
 fn collect_migration_files(dir: &Path, files: &mut Vec<PathBuf>) {

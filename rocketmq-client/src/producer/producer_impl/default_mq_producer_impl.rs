@@ -394,6 +394,7 @@ pub struct DefaultMQProducerImpl {
     compressor_missing_logged: AtomicBool,
 }
 
+mod hooks;
 mod lifecycle;
 mod retry;
 mod send;

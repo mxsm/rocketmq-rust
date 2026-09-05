@@ -3329,8 +3329,20 @@ fn rocksdb_message_store_dispatcher_dual_writes_commitlog_dispatch_to_rocksdb_cq
     );
     request.properties_map = Some(properties);
 
+    // Direct dispatch bypasses recovery, which normally seeds the first retained CommitLog offset.
+    let index_service = message_store.rocksdb_index_service();
+    index_service
+        .initialize_dispatch_frontier(request.commit_log_offset)
+        .expect("recovery should initialize the retained CommitLog frontier");
     message_store.local_file_store_mut().do_dispatch(&mut request);
-    message_store.flush();
+    message_store.try_flush().expect("derived stores should flush");
+
+    assert_eq!(
+        index_service
+            .get_safe_dispatch_offset()
+            .expect("index safe offset should read"),
+        1152
+    );
 
     assert_eq!(message_store.get_dispatcher_list().len(), 2);
     assert!(

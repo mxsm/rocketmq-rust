@@ -2241,8 +2241,12 @@ mod tests {
                 "broker-b unavailable",
             )),
         );
+        assert_eq!(failed.message.msg_id().as_str(), "MSGID");
         assert!(failed.tracks.is_empty());
-        assert!(failed.track_error.as_deref().unwrap().contains("broker-b unavailable"));
+        assert_eq!(
+            failed.track_error.as_deref(),
+            Some("Broker operation failed: operation=<redacted>, broker_code=<redacted>, message=<redacted>")
+        );
     }
 
     #[test]
