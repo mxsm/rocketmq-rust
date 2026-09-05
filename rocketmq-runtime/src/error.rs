@@ -780,6 +780,17 @@ mod tests {
     }
 
     #[test]
+    fn runtime_configuration_facade_uses_corrected_boundary_projection() {
+        let error = RuntimeError::configuration(RuntimeOperation::LoadConfigFile);
+        let public = error.public_view().expect("valid runtime public view");
+        let projection = public.projection();
+
+        assert_eq!("runtime.configuration.failed", public.code().as_str());
+        assert_eq!(rocketmq_error::HttpStatusCode::BAD_REQUEST, projection.http().status);
+        assert_eq!(rocketmq_error::CliExitCode::CONFIG, projection.cli().exit_code);
+    }
+
+    #[test]
     fn runtime_clone_shares_source_location_and_backtrace() {
         let caller_line = line!() + 1;
         let error = RuntimeError::internal(RuntimeOperation::PersistRuntimeMetadata, io::Error::other("typed leaf"));

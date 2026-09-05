@@ -557,9 +557,10 @@ def check_required_mapping_adapters() -> list[Finding]:
         / "client_adapter"
         / "services"
         / "error_view.rs": [
-            "error.spec().code.as_str()",
-            "error.public_message()",
-            "error.context()",
+            "error.boundary_view()",
+            "boundary.code().as_str()",
+            "boundary.message()",
+            "boundary.context()",
         ],
         ROOT
         / "rocketmq-tools"
@@ -619,8 +620,8 @@ def check_dashboard_http_boundary() -> list[Finding]:
         return [Finding(error_path, 1, "dashboard HTTP error mapper is missing")]
 
     forbidden = {
-        'Self::RocketMq(_) => "ROCKETMQ_ERROR"': "dashboard RocketMQ API code must come from ErrorSpec.code",
-        "Self::RocketMq(_) => StatusCode::BAD_GATEWAY": "dashboard RocketMQ HTTP status must come from ErrorSpec.http",
+        'Self::RocketMq(_) => "ROCKETMQ_ERROR"': "dashboard RocketMQ API code must come from the canonical descriptor",
+        "Self::RocketMq(_) => StatusCode::BAD_GATEWAY": "dashboard RocketMQ HTTP status must come from the descriptor projection",
         "ApiResponse::failure(self.code(), self.to_string())": "dashboard error body must use public/redacted response messages",
     }
     findings = scan_forbidden_terms([error_path], forbidden)
@@ -688,10 +689,12 @@ def check_client_callback_boundary() -> list[Finding]:
 def check_client_retry_boundary() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-client" / "src" / "common" / "retry_decision.rs": [
-            "error.kind().spec().recovery.retry",
+            "error.descriptor().recovery_hint()",
             "pub(crate) struct ClientRetryEffect",
             "pub(crate) fn producer_send_retry_decision",
             "pub(crate) fn producer_send_fault_decision",
+            "fn retry_policy_error(error: &RocketMQError)",
+            "RocketMQError::Shared(shared) => shared.as_error()",
             "retry_response_codes.contains(code)",
             "Java producer retries only configured broker response codes for send.",
         ],
@@ -718,47 +721,52 @@ def check_client_retry_boundary() -> list[Finding]:
 
     forbidden = {
         "to_string()": "client retry decisions must not parse or build display strings",
-        "format!(": "client retry decisions must use ErrorSpec recovery policy, not local text construction",
+        "format!(": "client retry decisions must use descriptor recovery policy, not local text construction",
         "downcast_ref": "client retry decisions must not use runtime downcast",
     }
     retry_path = ROOT / "rocketmq-client" / "src" / "common" / "retry_decision.rs"
     return [*findings, *scan_forbidden_terms([retry_path], forbidden)]
 
 
-def check_error_spec_contract() -> list[Finding]:
+def check_error_descriptor_contract() -> list[Finding]:
     required_tokens = {
-        ROOT / "rocketmq-error" / "src" / "kind.rs": [
-            "pub enum ErrorCategory",
-            "pub const fn category(self) -> ErrorCategory",
+        ROOT / "rocketmq-error" / "src" / "descriptor.rs": [
+            "pub struct ErrorDescriptor",
+            "pub(crate) const fn try_new(",
+            "pub const fn recovery_hint(&self) -> RecoveryHint",
         ],
         ROOT / "rocketmq-error" / "src" / "context.rs": [
-            "pub enum RedactionPolicy",
-            "pub const fn for_kind(kind: ErrorKind) -> Self",
+            "pub(crate) fn public_projection(&self, descriptor: &'static ErrorDescriptor) -> Self",
+            "if matches!(descriptor.exposure(), Exposure::Generic)",
         ],
-        ROOT / "rocketmq-error" / "src" / "spec.rs": [
-            "pub category: ErrorCategory",
-            "pub redact: RedactionPolicy",
-            "category: kind.category()",
-            "redact: RedactionPolicy::for_kind(kind)",
+        ROOT / "rocketmq-error" / "src" / "catalog.rs": [
+            "macro_rules! define_error_catalog",
+            "pub const ALL_DESCRIPTORS: &[ErrorDescriptor]",
+            "pub fn descriptor_by_code(code: &str)",
         ],
-        ROOT / "rocketmq-error" / "tests" / "error_spec_registry.rs": [
-            "assert_eq!(spec.category, spec.kind.category())",
-            "assert_eq!(spec.redact, RedactionPolicy::for_kind(spec.kind))",
+        ROOT / "rocketmq-error" / "src" / "domain.rs": [
+            "fn descriptor(&self) -> &'static ErrorDescriptor",
+            "BoundaryErrorView::new(self.descriptor(), self.context())",
+        ],
+        ROOT / "rocketmq-error" / "tests" / "error_descriptor_catalog.rs": [
+            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 98",
+            "descriptor_catalog_snapshot_is_exact",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [
             "rocketmq_error_exposes_public_message_and_redacted_context",
-            "internal_error=<redacted>",
+            "source_present=<redacted>",
+            "view.context().is_empty()",
         ],
     }
     findings: list[Finding] = []
     for path, needles in required_tokens.items():
         if not path.exists():
-            findings.append(Finding(path, 1, "required error spec contract file is missing"))
+            findings.append(Finding(path, 1, "required error descriptor contract file is missing"))
             continue
         text = read_text(path)
         for needle in needles:
             if needle not in text:
-                findings.append(Finding(path, 1, f"required error spec contract token missing: {needle}"))
+                findings.append(Finding(path, 1, f"required error descriptor contract token missing: {needle}"))
     return findings
 
 
@@ -1155,7 +1163,7 @@ def run() -> int:
         ("dashboard http boundary", check_dashboard_http_boundary),
         ("client callback boundary", check_client_callback_boundary),
         ("client retry boundary", check_client_retry_boundary),
-        ("error spec contract", check_error_spec_contract),
+        ("error descriptor contract", check_error_descriptor_contract),
         ("source stringification allowlist", check_source_stringification_allowlist),
         ("internal error allowlist", check_internal_error_allowlist),
         ("anyhow result allowlist", check_anyhow_result_allowlist),

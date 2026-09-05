@@ -128,7 +128,7 @@ use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 ///
 /// Implementations must:
 /// 1. Be `Send + Sync` to allow concurrent access
-/// 2. Handle all errors via `Result<T, ControllerError>`
+/// 2. Return canonical [`RocketMQResult`] errors
 /// 3. Support graceful shutdown and cleanup
 /// 4. Maintain idempotency for all state-mutating operations
 ///
@@ -231,13 +231,9 @@ pub trait Controller: Send + Sync {
     /// - Admin tools to find the leader node
     /// - Metrics collection
     ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if !controller.is_leader() {
-    ///     return Err(ControllerError::NotLeader);
-    /// }
-    /// ```
+    /// Callers that require leadership report
+    /// [`rocketmq_error::RocketMQError::ControllerNotLeader`] when this returns
+    /// `false`.
     fn is_leader(&self) -> bool;
 
     // ==================== Broker Management ====================
@@ -260,9 +256,9 @@ pub trait Controller: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `NotLeader` if called on follower
-    /// - `InvalidRequest` if request validation fails
-    /// - `ConsensusTimeout` if Raft proposal times out
+    /// - [`rocketmq_error::RocketMQError::ControllerNotLeader`] if called on a follower
+    /// - a canonical controller request error if validation fails
+    /// - [`rocketmq_error::RocketMQError::ControllerConsensusTimeout`] if the Raft proposal times out
     async fn register_broker(
         &self,
         request: &RegisterBrokerToControllerRequestHeader,

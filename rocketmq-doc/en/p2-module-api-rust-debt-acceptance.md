@@ -35,13 +35,13 @@ growth.
 The default-feature rustdoc JSON snapshot covers all 28 workspace library
 targets. The reviewed public-path changes are:
 
-| Package | Before | After | Decision |
-|---|---:|---:|---|
+| Package | Before record | After record | Decision |
+|---|---|---|---|
 | `rocketmq-client-rust` | 279 | 280 | add the classified minimal `prelude` module |
 | `rocketmq-runtime` | 350 | 351 | add the classified minimal `prelude` module |
 | `rocketmq-transport` | 193 | 194 | add the classified minimal `prelude` module |
 | `rocketmq-proxy-core` | 522 | 523 | add the object-safe dynamic plugin adapter |
-| `rocketmq-error` | 380 | 380 | preserve the exact `ErrorSpec` public-path fingerprint |
+| `rocketmq-error` | legacy 73-spec structural profile (1,160 items) | 98-descriptor structural profile (1,148 items) | replace the removed `ErrorSpec` fingerprint with the reviewed canonical descriptor surface |
 
 Client, Runtime, and Transport root exports are classified as stable,
 experimental, or compatibility entries in `scripts/public-api-intent.json`.

@@ -7,39 +7,26 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE-APACHE)
 
 `rocketmq-error` is the shared error kernel for the RocketMQ Rust workspace. It
-provides one typed error surface, stable machine-readable error identity, and
-redaction-aware boundary views for crates that need to expose errors through
-remoting, gRPC, HTTP, CLI, logs, or metrics.
+provides typed causes, stable descriptor identity, explicit protocol
+projections, bounded context, and redaction-safe boundary views.
 
 ## What This Crate Owns
 
-- `RocketMQError`: the primary error enum used by RocketMQ Rust crates.
-- `RocketMQResult<T>`: the standard result alias.
-- Domain-specific nested errors such as `NetworkError`, `SerializationError`,
-  `ProtocolError`, `RpcClientError`, `AuthError`, `ControllerError`,
-  `ToolsError`, `FilterError`, and `UnifiedServiceError`.
-- `ObservabilityError`: telemetry, logging, exporter initialization,
-  subscriber installation, and provider shutdown errors.
-- Stable taxonomy: `ErrorKind`, `ErrorCode`, `ErrorScope`, and
-  `ErrorCategory`.
-- Static metadata registry: `ErrorSpec` and `ALL_ERROR_SPECS`.
-- Boundary mappings for remoting, gRPC, HTTP, and CLI adapters.
-- Recovery and observability policy: `RetryClass`, `RecoverySpec`,
-  `ErrorSeverity`, and `ObserveSpec`.
-- Redaction-aware structured context: `ErrorContext`, `Sensitive<T>`, and
-  `BoundaryErrorView`.
+- The opaque canonical `Error`, `Result<T>`, and `SharedError` types.
+- `RocketMQError`, `RocketMQResult<T>`, and the retained domain error enums
+  used throughout the workspace.
+- `ErrorDescriptor` and the single `ALL_DESCRIPTORS` catalog.
+- Stable descriptor metadata: code, class, condition, fault attribution,
+  component, fixed public message, severity, recovery hint, backtrace policy,
+  exposure, four explicit boundary projections, and ordered field schemas.
+- `ErrorContext`, `PublicErrorView`, `DiagnosticView`,
+  `BoundaryErrorView`, and `CliErrorView`.
 
-The crate intentionally avoids depending on transport crates such as
-`rocketmq-remoting` or generated protobuf bindings. Boundary-facing primitive
-types mirror the required wire/status values while keeping the error crate low
-in the dependency graph.
+The crate intentionally does not depend on transport implementations or
+generated protobuf bindings. Its remoting, gRPC, HTTP, and CLI projection types
+are dependency-light values consumed by boundary adapters.
 
 ## Quick Start
-
-```toml
-[dependencies]
-rocketmq-error = "1.0.0"
-```
 
 ```rust
 use rocketmq_error::RocketMQError;
@@ -47,9 +34,10 @@ use rocketmq_error::RocketMQResult;
 
 fn validate_broker_addr(addr: &str) -> RocketMQResult<()> {
     if addr.is_empty() {
-        return Err(RocketMQError::network_connection_failed(
-            "<empty>",
-            "address must not be empty",
+        return Err(RocketMQError::Network(
+            rocketmq_error::NetworkError::InvalidAddress {
+                addr: addr.to_owned(),
+            },
         ));
     }
 
@@ -57,164 +45,48 @@ fn validate_broker_addr(addr: &str) -> RocketMQResult<()> {
 }
 ```
 
-`std::io::Error`, `std::str::Utf8Error`, and wrapped nested errors such as
-`NetworkError`, `SerializationError`, `ProtocolError`, `RpcClientError`,
-`AuthError`, `ControllerError`, `ToolsError`, `FilterError`,
-`ObservabilityError`, and `UnifiedServiceError` convert into `RocketMQError`
-through `From`, so the `?` operator can be used in normal code paths.
+Nested domain errors such as `NetworkError`, `SerializationError`,
+`ProtocolError`, `RpcClientError`, `AuthError`, `ControllerError`,
+`ToolsError`, `FilterError`, `ObservabilityError`, and
+`UnifiedServiceError` convert to `RocketMQError` through `From`.
 
-## Architecture
+## Canonical Descriptors
 
-The current architecture has three layers:
-
-Color coding highlights caller flow in blue, typed errors in purple, stable
-contracts in green, and boundary handoff points in orange.
-
-```mermaid
-%%{init: {"theme": "base", "themeVariables": {"background": "#FFFFFF", "primaryColor": "#E0F2FE", "primaryTextColor": "#0F172A", "primaryBorderColor": "#0284C7", "secondaryColor": "#F3E8FF", "secondaryTextColor": "#2E1065", "secondaryBorderColor": "#7C3AED", "tertiaryColor": "#DCFCE7", "tertiaryTextColor": "#052E16", "tertiaryBorderColor": "#16A34A", "lineColor": "#475569", "textColor": "#0F172A", "clusterBkg": "#F8FAFC", "clusterBorder": "#CBD5E1", "edgeLabelBackground": "#FFFFFF", "fontFamily": "Inter, ui-sans-serif, system-ui, sans-serif"}}}%%
-flowchart TB
-    subgraph apps["Application crates"]
-        app_api["Use RocketMQError / RocketMQResult"]
-        app_domain["Construct domain-specific errors"]
-        app_boundary["Inspect ErrorKind or BoundaryErrorView"]
-        app_api --> app_domain --> app_boundary
-    end
-
-    subgraph typed["rocketmq-error typed surface"]
-        result["RocketMQResult&lt;T&gt;"]
-        root["RocketMQError"]
-        wrapped["NetworkError / SerializationError / ProtocolError / RpcClientError"]
-        domain["AuthError / ControllerError / ToolsError / FilterError / ObservabilityError / UnifiedServiceError"]
-        direct["Broker / Route / Client / Storage / Configuration / System variants"]
-        result --> root
-        wrapped --> root
-        domain --> root
-        direct --> root
-    end
-
-    subgraph contracts["rocketmq-error stable contracts"]
-        taxonomy["ErrorKind -> ErrorCode / ErrorScope / ErrorCategory"]
-        registry["ErrorSpec registry"]
-        adapters["RemotingSpec / GrpcSpec / HttpSpec / CliSpec"]
-        policy["RecoverySpec / ObserveSpec / RedactionPolicy"]
-        context["ErrorContext / BoundaryErrorView"]
-        taxonomy --> registry
-        registry --> adapters
-        registry --> policy
-        registry --> context
-    end
-
-    app_boundary --> root
-    root --> taxonomy
-    root --> context
-    context --> adapters
-    policy --> app_boundary
-
-    classDef app fill:#E0F2FE,stroke:#0284C7,color:#0F172A,stroke-width:1.5px
-    classDef core fill:#F3E8FF,stroke:#7C3AED,color:#2E1065,stroke-width:1.5px
-    classDef contract fill:#DCFCE7,stroke:#16A34A,color:#052E16,stroke-width:1.5px
-    classDef bridge fill:#FFF7ED,stroke:#F97316,color:#7C2D12,stroke-width:1.5px
-
-    class app_api,app_domain,app_boundary app
-    class result,root,wrapped,domain,direct core
-    class taxonomy,registry,adapters,policy,context contract
-    class root,context,adapters,policy bridge
-```
-
-### Typed Surface
-
-`RocketMQError` is the top-level enum. Some variants wrap nested domain errors
-with `#[from]`, while other variants carry fields directly when the error is
-part of the shared broker, route, client, storage, configuration, system, or
-version contract.
-
-Important wrapped families:
-
-| Variant | Nested type | Typical producer |
-| --- | --- | --- |
-| `RocketMQError::Network` | `NetworkError` | remoting clients, RPC clients |
-| `RocketMQError::Serialization` | `SerializationError` | codecs, metadata serializers |
-| `RocketMQError::Protocol` | `ProtocolError` | command/header/body validation |
-| `RocketMQError::Rpc` | `RpcClientError` | request dispatch and response handling |
-| `RocketMQError::Authentication` | `AuthError` | authentication and authorization |
-| `RocketMQError::Controller` | `ControllerError` | controller and Raft workflows |
-| `RocketMQError::Tools` | `ToolsError` | admin tools and CLI operations |
-| `RocketMQError::Filter` | `FilterError` | bloom filter and bit-array utilities |
-| `RocketMQError::Observability` | `ObservabilityError` | telemetry bootstrap, exporters, subscriber install, provider shutdown |
-
-Important direct families:
-
-- Broker and message errors: topic/queue lookup, broker operation failures,
-  message size and validation failures, transaction rejection, permissions.
-- Route errors: missing route data, inconsistent route data, route registration
-  conflict, route version conflict, missing cluster.
-- Client lifecycle errors: not started, already started, shutting down, invalid
-  state, producer/consumer unavailable.
-- Storage errors: read, write, corruption, out of space, lock failure.
-- Configuration and auth reload errors.
-- System errors: I/O, illegal argument, timeout, internal, service lifecycle,
-  initialization, version ordinal, required message property.
-
-### Stable Taxonomy
-
-Display text is diagnostic and can contain local detail. Code that needs stable
-behavior should use the taxonomy:
+Every retained error leaf associates with exactly one immutable descriptor.
+Code that needs stable behavior reads the descriptor rather than deriving policy
+from an enum, display string, or caller override.
 
 ```rust
-use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
 
 let error = RocketMQError::route_not_found("TopicA");
+let descriptor = error.descriptor();
 
-assert_eq!(error.kind(), ErrorKind::RouteNotFound);
-assert_eq!(error.kind().code().as_str(), "ROUTE_NOT_FOUND");
-assert_eq!(error.kind().category().as_str(), "route");
+assert_eq!(descriptor.code().as_str(), "route.topic.not_found");
+assert_eq!(descriptor.public_message(), "Topic route was not found");
+assert_eq!(
+    descriptor.recovery_hint(),
+    rocketmq_error::RecoveryHint::RefreshRoute
+);
 ```
 
-`ErrorKind::ALL` lists every public logical kind. Each kind maps to:
+`ALL_DESCRIPTORS` is the sole catalog. `descriptor_by_code` performs exact
+lookup of canonical lowercase dotted codes. `ErrorKind` remains a structural
+typed discriminator for local exhaustive matching; it does not own a second
+metadata or policy table.
 
-- `ErrorCode`: stable machine-readable code, for example
-  `ROUTE_NOT_FOUND`.
-- `ErrorScope`: architectural owner such as `Route`, `Broker`, or `Storage`.
-- `ErrorCategory`: low-cardinality label for external adapters, metrics, and
-  dashboards.
+A descriptor explicitly owns all four projections:
 
-### ErrorSpec Registry
+- `RemotingSpec` for RocketMQ response codes.
+- `GrpcSpec` for payload and transport status.
+- `HttpSpec` for HTTP status.
+- `CliSpec` for process exit status.
 
-`ALL_ERROR_SPECS` is the central registry for metadata attached to every
-`ErrorKind`. Tests assert that every kind has exactly one spec, that codes are
-unique, and that the protocol, recovery, observability, and redaction metadata
-is complete.
+## Boundary Views and Redaction
 
-```rust
-use rocketmq_error::ErrorKind;
-
-let spec = ErrorKind::RouteNotFound.spec();
-
-assert_eq!(spec.code.as_str(), "ROUTE_NOT_FOUND");
-assert_eq!(spec.public_message, "Route information was not found");
-assert_eq!(spec.observe.metric_label, "ROUTE_NOT_FOUND");
-```
-
-When adding a new `ErrorKind`, update all related mappings through the existing
-constructors:
-
-- `ErrorKind::code`, `ErrorKind::scope`, and `ErrorKind::category`
-- `ALL_ERROR_SPECS`
-- `RemotingSpec::for_kind`
-- `GrpcSpec::for_kind`
-- `HttpSpec::for_kind`
-- `CliSpec::for_kind`
-- `RecoverySpec::for_kind`
-- `RedactionPolicy::for_kind`
-- `RocketMQError::kind` and `RocketMQError::context`, if the new kind is backed
-  by a `RocketMQError` variant
-
-## Boundary Views
-
-Use `RocketMQError::boundary_view()` when adapting an error to a wire protocol,
-HTTP response, CLI output, UI model, log record, or metric event. It combines
-the stable spec with redaction-aware context.
+Use `boundary_view()` for remoting, gRPC, HTTP, CLI, dashboard, or other public
+adapters. The view reads identity and projections from the descriptor and
+enforces its exposure policy.
 
 ```rust
 use rocketmq_error::RocketMQError;
@@ -223,37 +95,21 @@ let error = RocketMQError::storage_read_failed(
     "/var/lib/rocketmq/commitlog/00000000000000000000",
     "permission denied",
 );
-
 let view = error.boundary_view();
 
-assert_eq!(view.code().as_str(), "STORAGE_READ_FAILED");
+assert_eq!(view.code().as_str(), "storage.read.failed");
 assert_eq!(view.message(), "Storage read failed");
-assert_eq!(view.context().to_string(), "path=<redacted>, reason=<redacted>");
+assert!(view.context().is_empty());
 ```
 
-Boundary mappings are deliberately transport-neutral:
+For `Exposure::Generic`, a boundary view exposes the fixed message and no
+dynamic public fields. For `Exposure::Public`, it exposes only fields whose
+descriptor schema declares `ContextVisibility::Public`.
 
-| Spec | Purpose |
-| --- | --- |
-| `RemotingSpec` | RocketMQ remoting response code |
-| `GrpcSpec` | gRPC payload code and transport status |
-| `HttpSpec` | HTTP status code |
-| `CliSpec` | process exit code |
-| `RecoverySpec` | retry or recovery class |
-| `ObserveSpec` | severity and metric label |
-
-For CLI tools, `CliErrorView::from_error(&error).render_stderr()` renders a
-single redaction-aware line using the same registry.
-
-## Redaction Model
-
-`Display` and `Debug` are diagnostic surfaces. They are useful inside trusted
-process boundaries, but external adapters should prefer `public_message()`,
-`context()`, or `boundary_view()`.
-
-Catalog-owned typed keys fix each field's value shape, visibility, and bound.
-Secret-bearing input is never passed into `ErrorContext`; callers record only
-its presence through a value-free secret-presence key.
+Original diagnostic context remains available on the typed error and through
+`DiagnosticView`. Secret-bearing values are never stored in `ErrorContext`;
+only bounded, value-free presence markers are recorded. Typed source text,
+locations, and backtraces are not rendered by safe public views.
 
 ```rust
 use rocketmq_error::fields;
@@ -266,140 +122,79 @@ let context = ErrorContext::new()
 assert_eq!(context.to_string(), "topic=TopicA, credentials_present=<redacted>");
 ```
 
-## Recovery and Observability
+## Recovery and Severity
 
-Retry and observability behavior is derived from `ErrorKind`, not from formatted
-messages:
+`RecoveryHint` is catalog-owned advice, not a complete retry decision.
+Operation owners combine it with idempotency, progress, deadline, and retry
+budget.
+
+Current recovery hints are `Never`, `Backoff`, `RefreshRoute`,
+`RefreshLeader`, `SwitchBroker`, `RefreshCredentials`, and
+`OperatorAction`. Current severities are `Debug`, `Info`, `Warn`,
+`Error`, and `Critical`.
 
 ```rust
-use rocketmq_error::ErrorKind;
 use rocketmq_error::ErrorSeverity;
-use rocketmq_error::RetryClass;
-
-assert_eq!(
-    ErrorKind::RouteNotFound.spec().recovery.retry,
-    RetryClass::RefreshRoute,
-);
-assert_eq!(
-    ErrorKind::ControllerNotLeader.spec().recovery.retry,
-    RetryClass::RefreshLeader,
-);
-assert_eq!(
-    ErrorKind::RequestHeaderError.spec().observe.severity,
-    ErrorSeverity::Info,
-);
-```
-
-Current retry classes are:
-
-- `Never`
-- `Immediate`
-- `AfterBackoff`
-- `RefreshRoute`
-- `SwitchBroker`
-- `RefreshLeader`
-
-Current severities are:
-
-- `Debug`
-- `Info`
-- `Warn`
-- `Error`
-- `Critical`
-
-## Dependency Boundary
-
-`rocketmq-error` has no opt-in features and does not depend on JSON or
-configuration implementations. The crate that performs JSON work preserves its
-typed cause with `SerializationError::source("serialize", "JSON", error)` or
-`SerializationError::source("deserialize", "JSON", error)` before converting
-to `RocketMQError`. Boundary views continue to expose only the fixed public
-message, never rendered source text.
-
-## Usage Patterns
-
-Prefer typed constructors for common cases:
-
-```rust
 use rocketmq_error::RocketMQError;
 
-let network = RocketMQError::network_connection_failed("127.0.0.1:9876", "connection refused");
-let route = RocketMQError::route_not_found("TopicA");
-let broker = RocketMQError::broker_operation_failed("SEND_MESSAGE", 1, "topic not exist")
-    .with_broker_addr("127.0.0.1:10911");
-let storage = RocketMQError::storage_write_failed("/var/lib/rocketmq/commitlog", "disk full");
-let auth = RocketMQError::auth_config_invalid("auth.authorization", "provider not ready");
-let controller = RocketMQError::controller_not_leader(Some(2));
+let error = RocketMQError::ControllerNotLeader { leader_id: None };
+assert_eq!(
+    error.descriptor().recovery_hint(),
+    rocketmq_error::RecoveryHint::RefreshLeader
+);
+assert_eq!(error.descriptor().severity(), ErrorSeverity::Warn);
 ```
 
-Match on the typed enum when local control flow needs exact detail:
+## Typed Sources
+
+Use source-preserving constructors when a lower-level operation failed.
+`std::error::Error::source()` retains the original typed cause; boundary views
+never stringify it.
 
 ```rust
-use rocketmq_error::NetworkError;
+use std::error::Error as _;
 use rocketmq_error::RocketMQError;
 
-fn is_connection_problem(error: &RocketMQError) -> bool {
-    matches!(
-        error,
-        RocketMQError::Network(NetworkError::ConnectionFailed { .. })
-            | RocketMQError::Network(NetworkError::ConnectionTimeout { .. })
-    )
-}
-```
+let error = RocketMQError::request_header_source(
+    "decode header",
+    std::io::Error::other("private detail"),
+);
 
-Use `ErrorKind` or `BoundaryErrorView` for public contracts:
-
-```rust
-use rocketmq_error::ErrorKind;
-use rocketmq_error::RocketMQError;
-
-fn should_refresh_route(error: &RocketMQError) -> bool {
-    matches!(error.kind(), ErrorKind::RouteNotFound | ErrorKind::RouteInconsistent)
-}
+assert!(error
+    .source()
+    .and_then(|source| source.downcast_ref::<std::io::Error>())
+    .is_some());
+assert!(error.boundary_view().context().is_empty());
 ```
 
 ## Public API Notes
 
-- The typed `RocketMQError` surface is the public error API.
-- Pre-typed compatibility aliases and legacy enum names are intentionally not
-  exposed.
-- Stable external integrations should not parse `Display` output. Use
-  `ErrorKind`, `ErrorCode`, `ErrorSpec`, or `BoundaryErrorView`.
-- The crate keeps transport mappings local and dependency-light by exposing
-  primitive remoting/gRPC/HTTP/CLI spec types instead of depending on the
-  transport implementations.
+- Stable integrations use descriptor codes and projections, not `Display`.
+- Descriptor and projection construction is private; catalog constants are
+  read-only public values.
+- Deleted legacy `ErrorSpec`, recovery/observability policy tables, and
+  category/scope metadata are not compatibility aliases.
+- The six obsolete `ProtocolError` leaves, four conflicting
+  `ControllerError` leaves, and the unused required-property leaf are removed.
+  Retained callers use canonical `RocketMQError` variants and descriptors.
 
 ## Tests
 
-Run the crate tests from the workspace root:
+Run from the workspace root:
 
 ```bash
 cargo test -p rocketmq-error
-cargo test -p rocketmq-error --all-features
-```
-
-Useful focused suites:
-
-```bash
-cargo test -p rocketmq-error --test error_kind_contract
-cargo test -p rocketmq-error --test error_spec_registry
-cargo test -p rocketmq-error --test error_protocol_specs
-cargo test -p rocketmq-error --test error_policy_specs
-cargo test -p rocketmq-error --test error_context_redaction
-```
-
-For Rust code changes in this crate, also run the workspace validation required
-by the repository:
-
-```bash
-cargo fmt --all
+cargo fmt -p rocketmq-error -- --check
 cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 ```
 
-## Documentation
+Focused catalog and association suites:
 
-- [API documentation](https://docs.rs/rocketmq-error)
-- Example: [`examples/controller_error_integration.rs`](examples/controller_error_integration.rs)
+```bash
+cargo test -p rocketmq-error --test error_descriptor_catalog
+cargo test -p rocketmq-error --test legacy_descriptor_associations
+cargo test -p rocketmq-error --test error_context_redaction
+```
 
 ## License
 
@@ -407,5 +202,5 @@ Licensed under [Apache License, Version 2.0](../LICENSE-APACHE).
 
 ## Contributing
 
-Contributions are welcome. Please read the workspace
+Contributions are welcome. Read the workspace
 [Contributing Guide](../CONTRIBUTING.md) before submitting changes.

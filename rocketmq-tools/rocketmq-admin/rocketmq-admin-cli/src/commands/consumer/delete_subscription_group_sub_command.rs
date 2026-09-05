@@ -189,6 +189,6 @@ mod tests {
         };
 
         let error = DeleteSubscriptionGroupSubCommand::print_result(&request, result).unwrap_err();
-        assert_eq!(error.spec().code.as_str(), "BROKER_PERMISSION_DENIED");
+        assert_eq!(error.descriptor().code().as_str(), "auth.permission.denied");
     }
 }

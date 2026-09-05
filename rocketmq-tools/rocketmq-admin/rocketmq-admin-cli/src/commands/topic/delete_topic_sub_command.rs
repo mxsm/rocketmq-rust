@@ -149,6 +149,6 @@ mod tests {
         };
 
         let error = DeleteTopicSubCommand::print_result(result).unwrap_err();
-        assert_eq!(error.spec().code.as_str(), "BROKER_PERMISSION_DENIED");
+        assert_eq!(error.descriptor().code().as_str(), "auth.permission.denied");
     }
 }

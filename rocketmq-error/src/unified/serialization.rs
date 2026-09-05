@@ -18,6 +18,11 @@ use std::error::Error as StdError;
 
 use thiserror::Error;
 
+use crate::fields;
+use crate::ErrorContext;
+use crate::ErrorDescriptor;
+use crate::CORE_SERIALIZATION_FAILED;
+
 /// Serialization/Deserialization errors
 #[derive(Debug, Error)]
 pub enum SerializationError {
@@ -107,6 +112,53 @@ pub enum SerializationError {
 }
 
 impl SerializationError {
+    /// Returns the canonical descriptor for this serialization failure.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        &CORE_SERIALIZATION_FAILED
+    }
+
+    /// Returns descriptor-valid context without exposing serialized data.
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::EncodeFailed { format, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "encode")
+                .with_text(fields::FORMAT, format)
+                .with_secret_presence(fields::DETAIL_PRESENT),
+            Self::DecodeFailed { format, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "decode")
+                .with_text(fields::FORMAT, format)
+                .with_secret_presence(fields::DETAIL_PRESENT),
+            Self::Source { operation, format, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+                .with_text(fields::FORMAT, format)
+                .with_secret_presence(fields::SOURCE_PRESENT),
+            Self::InvalidFormat { expected, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "validate_format")
+                .with_text(fields::FORMAT, expected)
+                .with_secret_presence(fields::DETAIL_PRESENT),
+            Self::MissingField { field } => ErrorContext::new().with_text(fields::FIELD, field),
+            Self::InvalidValue { field, .. } => ErrorContext::new()
+                .with_text(fields::FIELD, field)
+                .with_secret_presence(fields::DETAIL_PRESENT),
+            Self::Utf8Error(_) => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "decode_utf8")
+                .with_text(fields::FORMAT, "utf-8")
+                .with_secret_presence(fields::SOURCE_PRESENT),
+            Self::ProtobufError(_) => ErrorContext::new()
+                .with_text(fields::FORMAT, "protobuf")
+                .with_secret_presence(fields::DETAIL_PRESENT),
+            Self::EventSerializationFailed(_) => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "serialize_event")
+                .with_secret_presence(fields::DETAIL_PRESENT),
+            Self::EventDeserializationFailed(_) => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "deserialize_event")
+                .with_secret_presence(fields::DETAIL_PRESENT),
+            Self::InvalidEventType(_) | Self::UnknownEventType(_) => ErrorContext::new()
+                .with_text(fields::FIELD, "event_type")
+                .with_secret_presence(fields::DETAIL_PRESENT),
+        }
+    }
+
     /// Creates a serialization failure while preserving its typed cause.
     #[inline]
     pub fn source(

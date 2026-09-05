@@ -16,6 +16,14 @@
 
 use thiserror::Error;
 
+use crate::fields;
+use crate::ErrorContext;
+use crate::ErrorDescriptor;
+use crate::RPC_BROKER_ADDRESS_NOT_FOUND;
+use crate::RPC_REQUEST_FAILED;
+use crate::RPC_REQUEST_UNSUPPORTED;
+use crate::RPC_RESPONSE_FAILED;
+
 /// RPC client specific errors with full context preservation
 #[derive(Error, Debug)]
 pub enum RpcClientError {
@@ -65,6 +73,39 @@ pub enum RpcClientError {
 }
 
 impl RpcClientError {
+    /// Returns the canonical descriptor for this RPC client failure.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self {
+            Self::BrokerNotFound { .. } => &RPC_BROKER_ADDRESS_NOT_FOUND,
+            Self::RequestFailed { .. } => &RPC_REQUEST_FAILED,
+            Self::UnexpectedResponseCode { .. } | Self::RemoteError(..) => &RPC_RESPONSE_FAILED,
+            Self::UnsupportedRequestCode { .. } => &RPC_REQUEST_UNSUPPORTED,
+        }
+    }
+
+    /// Returns descriptor-valid RPC context without exposing remote messages.
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::BrokerNotFound { broker_name } => ErrorContext::new().with_text(fields::BROKER, broker_name),
+            Self::RequestFailed {
+                addr,
+                request_code,
+                timeout_ms,
+                ..
+            } => ErrorContext::new()
+                .with_text(fields::REMOTE_ADDR, addr)
+                .with_i64(fields::REQUEST_CODE, i64::from(*request_code))
+                .with_u64(fields::TIMEOUT_MS, *timeout_ms)
+                .with_secret_presence(fields::SOURCE_PRESENT),
+            Self::UnexpectedResponseCode { code, .. } | Self::RemoteError(code, _) => ErrorContext::new()
+                .with_i64(fields::REMOTE_CODE, i64::from(*code))
+                .with_secret_presence(fields::MESSAGE_PRESENT),
+            Self::UnsupportedRequestCode { code } => {
+                ErrorContext::new().with_i64(fields::REQUEST_CODE, i64::from(*code))
+            }
+        }
+    }
+
     /// Helper to construct a `BrokerNotFound` error.
     pub fn broker_not_found(broker_name: impl Into<String>) -> Self {
         RpcClientError::BrokerNotFound {

@@ -16,6 +16,10 @@ use std::fmt;
 
 use crate::fields;
 use crate::ErrorContext;
+use crate::ErrorDescriptor;
+use crate::CORE_INTERNAL_FAILURE;
+use crate::CORE_LIFECYCLE_NOT_INITIALIZED;
+use crate::PROTOCOL_FILTER_INVALID;
 
 /// The category of a SQL filter compilation failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -74,6 +78,14 @@ pub struct FilterCompileError {
 }
 
 impl FilterCompileError {
+    /// Returns the canonical descriptor for this compile failure.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self.kind {
+            FilterCompileErrorKind::LegacyAdapter => &CORE_INTERNAL_FAILURE,
+            _ => &PROTOCOL_FILTER_INVALID,
+        }
+    }
+
     /// Creates a redaction-safe compile error at an original UTF-8 byte offset.
     pub const fn new(kind: FilterCompileErrorKind, stage: FilterCompileStage, position: Option<usize>) -> Self {
         Self {
@@ -121,6 +133,10 @@ impl FilterCompileError {
 
     /// Returns structured, redaction-safe context for this compile failure.
     pub fn context(&self) -> ErrorContext {
+        if matches!(self.kind, FilterCompileErrorKind::LegacyAdapter) {
+            return ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "filter.compile.compatibility");
+        }
+
         let context = ErrorContext::new()
             .with_text(fields::FILTER_COMPILE_KIND, format!("{:?}", self.kind))
             .with_text(fields::FILTER_COMPILE_STAGE, format!("{:?}", self.stage));
@@ -191,6 +207,38 @@ pub enum FilterError {
 }
 
 impl FilterError {
+    /// Returns the canonical descriptor for this filter failure.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self {
+            Self::Compile(error) => error.descriptor(),
+            Self::Uninitialized => &CORE_LIFECYCLE_NOT_INITIALIZED,
+            Self::EmptyBytes
+            | Self::InvalidBitLength
+            | Self::BitLengthTooSmall
+            | Self::BitPositionOutOfBounds(..)
+            | Self::BytePositionOutOfBounds(..) => &PROTOCOL_FILTER_INVALID,
+        }
+    }
+
+    /// Returns descriptor-valid filter context.
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::Compile(error) => error.context(),
+            Self::EmptyBytes => ErrorContext::new().with_text(fields::FILTER_KIND, "empty_bytes"),
+            Self::InvalidBitLength => ErrorContext::new().with_text(fields::FILTER_KIND, "invalid_bit_length"),
+            Self::BitLengthTooSmall => ErrorContext::new().with_text(fields::FILTER_KIND, "bit_length_too_small"),
+            Self::BitPositionOutOfBounds(position, limit) => ErrorContext::new()
+                .with_text(fields::FILTER_KIND, "bit_position_out_of_bounds")
+                .with_u64(fields::POSITION, *position as u64)
+                .with_u64(fields::LIMIT, *limit as u64),
+            Self::BytePositionOutOfBounds(position, limit) => ErrorContext::new()
+                .with_text(fields::FILTER_KIND, "byte_position_out_of_bounds")
+                .with_u64(fields::POSITION, *position as u64)
+                .with_u64(fields::LIMIT, *limit as u64),
+            Self::Uninitialized => ErrorContext::new().with_text(fields::COMPONENT_NAME, "filter.bits_array"),
+        }
+    }
+
     /// Creates a structured SQL filter compilation error wrapper.
     pub const fn compile(error: FilterCompileError) -> Self {
         Self::Compile(error)

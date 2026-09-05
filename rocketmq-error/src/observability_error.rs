@@ -15,6 +15,13 @@
 use crate::context::ErrorContext;
 use crate::fields;
 use crate::kind::ErrorKind;
+use crate::ErrorDescriptor;
+use crate::OBSERVABILITY_CONFIGURATION_INVALID;
+use crate::OBSERVABILITY_FEATURE_DISABLED;
+use crate::OBSERVABILITY_INITIALIZATION_FAILED;
+use crate::OBSERVABILITY_LOG_FILTER_INVALID;
+use crate::OBSERVABILITY_SHUTDOWN_FAILED;
+use crate::OBSERVABILITY_SUBSCRIBER_INSTALLATION_FAILED;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -76,6 +83,22 @@ pub enum ObservabilityError {
 }
 
 impl ObservabilityError {
+    /// Returns the canonical descriptor for this observability failure.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self {
+            Self::FeatureDisabled(_) => &OBSERVABILITY_FEATURE_DISABLED,
+            Self::InvalidConfig(_) => &OBSERVABILITY_CONFIGURATION_INVALID,
+            Self::MetricsInit(_) | Self::TracesInit(_) | Self::LogsInit(_) | Self::LoggingInit(_) => {
+                &OBSERVABILITY_INITIALIZATION_FAILED
+            }
+            Self::InvalidLogFilter { .. } => &OBSERVABILITY_LOG_FILTER_INVALID,
+            Self::SubscriberInstallFailed { .. } => &OBSERVABILITY_SUBSCRIBER_INSTALLATION_FAILED,
+            Self::MetricsShutdown(_) | Self::TracesShutdown(_) | Self::LogsShutdown(_) => {
+                &OBSERVABILITY_SHUTDOWN_FAILED
+            }
+        }
+    }
+
     /// Returns the kind.
     pub fn kind(&self) -> ErrorKind {
         match self {
@@ -97,20 +120,20 @@ impl ObservabilityError {
     pub fn context(&self) -> ErrorContext {
         match self {
             Self::FeatureDisabled(feature) => ErrorContext::new().with_text(fields::FEATURE, *feature),
-            Self::InvalidConfig(_)
-            | Self::MetricsInit(_)
-            | Self::TracesInit(_)
-            | Self::LogsInit(_)
-            | Self::LoggingInit(_)
-            | Self::MetricsShutdown(_)
-            | Self::TracesShutdown(_)
-            | Self::LogsShutdown(_) => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
+            Self::InvalidConfig(_) => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
+            Self::MetricsInit(_) => observability_failure_context("metrics"),
+            Self::TracesInit(_) => observability_failure_context("traces"),
+            Self::LogsInit(_) => observability_failure_context("logs"),
+            Self::LoggingInit(_) => observability_failure_context("subscriber"),
             Self::InvalidLogFilter { .. } => ErrorContext::new()
                 .with_secret_presence(fields::FILTER_PRESENT)
                 .with_secret_presence(fields::ERROR_PRESENT),
             Self::SubscriberInstallFailed { attempted, installed } => ErrorContext::new()
                 .with_bool(fields::ATTEMPTED, *attempted)
                 .with_bool(fields::INSTALLED, *installed),
+            Self::MetricsShutdown(_) => observability_failure_context("metrics"),
+            Self::TracesShutdown(_) => observability_failure_context("traces"),
+            Self::LogsShutdown(_) => observability_failure_context("logs"),
         }
     }
 
@@ -166,4 +189,10 @@ impl ObservabilityError {
     pub fn logs_shutdown(error: impl ToString) -> Self {
         Self::LogsShutdown(error.to_string())
     }
+}
+
+fn observability_failure_context(signal: &'static str) -> ErrorContext {
+    ErrorContext::new()
+        .with_text(fields::OBSERVABILITY_SIGNAL, signal)
+        .with_secret_presence(fields::REASON_PRESENT)
 }

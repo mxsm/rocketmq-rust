@@ -413,6 +413,24 @@ pub mod fields {
         "Cluster identity."
     );
     define_field!(
+        CLIENT_ROLE,
+        TextField,
+        "client_role",
+        ContextVisibility::Public,
+        FieldValueKind::Text,
+        Some(32),
+        "Client component role."
+    );
+    define_field!(
+        COMPONENT_NAME,
+        TextField,
+        "component",
+        ContextVisibility::Diagnostic,
+        FieldValueKind::Text,
+        Some(64),
+        "Component involved in a lifecycle failure."
+    );
+    define_field!(
         CONSUMER,
         TextField,
         "consumer",
@@ -465,6 +483,24 @@ pub mod fields {
         FieldValueKind::Text,
         Some(64),
         "Disabled feature name."
+    );
+    define_field!(
+        FILTER_KIND,
+        TextField,
+        "filter_kind",
+        ContextVisibility::Diagnostic,
+        FieldValueKind::Text,
+        Some(64),
+        "Filter failure classification."
+    );
+    define_field!(
+        FORMAT,
+        TextField,
+        "format",
+        ContextVisibility::Diagnostic,
+        FieldValueKind::Text,
+        Some(64),
+        "Serialization format classification."
     );
     define_field!(
         FIELD,
@@ -557,6 +593,15 @@ pub mod fields {
         "Controller leader identifier."
     );
     define_field!(
+        LIMIT,
+        U64Field,
+        "limit",
+        ContextVisibility::Diagnostic,
+        FieldValueKind::U64,
+        None,
+        "Capacity limit associated with a failure."
+    );
+    define_field!(
         LIMIT_BYTES,
         U64Field,
         "limit_bytes",
@@ -620,6 +665,15 @@ pub mod fields {
         "Diagnostic operation classification."
     );
     define_field!(
+        OBSERVABILITY_SIGNAL,
+        TextField,
+        "observability_signal",
+        ContextVisibility::Diagnostic,
+        FieldValueKind::Text,
+        Some(32),
+        "Observability signal classification."
+    );
+    define_field!(
         ORDINAL,
         U64Field,
         "ordinal",
@@ -647,6 +701,24 @@ pub mod fields {
         "Message property name."
     );
     define_field!(
+        PHASE,
+        TextField,
+        "phase",
+        ContextVisibility::Diagnostic,
+        FieldValueKind::Text,
+        Some(32),
+        "Operation phase at which the failure occurred."
+    );
+    define_field!(
+        POSITION,
+        U64Field,
+        "position",
+        ContextVisibility::Diagnostic,
+        FieldValueKind::U64,
+        None,
+        "Input position associated with a failure."
+    );
+    define_field!(
         QUEUE_ID,
         I64Field,
         "queue_id",
@@ -656,6 +728,15 @@ pub mod fields {
         "Message queue identifier."
     );
     define_field!(
+        REQUEST_CODE,
+        I64Field,
+        "request_code",
+        ContextVisibility::Public,
+        FieldValueKind::I64,
+        None,
+        "RocketMQ request code."
+    );
+    define_field!(
         REMOTE_ADDR,
         TextField,
         "remote_addr",
@@ -663,6 +744,15 @@ pub mod fields {
         FieldValueKind::Text,
         Some(256),
         "Remote transport address."
+    );
+    define_field!(
+        REMOTE_CODE,
+        I64Field,
+        "remote_code",
+        ContextVisibility::Diagnostic,
+        FieldValueKind::I64,
+        None,
+        "Remote response code."
     );
     define_field!(
         RESOURCE,
@@ -690,6 +780,15 @@ pub mod fields {
         FieldValueKind::Text,
         Some(64),
         "Storage operation classification."
+    );
+    define_field!(
+        SERIALIZATION_TYPE,
+        U64Field,
+        "serialization_type",
+        ContextVisibility::Public,
+        FieldValueKind::U64,
+        None,
+        "Protocol serialization type identifier."
     );
     define_field!(
         TASK,
@@ -745,6 +844,15 @@ pub mod fields {
         FieldValueKind::Presence,
         None,
         "Presence of task context."
+    );
+    define_field!(
+        DETAIL_PRESENT,
+        SecretPresenceField,
+        "detail",
+        ContextVisibility::SecretPresenceOnly,
+        FieldValueKind::Presence,
+        None,
+        "Presence of arbitrary diagnostic detail."
     );
     define_field!(
         CONTROLLER_ERROR_PRESENT,
@@ -810,6 +918,15 @@ pub mod fields {
         "Presence of rendered internal error detail."
     );
     define_field!(
+        HOST_PRESENT,
+        SecretPresenceField,
+        "host",
+        ContextVisibility::SecretPresenceOnly,
+        FieldValueKind::Presence,
+        None,
+        "Presence of a network host value."
+    );
+    define_field!(
         INVALID_VALUE_PRESENT,
         SecretPresenceField,
         "invalid_value_present",
@@ -853,6 +970,15 @@ pub mod fields {
         FieldValueKind::Presence,
         None,
         "Presence of rendered protocol error detail."
+    );
+    define_field!(
+        REMOTE_ADDR_PRESENT,
+        SecretPresenceField,
+        "remote_addr",
+        ContextVisibility::SecretPresenceOnly,
+        FieldValueKind::Presence,
+        None,
+        "Presence of a remote transport address."
     );
     define_field!(
         REASON_PRESENT,

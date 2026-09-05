@@ -16,6 +16,12 @@
 
 use thiserror::Error;
 
+use crate::fields;
+use crate::ErrorContext;
+use crate::ErrorDescriptor;
+use crate::PROTOCOL_ENCODING_UNSUPPORTED;
+use crate::PROTOCOL_REQUEST_UNSUPPORTED;
+
 /// Protocol validation and processing errors
 #[derive(Debug, Error)]
 pub enum ProtocolError {
@@ -25,54 +31,6 @@ pub enum ProtocolError {
     InvalidCommand {
         /// The code value.
         code: i32,
-    },
-
-    /// Unsupported protocol version
-    #[error("Unsupported protocol version: {version}")]
-    /// The unsupported version value.
-    UnsupportedVersion {
-        /// The version value.
-        version: i32,
-    },
-
-    /// Required header field is missing
-    #[error("Missing required header field: {field}")]
-    /// The header missing value.
-    HeaderMissing {
-        /// The field value.
-        field: &'static str,
-    },
-
-    /// Required body is missing
-    #[error("Missing required message body")]
-    BodyMissing,
-
-    /// Checksum mismatch
-    #[error("Checksum mismatch: expected {expected:x}, got {actual:x}")]
-    /// The checksum mismatch value.
-    ChecksumMismatch {
-        /// The expected value.
-        expected: u32,
-        /// The actual value.
-        actual: u32,
-    },
-
-    /// Invalid message format
-    #[error("Invalid message format: {reason}")]
-    /// The invalid message value.
-    InvalidMessage {
-        /// The reason value.
-        reason: String,
-    },
-
-    /// Protocol decode error
-    #[error("Protocol decode error: ext_fields_length={ext_fields_len}, header_length={header_len}")]
-    /// The decode error value.
-    DecodeError {
-        /// The ext fields len value.
-        ext_fields_len: usize,
-        /// The header len value.
-        header_len: usize,
     },
 
     /// Unsupported serialization type
@@ -85,28 +43,28 @@ pub enum ProtocolError {
 }
 
 impl ProtocolError {
+    /// Returns the canonical descriptor for this protocol failure.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self {
+            Self::InvalidCommand { .. } => &PROTOCOL_REQUEST_UNSUPPORTED,
+            Self::UnsupportedSerializationType { .. } => &PROTOCOL_ENCODING_UNSUPPORTED,
+        }
+    }
+
+    /// Returns descriptor-valid protocol context.
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::InvalidCommand { code } => ErrorContext::new().with_i64(fields::REQUEST_CODE, i64::from(*code)),
+            Self::UnsupportedSerializationType { serialize_type } => {
+                ErrorContext::new().with_u64(fields::SERIALIZATION_TYPE, u64::from(*serialize_type))
+            }
+        }
+    }
+
     /// Create an invalid command error
     #[inline]
     pub fn invalid_command(code: i32) -> Self {
         Self::InvalidCommand { code }
-    }
-
-    /// Create a header missing error
-    #[inline]
-    pub fn header_missing(field: &'static str) -> Self {
-        Self::HeaderMissing { field }
-    }
-
-    /// Create a checksum mismatch error
-    #[inline]
-    pub fn checksum_mismatch(expected: u32, actual: u32) -> Self {
-        Self::ChecksumMismatch { expected, actual }
-    }
-
-    /// Create an invalid message error
-    #[inline]
-    pub fn invalid_message(reason: impl Into<String>) -> Self {
-        Self::InvalidMessage { reason: reason.into() }
     }
 }
 
@@ -118,31 +76,6 @@ mod tests {
     fn test_protocol_error() {
         let err = ProtocolError::invalid_command(999);
         assert_eq!(err.to_string(), "Invalid command code: 999");
-
-        let err = ProtocolError::UnsupportedVersion { version: 1 };
-        assert_eq!(err.to_string(), "Unsupported protocol version: 1");
-
-        let err = ProtocolError::header_missing("topic");
-        assert_eq!(err.to_string(), "Missing required header field: topic");
-
-        let err = ProtocolError::BodyMissing;
-        assert_eq!(err.to_string(), "Missing required message body");
-
-        let err = ProtocolError::checksum_mismatch(0xABCD, 0x1234);
-        assert!(err.to_string().contains("abcd"));
-        assert!(err.to_string().contains("1234"));
-
-        let err = ProtocolError::invalid_message("too long");
-        assert_eq!(err.to_string(), "Invalid message format: too long");
-
-        let err = ProtocolError::DecodeError {
-            ext_fields_len: 10,
-            header_len: 20,
-        };
-        assert_eq!(
-            err.to_string(),
-            "Protocol decode error: ext_fields_length=10, header_length=20"
-        );
 
         let err = ProtocolError::UnsupportedSerializationType { serialize_type: 2 };
         assert_eq!(err.to_string(), "Unsupported serialization type: 2");

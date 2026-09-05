@@ -27,11 +27,11 @@ pub struct AdminErrorView {
 
 impl AdminErrorView {
     pub fn from_error(error: &RocketMQError) -> Self {
-        let context = error.context();
+        let boundary = error.boundary_view();
         Self {
-            code: error.spec().code.as_str().to_string(),
-            message: error.public_message().to_string(),
-            context: (!context.is_empty()).then(|| context.to_string()),
+            code: boundary.code().as_str().to_string(),
+            message: boundary.message().to_string(),
+            context: (!boundary.context().is_empty()).then(|| boundary.context().to_string()),
         }
     }
 
@@ -61,10 +61,9 @@ mod tests {
         let error = RocketMQError::storage_read_failed("C:/secret/token/file", "permission denied");
         let view = AdminErrorView::from_error(&error);
 
-        assert_eq!(view.code, "STORAGE_READ_FAILED");
+        assert_eq!(view.code, "storage.read.failed");
         assert_eq!(view.message, "Storage read failed");
-        let rendered = view.stable_message();
-        assert!(rendered.contains("path=<redacted>"));
-        assert!(!rendered.contains("secret/token"));
+        assert_eq!(view.context, None);
+        assert_eq!(view.stable_message(), "Storage read failed");
     }
 }

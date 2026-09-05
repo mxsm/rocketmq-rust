@@ -175,7 +175,7 @@ async fn network_rejects_pre_encode_stops_and_preserves_typed_encode_failures() 
     let ResponseOperationalFailure::Encode { source } = error else {
         panic!("encoding failure should preserve its typed source");
     };
-    assert_eq!(source.kind().code().as_str(), "SERIALIZATION_FAILED");
+    assert_eq!(source.descriptor().code().as_str(), "core.serialization.failed");
     assert_eq!(encodes.load(Ordering::SeqCst), 1);
 
     harness.shutdown().await;

@@ -47,7 +47,7 @@ fn error_context_redacts_sensitive_fields() {
 fn rocketmq_error_exposes_public_message_and_redacted_context() {
     let route = RocketMQError::route_not_found("TopicA");
 
-    assert_eq!(route.public_message(), "Route information was not found");
+    assert_eq!(route.public_message(), "Topic route was not found");
     assert_eq!(route.context().to_string(), "topic=TopicA");
 
     let internal = RocketMQError::internal("run internal operation", std::io::Error::other("password=plain-text"));
@@ -55,7 +55,7 @@ fn rocketmq_error_exposes_public_message_and_redacted_context() {
 
     assert_eq!(internal.public_message(), "Internal error");
     assert!(context.public_fields().next().is_none());
-    assert_eq!(context.to_string(), "operation=<redacted>, internal_error=<redacted>");
+    assert_eq!(context.to_string(), "operation=<redacted>, source_present=<redacted>");
     assert!(!context.to_string().contains("plain-text"));
 }
 
@@ -64,12 +64,9 @@ fn boundary_view_exposes_public_message_and_redacted_context() {
     let error = RocketMQError::internal("run internal operation", std::io::Error::other("password=plain-text"));
     let view = error.boundary_view();
 
-    assert_eq!(view.code().as_str(), "INTERNAL");
+    assert_eq!(view.code().as_str(), "core.internal.failure");
     assert_eq!(view.message(), "Internal error");
-    assert_eq!(
-        view.context().to_string(),
-        "operation=<redacted>, internal_error=<redacted>"
-    );
+    assert!(view.context().is_empty());
     assert!(!view.context().to_string().contains("plain-text"));
     assert!(!view.is_retryable());
 }
@@ -83,7 +80,10 @@ fn observability_error_context_redacts_sensitive_details() {
     assert_eq!(init.kind(), ErrorKind::ObservabilityMetricsInitFailed);
     let context = init.context();
     assert!(context.public_fields().next().is_none());
-    assert_eq!(context.to_string(), "reason=<redacted>");
+    assert_eq!(
+        context.to_string(),
+        "observability_signal=<redacted>, reason=<redacted>"
+    );
     assert!(!context.to_string().contains("secret"));
 
     let filter = RocketMQError::from(ObservabilityError::invalid_log_filter(

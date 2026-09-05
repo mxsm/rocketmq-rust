@@ -14,7 +14,6 @@
 
 use rocketmq_error::CanonicalCondition;
 use rocketmq_error::ErrorCode;
-use rocketmq_error::ErrorKind;
 use rocketmq_error::RecoveryHint;
 
 #[test]
@@ -59,17 +58,6 @@ fn canonical_error_codes_reject_noncanonical_values() {
             "`{value}` must not be accepted as a canonical catalog code"
         );
     }
-}
-
-#[test]
-fn current_error_kind_codes_retain_the_single_error_code_type() {
-    fn accepts_error_code(_: ErrorCode) {}
-
-    let current = ErrorKind::Network.code();
-    accepts_error_code(current);
-    assert_eq!(current.as_str(), "NETWORK_CONNECTION_FAILED");
-    assert_eq!(ErrorCode::new("NETWORK_CONNECTION_FAILED").as_str(), current.as_str());
-    assert!(ErrorCode::try_new("NETWORK_CONNECTION_FAILED").is_none());
 }
 
 #[test]

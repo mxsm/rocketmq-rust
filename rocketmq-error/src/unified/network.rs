@@ -16,6 +16,18 @@
 
 use thiserror::Error;
 
+use crate::fields;
+use crate::ErrorContext;
+use crate::ErrorDescriptor;
+use crate::TRANSPORT_ADMISSION_QUEUE_SATURATED;
+use crate::TRANSPORT_CONNECTION_FAILED;
+use crate::TRANSPORT_CONNECTION_TIMEOUT;
+use crate::TRANSPORT_DNS_FAILED;
+use crate::TRANSPORT_ENDPOINT_INVALID;
+use crate::TRANSPORT_REMOTE_RATE_LIMITED;
+use crate::TRANSPORT_RESPONSE_TIMEOUT;
+use crate::TRANSPORT_WRITE_TIMEOUT;
+
 /// Network operation errors
 #[derive(Debug, Error)]
 pub enum NetworkError {
@@ -143,6 +155,66 @@ pub enum NetworkError {
 }
 
 impl NetworkError {
+    /// Returns the canonical descriptor for this network failure.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self {
+            Self::ConnectionFailed { .. }
+            | Self::ConnectionClosed { .. }
+            | Self::SendFailed { .. }
+            | Self::ReceiveFailed { .. } => &TRANSPORT_CONNECTION_FAILED,
+            Self::ConnectionTimeout { .. } => &TRANSPORT_CONNECTION_TIMEOUT,
+            Self::InvalidAddress { .. } => &TRANSPORT_ENDPOINT_INVALID,
+            Self::DnsResolutionFailed { .. } => &TRANSPORT_DNS_FAILED,
+            Self::TooManyRequests { .. } => &TRANSPORT_REMOTE_RATE_LIMITED,
+            Self::QueueFull { .. } => &TRANSPORT_ADMISSION_QUEUE_SATURATED,
+            Self::DeadlineExceededBeforeSend { .. } | Self::WriteTimeout { .. } => &TRANSPORT_WRITE_TIMEOUT,
+            Self::ResponseTimeout { .. } | Self::RequestTimeout { .. } => &TRANSPORT_RESPONSE_TIMEOUT,
+        }
+    }
+
+    /// Returns descriptor-valid context without exposing raw failure detail.
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::ConnectionFailed { .. } => ErrorContext::new()
+                .with_text(fields::PHASE, "connect")
+                .with_secret_presence(fields::REMOTE_ADDR_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::ConnectionTimeout { addr, timeout_ms } => ErrorContext::new()
+                .with_u64(fields::TIMEOUT_MS, *timeout_ms)
+                .with_text(fields::REMOTE_ADDR, addr),
+            Self::ConnectionClosed { .. } => ErrorContext::new()
+                .with_text(fields::PHASE, "closed")
+                .with_secret_presence(fields::REMOTE_ADDR_PRESENT),
+            Self::SendFailed { .. } => ErrorContext::new()
+                .with_text(fields::PHASE, "writing")
+                .with_secret_presence(fields::REMOTE_ADDR_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::ReceiveFailed { .. } => ErrorContext::new()
+                .with_text(fields::PHASE, "reading")
+                .with_secret_presence(fields::REMOTE_ADDR_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::InvalidAddress { .. } => ErrorContext::new().with_secret_presence(fields::REMOTE_ADDR_PRESENT),
+            Self::DnsResolutionFailed { .. } => ErrorContext::new()
+                .with_secret_presence(fields::HOST_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::TooManyRequests { addr, limit } => ErrorContext::new()
+                .with_text(fields::REMOTE_ADDR, addr)
+                .with_u64(fields::LIMIT, *limit as u64),
+            Self::QueueFull { addr } => ErrorContext::new().with_text(fields::REMOTE_ADDR, addr),
+            Self::DeadlineExceededBeforeSend { .. } => ErrorContext::new()
+                .with_text(fields::PHASE, "before_write")
+                .with_secret_presence(fields::REMOTE_ADDR_PRESENT),
+            Self::WriteTimeout { timeout_ms, .. } => ErrorContext::new()
+                .with_text(fields::PHASE, "writing")
+                .with_u64(fields::TIMEOUT_MS, *timeout_ms)
+                .with_secret_presence(fields::REMOTE_ADDR_PRESENT),
+            Self::ResponseTimeout { timeout_ms, .. } | Self::RequestTimeout { timeout_ms, .. } => ErrorContext::new()
+                .with_text(fields::PHASE, "awaiting_response")
+                .with_u64(fields::TIMEOUT_MS, *timeout_ms)
+                .with_secret_presence(fields::REMOTE_ADDR_PRESENT),
+        }
+    }
+
     /// Create a connection failed error
     #[inline]
     pub fn connection_failed(addr: impl Into<String>, reason: impl Into<String>) -> Self {

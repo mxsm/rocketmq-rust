@@ -19,17 +19,16 @@ use rocketmq_error::AuthError;
 use rocketmq_error::ControllerError;
 use rocketmq_error::DomainError;
 use rocketmq_error::ErrorKind;
-use rocketmq_error::RedactionPolicy;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::SerializationError;
 
 fn assert_domain_contract(error: &dyn DomainError, expected_kind: ErrorKind) {
     assert_eq!(expected_kind, error.kind());
-    assert_eq!(expected_kind.code(), error.spec().code);
+    assert_eq!(error.code(), error.descriptor().code());
     assert_eq!(error.code(), error.boundary_view().code());
-    assert_eq!(error.retry(), error.boundary_view().retry());
+    assert_eq!(error.recovery_hint(), error.boundary_view().recovery_hint());
     assert_eq!(error.severity(), error.boundary_view().severity());
-    assert_eq!(error.redaction(), error.spec().redact);
+    assert_eq!(error.exposure(), error.boundary_view().exposure());
 }
 
 #[test]
@@ -37,8 +36,8 @@ fn domain_errors_share_one_stable_metadata_contract() {
     let auth = AuthError::InvalidCredential("missing access key".to_owned());
     assert_domain_contract(&auth, ErrorKind::Authentication);
 
-    let controller = ControllerError::NotLeader { leader_id: Some(7) };
-    assert_domain_contract(&controller, ErrorKind::ControllerNotLeader);
+    let controller = RocketMQError::Controller(ControllerError::Raft("append failed".to_owned()));
+    assert_domain_contract(&controller, ErrorKind::Controller);
 
     let serialization = SerializationError::source(
         "decode command",
@@ -74,7 +73,7 @@ fn source_preserving_variants_retain_the_original_error_chain() {
         Some("worker cancelled"),
         internal.source().map(ToString::to_string).as_deref()
     );
-    assert_eq!(RedactionPolicy::RedactSensitive, internal.redaction());
+    assert_eq!("core.internal.failure", internal.descriptor().code().as_str());
 }
 
 #[test]
@@ -84,6 +83,6 @@ fn invariant_failure_is_not_a_string_catch_all() {
     assert_eq!(ErrorKind::Internal, error.kind());
     assert!(error.source().is_none());
     let context = error.boundary_view().context().to_string();
-    assert_eq!(context, "invariant=<redacted>");
+    assert!(context.is_empty());
     assert!(!context.contains("request owner must outlive its worker"));
 }

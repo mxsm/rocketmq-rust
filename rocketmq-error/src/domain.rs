@@ -16,95 +16,81 @@
 
 use std::error::Error as StdError;
 
-use crate::descriptor::ErrorCode;
-use crate::fields;
 use crate::AuthError;
 use crate::BoundaryErrorView;
-use crate::ControllerError;
+use crate::ErrorCode;
 use crate::ErrorContext;
+use crate::ErrorDescriptor;
 use crate::ErrorKind;
 use crate::ErrorSeverity;
-use crate::ErrorSpec;
+use crate::Exposure;
 use crate::FilterCompileError;
 use crate::FilterError;
 use crate::NetworkError;
 use crate::ObservabilityError;
 use crate::ProtocolError;
-use crate::RecoverySpec;
-use crate::RedactionPolicy;
-use crate::RetryClass;
+use crate::RecoveryHint;
 use crate::RocketMQError;
 use crate::RpcClientError;
 use crate::SerializationError;
 use crate::ToolsError;
 use crate::UnifiedServiceError;
+use crate::CORE_SERVICE_FAILED;
 
-/// Stable metadata exposed by every error that may cross a domain boundary.
+/// Stable descriptor metadata exposed by errors that cross domain boundaries.
 ///
 /// Implementations keep their typed [`StdError::source`] chain for diagnostics.
-/// Boundary adapters consume [`Self::boundary_view`] exactly once and must not
-/// infer behavior from `Display` output.
+/// Boundary adapters consume [`Self::boundary_view`] and derive all identity,
+/// projection, recovery, and exposure policy from [`Self::descriptor`].
 pub trait DomainError: StdError + Send + Sync + 'static {
-    /// Returns the stable error kind.
+    /// Returns the structural legacy error kind.
     fn kind(&self) -> ErrorKind;
 
-    /// Returns redaction-aware context safe for boundary adapters.
+    /// Returns the authoritative catalog descriptor.
+    fn descriptor(&self) -> &'static ErrorDescriptor;
+
+    /// Returns descriptor-valid diagnostic context.
+    ///
+    /// The context is not itself a public-boundary projection. Boundary
+    /// adapters should consume [`Self::boundary_view`] so exposure and field
+    /// visibility are applied.
     fn context(&self) -> ErrorContext {
-        ErrorContext::new().with_secret_presence(fields::DOMAIN_ERROR_PRESENT)
+        ErrorContext::new()
     }
 
-    /// Returns the immutable policy record for this error.
-    fn spec(&self) -> &'static ErrorSpec {
-        self.kind().spec()
-    }
-
-    /// Returns the stable machine-readable error code.
+    /// Returns the stable canonical error code.
     fn code(&self) -> ErrorCode {
-        self.spec().code
+        self.descriptor().code()
     }
 
-    /// Returns the recovery policy.
-    fn recovery(&self) -> RecoverySpec {
-        self.spec().recovery
+    /// Returns the catalog recovery hint.
+    fn recovery_hint(&self) -> RecoveryHint {
+        self.descriptor().recovery_hint()
     }
 
-    /// Returns the retry classification.
-    fn retry(&self) -> RetryClass {
-        self.recovery().retry
-    }
-
-    /// Returns the observability severity.
+    /// Returns the catalog severity.
     fn severity(&self) -> ErrorSeverity {
-        self.spec().observe.severity
+        self.descriptor().severity()
     }
 
-    /// Returns the external redaction policy.
-    fn redaction(&self) -> RedactionPolicy {
-        self.spec().redact
+    /// Returns the catalog exposure policy.
+    fn exposure(&self) -> Exposure {
+        self.descriptor().exposure()
     }
 
     /// Builds the sole redaction-aware input consumed by protocol adapters.
     fn boundary_view(&self) -> BoundaryErrorView {
-        let spec = self.spec();
-        BoundaryErrorView::new(
-            spec.kind,
-            self.code(),
-            spec.category,
-            spec.public_message,
-            self.context(),
-            spec.remoting,
-            spec.grpc,
-            spec.http,
-            spec.cli,
-            spec.recovery,
-            spec.observe,
-        )
+        BoundaryErrorView::new(self.descriptor(), self.context())
     }
 }
 
 impl DomainError for RocketMQError {
     fn kind(&self) -> ErrorKind {
         RocketMQError::kind(self)
+    }
+
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        RocketMQError::descriptor(self)
     }
 
     fn context(&self) -> ErrorContext {
@@ -120,11 +106,27 @@ impl DomainError for AuthError {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Authentication
     }
+
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        AuthError::descriptor(self)
+    }
+
+    fn context(&self) -> ErrorContext {
+        AuthError::context(self)
+    }
 }
 
 impl DomainError for NetworkError {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Network
+    }
+
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        NetworkError::descriptor(self)
+    }
+
+    fn context(&self) -> ErrorContext {
+        NetworkError::context(self)
     }
 }
 
@@ -132,11 +134,27 @@ impl DomainError for SerializationError {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Serialization
     }
+
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        SerializationError::descriptor(self)
+    }
+
+    fn context(&self) -> ErrorContext {
+        SerializationError::context(self)
+    }
 }
 
 impl DomainError for ProtocolError {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Protocol
+    }
+
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        ProtocolError::descriptor(self)
+    }
+
+    fn context(&self) -> ErrorContext {
+        ProtocolError::context(self)
     }
 }
 
@@ -144,27 +162,13 @@ impl DomainError for RpcClientError {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Rpc
     }
-}
 
-impl DomainError for ControllerError {
-    fn kind(&self) -> ErrorKind {
-        match self {
-            Self::Io(_) => ErrorKind::Io,
-            Self::Raft(_) | Self::RaftSource { .. } => ErrorKind::ControllerRaftError,
-            Self::NotLeader { .. } => ErrorKind::ControllerNotLeader,
-            Self::MetadataNotFound { .. } => ErrorKind::QueryNotFound,
-            Self::InvalidRequest(_) | Self::InvalidRequestSource { .. } => ErrorKind::IllegalArgument,
-            Self::BrokerRegistrationFailed(_) => ErrorKind::BrokerRegistrationFailed,
-            Self::NotInitialized(_) => ErrorKind::NotInitialized,
-            Self::ConfigError(_) => ErrorKind::ConfigInvalidValue,
-            Self::SerializationError(_) | Self::SerializationSource { .. } => ErrorKind::Serialization,
-            Self::StorageError(_) | Self::StorageSource { .. } => ErrorKind::StorageWriteFailed,
-            Self::NetworkError(_) => ErrorKind::Network,
-            Self::Timeout { .. } => ErrorKind::ControllerConsensusTimeout,
-            Self::InitializationFailed | Self::RuntimeError(_) | Self::RuntimeSource { .. } | Self::Shutdown => {
-                ErrorKind::Controller
-            }
-        }
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        RpcClientError::descriptor(self)
+    }
+
+    fn context(&self) -> ErrorContext {
+        RpcClientError::context(self)
     }
 }
 
@@ -173,17 +177,22 @@ impl DomainError for FilterError {
         ErrorKind::Filter
     }
 
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        FilterError::descriptor(self)
+    }
+
     fn context(&self) -> ErrorContext {
-        match self {
-            FilterError::Compile(error) => error.context(),
-            _ => ErrorContext::new().with_secret_presence(fields::DOMAIN_ERROR_PRESENT),
-        }
+        FilterError::context(self)
     }
 }
 
 impl DomainError for FilterCompileError {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Filter
+    }
+
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        FilterCompileError::descriptor(self)
     }
 
     fn context(&self) -> ErrorContext {
@@ -196,6 +205,10 @@ impl DomainError for ObservabilityError {
         ObservabilityError::kind(self)
     }
 
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        ObservabilityError::descriptor(self)
+    }
+
     fn context(&self) -> ErrorContext {
         ObservabilityError::context(self)
     }
@@ -206,6 +219,10 @@ impl DomainError for ToolsError {
         ToolsError::kind(self)
     }
 
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        ToolsError::descriptor(self)
+    }
+
     fn context(&self) -> ErrorContext {
         ToolsError::context(self)
     }
@@ -214,5 +231,9 @@ impl DomainError for ToolsError {
 impl DomainError for UnifiedServiceError {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Service
+    }
+
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        &CORE_SERVICE_FAILED
     }
 }

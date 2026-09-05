@@ -22,7 +22,8 @@ use crate::field::I64Field;
 use crate::field::SecretPresenceField;
 use crate::field::TextField;
 use crate::field::U64Field;
-use crate::kind::ErrorKind;
+use crate::ErrorDescriptor;
+use crate::Exposure;
 
 /// The redacted constant.
 pub const REDACTED: &str = "<redacted>";
@@ -69,75 +70,6 @@ impl<T> fmt::Display for Sensitive<T> {
 impl<T> fmt::Debug for Sensitive<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Sensitive(<redacted>)")
-    }
-}
-
-/// Spec-level redaction policy for external error surfaces.
-///
-/// `Public` means the stable public message and explicitly public context fields
-/// are safe for API/CLI/log surfaces. `RedactSensitive` means external adapters
-/// must prefer `ErrorSpec::public_message` and redaction-aware context over raw
-/// `Display` or `Debug` output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RedactionPolicy {
-    /// Represents the public case.
-    Public,
-    /// Represents the redact sensitive case.
-    RedactSensitive,
-}
-
-impl RedactionPolicy {
-    /// Return the default external-surface redaction policy for an error kind.
-    #[inline]
-    pub const fn for_kind(kind: ErrorKind) -> Self {
-        match kind {
-            ErrorKind::Network
-            | ErrorKind::Serialization
-            | ErrorKind::Protocol
-            | ErrorKind::Rpc
-            | ErrorKind::Authentication
-            | ErrorKind::BrokerRegistrationFailed
-            | ErrorKind::BrokerOperationFailed
-            | ErrorKind::MessageValidationFailed
-            | ErrorKind::BrokerPermissionDenied
-            | ErrorKind::NotMasterBroker
-            | ErrorKind::TopicSendingForbidden
-            | ErrorKind::BrokerAsyncTaskFailed
-            | ErrorKind::RequestBodyInvalid
-            | ErrorKind::RequestHeaderError
-            | ErrorKind::ResponseProcessFailed
-            | ErrorKind::Filter
-            | ErrorKind::StorageReadFailed
-            | ErrorKind::StorageWriteFailed
-            | ErrorKind::StorageCorrupted
-            | ErrorKind::StorageOutOfSpace
-            | ErrorKind::StorageLockFailed
-            | ErrorKind::ConfigParseFailed
-            | ErrorKind::ConfigMissing
-            | ErrorKind::ConfigInvalidValue
-            | ErrorKind::AuthConfigInvalid
-            | ErrorKind::AuthHotReloadFailed
-            | ErrorKind::ObservabilityConfigInvalid
-            | ErrorKind::ObservabilityMetricsInitFailed
-            | ErrorKind::ObservabilityTracesInitFailed
-            | ErrorKind::ObservabilityLogsInitFailed
-            | ErrorKind::ObservabilityLoggingInitFailed
-            | ErrorKind::ObservabilityLogFilterInvalid
-            | ErrorKind::ObservabilityMetricsShutdownFailed
-            | ErrorKind::ObservabilityTracesShutdownFailed
-            | ErrorKind::ObservabilityLogsShutdownFailed
-            | ErrorKind::Controller
-            | ErrorKind::ControllerRaftError
-            | ErrorKind::ControllerConsensusTimeout
-            | ErrorKind::ControllerSnapshotFailed
-            | ErrorKind::Io
-            | ErrorKind::IllegalArgument
-            | ErrorKind::Internal
-            | ErrorKind::Service
-            | ErrorKind::NotInitialized
-            | ErrorKind::Tools => Self::RedactSensitive,
-            _ => Self::Public,
-        }
     }
 }
 
@@ -302,6 +234,25 @@ impl ErrorContext {
     /// Returns retained fields to crate-private descriptor validators.
     pub(crate) fn fields(&self) -> &[ErrorContextField] {
         &self.fields
+    }
+
+    pub(crate) fn public_projection(&self, descriptor: &'static ErrorDescriptor) -> Self {
+        let mut projection = Self::new();
+        projection.truncated = self.truncated;
+        if matches!(descriptor.exposure(), Exposure::Generic) {
+            return projection;
+        }
+
+        projection.fields.extend(
+            self.fields
+                .iter()
+                .filter(|field| {
+                    matches!(field.visibility(), ContextVisibility::Public)
+                        && descriptor.fields().iter().any(|schema| *schema == field.schema())
+                })
+                .cloned(),
+        );
+        projection
     }
 
     #[inline]

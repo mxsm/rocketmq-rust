@@ -49,22 +49,6 @@ pub enum ControllerError {
         source: Box<dyn StdError + Send + Sync>,
     },
 
-    /// Not the leader error
-    #[error("Not leader, current leader is: {}", leader_id.map(|id| id.to_string()).unwrap_or_else(|| "unknown".to_string()))]
-    /// The not leader value.
-    NotLeader {
-        /// The leader identifier.
-        leader_id: Option<u64>,
-    },
-
-    /// Metadata not found
-    #[error("Metadata not found: {key}")]
-    /// The metadata not found value.
-    MetadataNotFound {
-        /// The key value.
-        key: String,
-    },
-
     /// Invalid request
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
@@ -78,10 +62,6 @@ pub enum ControllerError {
         /// The struct field value.
         source: Box<dyn StdError + Send + Sync>,
     },
-
-    /// Broker registration error
-    #[error("Broker registration failed: {0}")]
-    BrokerRegistrationFailed(String),
 
     /// Not initialized error
     #[error("Not initialized: {0}")]
@@ -122,10 +102,6 @@ pub enum ControllerError {
         /// The struct field value.
         source: Box<dyn StdError + Send + Sync>,
     },
-
-    /// Network error
-    #[error("Network error: {0}")]
-    NetworkError(String),
 
     /// Timeout error
     #[error("Operation timeout after {timeout_ms}ms")]
@@ -226,26 +202,12 @@ mod tests {
         assert_eq!(err.to_string(), "Raft error: raft append failed");
         assert!(err.source().is_some());
 
-        let err = ControllerError::NotLeader { leader_id: Some(1) };
-        assert_eq!(err.to_string(), "Not leader, current leader is: 1");
-
-        let err = ControllerError::NotLeader { leader_id: None };
-        assert_eq!(err.to_string(), "Not leader, current leader is: unknown");
-
-        let err = ControllerError::MetadataNotFound {
-            key: "broker-a".to_string(),
-        };
-        assert_eq!(err.to_string(), "Metadata not found: broker-a");
-
         let err = ControllerError::InvalidRequest("bad request".to_string());
         assert_eq!(err.to_string(), "Invalid request: bad request");
 
         let err = ControllerError::invalid_request_source("decode request", io::Error::other("bad bytes"));
         assert_eq!(err.to_string(), "Invalid request: decode request");
         assert!(err.source().is_some());
-
-        let err = ControllerError::BrokerRegistrationFailed("failed".to_string());
-        assert_eq!(err.to_string(), "Broker registration failed: failed");
 
         let err = ControllerError::NotInitialized("init first".to_string());
         assert_eq!(err.to_string(), "Not initialized: init first");
@@ -269,9 +231,6 @@ mod tests {
         let err = ControllerError::storage_source("write metadata", io::Error::other("disk full"));
         assert_eq!(err.to_string(), "Storage error: write metadata");
         assert!(err.source().is_some());
-
-        let err = ControllerError::NetworkError("disconnected".to_string());
-        assert_eq!(err.to_string(), "Network error: disconnected");
 
         let err = ControllerError::Timeout { timeout_ms: 5000 };
         assert_eq!(err.to_string(), "Operation timeout after 5000ms");

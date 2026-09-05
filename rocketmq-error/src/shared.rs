@@ -16,16 +16,11 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::descriptor::ErrorCode;
 use crate::BoundaryErrorView;
 use crate::DomainError;
 use crate::ErrorContext;
+use crate::ErrorDescriptor;
 use crate::ErrorKind;
-use crate::ErrorSeverity;
-use crate::ErrorSpec;
-use crate::RecoverySpec;
-use crate::RedactionPolicy;
-use crate::RetryClass;
 use crate::RocketMQError;
 
 /// An immutable, cloneable snapshot of a [`RocketMQError`].
@@ -76,28 +71,8 @@ impl DomainError for SharedRocketMQError {
         self.as_error().context()
     }
 
-    fn spec(&self) -> &'static ErrorSpec {
-        DomainError::spec(self.as_error())
-    }
-
-    fn code(&self) -> ErrorCode {
-        DomainError::code(self.as_error())
-    }
-
-    fn recovery(&self) -> RecoverySpec {
-        DomainError::recovery(self.as_error())
-    }
-
-    fn retry(&self) -> RetryClass {
-        DomainError::retry(self.as_error())
-    }
-
-    fn severity(&self) -> ErrorSeverity {
-        DomainError::severity(self.as_error())
-    }
-
-    fn redaction(&self) -> RedactionPolicy {
-        DomainError::redaction(self.as_error())
+    fn descriptor(&self) -> &'static ErrorDescriptor {
+        self.as_error().descriptor()
     }
 
     fn boundary_view(&self) -> BoundaryErrorView {
