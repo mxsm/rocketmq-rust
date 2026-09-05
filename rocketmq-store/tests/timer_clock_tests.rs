@@ -15,8 +15,8 @@
 #![cfg(feature = "extended_timeline")]
 
 use rocketmq_model::common::message::timer_request::normalize_timer_request_fields;
-use rocketmq_model::common::message::timer_request::TimerNormalizeError;
 use rocketmq_model::common::message::timer_request::TimerPolicySnapshot;
+use rocketmq_model::ModelContractViolation;
 
 #[test]
 fn long_horizon_deadlines_are_checked_with_one_caller_clock_sample() {
@@ -35,7 +35,7 @@ fn long_horizon_deadlines_are_checked_with_one_caller_clock_sample() {
     let outside = now_ms + 401 * DAY_MS;
     assert_eq!(
         normalize_timer_request_fields(None, None, Some(&outside.to_string()), now_ms, policy),
-        Err(TimerNormalizeError::ExceedsMaximum {
+        Err(ModelContractViolation::TimerDelayExceedsMaximum {
             delay_ms: 401 * DAY_MS,
             max_delay_ms: 400 * DAY_MS,
         })

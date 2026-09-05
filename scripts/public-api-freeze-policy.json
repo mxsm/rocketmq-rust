@@ -100,6 +100,16 @@
       "reason": "The unreleased runtime boundary replaces positional construction and ambiguous error aliases with validated plans, separates operational failures with catalog descriptors and typed sources from deterministic contract violations, and represents normal admission, scheduler, trigger, and registration decisions as explicit outcomes without compatibility shims.",
       "approved_by": "repository-owner",
       "approved_on": "2026-09-04"
+    },
+    {
+      "id": "API-0.9-011",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_model::{common::attribute::attribute_util::{AttributeError,AttributeUtil::alter_current_attributes}, common::attribute::cleanup_policy::{ParseCleanupPolicyError,<CleanupPolicy as core::str::FromStr>::Err}, common::attribute::cq_type::{ParseCQTypeError,<CQType as core::str::FromStr>::Err}, common::message::timer_request::{TimerNormalizeError,TimerPolicySnapshot::try_new,normalize_timer_request,normalize_timer_request_fields}, common::pop_retry_policy::{PopRetryPolicyError,PopRetryPolicy::{state,transition_to}}}; rocketmq_store::config::message_store_config::MessageStoreConfig::{timer_policy_snapshot,timer_policy_fingerprint}; rocketmq_protocol::{protocol::body::release_checkpoint::{ReleaseCheckpointValidationError,ReleaseCheckpointOffsets::validate,ReleaseCheckpointArtifact::validate,ControllerReleaseSnapshotRequest::validate,ControllerReleaseSnapshotManifest::validate,StoreReleaseCheckpointRequest::validate,StoreReleaseCheckpointManifest::validate,ReleaseCheckpointSetManifest::validate,ReleaseCheckpointRestoreVerification::validate}, protocol::header_codec::{HeaderCodecError,HeaderCodec::{validate_for_wire,encode_into,decode_from_map,decode_from_source},EncodeSink::write,HeaderValue::decode,validate_unsigned_java_range,into_rocketmq_error}, CommandCustomHeader::{try_encode_into_map,encode_direct_binary,encode_direct_json_fields}, protocol::remoting_command::RemotingCommand::try_make_custom_header_to_net, protocol::rocketmq_serializable::RocketMQSerializable::try_rocketmq_protocol_encode, protocol::remoting_command_compat::{RemotingDefaultsError,resolve_remoting_serialize_type,initialize_remoting_command_factory,initialize_remoting_defaults}, protocol::subscription::subscription_group_config::{SubscriptionGroupValidationError,validate_subscription_group_name,validate_subscription_group_configs}}",
+      "replacement": "root-exported rocketmq_model::{ModelContractViolation,PopRetryPolicyOutcome} and rocketmq_protocol::ProtocolContractViolation; every listed Result/FromStr signature now returns its owning root contract, PopRetryPolicy::transition_to returns Result<PopRetryPolicyOutcome, ModelContractViolation>, and the legacy RequestHeaderError adapter accepts ProtocolContractViolation while preserving PROTOCOL_HEADER_INVALID",
+      "reason": "The unreleased model and protocol APIs replace nine overlapping validation/error enums with one contract per owning layer, separate normal POP transition rejection from invalid policy input, preserve typed configuration sources behind fixed public text, and keep request-header wire/codegen behavior without aliases or compatibility shims.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-09-04"
     }
   ],
   "frozen_contracts": [

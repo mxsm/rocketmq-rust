@@ -26,7 +26,7 @@ pub(super) fn generate(model: &HeaderModel, generics: &Generics, codec_trait: &T
     let from_map_trait = from_map_trait(protocol_path);
     let map_type = quote!(#protocol_path::HeaderMap);
     let field_source = quote!(#protocol_path::protocol::header_codec::HeaderFieldSource);
-    let codec_error = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
+    let codec_error = quote!(#protocol_path::ProtocolContractViolation);
     let into_rocketmq_error = quote!(#protocol_path::protocol::header_codec::into_rocketmq_error);
     let rocketmq_error = quote!(#protocol_path::__request_header_codec::RocketMQError);
     let map_sink = quote!(#protocol_path::protocol::header_codec::MapSink);

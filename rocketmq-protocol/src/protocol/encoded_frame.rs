@@ -229,9 +229,9 @@ mod tests {
     use crate::protocol::command_custom_header::HeaderEncodeCapability;
     use crate::protocol::header::client_request_header::GetRouteInfoRequestHeader;
     use crate::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
-    use crate::protocol::header_codec::HeaderCodecError;
     use crate::protocol::remoting_command::RemotingCommand;
     use crate::protocol::SerializeType;
+    use crate::ProtocolContractViolation;
 
     struct FailingDirectHeader;
 
@@ -244,8 +244,8 @@ mod tests {
             HeaderEncodeCapability::DirectBinary
         }
 
-        fn encode_direct_binary(&self, _out: &mut BytesMut) -> Result<(), HeaderCodecError> {
-            Err(HeaderCodecError::FastCodecUnavailable {
+        fn encode_direct_binary(&self, _out: &mut BytesMut) -> Result<(), ProtocolContractViolation> {
+            Err(ProtocolContractViolation::FastCodecUnavailable {
                 header: "FailingDirectHeader",
             })
         }

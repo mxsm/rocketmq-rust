@@ -14,9 +14,9 @@
 
 use serde::Deserialize;
 use serde::Serialize;
-use thiserror::Error;
 
 use super::key_builder::KeyBuilder;
+use crate::ModelContractViolation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -61,17 +61,13 @@ pub struct PopRetryPolicy {
     pub generation: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum PopRetryPolicyError {
-    #[error("POP retry policy does not describe one of the four supported migration states")]
-    InvalidState,
-    #[error("POP retry policy transition from {from:?} to {to:?} is not safe")]
-    UnsafeTransition {
-        from: PopRetryMigrationState,
-        to: PopRetryMigrationState,
-    },
-    #[error("POP retry policy generation must advance beyond {current}, got {next}")]
-    StaleGeneration { current: u64, next: u64 },
+/// Result of asking a valid POP retry policy to change migration state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PopRetryPolicyOutcome {
+    /// The requested generation or state transition was not accepted.
+    Rejected,
+    /// The selected policy with the requested migration state and generation.
+    Transitioned(PopRetryPolicy),
 }
 
 impl PopRetryPolicy {
@@ -123,7 +119,13 @@ impl PopRetryPolicy {
         }
     }
 
-    pub fn state(&self) -> Result<PopRetryMigrationState, PopRetryPolicyError> {
+    /// Returns the migration state encoded by this policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelContractViolation::InvalidPopRetryPolicyState`] when the policy fields do
+    /// not encode one of the supported migration states.
+    pub fn state(&self) -> Result<PopRetryMigrationState, ModelContractViolation> {
         let state = match (
             self.write_version,
             self.read_fallback_order.as_slice(),
@@ -138,19 +140,28 @@ impl PopRetryPolicy {
                 PopRetryMigrationState::DualReadV2Write
             }
             (PopRetryTopicVersion::V2, [PopRetryTopicVersion::V2], false, true) => PopRetryMigrationState::V2Only,
-            _ => return Err(PopRetryPolicyError::InvalidState),
+            _ => return Err(ModelContractViolation::InvalidPopRetryPolicyState),
         };
         Ok(state)
     }
 
-    pub fn transition_to(&self, next: PopRetryMigrationState, generation: u64) -> Result<Self, PopRetryPolicyError> {
-        if generation <= self.generation {
-            return Err(PopRetryPolicyError::StaleGeneration {
-                current: self.generation,
-                next: generation,
-            });
-        }
+    /// Attempts to select a new migration state and generation.
+    ///
+    /// Stale generations and unsafe transitions return [`PopRetryPolicyOutcome::Rejected`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelContractViolation::InvalidPopRetryPolicyState`] when the current policy is
+    /// malformed.
+    pub fn transition_to(
+        &self,
+        next: PopRetryMigrationState,
+        generation: u64,
+    ) -> Result<PopRetryPolicyOutcome, ModelContractViolation> {
         let current = self.state()?;
+        if generation <= self.generation {
+            return Ok(PopRetryPolicyOutcome::Rejected);
+        }
         let allowed = matches!(
             (current, next),
             (PopRetryMigrationState::V1Only, PopRetryMigrationState::DualReadV1Write)
@@ -165,12 +176,9 @@ impl PopRetryPolicy {
                 )
         );
         if !allowed {
-            return Err(PopRetryPolicyError::UnsafeTransition {
-                from: current,
-                to: next,
-            });
+            return Ok(PopRetryPolicyOutcome::Rejected);
         }
-        Ok(Self::for_state(next, generation))
+        Ok(PopRetryPolicyOutcome::Transitioned(Self::for_state(next, generation)))
     }
 
     pub fn write_topic(&self, topic: &str, consumer_group: &str) -> String {
@@ -224,15 +232,24 @@ mod tests {
     #[test]
     fn migration_sequence_and_dual_reader_rollback_are_explicit() {
         let v1 = PopRetryPolicy::v1_only(1);
-        let dual_v1 = v1
+        let PopRetryPolicyOutcome::Transitioned(dual_v1) = v1
             .transition_to(PopRetryMigrationState::DualReadV1Write, 2)
-            .expect("v1 should enter dual-read before switching writes");
-        let dual_v2 = dual_v1
+            .expect("v1 should enter dual-read before switching writes")
+        else {
+            panic!("v1 should accept the first migration transition");
+        };
+        let PopRetryPolicyOutcome::Transitioned(dual_v2) = dual_v1
             .transition_to(PopRetryMigrationState::DualReadV2Write, 3)
-            .expect("dual reader should switch writes to v2");
-        let rolled_back = dual_v2
+            .expect("dual reader should switch writes to v2")
+        else {
+            panic!("dual reader should accept the write-version transition");
+        };
+        let PopRetryPolicyOutcome::Transitioned(rolled_back) = dual_v2
             .transition_to(PopRetryMigrationState::DualReadV1Write, 4)
-            .expect("dual reader should roll writes back to v1");
+            .expect("dual reader should roll writes back to v1")
+        else {
+            panic!("dual reader should accept the rollback transition");
+        };
 
         assert_eq!(rolled_back.state(), Ok(PopRetryMigrationState::DualReadV1Write));
         assert!(rolled_back.accepts(PopRetryTopicVersion::V2));
@@ -240,16 +257,36 @@ mod tests {
     }
 
     #[test]
-    fn policy_rejects_skipped_or_stale_transitions() {
+    fn policy_rejects_skipped_or_stale_transitions_without_contract_errors() {
         let v1 = PopRetryPolicy::v1_only(4);
-        assert!(matches!(
+        assert_eq!(
             v1.transition_to(PopRetryMigrationState::DualReadV1Write, 4),
-            Err(PopRetryPolicyError::StaleGeneration { .. })
-        ));
-        assert!(matches!(
+            Ok(PopRetryPolicyOutcome::Rejected)
+        );
+        assert_eq!(
             v1.transition_to(PopRetryMigrationState::DualReadV2Write, 5),
-            Err(PopRetryPolicyError::UnsafeTransition { .. })
-        ));
+            Ok(PopRetryPolicyOutcome::Rejected)
+        );
+    }
+
+    #[test]
+    fn malformed_current_policy_is_a_model_contract_violation() {
+        let malformed = PopRetryPolicy {
+            write_version: PopRetryTopicVersion::V1,
+            read_fallback_order: vec![PopRetryTopicVersion::V1],
+            accept_v1: false,
+            accept_v2: false,
+            generation: 4,
+        };
+
+        assert_eq!(
+            malformed.state(),
+            Err(ModelContractViolation::InvalidPopRetryPolicyState)
+        );
+        assert_eq!(
+            malformed.transition_to(PopRetryMigrationState::DualReadV1Write, 4),
+            Err(ModelContractViolation::InvalidPopRetryPolicyState)
+        );
     }
 
     #[test]

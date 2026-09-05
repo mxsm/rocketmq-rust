@@ -24,11 +24,11 @@ use cheetah_string::CheetahString;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
 use crate::protocol::header_codec::BinaryHeaderFields;
-use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_field_merge::has_custom_ext_collision;
 use crate::protocol::header_field_merge::merge_header_and_dynamic;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::LanguageCode;
+use crate::ProtocolContractViolation;
 
 const MAP_ENTRY_ENCODED_BYTES_ESTIMATE: usize = 16;
 const MIN_MAP_CAPACITY: usize = 4;
@@ -162,7 +162,10 @@ impl RocketMQSerializable {
     /// Returns the direct custom-header encoding failure when the selected
     /// header cannot be represented in the ROCKETMQ extension-field payload.
     #[inline]
-    pub fn try_rocketmq_protocol_encode(cmd: &RemotingCommand, buf: &mut BytesMut) -> Result<usize, HeaderCodecError> {
+    pub fn try_rocketmq_protocol_encode(
+        cmd: &RemotingCommand,
+        buf: &mut BytesMut,
+    ) -> Result<usize, ProtocolContractViolation> {
         Self::try_rocketmq_protocol_encode_with_capability(cmd, buf, cmd.custom_header_encode_capability())
     }
 
@@ -170,7 +173,7 @@ impl RocketMQSerializable {
         cmd: &RemotingCommand,
         buf: &mut BytesMut,
         capability: HeaderEncodeCapability,
-    ) -> Result<usize, HeaderCodecError> {
+    ) -> Result<usize, ProtocolContractViolation> {
         // A bounded initial allocation is cheaper than walking every typed and
         // dynamic field before immediately walking them again to encode. Large
         // headers retain BytesMut's normal growth behavior.
@@ -187,7 +190,7 @@ impl RocketMQSerializable {
         cmd: &RemotingCommand,
         buf: &mut BytesMut,
         capability: HeaderEncodeCapability,
-    ) -> Result<usize, HeaderCodecError> {
+    ) -> Result<usize, ProtocolContractViolation> {
         let begin_index = buf.len();
 
         // Write fixed-size header fields (total: 15 bytes)
@@ -246,7 +249,7 @@ impl RocketMQSerializable {
         cmd: &RemotingCommand,
         header: &dyn CommandCustomHeader,
         buf: &mut BytesMut,
-    ) -> Result<usize, HeaderCodecError> {
+    ) -> Result<usize, ProtocolContractViolation> {
         const FIXED_HEADER_LENGTH: usize = 21;
         const EXT_FIELDS_LENGTH_OFFSET: usize = 17;
 
@@ -271,7 +274,7 @@ impl RocketMQSerializable {
     fn write_ext_fields(
         buf: &mut BytesMut,
         fields: &HashMap<CheetahString, CheetahString>,
-    ) -> Result<(), HeaderCodecError> {
+    ) -> Result<(), ProtocolContractViolation> {
         for (key, value) in sorted_ext_fields(fields) {
             let key_length = Self::checked_dynamic_key_length(key.len())?;
             let value_length = Self::checked_dynamic_value_length(value.len())?;
@@ -284,20 +287,20 @@ impl RocketMQSerializable {
     }
 
     #[inline]
-    fn checked_ext_fields_length(length: usize) -> Result<i32, HeaderCodecError> {
-        i32::try_from(length).map_err(|_| HeaderCodecError::ExtensionFieldsLengthOverflow)
+    fn checked_ext_fields_length(length: usize) -> Result<i32, ProtocolContractViolation> {
+        i32::try_from(length).map_err(|_| ProtocolContractViolation::ExtensionFieldsLengthOverflow)
     }
 
     #[inline]
-    fn checked_dynamic_key_length(length: usize) -> Result<u16, HeaderCodecError> {
+    fn checked_dynamic_key_length(length: usize) -> Result<u16, ProtocolContractViolation> {
         i16::try_from(length)
             .map(|length| length as u16)
-            .map_err(|_| HeaderCodecError::DynamicKeyLengthOverflow)
+            .map_err(|_| ProtocolContractViolation::DynamicKeyLengthOverflow)
     }
 
     #[inline]
-    fn checked_dynamic_value_length(length: usize) -> Result<i32, HeaderCodecError> {
-        i32::try_from(length).map_err(|_| HeaderCodecError::DynamicValueLengthOverflow)
+    fn checked_dynamic_value_length(length: usize) -> Result<i32, ProtocolContractViolation> {
+        i32::try_from(length).map_err(|_| ProtocolContractViolation::DynamicValueLengthOverflow)
     }
 
     pub fn rocket_mq_protocol_encode_bytes(cmd: &RemotingCommand) -> Bytes {
@@ -653,7 +656,7 @@ mod tests {
         );
         assert!(matches!(
             RocketMQSerializable::checked_ext_fields_length(i32::MAX as usize + 1),
-            Err(HeaderCodecError::ExtensionFieldsLengthOverflow)
+            Err(ProtocolContractViolation::ExtensionFieldsLengthOverflow)
         ));
         assert_eq!(
             RocketMQSerializable::checked_dynamic_value_length(i32::MAX as usize).unwrap(),
@@ -661,7 +664,7 @@ mod tests {
         );
         assert!(matches!(
             RocketMQSerializable::checked_dynamic_value_length(i32::MAX as usize + 1),
-            Err(HeaderCodecError::DynamicValueLengthOverflow)
+            Err(ProtocolContractViolation::DynamicValueLengthOverflow)
         ));
     }
 
@@ -679,7 +682,7 @@ mod tests {
         );
         assert!(matches!(
             RocketMQSerializable::checked_dynamic_key_length(maximum + 1),
-            Err(HeaderCodecError::DynamicKeyLengthOverflow)
+            Err(ProtocolContractViolation::DynamicKeyLengthOverflow)
         ));
     }
 

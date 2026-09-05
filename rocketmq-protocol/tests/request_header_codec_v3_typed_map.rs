@@ -17,9 +17,9 @@
 use cheetah_string::CheetahString;
 use rocketmq_macros::{RequestHeaderCodecV2, RequestHeaderCodecV3};
 use rocketmq_protocol::protocol::header_codec::{
-    AliasConflictPolicy, FlattenPresenceSpec, HeaderCodec, HeaderCodecError, HeaderFieldSource, HeaderPresence,
+    AliasConflictPolicy, FlattenPresenceSpec, HeaderCodec, HeaderFieldSource, HeaderPresence,
 };
-use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderMap};
+use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderMap, ProtocolContractViolation};
 
 #[derive(Debug, PartialEq, RequestHeaderCodecV3)]
 #[header(
@@ -72,9 +72,9 @@ struct TypedMapHeaderV3 {
 }
 
 impl TypedMapHeaderV3 {
-    fn validate_header(&self) -> Result<(), HeaderCodecError> {
+    fn validate_header(&self) -> Result<(), ProtocolContractViolation> {
         if self.attempts < 0 {
-            Err(HeaderCodecError::Validation {
+            Err(ProtocolContractViolation::Validation {
                 header: <Self as HeaderCodec>::TYPE_ID,
                 rule: "attempts_non_negative",
             })
@@ -168,8 +168,8 @@ fn direct_field_source_matches_map_decode_for_values_and_errors() {
     conflicting.insert("legacyTraceId".into(), "different".into());
     let map_error = <TypedMapHeaderV3 as HeaderCodec>::decode_from_map(&conflicting).unwrap_err();
     let source_error = <TypedMapHeaderV3 as HeaderCodec>::decode_from_source(&conflicting).unwrap_err();
-    assert!(matches!(map_error, HeaderCodecError::Conflict { .. }));
-    assert!(matches!(source_error, HeaderCodecError::Conflict { .. }));
+    assert!(matches!(map_error, ProtocolContractViolation::Conflict { .. }));
+    assert!(matches!(source_error, ProtocolContractViolation::Conflict { .. }));
     assert_eq!(map_error.to_string(), source_error.to_string());
 
     for (key, value) in [
@@ -188,7 +188,7 @@ fn direct_field_source_matches_map_decode_for_values_and_errors() {
     missing.remove("requestId");
     assert!(matches!(
         <TypedMapHeaderV3 as HeaderCodec>::decode_from_source(&missing),
-        Err(HeaderCodecError::Missing {
+        Err(ProtocolContractViolation::Missing {
             header: "fixtures::TypedMapHeaderV3",
             key: "requestId"
         })
@@ -220,7 +220,7 @@ fn alias_policy_is_deterministic_for_get_and_scan_plans() {
     );
     assert!(matches!(
         <TypedMapHeaderV3 as HeaderCodec>::decode_from_map(&map),
-        Err(HeaderCodecError::Conflict {
+        Err(ProtocolContractViolation::Conflict {
             header: "fixtures::TypedMapHeaderV3",
             key: "traceId"
         })
@@ -313,7 +313,7 @@ fn validation_and_java_ranges_fail_before_map_values_are_exposed() {
     let mut out = HeaderMap::new();
     assert!(matches!(
         empty_required.try_encode_into_map(&mut out),
-        Err(HeaderCodecError::Validation {
+        Err(ProtocolContractViolation::Validation {
             rule: "required_non_empty:requestId",
             ..
         })
@@ -325,7 +325,7 @@ fn validation_and_java_ranges_fail_before_map_values_are_exposed() {
     invalid_range.queue_id = i32::MAX as u32 + 1;
     assert!(matches!(
         invalid_range.try_encode_into_map(&mut out),
-        Err(HeaderCodecError::JavaRange {
+        Err(ProtocolContractViolation::JavaRange {
             header: "fixtures::TypedMapHeaderV3",
             key: "queueId"
         })
@@ -335,7 +335,7 @@ fn validation_and_java_ranges_fail_before_map_values_are_exposed() {
     invalid_custom.attempts = -1;
     assert!(matches!(
         invalid_custom.try_encode_into_map(&mut out),
-        Err(HeaderCodecError::Validation {
+        Err(ProtocolContractViolation::Validation {
             rule: "attempts_non_negative",
             ..
         })
@@ -353,7 +353,7 @@ fn object_safe_and_v2_fallible_shims_preserve_classified_failures() {
     let mut out = HeaderMap::new();
     assert!(matches!(
         v2.try_encode_into_map(&mut out),
-        Err(HeaderCodecError::LegacyValidation { .. })
+        Err(ProtocolContractViolation::LegacyValidation { .. })
     ));
     assert!(out.is_empty());
 }

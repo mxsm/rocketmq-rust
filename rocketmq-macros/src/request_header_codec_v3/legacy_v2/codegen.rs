@@ -37,7 +37,7 @@ pub(crate) fn generate(model: &HeaderModel) -> TokenStream {
     let map_type = quote!(#protocol_path::HeaderMap);
     let string_type = quote!(#protocol_path::__request_header_codec::CheetahString);
     let error_type = quote!(#protocol_path::__request_header_codec::RocketMQError);
-    let codec_error_type = quote!(#protocol_path::protocol::header_codec::HeaderCodecError);
+    let codec_error_type = quote!(#protocol_path::ProtocolContractViolation);
 
     let const_decls = fields.iter().filter(|field| !field.flattened).map(gen_const_decl);
     let encode_stmts = fields

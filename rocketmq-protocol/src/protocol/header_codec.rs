@@ -32,10 +32,10 @@ mod private {
     pub trait FieldSourceSealed {}
 }
 
+pub(crate) use crate::ProtocolContractViolation;
 pub use codec::HeaderCodec;
 #[doc(hidden)]
 pub use error::into_rocketmq_error;
-pub use error::HeaderCodecError;
 pub(crate) use field_source::BinaryHeaderFields;
 pub use field_source::HeaderFieldSource;
 pub(crate) use json_field_source::JsonHeaderFields;

@@ -18,8 +18,8 @@ use super::RemotingCommand;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::command_custom_header::HeaderEncodeCapability;
-use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_field_merge::merge_header_and_dynamic;
+use crate::ProtocolContractViolation;
 
 impl RemotingCommand {
     pub fn set_command_custom_header<T>(mut self, command_custom_header: T) -> Self
@@ -70,7 +70,7 @@ impl RemotingCommand {
     ///
     /// Returns a typed validation, conversion, alias, or dynamic-field
     /// collision error without mutating this command.
-    pub fn try_make_custom_header_to_net(&mut self) -> Result<(), HeaderCodecError> {
+    pub fn try_make_custom_header_to_net(&mut self) -> Result<(), ProtocolContractViolation> {
         if self.custom_header_to_net {
             return Ok(());
         }

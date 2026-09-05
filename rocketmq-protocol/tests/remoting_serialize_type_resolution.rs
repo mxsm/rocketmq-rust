@@ -16,6 +16,7 @@ use rocketmq_protocol::protocol::remoting_command::SERIALIZE_TYPE_ENV;
 use rocketmq_protocol::protocol::remoting_command::SERIALIZE_TYPE_PROPERTY;
 use rocketmq_protocol::protocol::remoting_command_facade::resolve_remoting_serialize_type;
 use rocketmq_protocol::protocol::SerializeType;
+use rocketmq_protocol::ProtocolContractViolation;
 
 #[test]
 fn resolver_defaults_to_json_without_configuration() {
@@ -44,13 +45,19 @@ fn environment_is_used_when_property_is_absent() {
 
 #[test]
 fn unsupported_values_report_the_selected_key_and_value() {
-    let property_error = resolve_remoting_serialize_type(Some("CBOR"), Some("ROCKETMQ"))
+    let error = resolve_remoting_serialize_type(Some("CBOR"), Some("ROCKETMQ"))
         .expect_err("an invalid property must not fall back to the environment");
+    let ProtocolContractViolation::InvalidSerializeType(property_error) = error else {
+        panic!("expected invalid serialization type");
+    };
     assert_eq!(property_error.key(), SERIALIZE_TYPE_PROPERTY);
     assert_eq!(property_error.value(), "CBOR");
 
-    let environment_error =
+    let error =
         resolve_remoting_serialize_type(None, Some("CBOR")).expect_err("an invalid environment value must fail");
+    let ProtocolContractViolation::InvalidSerializeType(environment_error) = error else {
+        panic!("expected invalid serialization type");
+    };
     assert_eq!(environment_error.key(), SERIALIZE_TYPE_ENV);
     assert_eq!(environment_error.value(), "CBOR");
 }

@@ -33,36 +33,15 @@ impl fmt::Display for CQType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseCQTypeError {
-    value: String,
-}
-
-impl ParseCQTypeError {
-    fn new(value: &str) -> Self {
-        Self {
-            value: value.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for ParseCQTypeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Parse from string error,Invalid CQType: {}", self.value)
-    }
-}
-
-impl std::error::Error for ParseCQTypeError {}
-
 impl FromStr for CQType {
-    type Err = ParseCQTypeError;
+    type Err = crate::ModelContractViolation;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_uppercase().as_str() {
             "SIMPLECQ" => Ok(CQType::SimpleCQ),
             "BATCHCQ" => Ok(CQType::BatchCQ),
             "ROCKSDBCQ" => Ok(CQType::RocksDBCQ),
-            _ => Err(ParseCQTypeError::new(s)),
+            _ => Err(crate::ModelContractViolation::InvalidCqType),
         }
     }
 }
@@ -91,11 +70,14 @@ mod tests {
 
     #[test]
     fn test_from_str_invalid() {
-        let result = CQType::from_str("invalidcq");
-        assert!(result.is_err());
+        let rejected_value = "untrusted-cq-type";
         assert_eq!(
-            result.err().unwrap().to_string(),
-            "Parse from string error,Invalid CQType: invalidcq"
+            CQType::from_str(rejected_value),
+            Err(crate::ModelContractViolation::InvalidCqType)
         );
+        let error = CQType::from_str(rejected_value).expect_err("invalid CQ type should be rejected");
+        assert_eq!(error.to_string(), "consume queue type is invalid");
+        assert_eq!(format!("{error:?}"), "InvalidCqType");
+        assert!(!format!("{error:?}").contains(rejected_value));
     }
 }

@@ -17,10 +17,10 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 
-use crate::protocol::header_codec::HeaderCodecError;
 use crate::protocol::header_codec::HeaderFieldSource;
 use crate::protocol::header_codec::ResolvedHeaderKey;
 use crate::rocketmq_serializable::RocketMQSerializable;
+use crate::ProtocolContractViolation;
 
 /// Wire-format extension fields carried by a RocketMQ remoting command.
 pub type HeaderMap = HashMap<CheetahString, CheetahString>;
@@ -79,16 +79,19 @@ pub trait CommandCustomHeader: AsAny {
     ///
     /// # Errors
     ///
-    /// Returns [`HeaderCodecError::LegacyValidation`] when `check_fields`
-    /// fails, or [`HeaderCodecError::LegacyMapConversionFailed`] when a legacy
+    /// Returns [`ProtocolContractViolation::LegacyValidation`] when `check_fields`
+    /// fails, or [`ProtocolContractViolation::LegacyMapConversionFailed`] when a legacy
     /// `to_map` implementation returns `None`.
-    fn try_encode_into_map(&self, out: &mut HeaderMap) -> Result<(), HeaderCodecError> {
-        self.check_fields().map_err(|_| HeaderCodecError::LegacyValidation {
-            header: std::any::type_name::<Self>(),
-        })?;
-        let fields = self.to_map().ok_or(HeaderCodecError::LegacyMapConversionFailed {
-            header: std::any::type_name::<Self>(),
-        })?;
+    fn try_encode_into_map(&self, out: &mut HeaderMap) -> Result<(), ProtocolContractViolation> {
+        self.check_fields()
+            .map_err(|_| ProtocolContractViolation::LegacyValidation {
+                header: std::any::type_name::<Self>(),
+            })?;
+        let fields = self
+            .to_map()
+            .ok_or(ProtocolContractViolation::LegacyMapConversionFailed {
+                header: std::any::type_name::<Self>(),
+            })?;
         out.extend(fields);
         Ok(())
     }
@@ -132,8 +135,8 @@ pub trait CommandCustomHeader: AsAny {
     /// Returns a classified header codec error when validation or binary
     /// representation fails. The default reports that direct encoding is
     /// unavailable.
-    fn encode_direct_binary(&self, _out: &mut bytes::BytesMut) -> Result<(), HeaderCodecError> {
-        Err(HeaderCodecError::FastCodecUnavailable {
+    fn encode_direct_binary(&self, _out: &mut bytes::BytesMut) -> Result<(), ProtocolContractViolation> {
+        Err(ProtocolContractViolation::FastCodecUnavailable {
             header: std::any::type_name::<Self>(),
         })
     }
@@ -154,8 +157,8 @@ pub trait CommandCustomHeader: AsAny {
     ///
     /// Returns a classified header codec error when direct JSON encoding is
     /// unavailable or validation fails.
-    fn encode_direct_json_fields(&self, _out: &mut bytes::BytesMut) -> Result<(), HeaderCodecError> {
-        Err(HeaderCodecError::FastCodecUnavailable {
+    fn encode_direct_json_fields(&self, _out: &mut bytes::BytesMut) -> Result<(), ProtocolContractViolation> {
+        Err(ProtocolContractViolation::FastCodecUnavailable {
             header: std::any::type_name::<Self>(),
         })
     }

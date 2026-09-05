@@ -21,10 +21,10 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::timer_request::normalize_timer_request;
-use rocketmq_model::common::message::timer_request::TimerNormalizeError;
 use rocketmq_model::common::message::timer_request::TimerPolicySnapshot;
 use rocketmq_model::common::message::timer_request::JAVA_COMPAT_TIMER_PRECISIONS_MS;
 use rocketmq_model::common::message::MessageConst;
+use rocketmq_model::ModelContractViolation;
 use rocketmq_store_local::timer::service::TimerSchedulePolicy;
 
 fn deliver_at(value: u64) -> HashMap<CheetahString, CheetahString> {
@@ -68,10 +68,10 @@ fn java_compat_three_day_boundary_is_inclusive_and_next_millisecond_fails() {
     assert!(normalize_timer_request(&deliver_at(NOW_MS + MAX_DELAY_MS), NOW_MS, policy).is_ok());
     assert!(matches!(
         normalize_timer_request(&deliver_at(NOW_MS + MAX_DELAY_MS + 1), NOW_MS, policy),
-        Err(TimerNormalizeError::ExceedsMaximum { .. })
+        Err(ModelContractViolation::TimerDelayExceedsMaximum { .. })
     ));
     assert!(matches!(
         normalize_timer_request(&deliver_at(NOW_MS - 1), NOW_MS, policy),
-        Err(TimerNormalizeError::NotInFuture { .. })
+        Err(ModelContractViolation::TimerDeliveryTimeIsNotInFuture { .. })
     ));
 }

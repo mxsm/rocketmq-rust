@@ -15,25 +15,23 @@
 use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::{
     validate_subscription_group_configs, validate_subscription_group_name, SubscriptionGroupConfig,
-    SubscriptionGroupValidationError, SUBSCRIPTION_GROUP_NAME_MAX_LENGTH,
+    SUBSCRIPTION_GROUP_NAME_MAX_LENGTH,
 };
+use rocketmq_protocol::ProtocolContractViolation;
 
 #[test]
 fn java_compatible_group_name_rules_are_shared() {
     assert_eq!(
         validate_subscription_group_name("   "),
-        Err(SubscriptionGroupValidationError::Blank)
+        Err(ProtocolContractViolation::BlankSubscriptionGroup)
     );
     assert_eq!(
         validate_subscription_group_name("invalid.group"),
-        Err(SubscriptionGroupValidationError::IllegalCharacters {
-            group_name: CheetahString::from_static_str("invalid.group"),
-        })
+        Err(ProtocolContractViolation::SubscriptionGroupIllegalCharacters)
     );
     assert_eq!(
         validate_subscription_group_name(&"a".repeat(SUBSCRIPTION_GROUP_NAME_MAX_LENGTH + 1)),
-        Err(SubscriptionGroupValidationError::TooLong {
-            group_name: CheetahString::from_string("a".repeat(SUBSCRIPTION_GROUP_NAME_MAX_LENGTH + 1)),
+        Err(ProtocolContractViolation::SubscriptionGroupTooLong {
             max_length: SUBSCRIPTION_GROUP_NAME_MAX_LENGTH,
         })
     );
@@ -48,9 +46,7 @@ fn batch_validation_rejects_the_entire_list_before_mutation() {
     ];
     assert_eq!(
         validate_subscription_group_configs(&configs),
-        Err(SubscriptionGroupValidationError::IllegalCharacters {
-            group_name: CheetahString::from_static_str("invalid.group"),
-        })
+        Err(ProtocolContractViolation::SubscriptionGroupIllegalCharacters)
     );
 
     let duplicate = vec![
@@ -59,8 +55,6 @@ fn batch_validation_rejects_the_entire_list_before_mutation() {
     ];
     assert_eq!(
         validate_subscription_group_configs(&duplicate),
-        Err(SubscriptionGroupValidationError::Duplicate {
-            group_name: CheetahString::from_static_str("same-group"),
-        })
+        Err(ProtocolContractViolation::DuplicateSubscriptionGroup)
     );
 }

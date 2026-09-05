@@ -65,7 +65,7 @@ impl RemotingCommand {
         }
 
         self.try_make_custom_header_to_net()
-            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
+            .map_err(crate::protocol::header_codec::into_rocketmq_error)?;
 
         let estimated_header_size = self.estimate_json_header_size();
         let begin_index = dst.len();
@@ -128,7 +128,7 @@ impl RemotingCommand {
         dst.extend_from_slice(b",\"extFields\":");
         header
             .encode_direct_json_fields(dst)
-            .map_err(|error| rocketmq_error::RocketMQError::request_header_error(error.to_string()))?;
+            .map_err(crate::protocol::header_codec::into_rocketmq_error)?;
         dst.extend_from_slice(b",\"serializeTypeCurrentRPC\":\"JSON\"}");
 
         let header_length = dst.len() - header_index;

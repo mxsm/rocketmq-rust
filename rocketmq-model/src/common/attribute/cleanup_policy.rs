@@ -31,23 +31,14 @@ impl fmt::Display for CleanupPolicy {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub struct ParseCleanupPolicyError;
-
-impl fmt::Display for ParseCleanupPolicyError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "invalid cleanup policy")
-    }
-}
-
 impl FromStr for CleanupPolicy {
-    type Err = ParseCleanupPolicyError;
+    type Err = crate::ModelContractViolation;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
             "DELETE" => Ok(CleanupPolicy::DELETE),
             "COMPACTION" => Ok(CleanupPolicy::COMPACTION),
-            _ => Err(ParseCleanupPolicyError),
+            _ => Err(crate::ModelContractViolation::InvalidCleanupPolicy),
         }
     }
 }
@@ -76,6 +67,9 @@ mod tests {
 
     #[test]
     fn cleanup_policy_from_str_invalid() {
-        assert!("invalid".parse::<CleanupPolicy>().is_err());
+        assert_eq!(
+            "invalid".parse::<CleanupPolicy>(),
+            Err(crate::ModelContractViolation::InvalidCleanupPolicy)
+        );
     }
 }

@@ -15,12 +15,13 @@
 //! Versioned wire contracts for release snapshots and Store checkpoints.
 
 use std::collections::BTreeSet;
-use std::error::Error as StdError;
 use std::fmt;
 
 use rocketmq_error::Sensitive;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::ProtocolContractViolation;
 
 /// Current checkpoint manifest schema.
 pub const RELEASE_CHECKPOINT_SCHEMA_VERSION: u16 = 1;
@@ -79,22 +80,22 @@ impl ReleaseCheckpointOffsets {
     /// # Errors
     ///
     /// Returns a typed invariant error for a negative or out-of-order offset.
-    pub fn validate(self) -> Result<(), ReleaseCheckpointValidationError> {
+    pub fn validate(self) -> Result<(), ProtocolContractViolation> {
         if self.appended_offset < 0 || self.durable_offset < 0 || self.consume_queue_offset < 0 || self.index_offset < 0
         {
-            return Err(ReleaseCheckpointValidationError::InvalidOffsets(
-                "checkpoint offsets cannot be negative".to_string(),
-            ));
+            return Err(ProtocolContractViolation::InvalidCheckpointOffsets {
+                reason: "checkpoint offsets cannot be negative",
+            });
         }
         if self.durable_offset > self.appended_offset {
-            return Err(ReleaseCheckpointValidationError::InvalidOffsets(
-                "durable_offset cannot exceed appended_offset".to_string(),
-            ));
+            return Err(ProtocolContractViolation::InvalidCheckpointOffsets {
+                reason: "durable_offset cannot exceed appended_offset",
+            });
         }
         if self.consume_queue_offset > self.durable_offset || self.index_offset > self.durable_offset {
-            return Err(ReleaseCheckpointValidationError::InvalidOffsets(
-                "derived offsets cannot exceed durable_offset".to_string(),
-            ));
+            return Err(ProtocolContractViolation::InvalidCheckpointOffsets {
+                reason: "derived offsets cannot exceed durable_offset",
+            });
         }
         Ok(())
     }
@@ -111,12 +112,12 @@ pub struct ReleaseCheckpointStorageIdentity {
 }
 
 impl ReleaseCheckpointStorageIdentity {
-    fn validate(&self) -> Result<(), ReleaseCheckpointValidationError> {
+    fn validate(&self) -> Result<(), ProtocolContractViolation> {
         require_identifier("storageIdentity.volumeId", &self.volume_id)?;
         if self.wal_generation == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "storageIdentity.walGeneration",
-                reason: "must be greater than zero".to_string(),
+                reason: "must be greater than zero",
             });
         }
         Ok(())
@@ -153,9 +154,9 @@ impl ReleaseCheckpointArtifact {
     /// # Errors
     ///
     /// Returns a typed validation error when the artifact is incomplete.
-    pub fn validate(&self) -> Result<(), ReleaseCheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), ProtocolContractViolation> {
         if self.schema_version != RELEASE_CHECKPOINT_SCHEMA_VERSION {
-            return Err(ReleaseCheckpointValidationError::SchemaVersion {
+            return Err(ProtocolContractViolation::CheckpointSchemaVersion {
                 expected: RELEASE_CHECKPOINT_SCHEMA_VERSION,
                 actual: self.schema_version,
             });
@@ -164,28 +165,28 @@ impl ReleaseCheckpointArtifact {
         require_identifier("checkpointSetId", &self.checkpoint_set_id)?;
         require_identifier("barrierId", &self.barrier_id)?;
         if self.generation == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "generation",
-                reason: "must be greater than zero".to_string(),
+                reason: "must be greater than zero",
             });
         }
         if self.created_at_unix_millis == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "createdAtUnixMillis",
-                reason: "must be greater than zero".to_string(),
+                reason: "must be greater than zero",
             });
         }
         if self.length_bytes == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "lengthBytes",
-                reason: "must be greater than zero".to_string(),
+                reason: "must be greater than zero",
             });
         }
         require_sha256(&self.sha256)?;
         if self.uri.trim().is_empty() || self.uri.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "uri",
-                reason: "must be a non-empty single-line URI".to_string(),
+                reason: "must be a non-empty single-line URI",
             });
         }
         Ok(())
@@ -209,14 +210,14 @@ impl ControllerReleaseSnapshotRequest {
     ///
     /// Returns a typed validation error when an identifier is non-canonical or
     /// the requested storage generation is zero.
-    pub fn validate(&self) -> Result<(), ReleaseCheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), ProtocolContractViolation> {
         require_identifier("checkpointId", &self.checkpoint_id)?;
         require_identifier("checkpointSetId", &self.checkpoint_set_id)?;
         require_identifier("barrierId", &self.barrier_id)?;
         if self.generation == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "generation",
-                reason: "must be greater than zero".to_string(),
+                reason: "must be greater than zero",
             });
         }
         Ok(())
@@ -246,20 +247,20 @@ impl ControllerReleaseSnapshotManifest {
     ///
     /// Returns a typed validation error for invalid artifact metadata, missing
     /// applied state, or empty/duplicate voter membership.
-    pub fn validate(&self) -> Result<(), ReleaseCheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), ProtocolContractViolation> {
         self.artifact.validate()?;
         require_identifier("snapshotId", &self.snapshot_id)?;
         if self.last_applied_index == 0 || self.last_applied_term == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "lastApplied",
-                reason: "term and index must be greater than zero".to_string(),
+                reason: "term and index must be greater than zero",
             });
         }
         let voters = self.voter_ids.iter().copied().collect::<BTreeSet<_>>();
         if voters.is_empty() || voters.len() != self.voter_ids.len() || voters.contains(&0) {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "voterIds",
-                reason: "must contain unique non-zero Controller voters".to_string(),
+                reason: "must contain unique non-zero Controller voters",
             });
         }
         Ok(())
@@ -286,15 +287,15 @@ impl StoreReleaseCheckpointRequest {
     ///
     /// Returns a typed validation error when any required identity, generation,
     /// offset, or storage identity is invalid.
-    pub fn validate(&self) -> Result<(), ReleaseCheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), ProtocolContractViolation> {
         require_identifier("checkpointId", &self.checkpoint_id)?;
         require_identifier("checkpointSetId", &self.checkpoint_set_id)?;
         require_identifier("barrierId", &self.barrier_id)?;
         require_identifier("memberId", &self.member_id)?;
         if self.generation == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "generation",
-                reason: "must be greater than zero".to_string(),
+                reason: "must be greater than zero",
             });
         }
         self.offsets.validate()?;
@@ -329,13 +330,13 @@ impl StoreReleaseCheckpointManifest {
     ///
     /// Returns a typed validation error for an incomplete artifact, invalid
     /// offsets/storage identity, or a policy that permits WAL/PVC replacement.
-    pub fn validate(&self) -> Result<(), ReleaseCheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), ProtocolContractViolation> {
         self.artifact.validate()?;
         require_identifier("memberId", &self.member_id)?;
         self.offsets.validate()?;
         self.storage_identity.validate()?;
         if !self.wal_retained || !self.persistent_volume_retained {
-            return Err(ReleaseCheckpointValidationError::DestructiveRollback);
+            return Err(ProtocolContractViolation::DestructiveRollback);
         }
         Ok(())
     }
@@ -382,9 +383,9 @@ impl ReleaseCheckpointSetManifest {
     ///
     /// Returns a typed validation error when schema, release identity, policy
     /// version, fencing, membership, or any cross-artifact binding differs.
-    pub fn validate(&self) -> Result<(), ReleaseCheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), ProtocolContractViolation> {
         if self.schema_version != RELEASE_CHECKPOINT_SCHEMA_VERSION {
-            return Err(ReleaseCheckpointValidationError::SchemaVersion {
+            return Err(ProtocolContractViolation::CheckpointSchemaVersion {
                 expected: RELEASE_CHECKPOINT_SCHEMA_VERSION,
                 actual: self.schema_version,
             });
@@ -393,31 +394,29 @@ impl ReleaseCheckpointSetManifest {
         require_identifier("releaseId", &self.release_id)?;
         require_identifier("barrierId", &self.barrier_id)?;
         if self.generation == 0 || self.policy_version == 0 || self.fencing_token == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "generation/policyVersion/fencingToken",
-                reason: "must be greater than zero".to_string(),
+                reason: "must be greater than zero",
             });
         }
         if self.created_at_unix_millis == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "createdAtUnixMillis",
-                reason: "must be greater than zero".to_string(),
+                reason: "must be greater than zero",
             });
         }
         self.controller.validate()?;
         if self.stores.is_empty() {
-            return Err(ReleaseCheckpointValidationError::MissingStoreMembers);
+            return Err(ProtocolContractViolation::MissingStoreMembers);
         }
 
-        self.validate_binding("controller", &self.controller.artifact)?;
+        self.validate_binding("Controller", &self.controller.artifact)?;
         let mut members = BTreeSet::new();
         for store in &self.stores {
             store.validate()?;
-            self.validate_binding(&store.member_id, &store.artifact)?;
+            self.validate_binding("Store", &store.artifact)?;
             if !members.insert(store.member_id.as_str()) {
-                return Err(ReleaseCheckpointValidationError::DuplicateMember(
-                    store.member_id.clone(),
-                ));
+                return Err(ProtocolContractViolation::DuplicateStoreMember);
             }
         }
         Ok(())
@@ -425,16 +424,14 @@ impl ReleaseCheckpointSetManifest {
 
     fn validate_binding(
         &self,
-        member: &str,
+        member: &'static str,
         artifact: &ReleaseCheckpointArtifact,
-    ) -> Result<(), ReleaseCheckpointValidationError> {
+    ) -> Result<(), ProtocolContractViolation> {
         if artifact.checkpoint_set_id != self.checkpoint_set_id
             || artifact.generation != self.generation
             || artifact.barrier_id != self.barrier_id
         {
-            return Err(ReleaseCheckpointValidationError::SetBindingMismatch {
-                member: member.to_string(),
-            });
+            return Err(ProtocolContractViolation::CheckpointSetBindingMismatch { member });
         }
         Ok(())
     }
@@ -461,12 +458,12 @@ impl ReleaseCheckpointRestoreVerification {
     ///
     /// Returns a typed validation error when any integrity, offset, WAL, or PVC
     /// proof is absent.
-    pub fn validate(&self) -> Result<(), ReleaseCheckpointValidationError> {
+    pub fn validate(&self) -> Result<(), ProtocolContractViolation> {
         require_identifier("checkpointId", &self.checkpoint_id)?;
         if self.generation == 0 || self.verified_at_unix_millis == 0 {
-            return Err(ReleaseCheckpointValidationError::InvalidField {
+            return Err(ProtocolContractViolation::InvalidCheckpointField {
                 field: "generation/verifiedAtUnixMillis",
-                reason: "must be greater than zero".to_string(),
+                reason: "must be greater than zero",
             });
         }
         if !self.checksum_verified
@@ -475,75 +472,36 @@ impl ReleaseCheckpointRestoreVerification {
             || !self.wal_retained
             || !self.persistent_volume_retained
         {
-            return Err(ReleaseCheckpointValidationError::RestoreVerificationIncomplete);
+            return Err(ProtocolContractViolation::RestoreVerificationIncomplete);
         }
         Ok(())
     }
 }
 
-/// Checkpoint schema or cross-artifact invariant violation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ReleaseCheckpointValidationError {
-    SchemaVersion { expected: u16, actual: u16 },
-    InvalidField { field: &'static str, reason: String },
-    InvalidOffsets(String),
-    MissingStoreMembers,
-    DuplicateMember(String),
-    SetBindingMismatch { member: String },
-    DestructiveRollback,
-    RestoreVerificationIncomplete,
-}
-
-impl fmt::Display for ReleaseCheckpointValidationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SchemaVersion { expected, actual } => {
-                write!(
-                    formatter,
-                    "checkpoint schema version {actual} does not match {expected}"
-                )
-            }
-            Self::InvalidField { field, reason } => write!(formatter, "invalid checkpoint field {field}: {reason}"),
-            Self::InvalidOffsets(reason) => write!(formatter, "invalid checkpoint offsets: {reason}"),
-            Self::MissingStoreMembers => formatter.write_str("checkpoint set has no Store member"),
-            Self::DuplicateMember(member) => write!(formatter, "checkpoint set repeats Store member '{member}'"),
-            Self::SetBindingMismatch { member } => {
-                write!(formatter, "checkpoint member '{member}' does not match the set barrier")
-            }
-            Self::DestructiveRollback => {
-                formatter.write_str("checkpoint permits destructive WAL or persistent-volume replacement")
-            }
-            Self::RestoreVerificationIncomplete => formatter.write_str("checkpoint restore verification is incomplete"),
-        }
-    }
-}
-
-impl StdError for ReleaseCheckpointValidationError {}
-
-fn require_identifier(field: &'static str, value: &str) -> Result<(), ReleaseCheckpointValidationError> {
+fn require_identifier(field: &'static str, value: &str) -> Result<(), ProtocolContractViolation> {
     if value.is_empty()
         || value.len() > 256
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':' | b'/' | b'@'))
     {
-        return Err(ReleaseCheckpointValidationError::InvalidField {
+        return Err(ProtocolContractViolation::InvalidCheckpointField {
             field,
-            reason: "must be a canonical identifier".to_string(),
+            reason: "must be a canonical identifier",
         });
     }
     Ok(())
 }
 
-fn require_sha256(value: &str) -> Result<(), ReleaseCheckpointValidationError> {
+fn require_sha256(value: &str) -> Result<(), ProtocolContractViolation> {
     if value.len() != 64
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err(ReleaseCheckpointValidationError::InvalidField {
+        return Err(ProtocolContractViolation::InvalidCheckpointField {
             field: "sha256",
-            reason: "must be 64 lowercase hexadecimal characters".to_string(),
+            reason: "must be 64 lowercase hexadecimal characters",
         });
     }
     Ok(())

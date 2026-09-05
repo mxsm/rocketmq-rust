@@ -1,13 +1,13 @@
 error[E0277]: the trait bound `ExternalValue: header_codec::private::Sealed` is not satisfied
- --> tests/ui/request_header_codec_runtime/fail/external_header_value.rs:9:22
+ --> tests/ui/request_header_codec_runtime/fail/external_header_value.rs:8:22
   |
-9 | impl HeaderValue for ExternalValue {
+8 | impl HeaderValue for ExternalValue {
   |                      ^^^^^^^^^^^^^ unsatisfied trait bound
   |
 help: the trait `header_codec::private::Sealed` is not implemented for `ExternalValue`
- --> tests/ui/request_header_codec_runtime/fail/external_header_value.rs:7:1
+ --> tests/ui/request_header_codec_runtime/fail/external_header_value.rs:6:1
   |
-7 | struct ExternalValue;
+6 | struct ExternalValue;
   | ^^^^^^^^^^^^^^^^^^^^
   = help: the following other types implement trait `header_codec::private::Sealed`:
             BinarySink<'_>

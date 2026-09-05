@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use super::EncodeSink;
-use super::HeaderCodecError;
 use super::HeaderFieldSource;
 use super::HeaderFieldSpec;
 use super::HeaderFlattenSpec;
+use super::ProtocolContractViolation;
 use super::ResolvedHeaderKey;
 use crate::HeaderMap;
 
@@ -46,21 +46,21 @@ pub trait HeaderCodec: Sized {
     /// # Errors
     ///
     /// Returns a classified structural or header-specific validation failure.
-    fn validate_for_wire(&self) -> Result<(), HeaderCodecError>;
+    fn validate_for_wire(&self) -> Result<(), ProtocolContractViolation>;
 
     /// Appends canonical fields to a statically dispatched destination.
     ///
     /// # Errors
     ///
     /// Returns a typed validation, range, or destination representation error.
-    fn encode_into<S: EncodeSink>(&self, sink: &mut S) -> Result<(), HeaderCodecError>;
+    fn encode_into<S: EncodeSink>(&self, sink: &mut S) -> Result<(), ProtocolContractViolation>;
 
     /// Decodes this header from borrowed extension fields.
     ///
     /// # Errors
     ///
     /// Returns a typed missing, conflict, conversion, range, or validation error.
-    fn decode_from_map(map: &HeaderMap) -> Result<Self, HeaderCodecError>;
+    fn decode_from_map(map: &HeaderMap) -> Result<Self, ProtocolContractViolation>;
 
     /// Decodes this header directly from a borrowed field source.
     ///
@@ -71,7 +71,7 @@ pub trait HeaderCodec: Sized {
     ///
     /// Returns the same classified failures as [`Self::decode_from_map`].
     #[inline]
-    fn decode_from_source(source: &dyn HeaderFieldSource) -> Result<Self, HeaderCodecError> {
+    fn decode_from_source(source: &dyn HeaderFieldSource) -> Result<Self, ProtocolContractViolation> {
         let map = source.to_header_map();
         Self::decode_from_map(&map)
     }

@@ -87,15 +87,16 @@ use rocketmq_protocol::protocol::header::{
     ack_message_request_header::AckMessageRequestHeader, pop_message_request_header::PopMessageRequestHeader,
 };
 use rocketmq_protocol::protocol::header_codec::{
-    AliasConflictPolicy, HeaderCodec, HeaderCodecError, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence,
-    HeaderRange, HeaderValueKind,
+    AliasConflictPolicy, HeaderCodec, HeaderFieldSpec, HeaderFlattenSpec, HeaderPresence, HeaderRange, HeaderValueKind,
 };
 #[allow(deprecated, reason = "verifies the source-compatible legacy adapter delegates to V3")]
 use rocketmq_protocol::protocol::FastCodesHeader;
 use rocketmq_protocol::protocol::SerializeType;
 use rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_protocol::rpc::topic_request_header::TopicRequestHeader;
-use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderEncodeCapability, HeaderMap, RemotingCommand};
+use rocketmq_protocol::{
+    CommandCustomHeader, FromMap, HeaderEncodeCapability, HeaderMap, ProtocolContractViolation, RemotingCommand,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -208,7 +209,7 @@ struct SingleValidationHeader {
 }
 
 impl SingleValidationHeader {
-    fn count_validation(&self) -> Result<(), HeaderCodecError> {
+    fn count_validation(&self) -> Result<(), ProtocolContractViolation> {
         VALIDATION_CALLS.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -1009,7 +1010,7 @@ fn assert_rpc_envelope_contract<T>(
         missing.remove(key);
         let typed_missing = <T as HeaderCodec>::decode_from_map(&missing);
         assert!(
-            matches!(typed_missing, Err(HeaderCodecError::Missing { key: actual, .. }) if actual == key),
+            matches!(typed_missing, Err(ProtocolContractViolation::Missing { key: actual, .. }) if actual == key),
             "typed decode must reject missing required field {key}"
         );
         assert!(
@@ -1097,7 +1098,7 @@ fn assert_topic_envelope_contract<T>(
         missing.remove(key);
         assert!(matches!(
             <T as HeaderCodec>::decode_from_map(&missing),
-            Err(HeaderCodecError::Missing { key: actual, .. }) if actual == key
+            Err(ProtocolContractViolation::Missing { key: actual, .. }) if actual == key
         ));
         assert!(<T as FromMap>::from(&missing).is_err());
     }
@@ -1536,7 +1537,7 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
     malformed_order.insert("order".into(), "not-a-bool".into());
     assert!(matches!(
         <PopMessageRequestHeader as HeaderCodec>::decode_from_map(&malformed_order),
-        Err(HeaderCodecError::InvalidValue { key: "order", .. })
+        Err(ProtocolContractViolation::InvalidValue { key: "order", .. })
     ));
     assert!(<PopMessageRequestHeader as FromMap>::from(&malformed_order).is_err());
 
@@ -1557,7 +1558,7 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
     malformed_suspend.insert("suspend".into(), "not-a-bool".into());
     assert!(matches!(
         <ChangeInvisibleTimeRequestHeader as HeaderCodec>::decode_from_map(&malformed_suspend),
-        Err(HeaderCodecError::InvalidValue { key: "suspend", .. })
+        Err(ProtocolContractViolation::InvalidValue { key: "suspend", .. })
     ));
     assert!(<ChangeInvisibleTimeRequestHeader as FromMap>::from(&malformed_suspend).is_err());
 
@@ -1609,7 +1610,7 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
         let mut map = HeaderMap::new();
         assert!(matches!(
             header.try_encode_into_map(&mut map),
-            Err(HeaderCodecError::JavaRange { key: actual, .. }) if actual == key
+            Err(ProtocolContractViolation::JavaRange { key: actual, .. }) if actual == key
         ));
     }
 
@@ -1666,7 +1667,7 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
     invalid_filter_type.insert("topicFilterType".into(), "SQL92".into());
     assert!(matches!(
         <CreateTopicRequestHeader as HeaderCodec>::decode_from_map(&invalid_filter_type),
-        Err(HeaderCodecError::Validation {
+        Err(ProtocolContractViolation::Validation {
             rule: "supported_topic_filter_type",
             ..
         })
@@ -1705,7 +1706,7 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
     ]);
     assert!(matches!(
         <GetRouteInfoRequestHeader as HeaderCodec>::decode_from_map(&malformed_accept),
-        Err(HeaderCodecError::InvalidValue {
+        Err(ProtocolContractViolation::InvalidValue {
             key: "acceptStandardJsonOnly",
             ..
         })
@@ -1750,7 +1751,7 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
     ]);
     assert!(matches!(
         <QueryConsumerOffsetRequestHeader as HeaderCodec>::decode_from_map(&malformed_set_zero),
-        Err(HeaderCodecError::InvalidValue {
+        Err(ProtocolContractViolation::InvalidValue {
             key: "setZeroIfNotFound",
             ..
         })
@@ -1782,7 +1783,7 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
     ]);
     assert!(matches!(
         <UpdateGroupForbiddenRequestHeader as HeaderCodec>::decode_from_map(&malformed_readable),
-        Err(HeaderCodecError::InvalidValue { key: "readable", .. })
+        Err(ProtocolContractViolation::InvalidValue { key: "readable", .. })
     ));
     assert!(<UpdateGroupForbiddenRequestHeader as FromMap>::from(&malformed_readable).is_err());
 
@@ -1798,7 +1799,7 @@ fn topic_headers_preserve_nested_java_inheritance_and_defaults() {
     malformed.insert("committed".into(), "not-a-bool".into());
     assert!(matches!(
         <GetMaxOffsetRequestHeader as HeaderCodec>::decode_from_map(&malformed),
-        Err(HeaderCodecError::InvalidValue { key: "committed", .. })
+        Err(ProtocolContractViolation::InvalidValue { key: "committed", .. })
     ));
     assert!(<GetMaxOffsetRequestHeader as FromMap>::from(&malformed).is_err());
 }
@@ -1977,7 +1978,7 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
         missing.remove(required);
         assert!(matches!(
             <EndTransactionRequestHeader as HeaderCodec>::decode_from_map(&missing),
-            Err(HeaderCodecError::Missing { key, .. }) if key == required
+            Err(ProtocolContractViolation::Missing { key, .. }) if key == required
         ));
         assert!(<EndTransactionRequestHeader as FromMap>::from(&missing).is_err());
     }
@@ -1986,7 +1987,7 @@ fn rpc_envelope_headers_preserve_java_inheritance_and_legacy_aliases() {
     unsupported_state.insert("commitOrRollback".into(), "999".into());
     assert!(matches!(
         <EndTransactionRequestHeader as HeaderCodec>::decode_from_map(&unsupported_state),
-        Err(HeaderCodecError::Validation {
+        Err(ProtocolContractViolation::Validation {
             rule: "supported_transaction_state",
             ..
         })
@@ -2191,7 +2192,7 @@ fn typed_validation_errors_remain_classified_and_redacted() {
     let mut map = HeaderMap::new();
     assert!(matches!(
         invalid.try_encode_into_map(&mut map),
-        Err(HeaderCodecError::Validation {
+        Err(ProtocolContractViolation::Validation {
             rule: "max_count_positive",
             ..
         })
@@ -2488,7 +2489,7 @@ where
 
         let error = <T as HeaderCodec>::decode_from_map(&overflow).unwrap_err();
         assert!(
-            matches!(error, HeaderCodecError::InvalidValue { key: actual, .. } if actual == key),
+            matches!(error, ProtocolContractViolation::InvalidValue { key: actual, .. } if actual == key),
             "{key} must reject a value above its Java/Rust signed limit: {error}"
         );
         assert!(
@@ -2589,7 +2590,7 @@ fn unsigned_fast_header_fields_enforce_inferred_java_ranges() {
     let mut map = HeaderMap::new();
     assert!(matches!(
         request.try_encode_into_map(&mut map),
-        Err(HeaderCodecError::JavaRange {
+        Err(ProtocolContractViolation::JavaRange {
             key: "suspendTimeoutMillis",
             ..
         })
@@ -2597,7 +2598,7 @@ fn unsigned_fast_header_fields_enforce_inferred_java_ranges() {
     let mut bytes = BytesMut::from(&b"prefix"[..]);
     assert!(matches!(
         request.encode_direct_binary(&mut bytes),
-        Err(HeaderCodecError::JavaRange {
+        Err(ProtocolContractViolation::JavaRange {
             key: "suspendTimeoutMillis",
             ..
         })
@@ -2611,7 +2612,7 @@ fn unsigned_fast_header_fields_enforce_inferred_java_ranges() {
     let mut map = HeaderMap::new();
     assert!(matches!(
         response.try_encode_into_map(&mut map),
-        Err(HeaderCodecError::JavaRange {
+        Err(ProtocolContractViolation::JavaRange {
             key: "suggestWhichBrokerId",
             ..
         })
@@ -2620,7 +2621,7 @@ fn unsigned_fast_header_fields_enforce_inferred_java_ranges() {
     let mut bytes = BytesMut::from(&b"prefix"[..]);
     assert!(matches!(
         response.encode_direct_binary(&mut bytes),
-        Err(HeaderCodecError::JavaRange {
+        Err(ProtocolContractViolation::JavaRange {
             key: "suggestWhichBrokerId",
             ..
         })

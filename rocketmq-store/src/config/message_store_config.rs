@@ -1703,15 +1703,15 @@ impl MessageStoreConfig {
         &self,
     ) -> Result<
         rocketmq_model::common::message::timer_request::TimerPolicySnapshot,
-        rocketmq_model::common::message::timer_request::TimerNormalizeError,
+        rocketmq_model::ModelContractViolation,
     > {
-        use rocketmq_model::common::message::timer_request::TimerNormalizeError;
         use rocketmq_model::common::message::timer_request::TimerPolicySnapshot;
+        use rocketmq_model::ModelContractViolation;
 
         let max_delay_ms = self
             .timer_max_delay_sec
             .checked_mul(1_000)
-            .ok_or(TimerNormalizeError::ArithmeticOverflow)?;
+            .ok_or(ModelContractViolation::TimerDeliveryArithmeticOverflow)?;
         TimerPolicySnapshot::try_new(self.timer_precision_ms, max_delay_ms)
     }
 
@@ -1720,9 +1720,7 @@ impl MessageStoreConfig {
     /// # Errors
     ///
     /// Returns the same validation errors as [`Self::timer_policy_snapshot`].
-    pub fn timer_policy_fingerprint(
-        &self,
-    ) -> Result<u64, rocketmq_model::common::message::timer_request::TimerNormalizeError> {
+    pub fn timer_policy_fingerprint(&self) -> Result<u64, rocketmq_model::ModelContractViolation> {
         self.timer_policy_snapshot().map(|policy| policy.fingerprint())
     }
 

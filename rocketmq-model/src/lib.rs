@@ -21,6 +21,7 @@ pub mod common;
 pub mod consistent_hash;
 pub mod lite;
 pub mod message;
+mod model_contract_violation;
 pub mod result;
 pub mod time;
 pub mod topic;
@@ -29,6 +30,8 @@ pub mod version;
 
 pub use common::attribute::topic_attributes as TopicAttributes;
 pub use common::message::message_accessor as MessageAccessor;
+pub use common::pop_retry_policy::PopRetryPolicyOutcome;
+pub use model_contract_violation::ModelContractViolation;
 pub use rocketmq_error::RocketMQError;
 pub use rocketmq_error::RocketMQResult;
 pub use utils::crc32_utils as CRC32Utils;
