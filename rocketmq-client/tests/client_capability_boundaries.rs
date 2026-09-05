@@ -42,6 +42,7 @@ const ADMIN_TOPIC: &str = include_str!("../src/admin/default_mq_admin_ext_impl/t
 const PRODUCER_FACADE: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl.rs");
 const PRODUCER_CAPABILITIES: &str = include_str!("../src/producer/capability.rs");
 const PRODUCER_BACKEND: &str = include_str!("../src/producer/producer_backend.rs");
+const PRODUCER_HOOKS: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/hooks.rs");
 const PRODUCER_LIFECYCLE: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/lifecycle.rs");
 const PRODUCER_RETRY: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/retry.rs");
 const PRODUCER_SEND: &str = include_str!("../src/producer/producer_impl/default_mq_producer_impl/send.rs");
@@ -66,7 +67,7 @@ fn client_facades_declare_explicit_capability_modules() {
     for module in ["admin_api", "broker", "group", "lifecycle", "security", "topic"] {
         assert!(ADMIN_FACADE.contains(&format!("mod {module};")));
     }
-    for module in ["lifecycle", "retry", "send", "transaction"] {
+    for module in ["hooks", "lifecycle", "retry", "send", "transaction"] {
         assert!(PRODUCER_FACADE.contains(&format!("mod {module};")));
     }
 
@@ -176,6 +177,14 @@ fn protocol_and_retry_responsibilities_remain_in_their_own_modules() {
     assert!(PRODUCER_RETRY.contains("ClientRetryDecision"));
     assert!(PRODUCER_TRANSACTION.contains("send_message_in_transaction"));
     assert!(PRODUCER_LIFECYCLE.contains("shutdown_with_factory"));
+    for method in [
+        "register_end_transaction_hook",
+        "register_check_forbidden_hook",
+        "register_send_message_hook",
+        "set_rpc_hook",
+    ] {
+        assert!(PRODUCER_HOOKS.contains(&format!("pub fn {method}(")));
+    }
 }
 
 #[test]
@@ -203,6 +212,7 @@ fn capability_files_stay_within_the_reviewed_split_limits() {
         ("admin/security.rs", ADMIN_SECURITY, 200),
         ("admin/topic.rs", ADMIN_TOPIC, 450),
         ("producer/lifecycle.rs", PRODUCER_LIFECYCLE, 1_250),
+        ("producer/hooks.rs", PRODUCER_HOOKS, 100),
         ("producer/retry.rs", PRODUCER_RETRY, 250),
         ("producer/send.rs", PRODUCER_SEND, 2_050),
         ("producer/transaction.rs", PRODUCER_TRANSACTION, 450),
@@ -235,6 +245,7 @@ fn capability_split_does_not_introduce_detached_runtime_work() {
         ADMIN_SECURITY,
         ADMIN_TOPIC,
         PRODUCER_LIFECYCLE,
+        PRODUCER_HOOKS,
         PRODUCER_RETRY,
         PRODUCER_SEND,
         PRODUCER_TRANSACTION,
