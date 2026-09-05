@@ -22,7 +22,6 @@ use crate::model::EnvironmentId;
 use crate::model::StorageBackend;
 use crate::persistence::Revision;
 use crate::persistence::error::PersistenceError;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use serde_json::Value;
 
@@ -132,7 +131,7 @@ fn unknown_record_fields_truncated_lines_duplicate_identity_and_bad_relations_ar
 #[test]
 fn sqlite_backup_verify_restore_and_nonempty_target_are_atomic() {
     let directory = tempfile::tempdir().expect("temporary directory");
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let source_config = sqlite_config(directory.path().join("source.db"));
         let source = DashboardPersistence::initialize(
@@ -203,7 +202,7 @@ fn sqlite_backup_verify_restore_and_nonempty_target_are_atomic() {
 #[test]
 fn file_restore_publishes_only_a_complete_target() {
     let directory = tempfile::tempdir().expect("temporary directory");
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let config = StorageConfig {
             backend: StorageBackend::File,

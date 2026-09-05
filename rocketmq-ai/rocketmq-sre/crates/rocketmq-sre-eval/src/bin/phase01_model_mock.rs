@@ -81,7 +81,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_owned())
         .parse()
         .map_err(|_| MockProviderError::Configuration)?;
-    let runtime_owner = RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-sre-phase01-model-mock"))?;
+    let runtime_owner = RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-sre-phase01-model-mock"))
+        .expect("runtime configuration is valid")
+        .build()?;
     let service_result = runtime_owner.block_on(run(bind_addr));
     let shutdown_result = runtime_owner.shutdown_runtime_blocking();
     service_result?;

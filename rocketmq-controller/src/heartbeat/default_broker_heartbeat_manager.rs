@@ -636,7 +636,9 @@ mod tests {
         static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
         OWNER
             .get_or_init(|| {
-                RuntimeOwner::new(RuntimeConfig::server_default("controller-heartbeat-tests"))
+                RuntimeOwner::plan(RuntimeConfig::server_default("controller-heartbeat-tests"))
+                    .expect("runtime configuration is valid")
+                    .build()
                     .expect("controller heartbeat test runtime should start")
             })
             .root_context()

@@ -937,10 +937,12 @@ mod tests {
 
     #[test]
     fn topic_admin_builder_injects_runtime_and_credentials() {
-        let runtime_owner = RuntimeOwner::new(RuntimeConfig {
+        let runtime_owner = RuntimeOwner::plan(RuntimeConfig {
             thread_name: "topic-service-unit-test".to_string(),
             ..Default::default()
         })
+        .expect("runtime configuration is valid")
+        .build()
         .unwrap();
         let client_runtime = ClientRuntime::try_new(
             runtime_owner.root_context().component("topic-service-client"),

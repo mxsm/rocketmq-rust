@@ -31,7 +31,10 @@ fn service_context() -> ChildServiceContext {
     static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
     OWNER
         .get_or_init(|| {
-            RuntimeOwner::new(RuntimeConfig::server_default("timer-cutover-contract")).expect("timer cutover runtime")
+            RuntimeOwner::plan(RuntimeConfig::server_default("timer-cutover-contract"))
+                .expect("test runtime configuration is valid")
+                .build()
+                .expect("timer cutover runtime")
         })
         .root_context()
         .component("store")

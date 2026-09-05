@@ -1108,10 +1108,12 @@ mod cluster_test_runtime {
     use super::*;
 
     static TEST_RUNTIME_OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
-        rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig {
+        rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig {
             thread_name: "rocketmq-proxy-cluster-test".to_string(),
             ..Default::default()
         })
+        .expect("runtime configuration is valid")
+        .build()
         .expect("proxy cluster test runtime should start")
     });
 
@@ -3657,10 +3659,10 @@ mod tests {
             .checked_sub(Duration::from_millis(10))
             .expect("test instant supports subtraction");
         queued.queue_deadline = Duration::from_millis(1);
-        registration
-            .queue
-            .try_push_control(queued, size_of::<ClusterCommand>())
-            .expect("expired command enters the queue");
+        assert!(matches!(
+            registration.queue.try_push_control(queued, size_of::<ClusterCommand>()),
+            rocketmq_runtime::QueuePushOutcome::Enqueued
+        ));
         registration.queue.close();
 
         run_cluster_lane(

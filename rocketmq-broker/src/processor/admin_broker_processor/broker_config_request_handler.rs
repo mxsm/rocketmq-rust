@@ -205,7 +205,8 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             Err(error @ BrokerConfigError::RestartRequired { .. })
             | Err(error @ BrokerConfigError::UnsupportedKeys { .. })
             | Err(error @ BrokerConfigError::InvalidProperty { .. })
-            | Err(error @ BrokerConfigError::Invalid { .. }) => {
+            | Err(error @ BrokerConfigError::Invalid { .. })
+            | Err(error @ BrokerConfigError::Contract { .. }) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::InvalidParameter)
@@ -223,6 +224,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
                 ));
             }
             Err(error @ BrokerConfigError::Load { .. })
+            | Err(error @ BrokerConfigError::Runtime { .. })
             | Err(error @ BrokerConfigError::GenerationExhausted)
             | Err(error @ BrokerConfigError::RuntimeProjectionUnavailable { .. }) => {
                 return Ok(Some(

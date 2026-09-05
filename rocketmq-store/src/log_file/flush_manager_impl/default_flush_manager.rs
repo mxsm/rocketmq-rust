@@ -438,7 +438,7 @@ impl GroupCommitService {
             .record_enqueue(enqueue_time_millis, retained_bytes);
         tokio::select! {
             result = request_queue.push_until(request, retained_bytes, BudgetClass::Data, deadline) => {
-                let sent = result.is_ok();
+                let sent = !matches!(result, rocketmq_runtime::QueuePushOutcome::Rejected { .. });
                 if !sent {
                     self.sync_flush_stats.rollback_enqueue(enqueue_time_millis, retained_bytes);
                     self.sync_flush_stats.record_rejected();

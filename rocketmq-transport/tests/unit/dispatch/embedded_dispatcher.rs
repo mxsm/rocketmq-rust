@@ -247,7 +247,10 @@ impl RequestPolicy for AllowPolicy {
 
 impl EmbeddedFixture {
     fn new(name: &'static str) -> Self {
-        let runtime = RuntimeOwner::new(RuntimeConfig::server_default(name)).expect("embedded test runtime owner");
+        let runtime = RuntimeOwner::plan(RuntimeConfig::server_default(name))
+            .expect("test runtime configuration is valid")
+            .build()
+            .expect("embedded test runtime owner");
         let service = runtime.root_context().component(name);
         let task_group = service.task_group().clone();
         Self {

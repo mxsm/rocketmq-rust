@@ -113,7 +113,10 @@ mod tests {
         let sentinel = "sensitive-shutdown-runtime-canary";
         let error = crate::error::runtime_error(
             StoreOperation::Shutdown,
-            rocketmq_runtime::RuntimeError::InsideTokioRuntime(sentinel),
+            rocketmq_runtime::RuntimeError::internal(
+                rocketmq_runtime::RuntimeOperation::TieredStoreRuntime,
+                std::io::Error::other(sentinel),
+            ),
         );
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);

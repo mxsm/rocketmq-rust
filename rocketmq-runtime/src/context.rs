@@ -33,6 +33,8 @@ use crate::shutdown_deadline::ShutdownDeadline;
 use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskGroup;
 
+const BORROWED_RUNTIME_MEMORY_LIMIT_BYTES: u64 = u64::MAX;
+
 /// Test and migration harness for borrowing an already-running Tokio runtime.
 ///
 /// Production composition roots must use [`crate::RuntimeOwner`]. Production
@@ -55,7 +57,8 @@ impl RuntimeContext {
         name: impl Into<Arc<str>>,
         blocking_policy: BlockingPoolPolicy,
     ) -> RuntimeResult<Self> {
-        let handle = tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::NoCurrentRuntime)?;
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_error| RuntimeError::context_unavailable(crate::RuntimeOperation::RuntimeContext))?;
         let runtime = RuntimeHandle::new(handle);
         Self::new_with_blocking_lanes(runtime, name, BlockingLanePolicies::uniform(blocking_policy))
     }
@@ -70,9 +73,9 @@ impl RuntimeContext {
         let root_group = TaskGroup::root(name.clone(), runtime.clone());
         let diagnostics = RuntimeDiagnostics::new();
         let resources = RuntimeResources::from_memory_limit(
-            ProcessMemoryLimit::configured(u64::MAX)
-                .map_err(|error| RuntimeError::InvalidConfig(format!("invalid harness memory limit: {error}")))?,
-        )?;
+            ProcessMemoryLimit::configured(BORROWED_RUNTIME_MEMORY_LIMIT_BYTES)
+                .expect("the static borrowed-runtime memory limit is positive"),
+        );
         let root = RootServiceContext::new(
             name,
             runtime,
@@ -81,13 +84,14 @@ impl RuntimeContext {
             global_blocking_capacity,
             diagnostics,
             resources,
-        )?;
+        );
         Ok(Self { root: Arc::new(root) })
     }
 
     #[doc(hidden)]
     pub fn try_from_current(name: impl Into<Arc<str>>) -> RuntimeResult<Self> {
-        let handle = tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::NoCurrentRuntime)?;
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_error| RuntimeError::context_unavailable(crate::RuntimeOperation::RuntimeContext))?;
         Self::new(RuntimeHandle::new(handle), name)
     }
 

@@ -20,7 +20,6 @@ use tokio::sync::Notify;
 
 use super::BlockingLane;
 use super::BlockingLanePolicies;
-use crate::error::RuntimeResult;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LaneAdmissionSnapshot {
@@ -57,9 +56,9 @@ pub(crate) struct GlobalBlockingBudget {
 }
 
 impl GlobalBlockingBudget {
-    pub(crate) fn managed(capacity: usize, policies: &BlockingLanePolicies) -> RuntimeResult<Self> {
-        policies.validate_for_global_capacity(capacity)?;
-        Ok(Self::new(
+    pub(crate) fn managed(capacity: usize, policies: &BlockingLanePolicies) -> Self {
+        debug_assert!(policies.validate_for_global_capacity(capacity).is_ok());
+        Self::new(
             capacity,
             [
                 policies.max_concurrency(BlockingLane::StorageIo),
@@ -67,7 +66,7 @@ impl GlobalBlockingBudget {
                 policies.max_concurrency(BlockingLane::CpuCrypto),
             ],
             [1; 3],
-        ))
+        )
     }
 
     pub(crate) fn isolated(capacity: usize) -> Self {

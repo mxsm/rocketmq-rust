@@ -176,8 +176,10 @@ where
     P: RequestProcessor + Clone + Sync + 'static,
 {
     fn new(router: P, hooks: Vec<Arc<dyn RPCHook>>) -> Self {
-        let owner =
-            RuntimeOwner::new(RuntimeConfig::server_default("broker-router-test")).expect("Broker router test runtime");
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("broker-router-test"))
+            .expect("test runtime configuration is valid")
+            .build()
+            .expect("Broker router test runtime");
         let request_context = owner.root_context().component("broker-router-request");
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             router,

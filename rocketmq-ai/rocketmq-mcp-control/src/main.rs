@@ -31,7 +31,10 @@ fn main() -> Result<(), ControlError> {
     let config = ControlConfig::load(config_path)?;
     let mut runtime_config = RuntimeConfig::server_default("rocketmq-mcp-control");
     runtime_config.shutdown_timeout = RUNTIME_SHUTDOWN_TIMEOUT;
-    let owner = RuntimeOwner::new(runtime_config).map_err(|_| ControlError::execution_failed())?;
+    let owner = RuntimeOwner::plan(runtime_config)
+        .expect("runtime configuration is valid")
+        .build()
+        .map_err(|_| ControlError::execution_failed())?;
     let service_context = owner.root_context().component("rocketmq-mcp-control");
     let result = owner.block_on(run(config, service_context));
     let shutdown = owner

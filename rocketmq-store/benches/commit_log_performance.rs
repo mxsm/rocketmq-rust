@@ -163,7 +163,9 @@ fn benchmark_service_context() -> ChildServiceContext {
     static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
     OWNER
         .get_or_init(|| {
-            RuntimeOwner::new(RuntimeConfig::server_default("commit-log-performance-bench"))
+            RuntimeOwner::plan(RuntimeConfig::server_default("commit-log-performance-bench"))
+                .expect("test runtime configuration is valid")
+                .build()
                 .expect("commit log benchmark runtime should start")
         })
         .root_context()

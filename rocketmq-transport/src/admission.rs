@@ -25,13 +25,13 @@ use crate::dispatch::EmbeddedCaller;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetClass;
-use rocketmq_runtime::BudgetConfigError;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
 pub use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
+use rocketmq_runtime::RuntimeContractViolation;
 
 const ESTABLISHED_CONNECTION_RETAINED_BYTES: usize = 16 * 1024;
 const HANDSHAKE_RETAINED_BYTES: usize = 64 * 1024;
@@ -228,7 +228,7 @@ impl std::error::Error for AdmissionError {}
 
 #[derive(Debug)]
 pub enum AdmissionConfigError {
-    Budget(BudgetConfigError),
+    Budget(RuntimeContractViolation),
     ZeroScopeCapacity {
         scope: &'static str,
         dimension: BudgetDimension,
@@ -259,8 +259,8 @@ impl std::error::Error for AdmissionConfigError {
     }
 }
 
-impl From<BudgetConfigError> for AdmissionConfigError {
-    fn from(error: BudgetConfigError) -> Self {
+impl From<RuntimeContractViolation> for AdmissionConfigError {
+    fn from(error: RuntimeContractViolation) -> Self {
         Self::Budget(error)
     }
 }
@@ -905,7 +905,7 @@ fn global_budget(
     limit: ResourceLimit,
     reserve: ResourceLimit,
     policy: FullPolicy,
-) -> Result<ResourceBudget, BudgetConfigError> {
+) -> Result<ResourceBudget, RuntimeContractViolation> {
     let root_capacity = root.limit().capacity;
     let limit = ResourceLimit {
         count: limit.count.min(root_capacity.count),

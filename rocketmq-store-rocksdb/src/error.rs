@@ -83,25 +83,42 @@ pub(crate) fn capacity_exhausted(operation: StoreOperation) -> StoreError {
 }
 
 pub(crate) fn runtime_error(operation: StoreOperation, source: rocketmq_runtime::RuntimeError) -> StoreError {
-    use rocketmq_runtime::RuntimeError;
-
-    let descriptor = match &source {
-        RuntimeError::BlockingQueueTimeout { .. } | RuntimeError::BlockingTaskTimeoutStillRunning { .. } => {
-            &rocketmq_error::STORAGE_OPERATION_TIMED_OUT
+    let descriptor = if source.code() == rocketmq_error::RUNTIME_BUILD_FAILED.code()
+        || source.code() == rocketmq_error::RUNTIME_IO_FAILED.code()
+    {
+        &rocketmq_error::STORAGE_IO_FAILED
+    } else {
+        match source.condition() {
+            rocketmq_error::CanonicalCondition::InvalidArgument => &rocketmq_error::STORAGE_REQUEST_INVALID,
+            rocketmq_error::CanonicalCondition::Unavailable => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            rocketmq_error::CanonicalCondition::ResourceExhausted => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+            rocketmq_error::CanonicalCondition::DeadlineExceeded => &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
+            rocketmq_error::CanonicalCondition::Unimplemented => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+            _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
         }
-        RuntimeError::BlockingQueueFull { .. } => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
-        RuntimeError::UnsupportedBlockingKind { .. } => &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
-        RuntimeError::BuildRuntime(_) | RuntimeError::Io(_) => &rocketmq_error::STORAGE_IO_FAILED,
-        RuntimeError::InvalidConfig(_)
-        | RuntimeError::Configuration(_)
-        | RuntimeError::NoCurrentRuntime
-        | RuntimeError::InsideTokioRuntime(_)
-        | RuntimeError::TaskGroupClosing { .. }
-        | RuntimeError::BlockingJoin { .. }
-        | RuntimeError::ScheduledTaskExists { .. }
-        | RuntimeError::LifecycleOperation { .. } => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
     };
     StoreError::new(descriptor, operation)
         .in_component(StoreComponent::RocksDb)
         .with_source(source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_build_failure_maps_to_storage_io_before_unavailable() {
+        let error = runtime_error(
+            StoreOperation::Load,
+            rocketmq_runtime::RuntimeError::build(
+                rocketmq_runtime::RuntimeOperation::BuildTokioRuntime,
+                std::io::Error::other("injected build failure"),
+            ),
+        );
+
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<rocketmq_runtime::RuntimeError>())
+            .is_some());
+    }
 }

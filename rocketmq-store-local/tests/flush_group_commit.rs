@@ -91,8 +91,14 @@ async fn worker_batches_waiters_and_applies_checkpoint_after_completion() {
     stats.record_enqueue(first.enqueue_time_millis(), first.retained_bytes());
     stats.record_enqueue(second.enqueue_time_millis(), second.retained_bytes());
     let queue = group_commit_queue(2, 4_096);
-    queue.try_push_data(first, first_bytes).unwrap();
-    queue.try_push_data(second, second_bytes).unwrap();
+    assert!(matches!(
+        queue.try_push_data(first, first_bytes),
+        rocketmq_runtime::QueuePushOutcome::Enqueued
+    ));
+    assert!(matches!(
+        queue.try_push_data(second, second_bytes),
+        rocketmq_runtime::QueuePushOutcome::Enqueued
+    ));
     queue.close();
 
     let durable = Arc::new(AtomicI64::new(96));
@@ -155,7 +161,10 @@ async fn worker_propagates_forced_error_once_to_the_whole_batch() {
     let retained_bytes = request.retained_bytes();
     stats.record_enqueue(request.enqueue_time_millis(), request.retained_bytes());
     let queue = group_commit_queue(1, 2_048);
-    queue.try_push_data(request, retained_bytes).unwrap();
+    assert!(matches!(
+        queue.try_push_data(request, retained_bytes),
+        rocketmq_runtime::QueuePushOutcome::Enqueued
+    ));
     queue.close();
 
     let error = Arc::new(String::from("injected flush failure"));
@@ -205,7 +214,10 @@ async fn worker_panic_drops_request_permit_and_records_abandonment() {
     let retained_bytes = request.retained_bytes();
     stats.record_enqueue(request.enqueue_time_millis(), retained_bytes);
     let queue = group_commit_queue(1, retained_bytes);
-    queue.try_push_data(request, retained_bytes).expect("request fits");
+    assert!(matches!(
+        queue.try_push_data(request, retained_bytes),
+        rocketmq_runtime::QueuePushOutcome::Enqueued
+    ));
     queue.close();
     let diagnostics = queue.clone();
     let ports = GroupCommitWorkerPorts::new(

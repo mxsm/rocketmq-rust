@@ -152,10 +152,11 @@ impl GroupTransferServiceInner {
     #[inline]
     async fn put_request(&self, request: GroupCommitRequest) {
         let retained_bytes = std::mem::size_of::<PendingGroupTransfer>();
-        if let Err(_error) = self
-            .pending_requests
-            .try_push_data(PendingGroupTransfer::new(request), retained_bytes)
-        {
+        if matches!(
+            self.pending_requests
+                .try_push_data(PendingGroupTransfer::new(request), retained_bytes),
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. }
+        ) {
             warn!("HA group-transfer queue rejected a request");
         }
     }

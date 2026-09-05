@@ -28,12 +28,14 @@ use rocketmq_store::test_support::run_store_kv_compaction_lifecycle_probe;
 use rocketmq_store::test_support::StoreKvCompactionLifecycleProbe;
 
 fn run_lifecycle_probe() -> StoreKvCompactionLifecycleProbe {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: 2,
         max_blocking_threads: 4,
         thread_name: "rocketmq-store-kv-compaction-bench".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("store KV compaction benchmark runtime should start");
     let context = owner.root_context().component("store-kv-compaction-bench");
     let output = owner.block_on(run_store_kv_compaction_lifecycle_probe(context));

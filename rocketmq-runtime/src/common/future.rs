@@ -219,10 +219,9 @@ mod tests {
     #[test]
     fn completable_future_exceptional_completion_accepts_typed_error() {
         let mut cf: CompletableFuture<i32> = CompletableFuture::new();
-        cf.complete_exceptionally(RuntimeError::LifecycleOperation {
-            operation: "completable_future",
-            message: "test failure".to_string(),
-        });
+        cf.complete_exceptionally(RuntimeError::internal_failure(
+            crate::RuntimeOperation::CompletableFuture,
+        ));
 
         assert_eq!(futures::executor::block_on(cf), None);
     }

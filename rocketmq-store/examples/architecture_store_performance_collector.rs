@@ -834,11 +834,13 @@ fn build_envelope(scenario: Scenario, observations: Vec<SampleObservation>) -> R
 }
 
 fn collect_one_sample(scenario: Scenario) -> Result<SampleObservation> {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: 1,
         thread_name: "rocketmq-store-performance-collector".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .context("create sample runtime")?;
     #[cfg(feature = "tieredstore")]
     if scenario.is_tiered() {

@@ -27,7 +27,6 @@ use crate::model::StorageBackend;
 use crate::persistence::backend::PersistenceBackend;
 use crate::persistence::environment_repository::DEFAULT_ENVIRONMENT_ID;
 use crate::persistence::error::PersistenceError;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use sqlx::MySqlPool;
 use sqlx::PgPool;
@@ -85,7 +84,7 @@ fn docker_postgres_repository_contract() {
 }
 
 fn run_contract(config: StorageConfig) {
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let first = DashboardPersistence::initialize(&config, owner.root_context().component("contract-first"))
             .await

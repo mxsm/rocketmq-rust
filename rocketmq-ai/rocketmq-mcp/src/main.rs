@@ -34,10 +34,13 @@ use rocketmq_security_api::SecurityBootstrapProfile;
 
 const RUNTIME_TEARDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 fn main() -> Result<(), McpError> {
-    let owner = RuntimeOwner::new(mcp_runtime_config()).map_err(|source| McpError::Infrastructure {
-        operation: "create MCP runtime owner",
-        source: Box::new(source),
-    })?;
+    let owner = RuntimeOwner::plan(mcp_runtime_config())
+        .expect("runtime configuration is valid")
+        .build()
+        .map_err(|source| McpError::Infrastructure {
+            operation: "create MCP runtime owner",
+            source: Box::new(source),
+        })?;
     let service_context = owner.root_context().component("rocketmq-mcp");
     let lifecycle = ServiceLifecycle::from_env("rocketmq-mcp")
         .map_err(|error| McpError::InvalidConfig(format!("invalid MCP lifecycle configuration: {error}")))?;

@@ -348,6 +348,20 @@ pub(crate) fn runtime_to_rocketmq_error(
     rocketmq_error::RocketMQError::IO(std::io::Error::other(error))
 }
 
+pub(crate) fn require_metadata_durability(
+    outcome: rocketmq_runtime::MetadataIoDurabilityOutcome,
+) -> rocketmq_error::RocketMQResult<()> {
+    match outcome {
+        rocketmq_runtime::MetadataIoDurabilityOutcome::Durable(_) => Ok(()),
+        rocketmq_runtime::MetadataIoDurabilityOutcome::TargetConflict(request) => {
+            Err(rocketmq_error::RocketMQError::storage_write_failed(
+                request.target().display().to_string(),
+                "metadata resource target conflict",
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_service_context(name: impl Into<std::sync::Arc<str>>) -> rocketmq_runtime::ChildServiceContext {
     use std::sync::OnceLock;
@@ -356,13 +370,15 @@ pub(crate) fn test_service_context(name: impl Into<std::sync::Arc<str>>) -> rock
     let name: std::sync::Arc<str> = name.into();
     OWNER
         .get_or_init(|| {
-            rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+            rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
                 "rocketmq-broker-tests",
             ))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("broker test runtime owner should start")
         })
         .root_context()
-        .component(name)
+        .component(rocketmq_runtime::ScopeId::try_new(name).expect("broker test contexts use nonblank fixture names"))
 }
 
 #[cfg(test)]

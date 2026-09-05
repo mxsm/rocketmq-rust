@@ -20,12 +20,12 @@ use cheetah_string::CheetahString;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS;
 use rocketmq_runtime::BudgetCapacity;
-use rocketmq_runtime::BudgetConfigError;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::MemoryLimitSource;
 use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::ResourceBudgetTree;
+use rocketmq_runtime::RuntimeContractViolation;
 use rocketmq_store::FlushDiskType;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::StoreType;
@@ -236,7 +236,7 @@ impl ResourceConfig {
         self.control_reserve_bytes
     }
 
-    pub fn budget_tree(&self) -> Result<ResourceBudgetTree, BudgetConfigError> {
+    pub fn budget_tree(&self) -> Result<ResourceBudgetTree, RuntimeContractViolation> {
         // A Lite subscription can contribute one pending event and one tracked
         // client-access entry. Both consume separate child permits.
         let item_limit = self
@@ -805,23 +805,16 @@ fn validate_resources(broker: &BrokerConfig, store: &MessageStoreConfig) -> Resu
     }
 
     let process_memory_limit = if broker.process_memory_limit_bytes == 0 {
-        ProcessMemoryLimit::detect()
+        ProcessMemoryLimit::detect().map_err(|source| {
+            BrokerConfigError::runtime(ConfigSection::Resources, "broker.processMemoryLimitBytes", source)
+        })?
     } else {
-        ProcessMemoryLimit::configured(broker.process_memory_limit_bytes)
-    }
-    .map_err(|error| {
-        BrokerConfigError::invalid(
-            ConfigSection::Resources,
-            "broker.processMemoryLimitBytes",
-            error.to_string(),
-        )
-    })?;
-    let managed_memory_bytes = process_memory_limit.fraction(1, 4).map_err(|error| {
-        BrokerConfigError::invalid(
-            ConfigSection::Resources,
-            "broker.processMemoryLimitBytes",
-            error.to_string(),
-        )
+        ProcessMemoryLimit::configured(broker.process_memory_limit_bytes).map_err(|source| {
+            BrokerConfigError::contract(ConfigSection::Resources, "broker.processMemoryLimitBytes", source)
+        })?
+    };
+    let managed_memory_bytes = process_memory_limit.fraction(1, 4).map_err(|source| {
+        BrokerConfigError::contract(ConfigSection::Resources, "broker.processMemoryLimitBytes", source)
     })?;
     if managed_memory_bytes < 1024 * 1024 {
         return Err(BrokerConfigError::invalid(

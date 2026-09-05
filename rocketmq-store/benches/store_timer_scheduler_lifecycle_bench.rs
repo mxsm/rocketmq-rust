@@ -33,12 +33,14 @@ fn run_lifecycle_probe() -> StoreTimerSchedulerLifecycleProbe {
 }
 
 fn run_lifecycle_probe_with_workers(workers: usize) -> StoreTimerSchedulerLifecycleProbe {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: workers.max(2),
         max_blocking_threads: 4,
         thread_name: "rocketmq-store-timer-scheduler-bench".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("store timer scheduler benchmark runtime should start");
     let context = owner.root_context().component("store-timer-scheduler-bench");
     let output = if workers == 3 {

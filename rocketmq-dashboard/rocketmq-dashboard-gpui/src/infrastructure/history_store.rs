@@ -197,11 +197,11 @@ mod tests {
 
     fn with_store(test: impl FnOnce(Arc<HistoryStore>, &std::path::Path, &RuntimeOwner)) {
         let directory = tempfile::tempdir().expect("temp directory");
-        let runtime = RuntimeOwner::new_with_memory_limit(
-            RuntimeConfig::for_parallelism("history-test", 1),
-            ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory"),
-        )
-        .expect("runtime");
+        let runtime = RuntimeOwner::plan(RuntimeConfig::for_parallelism("history-test", 1))
+            .expect("test runtime configuration is valid")
+            .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory"))
+            .build()
+            .expect("runtime");
         let path = directory.path().join("history.json");
         let store = HistoryStore::new(path.clone(), runtime.root_context().component("history"));
         test(store, &path, &runtime);

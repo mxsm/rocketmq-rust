@@ -27,7 +27,9 @@ where
     F: FnOnce(Arc<ClientRuntime>) -> Fut,
     Fut: Future<Output = RocketMQResult<()>>,
 {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-example"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-example"))
+        .expect("test runtime configuration is valid")
+        .build()
         .map_err(|source| RocketMQError::internal("create example runtime", source))?;
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())

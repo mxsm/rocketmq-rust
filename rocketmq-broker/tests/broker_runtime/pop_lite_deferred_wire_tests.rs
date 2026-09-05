@@ -134,7 +134,9 @@ async fn start_wire_server(
     processor: RegisteringProcessor,
     controller: Arc<AdmissionController>,
 ) -> (Connection, RunningWireServer) {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("pop-lite-real-store-wire"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("pop-lite-real-store-wire"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("PopLite real-store runtime owner");
     let server_context = owner.root_context().component("pop-lite.real-store.server");
     let runner_context: ChildServiceContext = owner.root_context().component("pop-lite.real-store.runner");

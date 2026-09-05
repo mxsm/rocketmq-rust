@@ -28,10 +28,10 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use futures::future::join_all;
+use rocketmq_error::CanonicalCondition;
 use rocketmq_runtime::BlockingExecutorSnapshot;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::RuntimeConfig;
-use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ShutdownReport;
 use tokio::sync::oneshot;
@@ -78,7 +78,10 @@ fn run_completed_blocking(
         task_timeout: Duration::from_secs(2),
         warn_after: Duration::from_secs(10),
     };
-    let owner = RuntimeOwner::new(runtime_config(policy)).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(runtime_config(policy))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime owner should start");
     let context = owner.root_context().component("blocking-bench-completed");
 
     owner.block_on(async move {
@@ -137,7 +140,10 @@ fn run_timeout_still_running() -> TimeoutBlockingOutput {
         task_timeout: Duration::from_millis(20),
         warn_after: Duration::from_secs(10),
     };
-    let owner = RuntimeOwner::new(runtime_config(policy)).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(runtime_config(policy))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime owner should start");
     let context = owner.root_context().component("blocking-bench-timeout");
 
     owner.block_on(async move {
@@ -161,7 +167,7 @@ fn run_timeout_still_running() -> TimeoutBlockingOutput {
             .await
             .expect("blocking caller task should join")
             .expect_err("blocking task should time out while closure still runs");
-        assert!(matches!(error, RuntimeError::BlockingTaskTimeoutStillRunning { .. }));
+        assert_eq!(error.condition(), CanonicalCondition::DeadlineExceeded);
 
         let timed_out_snapshot = executor.snapshot();
         assert_eq!(timed_out_snapshot.timed_out_still_running, 1, "{timed_out_snapshot:?}");

@@ -19,7 +19,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
 use tokio::io::AsyncReadExt;
@@ -72,7 +71,7 @@ fn response_head(code: i32, opaque: i32) -> RemotingCommand {
 
 #[tokio::test]
 async fn forced_portable_and_auto_compat_fallback_are_selected_without_global_counters() {
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     let blocking = owner
         .root_context()
         .component("brk02-auto-portable")
@@ -136,7 +135,7 @@ async fn real_rustls_file_region_stays_portable_and_never_probes_sendfile() {
     let server_tls = server_tls.expect("server TLS handshake");
     let client_tls = client_tls.expect("client TLS handshake");
 
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     let blocking = owner
         .root_context()
         .component("brk02-rustls-portable")
@@ -203,7 +202,7 @@ async fn capture_real_tcp_file_frame(
 async fn auto_sendfile_and_portable_produce_identical_complete_real_tcp_frames() {
     const BODY_LEN: usize = 64 * 1024;
 
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     let blocking = owner
         .root_context()
         .component("brk02-linux-sendfile")

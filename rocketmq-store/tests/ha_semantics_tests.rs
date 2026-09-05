@@ -44,7 +44,9 @@ fn test_service_context() -> ChildServiceContext {
     static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
     OWNER
         .get_or_init(|| {
-            RuntimeOwner::new(RuntimeConfig::server_default("ha-semantics-tests"))
+            RuntimeOwner::plan(RuntimeConfig::server_default("ha-semantics-tests"))
+                .expect("test runtime configuration is valid")
+                .build()
                 .expect("HA semantics test runtime should start")
         })
         .root_context()

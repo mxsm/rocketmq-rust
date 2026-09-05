@@ -21,8 +21,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::RuntimeConfig;
+use crate::RuntimeContractViolation;
 use crate::RuntimeError;
 use crate::RuntimeOwner;
+use crate::RuntimeOwnerPlan;
 use crate::RuntimeResult;
 use crate::ScheduledTaskConfig;
 use crate::ScheduledTaskGroup;
@@ -35,6 +37,12 @@ use tokio::runtime::Handle;
 pub struct TokioExecutorService {
     inner: RuntimeOwner,
     task_group: TaskGroup,
+}
+
+/// A Tokio executor service profile that passed deterministic validation.
+#[derive(Debug)]
+pub struct TokioExecutorServicePlan {
+    runtime: RuntimeOwnerPlan,
 }
 
 impl Default for TokioExecutorService {
@@ -63,51 +71,71 @@ impl TokioExecutorService {
         Self::try_new().unwrap_or_else(|error| panic!("failed to create TokioExecutorService: {error:#}"))
     }
 
-    /// Attempts to new.
+    /// Builds the internally validated default executor profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational runtime error when the executor cannot start.
     pub fn try_new() -> RuntimeResult<TokioExecutorService> {
-        Self::from_config(common_runtime_config(
-            num_cpus::get(),
-            "rocketmq-runtime-tokio-executor",
+        Self::plan()
+            .expect("internally derived Tokio executor profile is valid")
+            .build()
+    }
+
+    /// Validates the internally derived executor profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic contract violation only if the platform's CPU
+    /// count cannot form a supported runtime profile.
+    pub fn plan() -> Result<TokioExecutorServicePlan, RuntimeContractViolation> {
+        let workers = num_cpus::get().max(1);
+        Self::plan_with_config(
+            workers,
+            Some("rocketmq-runtime-tokio-executor"),
             Duration::from_secs(30),
-            num_cpus::get().saturating_mul(4),
-        ))
+            workers.saturating_mul(4),
+        )
     }
 
-    /// Creates with config.
-    pub fn new_with_config(
+    /// Validates an explicit Tokio executor profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic contract violation when the requested runtime
+    /// parameters are structurally invalid. Call [`TokioExecutorServicePlan::build`]
+    /// to perform runtime construction.
+    pub fn plan_with_config(
         thread_num: usize,
         thread_prefix: Option<impl Into<String>>,
         keep_alive: Duration,
         max_blocking_threads: usize,
-    ) -> TokioExecutorService {
-        Self::try_new_with_config(thread_num, thread_prefix, keep_alive, max_blocking_threads)
-            .unwrap_or_else(|error| panic!("failed to create TokioExecutorService: {error:#}"))
-    }
-
-    /// Attempts to new with config.
-    pub fn try_new_with_config(
-        thread_num: usize,
-        thread_prefix: Option<impl Into<String>>,
-        keep_alive: Duration,
-        max_blocking_threads: usize,
-    ) -> RuntimeResult<TokioExecutorService> {
-        validate_runtime_config(thread_num, max_blocking_threads)?;
+    ) -> Result<TokioExecutorServicePlan, RuntimeContractViolation> {
         let thread_prefix_inner = if let Some(thread_prefix) = thread_prefix {
             thread_prefix.into()
         } else {
             "rocketmq-thread-".to_string()
         };
-        Self::from_config(common_runtime_config(
-            thread_num,
-            thread_prefix_inner,
-            keep_alive,
-            max_blocking_threads,
-        ))
+        Ok(TokioExecutorServicePlan {
+            runtime: RuntimeOwner::plan(common_runtime_config(
+                thread_num,
+                thread_prefix_inner,
+                keep_alive,
+                max_blocking_threads,
+            ))?,
+        })
     }
+}
 
-    fn from_config(config: RuntimeConfig) -> RuntimeResult<TokioExecutorService> {
-        let inner = RuntimeOwner::new(config)
-            .map_err(|error| service_startup_failed("failed to create TokioExecutorService runtime", error))?;
+impl TokioExecutorServicePlan {
+    /// Builds a Tokio executor service from a validated profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when process-memory discovery or Tokio
+    /// runtime construction fails.
+    pub fn build(self) -> RuntimeResult<TokioExecutorService> {
+        let inner = self.runtime.build()?;
         let task_group = inner.root_context().component("tokio-executor").task_group().clone();
         Ok(TokioExecutorService { inner, task_group })
     }
@@ -176,6 +204,14 @@ pub struct FuturesExecutorServiceBuilder {
     thread_name_prefix: Option<String>,
 }
 
+/// A futures executor configuration that passed deterministic validation.
+#[derive(Debug)]
+pub struct FuturesExecutorPlan {
+    pool_size: usize,
+    stack_size: usize,
+    thread_name_prefix: Option<String>,
+}
+
 impl FuturesExecutorServiceBuilder {
     /// Creates a new `FuturesExecutorServiceBuilder`.
     pub fn new() -> FuturesExecutorServiceBuilder {
@@ -198,15 +234,40 @@ impl FuturesExecutorServiceBuilder {
         self
     }
 
-    /// Returns the create.
-    pub fn create(&mut self) -> RuntimeResult<FuturesExecutorService> {
+    /// Validates deterministic pool settings and creates a build plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when the requested pool size is zero.
+    pub fn into_plan(self) -> Result<FuturesExecutorPlan, crate::RuntimeContractViolation> {
+        if self.pool_size == 0 {
+            return Err(crate::RuntimeContractViolation::InvalidConfiguration {
+                policy: crate::RuntimeContractPolicy::FuturesExecutorPoolSizePositive,
+            });
+        }
+        Ok(FuturesExecutorPlan {
+            pool_size: self.pool_size,
+            stack_size: self.stack_size,
+            thread_name_prefix: self.thread_name_prefix,
+        })
+    }
+}
+
+impl FuturesExecutorPlan {
+    /// Builds the validated futures executor.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime build error while retaining the underlying
+    /// `ThreadPoolBuildError` source when thread-pool creation fails.
+    pub fn build(&self) -> RuntimeResult<FuturesExecutorService> {
         let name_prefix = self.thread_name_prefix.as_deref().unwrap_or("Default-Executor");
         let thread_pool = futures::executor::ThreadPool::builder()
             .stack_size(self.stack_size)
             .pool_size(self.pool_size)
             .name_prefix(name_prefix)
             .create()
-            .map_err(|error| service_startup_failed("failed to create futures executor thread pool", error))?;
+            .map_err(|error| RuntimeError::build(crate::RuntimeOperation::BuildFuturesThreadPool, error))?;
         Ok(FuturesExecutorService { inner: thread_pool })
     }
 }
@@ -215,6 +276,12 @@ impl FuturesExecutorServiceBuilder {
 pub struct ScheduledExecutorService {
     inner: RuntimeOwner,
     scheduled_tasks: ScheduledTaskGroup,
+}
+
+/// A scheduled executor profile that passed deterministic validation.
+#[derive(Debug)]
+pub struct ScheduledExecutorServicePlan {
+    runtime: RuntimeOwnerPlan,
 }
 
 impl Default for ScheduledExecutorService {
@@ -228,46 +295,59 @@ impl ScheduledExecutorService {
         Self::try_new().unwrap_or_else(|error| panic!("failed to create ScheduledExecutorService: {error:#}"))
     }
 
-    /// Attempts to new.
+    /// Builds the internally validated default scheduled executor profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational runtime error when the executor cannot start.
     pub fn try_new() -> RuntimeResult<ScheduledExecutorService> {
-        Self::from_config(common_runtime_config(
-            num_cpus::get(),
-            "rocketmq-runtime-scheduled-executor",
+        Self::plan()
+            .expect("internally derived scheduled executor profile is valid")
+            .build()
+    }
+
+    /// Validates the internally derived scheduled executor profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic contract violation only if the platform's CPU
+    /// count cannot form a supported runtime profile.
+    pub fn plan() -> Result<ScheduledExecutorServicePlan, RuntimeContractViolation> {
+        let workers = num_cpus::get().max(1);
+        Self::plan_with_config(
+            workers,
+            Some("rocketmq-runtime-scheduled-executor"),
             Duration::from_secs(30),
-            num_cpus::get().saturating_mul(4),
-        ))
+            workers.saturating_mul(4),
+        )
     }
 
-    /// Creates with config.
-    pub fn new_with_config(
+    /// Validates an explicit scheduled executor profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic contract violation when the requested runtime
+    /// parameters are structurally invalid. Call [`ScheduledExecutorServicePlan::build`]
+    /// to perform runtime construction.
+    pub fn plan_with_config(
         thread_num: usize,
         thread_prefix: Option<impl Into<String>>,
         keep_alive: Duration,
         max_blocking_threads: usize,
-    ) -> ScheduledExecutorService {
-        Self::try_new_with_config(thread_num, thread_prefix, keep_alive, max_blocking_threads)
-            .unwrap_or_else(|error| panic!("failed to create ScheduledExecutorService: {error:#}"))
-    }
-
-    /// Attempts to new with config.
-    pub fn try_new_with_config(
-        thread_num: usize,
-        thread_prefix: Option<impl Into<String>>,
-        keep_alive: Duration,
-        max_blocking_threads: usize,
-    ) -> RuntimeResult<ScheduledExecutorService> {
-        validate_runtime_config(thread_num, max_blocking_threads)?;
+    ) -> Result<ScheduledExecutorServicePlan, RuntimeContractViolation> {
         let thread_prefix_inner = if let Some(thread_prefix) = thread_prefix {
             thread_prefix.into()
         } else {
             "rocketmq-thread-".to_string()
         };
-        Self::from_config(common_runtime_config(
-            thread_num,
-            thread_prefix_inner,
-            keep_alive,
-            max_blocking_threads,
-        ))
+        Ok(ScheduledExecutorServicePlan {
+            runtime: RuntimeOwner::plan(common_runtime_config(
+                thread_num,
+                thread_prefix_inner,
+                keep_alive,
+                max_blocking_threads,
+            ))?,
+        })
     }
 
     /// Executes schedule at fixed rate.
@@ -299,10 +379,17 @@ impl ScheduledExecutorService {
             tracing::warn!(%error, "failed to schedule fixed-rate task");
         }
     }
+}
 
-    fn from_config(config: RuntimeConfig) -> RuntimeResult<ScheduledExecutorService> {
-        let inner = RuntimeOwner::new(config)
-            .map_err(|error| service_startup_failed("failed to create ScheduledExecutorService runtime", error))?;
+impl ScheduledExecutorServicePlan {
+    /// Builds a scheduled executor service from a validated profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when process-memory discovery or Tokio
+    /// runtime construction fails.
+    pub fn build(self) -> RuntimeResult<ScheduledExecutorService> {
+        let inner = self.runtime.build()?;
         let scheduled_tasks = inner.root_context().component("scheduled").scheduled_tasks("executor");
         Ok(ScheduledExecutorService { inner, scheduled_tasks })
     }
@@ -324,71 +411,63 @@ fn common_runtime_config(
     config
 }
 
-fn validate_runtime_config(thread_num: usize, max_blocking_threads: usize) -> RuntimeResult<()> {
-    if thread_num == 0 {
-        return Err(config_invalid_value(
-            "thread_num",
-            thread_num,
-            "thread_num must be greater than zero",
-        ));
-    }
-    if max_blocking_threads == 0 {
-        return Err(config_invalid_value(
-            "max_blocking_threads",
-            max_blocking_threads,
-            "max_blocking_threads must be greater than zero",
-        ));
-    }
-    Ok(())
-}
-
-fn config_invalid_value(key: &'static str, value: usize, reason: &'static str) -> RuntimeError {
-    RuntimeError::InvalidConfig(format!("{key}={value}: {reason}"))
-}
-
-fn service_startup_failed(context: &'static str, error: impl std::fmt::Display) -> RuntimeError {
-    RuntimeError::LifecycleOperation {
-        operation: context,
-        message: error.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod runtime_config_tests {
     use super::*;
 
     #[test]
     fn tokio_executor_try_new_with_config_rejects_invalid_thread_counts() {
-        let error = match TokioExecutorService::try_new_with_config(0, Some("test-"), Duration::from_secs(1), 1) {
+        let error = match TokioExecutorService::plan_with_config(0, Some("test-"), Duration::from_secs(1), 1) {
             Ok(_) => panic!("zero worker threads should be rejected before tokio builder panics"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("thread_num must be greater than zero"));
+        assert!(matches!(
+            error,
+            crate::RuntimeContractViolation::InvalidConfiguration { .. }
+        ));
 
-        let error = match TokioExecutorService::try_new_with_config(1, Some("test-"), Duration::from_secs(1), 0) {
+        let error = match TokioExecutorService::plan_with_config(1, Some("test-"), Duration::from_secs(1), 0) {
             Ok(_) => panic!("zero blocking threads should be rejected before tokio builder panics"),
             Err(error) => error,
         };
-        assert!(error
-            .to_string()
-            .contains("max_blocking_threads must be greater than zero"));
+        assert!(matches!(
+            error,
+            crate::RuntimeContractViolation::InvalidConfiguration { .. }
+        ));
     }
 
     #[test]
     fn scheduled_executor_try_new_with_config_rejects_invalid_thread_counts() {
-        let error = match ScheduledExecutorService::try_new_with_config(0, Some("test-"), Duration::from_secs(1), 1) {
+        let error = match ScheduledExecutorService::plan_with_config(0, Some("test-"), Duration::from_secs(1), 1) {
             Ok(_) => panic!("zero worker threads should be rejected before tokio builder panics"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("thread_num must be greater than zero"));
+        assert!(matches!(
+            error,
+            crate::RuntimeContractViolation::InvalidConfiguration { .. }
+        ));
 
-        let error = match ScheduledExecutorService::try_new_with_config(1, Some("test-"), Duration::from_secs(1), 0) {
+        let error = match ScheduledExecutorService::plan_with_config(1, Some("test-"), Duration::from_secs(1), 0) {
             Ok(_) => panic!("zero blocking threads should be rejected before tokio builder panics"),
             Err(error) => error,
         };
-        assert!(error
-            .to_string()
-            .contains("max_blocking_threads must be greater than zero"));
+        assert!(matches!(
+            error,
+            crate::RuntimeContractViolation::InvalidConfiguration { .. }
+        ));
+    }
+
+    #[test]
+    fn futures_thread_pool_build_failure_keeps_the_build_source() {
+        let error = match FuturesExecutorServiceBuilder::new().pool_size(0).into_plan() {
+            Ok(_) => panic!("zero futures pool size must fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            crate::RuntimeContractViolation::InvalidConfiguration { .. }
+        ));
     }
 }
 
@@ -422,8 +501,12 @@ mod tests {
 
     #[test]
     fn futures_executor_builder_create_returns_executor() {
-        let mut builder = FuturesExecutorServiceBuilder::new().pool_size(1).stack_size(0);
-        let executor = builder.create().expect("executor should be created");
+        let plan = FuturesExecutorServiceBuilder::new()
+            .pool_size(1)
+            .stack_size(0)
+            .into_plan()
+            .expect("executor plan should be valid");
+        let executor = plan.build().expect("executor should be created");
         let (tx, rx) = mpsc::channel();
 
         executor.spawn(async move {
@@ -436,7 +519,9 @@ mod tests {
     #[test]
     fn tokio_executor_uses_runtime_owner_and_runs_tasks() {
         let executor =
-            TokioExecutorService::try_new_with_config(2, Some("tokio-executor-test"), Duration::from_secs(1), 3)
+            TokioExecutorService::plan_with_config(2, Some("tokio-executor-test"), Duration::from_secs(1), 3)
+                .expect("tokio executor plan should be valid")
+                .build()
                 .expect("tokio executor should be created");
         let (tx, rx) = mpsc::channel();
 
@@ -452,9 +537,10 @@ mod tests {
 
     #[test]
     fn scheduled_executor_fixed_rate_does_not_overlap() {
-        let executor =
-            ScheduledExecutorService::try_new_with_config(2, Some("schedule-test-"), Duration::from_secs(1), 3)
-                .expect("scheduled executor should be created");
+        let executor = ScheduledExecutorService::plan_with_config(2, Some("schedule-test-"), Duration::from_secs(1), 3)
+            .expect("scheduled executor plan should be valid")
+            .build()
+            .expect("scheduled executor should be created");
         let active = Arc::new(AtomicUsize::new(0));
         let max_active = Arc::new(AtomicUsize::new(0));
         let runs = Arc::new(AtomicUsize::new(0));

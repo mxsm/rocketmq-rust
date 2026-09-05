@@ -183,7 +183,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         generation: Arc::new(AtomicU64::new(1)),
     };
 
-    let runtime_owner = RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-sre-phase00-dev-issuer"))?;
+    let runtime_owner = RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-sre-phase00-dev-issuer"))
+        .expect("runtime configuration is valid")
+        .build()?;
     let service_result = runtime_owner.block_on(run(bind_addr, state));
     let shutdown_result = runtime_owner.shutdown_runtime_blocking();
     service_result?;

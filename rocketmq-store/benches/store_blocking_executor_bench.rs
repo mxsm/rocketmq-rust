@@ -29,12 +29,14 @@ use rocketmq_store::test_support::run_store_blocking_io_probe;
 use rocketmq_store::test_support::StoreBlockingIoProbe;
 
 fn run_store_blocking_probe(task_count: usize, work_duration: Duration) -> StoreBlockingIoProbe {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: 2,
         max_blocking_threads: 64,
         thread_name: "rocketmq-store-blocking-bench".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("store blocking benchmark runtime should start");
     let context = owner.root_context().component("store-blocking-bench");
     let output = owner.block_on(run_store_blocking_io_probe(context, task_count, work_duration));

@@ -2775,6 +2775,7 @@ dependencies = [
  "local-ip-address",
  "num_cpus",
  "parking_lot",
+ "rocketmq-error",
  "serde",
  "serde_json",
  "smallvec",

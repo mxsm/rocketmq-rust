@@ -21,7 +21,6 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_runtime::ChildServiceContext;
-use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_security_api::Action;
 
@@ -50,11 +49,11 @@ pub struct AuthAdminService {
 
 impl AuthAdminService {
     pub async fn new(auth_config: AuthConfig, service_context: ChildServiceContext) -> Result<Self, RocketMQError> {
-        let metadata_io = MetadataIoActor::start(
-            &service_context.component("auth-admin.metadata-io"),
-            MetadataIoConfig::default(),
-        )
-        .map_err(crate::runtime_to_rocketmq_error)?;
+        let metadata_io = MetadataIoConfig::default()
+            .into_plan()
+            .expect("default metadata I/O config is valid")
+            .start(&service_context.component("auth-admin.metadata-io"))
+            .map_err(crate::runtime_to_rocketmq_error)?;
         let provider_registry =
             ProviderRegistry::load_with_metadata_io(&auth_config, metadata_io, service_context.metadata_io().clone())
                 .await?;

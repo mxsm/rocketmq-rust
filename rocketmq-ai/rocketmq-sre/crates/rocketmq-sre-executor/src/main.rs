@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = ExecutorConfig::from_env()?;
     let mut runtime_config = RuntimeConfig::server_default("rocketmq-sre-executor");
     runtime_config.shutdown_timeout = config.shutdown_timeout();
-    let runtime_owner = RuntimeOwner::new(runtime_config)?;
+    let runtime_owner = RuntimeOwner::plan(runtime_config)?.build()?;
     let service_context = runtime_owner.root_context().component("rocketmq-sre-executor.http");
     let service_result = runtime_owner.block_on(rocketmq_sre_executor::run(config, service_context));
     let shutdown_result = runtime_owner.shutdown_runtime_blocking();

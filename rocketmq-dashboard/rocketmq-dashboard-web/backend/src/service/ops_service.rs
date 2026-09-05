@@ -59,7 +59,10 @@ mod tests {
 
     #[test]
     fn authenticated_storage_view_has_no_location_or_connection_details() {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("ops-service-test")).unwrap();
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("ops-service-test"))
+            .expect("runtime configuration is valid")
+            .build()
+            .unwrap();
         let directory = tempdir().unwrap();
         let persistence = owner.block_on(async {
             DashboardPersistence::initialize(

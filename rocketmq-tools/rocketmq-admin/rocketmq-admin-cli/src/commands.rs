@@ -60,10 +60,12 @@ pub trait CommandExecute {
 #[cfg(test)]
 pub(crate) fn test_client_runtime() -> std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime> {
     static OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
-        rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig {
+        rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig {
             thread_name: "rocketmq-admin-cli-test".to_string(),
             ..Default::default()
         })
+        .expect("runtime configuration is valid")
+        .build()
         .expect("admin CLI test runtime should start")
     });
     rocketmq_admin_core::client_adapter::ClientRuntime::try_new(

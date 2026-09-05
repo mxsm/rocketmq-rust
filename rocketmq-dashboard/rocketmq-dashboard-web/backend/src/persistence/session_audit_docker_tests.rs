@@ -29,13 +29,12 @@ use crate::persistence::DashboardPersistence;
 use crate::persistence::Revision;
 use crate::persistence::audit_repository::AuditQuery;
 use crate::persistence::session_repository::SessionQuery;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 #[test]
 #[ignore = "requires fresh docker-compose.storage-test.yml volumes"]
 fn docker_session_audit_contracts_cover_file_sqlite_mysql_and_postgres() {
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let configs = [
             StorageConfig {

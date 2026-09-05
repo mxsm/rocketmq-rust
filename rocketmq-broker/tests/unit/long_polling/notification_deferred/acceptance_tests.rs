@@ -204,7 +204,9 @@ async fn start_server<P>(processor: P, controller: Arc<AdmissionController>) -> 
 where
     P: RequestProcessor + Clone + Send + Sync + 'static,
 {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("notification-deferred-acceptance"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("notification-deferred-acceptance"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("Notification runtime owner");
     let server_context = owner.root_context().component("notification.server");
     let runner_context = owner.root_context().component("notification.runner");

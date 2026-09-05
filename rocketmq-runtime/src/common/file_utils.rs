@@ -17,8 +17,8 @@ use std::path::Path;
 
 use crate::LocalMetadataFileSystem;
 use crate::MetadataFileSystem;
-use crate::MetadataIoError;
 use crate::RuntimeError;
+use crate::RuntimeOperation;
 use crate::RuntimeResult;
 use parking_lot::Mutex;
 #[cfg(feature = "async_fs")]
@@ -39,7 +39,7 @@ pub fn file_to_string(file_name: impl AsRef<Path>) -> RuntimeResult<String> {
             warn!("file not exist: {}", path.display());
             Ok(String::new())
         }
-        Err(e) => Err(RuntimeError::Io(e)),
+        Err(e) => Err(RuntimeError::io(RuntimeOperation::ReadFile, e)),
     }
 }
 /// Writes a string to a file.
@@ -52,7 +52,8 @@ pub fn string_to_file(str_content: &str, file_name: impl AsRef<Path>) -> Runtime
 
     // Create a backup if the file exists
     if file_path.exists() {
-        let previous = std::fs::read(file_path).map_err(RuntimeError::Io)?;
+        let previous =
+            std::fs::read(file_path).map_err(|error| RuntimeError::io(RuntimeOperation::ReadFileBackup, error))?;
         LocalMetadataFileSystem
             .persist_atomic(Path::new(&bak_file), &previous)
             .map_err(metadata_io_error)?;
@@ -64,8 +65,8 @@ pub fn string_to_file(str_content: &str, file_name: impl AsRef<Path>) -> Runtime
 }
 
 /// Creates the metadata io error value.
-pub fn metadata_io_error(error: MetadataIoError) -> RuntimeError {
-    RuntimeError::Io(io::Error::other(error))
+pub fn metadata_io_error(error: impl std::error::Error + Send + Sync + 'static) -> RuntimeError {
+    RuntimeError::internal(RuntimeOperation::PersistMetadata, error)
 }
 
 #[cfg(feature = "async_fs")]
@@ -76,18 +77,20 @@ pub fn metadata_io_error(error: MetadataIoError) -> RuntimeError {
 ///
 /// # Errors
 ///
-/// Returns [`RuntimeError::Io`] when the path does not exist, cannot be read, or
+/// Returns an I/O-classified [`RuntimeError`] when the path does not exist, cannot be read, or
 /// does not contain valid UTF-8.
 pub async fn file_to_string_async(file_name: impl AsRef<Path>) -> RuntimeResult<String> {
     let path = file_name.as_ref();
     if !tokio::fs::try_exists(path).await? {
         warn!("file not exist: {}", path.display());
-        return Err(RuntimeError::Io(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("File not found: {}", path.display()),
-        )));
+        return Err(RuntimeError::io(
+            RuntimeOperation::ReadFile,
+            io::Error::new(io::ErrorKind::NotFound, format!("File not found: {}", path.display())),
+        ));
     }
-    tokio::fs::read_to_string(path).await.map_err(RuntimeError::Io)
+    tokio::fs::read_to_string(path)
+        .await
+        .map_err(|error| RuntimeError::io(RuntimeOperation::ReadFile, error))
 }
 
 #[cfg(feature = "async_fs")]
@@ -99,7 +102,7 @@ pub async fn file_to_string_async(file_name: impl AsRef<Path>) -> RuntimeResult<
 ///
 /// # Errors
 ///
-/// Returns [`RuntimeError::Io`] when existence checks, backup creation,
+/// Returns an I/O-classified [`RuntimeError`] when existence checks, backup creation,
 /// directory creation, writing, or flushing fail.
 pub async fn string_to_file_async(str_content: &str, file_name: impl AsRef<Path>) -> RuntimeResult<()> {
     let _lock = ASYNC_LOCK.lock().await;
@@ -109,8 +112,13 @@ pub async fn string_to_file_async(str_content: &str, file_name: impl AsRef<Path>
     bak_file.push(".bak");
 
     // Create a backup if the file exists
-    if tokio::fs::try_exists(file_path).await.map_err(RuntimeError::Io)? {
-        tokio::fs::copy(file_path, &bak_file).await.map_err(RuntimeError::Io)?;
+    if tokio::fs::try_exists(file_path)
+        .await
+        .map_err(|error| RuntimeError::io(RuntimeOperation::CheckFile, error))?
+    {
+        tokio::fs::copy(file_path, &bak_file)
+            .await
+            .map_err(|error| RuntimeError::io(RuntimeOperation::CopyFileBackup, error))?;
     }
 
     // Write new content to the file
@@ -124,21 +132,31 @@ async fn string_to_file_not_safe_async(str_content: &str, file_name: impl AsRef<
 
     // Create parent directories if they don't exist
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(RuntimeError::Io)?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| RuntimeError::io(RuntimeOperation::CreateFileParent, error))?;
     }
 
-    let file = tokio::fs::File::create(file_name).await.map_err(RuntimeError::Io)?;
+    let file = tokio::fs::File::create(file_name)
+        .await
+        .map_err(|error| RuntimeError::io(RuntimeOperation::CreateFile, error))?;
     let mut writer = tokio::io::BufWriter::new(file);
     writer
         .write_all(str_content.as_bytes())
         .await
-        .map_err(RuntimeError::Io)?;
-    writer.flush().await.map_err(RuntimeError::Io)?;
+        .map_err(|error| RuntimeError::io(RuntimeOperation::WriteFile, error))?;
+    writer
+        .flush()
+        .await
+        .map_err(|error| RuntimeError::io(RuntimeOperation::FlushFile, error))?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "async_fs")]
+    use std::error::Error;
+
     use super::*;
 
     #[test]
@@ -221,10 +239,12 @@ mod tests {
     async fn test_file_to_string_async_not_found() {
         let result = file_to_string_async("/nonexistent/path/file.txt").await;
         assert!(result.is_err());
-        if let Err(RuntimeError::Io(io_err)) = result {
-            assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
-        } else {
-            panic!("expected RuntimeError::Io with NotFound");
-        }
+        let error = result.expect_err("missing file should fail");
+        assert_eq!(error.code(), rocketmq_error::RUNTIME_IO_FAILED.code());
+        let source = error.source().expect("I/O source should be retained");
+        let source = source
+            .downcast_ref::<io::Error>()
+            .expect("I/O source should remain typed");
+        assert_eq!(source.kind(), io::ErrorKind::NotFound);
     }
 }

@@ -31,6 +31,7 @@ use std::time::Duration;
 
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoDurabilityOutcome;
 use rocketmq_runtime::MonotonicClock;
 use rocketmq_runtime::SystemMonotonicClock;
 use rocketmq_security_api::Action;
@@ -284,7 +285,7 @@ impl LocalAuthorizationMetadataProvider {
         };
         let content = encode_acl_snapshot(snapshot)?;
         if let Some(metadata_io) = &self.metadata_io {
-            metadata_io
+            match metadata_io
                 .submit_next_durable(
                     "auth.authorization-acls",
                     path,
@@ -292,8 +293,16 @@ impl LocalAuthorizationMetadataProvider {
                     MetadataDeadline::after(Duration::from_secs(5)),
                 )
                 .await
-                .map_err(AuthorizationError::MetadataIo)?;
-            return Ok(());
+                .map_err(AuthorizationError::MetadataIo)?
+            {
+                MetadataIoDurabilityOutcome::Durable(_) => return Ok(()),
+                MetadataIoDurabilityOutcome::TargetConflict(request) => {
+                    return Err(AuthorizationError::StorageWriteFailed {
+                        path: request.target().display().to_string(),
+                        reason: "metadata resource target conflict".to_owned(),
+                    });
+                }
+            }
         }
         let path = path.clone();
         let path_display = path.display().to_string();
@@ -926,11 +935,11 @@ mod tests {
 
     fn metadata_io_actor(name: &str) -> MetadataIoActor {
         let context = rocketmq_runtime::RuntimeContext::try_from_current(name).unwrap();
-        MetadataIoActor::start(
-            &context.service_context("auth.authorization-metadata"),
-            rocketmq_runtime::MetadataIoConfig::default(),
-        )
-        .unwrap()
+        rocketmq_runtime::MetadataIoConfig::default()
+            .into_plan()
+            .expect("default metadata I/O config is valid")
+            .start(&context.service_context("auth.authorization-metadata"))
+            .unwrap()
     }
 
     #[tokio::test]

@@ -33,10 +33,12 @@ pub struct BenchClientRuntime {
 )]
 impl BenchClientRuntime {
     pub fn new(scope: &str) -> Self {
-        let owner = RuntimeOwner::new(RuntimeConfig {
+        let owner = RuntimeOwner::plan(RuntimeConfig {
             thread_name: format!("rocketmq-client-bench-{scope}"),
             ..Default::default()
         })
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("benchmark runtime owner should start");
         let client_runtime = ClientRuntime::try_new(
             owner.root_context().component("client"),

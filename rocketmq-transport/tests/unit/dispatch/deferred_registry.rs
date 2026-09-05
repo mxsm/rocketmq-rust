@@ -69,7 +69,10 @@ struct Harness {
 
 impl Harness {
     fn new(name: &'static str, owner: u64) -> Self {
-        let runtime = RuntimeOwner::new(RuntimeConfig::server_default(name)).expect("registry test runtime owner");
+        let runtime = RuntimeOwner::plan(RuntimeConfig::server_default(name))
+            .expect("test runtime configuration is valid")
+            .build()
+            .expect("registry test runtime owner");
         let parent = runtime.root_context().component(name).task_group().clone();
         let session = EmbeddedSessionRecord::new(owner);
         let controller = AdmissionController::new(AdmissionLimits::default());

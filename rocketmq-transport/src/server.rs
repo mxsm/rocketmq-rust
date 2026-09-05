@@ -2013,10 +2013,7 @@ impl SessionTransportServer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
-            .ok_or(RuntimeError::TaskGroupClosing {
-                group_id: self.service_context.task_group().id(),
-                group_name: self.service_context.task_group().name().into(),
-            })?;
+            .ok_or_else(|| RuntimeError::context_unavailable(rocketmq_runtime::RuntimeOperation::TransportListener))?;
         let server = self.clone();
         let cancellation = self.service_context.task_group().cancellation_token();
         self.service_context.spawn_service("transport.accept", async move {

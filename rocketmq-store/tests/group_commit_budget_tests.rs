@@ -16,7 +16,8 @@ use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushErrorKind;
+use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_store_local::flush::group_commit::GroupCommitQueue;
 use rocketmq_store_local::flush::group_commit::GroupCommitRequest;
@@ -28,6 +29,22 @@ fn group_commit_queue<E>(name: &str, count: usize, bytes: usize, policy: FullPol
     GroupCommitQueue::new(budget)
 }
 
+fn admitted<T>(outcome: QueuePushOutcome<T>) {
+    assert!(
+        !matches!(outcome, QueuePushOutcome::Rejected { .. }),
+        "group commit request should be admitted"
+    );
+}
+
+fn rejection<T>(outcome: QueuePushOutcome<T>) -> QueuePushRejection {
+    match outcome {
+        QueuePushOutcome::Rejected { rejection, .. } => rejection,
+        QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } | QueuePushOutcome::DroppedStale { .. } => {
+            panic!("group commit request should be rejected")
+        }
+    }
+}
+
 #[test]
 fn group_commit_queue_enforces_count_and_holds_permit_until_owner_drop() {
     let queue = group_commit_queue::<()>("group-count", 1, 4_096, FullPolicy::Reject);
@@ -36,13 +53,11 @@ fn group_commit_queue_enforces_count_and_holds_permit_until_owner_drop() {
     let first_bytes = first.retained_bytes();
     let second_bytes = second.retained_bytes();
 
-    queue.try_push_data(first, first_bytes).expect("first request fits");
-    let error = queue
-        .try_push_data(second, second_bytes)
-        .expect_err("second request exceeds count");
+    admitted(queue.try_push_data(first, first_bytes));
+    let error = rejection(queue.try_push_data(second, second_bytes));
     assert!(matches!(
-        error.kind(),
-        QueuePushErrorKind::BudgetExhausted(error)
+        error,
+        QueuePushRejection::BudgetExhausted(error)
             if error.dimension() == BudgetDimension::Count
     ));
 
@@ -61,13 +76,11 @@ fn group_commit_queue_enforces_retained_bytes_before_count() {
     let (second, _second_response) = GroupCommitRequest::new(20, 5_000);
     let second_bytes = second.retained_bytes();
 
-    queue.try_push_data(first, retained_bytes).expect("first request fits");
-    let error = queue
-        .try_push_data(second, second_bytes)
-        .expect_err("second request exceeds retained bytes");
+    admitted(queue.try_push_data(first, retained_bytes));
+    let error = rejection(queue.try_push_data(second, second_bytes));
     assert!(matches!(
-        error.kind(),
-        QueuePushErrorKind::BudgetExhausted(error)
+        error,
+        QueuePushRejection::BudgetExhausted(error)
             if error.dimension() == BudgetDimension::Bytes
     ));
 
@@ -82,8 +95,8 @@ fn group_commit_queue_preserves_fifo_and_close_releases_drained_permits() {
     let (second, _second_response) = GroupCommitRequest::new(20, 5_000);
     let first_bytes = first.retained_bytes();
     let second_bytes = second.retained_bytes();
-    queue.try_push_data(first, first_bytes).expect("first request fits");
-    queue.try_push_data(second, second_bytes).expect("second request fits");
+    admitted(queue.try_push_data(first, first_bytes));
+    admitted(queue.try_push_data(second, second_bytes));
     queue.close();
 
     let first = queue.try_pop_budgeted().expect("first request").into_item();
@@ -100,13 +113,14 @@ async fn group_commit_admission_deadline_is_typed_and_does_not_leak_capacity() {
     let (second, _second_response) = GroupCommitRequest::new(20, 0);
     let first_bytes = first.retained_bytes();
     let second_bytes = second.retained_bytes();
-    queue.try_push_data(first, first_bytes).expect("first request fits");
+    admitted(queue.try_push_data(first, first_bytes));
 
-    let error = queue
-        .push_until(second, second_bytes, BudgetClass::Data, tokio::time::Instant::now())
-        .await
-        .expect_err("expired admission deadline");
-    assert_eq!(error.kind(), &QueuePushErrorKind::DeadlineExceeded);
+    let error = rejection(
+        queue
+            .push_until(second, second_bytes, BudgetClass::Data, tokio::time::Instant::now())
+            .await,
+    );
+    assert_eq!(error, QueuePushRejection::DeadlineExceeded);
     assert_eq!(queue.snapshot().reserved_count, 1);
 
     drop(queue.try_pop_budgeted());

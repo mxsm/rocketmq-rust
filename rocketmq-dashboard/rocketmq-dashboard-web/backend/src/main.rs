@@ -21,7 +21,9 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 fn main() -> anyhow::Result<()> {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("rocketmq-dashboard-web-backend"))?;
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-dashboard-web-backend"))
+        .expect("dashboard runtime profile is internally valid")
+        .build()?;
     let config = AppConfig::load()?;
     let environment_filter = rocketmq_observability::read_rust_log()?;
     let resolved_filter =

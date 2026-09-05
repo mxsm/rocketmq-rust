@@ -462,7 +462,8 @@ async fn persist_stable(
                         MetadataDeadline::after(Duration::from_secs(30)),
                     )
                     .await
-                    .map_err(crate::runtime_to_rocketmq_error)?;
+                    .map_err(crate::runtime_to_rocketmq_error)
+                    .and_then(crate::require_metadata_durability)?;
                 version
             } else {
                 let manager_for_write = Arc::clone(manager);

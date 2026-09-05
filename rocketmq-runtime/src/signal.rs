@@ -28,22 +28,18 @@ pub async fn wait_for_signal() {
 ///
 /// # Errors
 ///
-/// Returns [`RuntimeError::LifecycleOperation`] when the platform signal
-/// handler cannot be registered or observed.
+/// Returns an operational runtime failure when the platform signal handler
+/// cannot be registered or observed.
 #[cfg(unix)]
 pub async fn wait_for_signal_result() -> RuntimeResult<()> {
     use tokio::signal::unix::signal;
     use tokio::signal::unix::SignalKind;
     use tracing::info;
 
-    let mut term = signal(SignalKind::terminate()).map_err(|error| RuntimeError::LifecycleOperation {
-        operation: "wait_for_signal",
-        message: format!("failed to register SIGTERM handler: {error}"),
-    })?;
-    let mut int = signal(SignalKind::interrupt()).map_err(|error| RuntimeError::LifecycleOperation {
-        operation: "wait_for_signal",
-        message: format!("failed to register SIGINT handler: {error}"),
-    })?;
+    let mut term = signal(SignalKind::terminate())
+        .map_err(|error| RuntimeError::internal(crate::RuntimeOperation::RegisterSigtermHandler, error))?;
+    let mut int = signal(SignalKind::interrupt())
+        .map_err(|error| RuntimeError::internal(crate::RuntimeOperation::RegisterSigintHandler, error))?;
 
     tokio::select! {
         _ = term.recv() => info!("Received SIGTERM"),
@@ -56,14 +52,11 @@ pub async fn wait_for_signal_result() -> RuntimeResult<()> {
 ///
 /// # Errors
 ///
-/// Returns [`RuntimeError::LifecycleOperation`] when the Ctrl-C handler
-/// cannot be registered or observed.
+/// Returns an operational runtime failure when the Ctrl-C handler cannot be
+/// registered or observed.
 #[cfg(windows)]
 pub async fn wait_for_signal_result() -> RuntimeResult<()> {
     tokio::signal::ctrl_c()
         .await
-        .map_err(|error| RuntimeError::LifecycleOperation {
-            operation: "wait_for_signal",
-            message: error.to_string(),
-        })
+        .map_err(|error| RuntimeError::internal(crate::RuntimeOperation::WaitForSignal, error))
 }

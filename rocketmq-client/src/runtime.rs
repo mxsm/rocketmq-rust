@@ -251,10 +251,12 @@ pub(crate) fn standalone_client_resource_budget() -> RocketMQResult<ResourceBudg
 
 #[cfg(test)]
 static TEST_RUNTIME_OWNER: std::sync::LazyLock<rocketmq_runtime::RuntimeOwner> = std::sync::LazyLock::new(|| {
-    rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig {
+    rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig {
         thread_name: "rocketmq-client-unit-test".to_string(),
         ..Default::default()
     })
+    .expect("runtime configuration is valid")
+    .build()
     .expect("client unit-test runtime owner should start")
 });
 

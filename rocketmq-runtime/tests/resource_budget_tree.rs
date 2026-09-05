@@ -25,11 +25,12 @@ use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::MonotonicClock;
-use rocketmq_runtime::PermitRebindError;
-use rocketmq_runtime::QueuePushErrorKind;
+use rocketmq_runtime::PermitRebindOutcome;
 use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudgetTree;
+use rocketmq_runtime::RuntimeContractViolation;
 
 #[derive(Default)]
 struct ManualClock {
@@ -53,6 +54,21 @@ impl MonotonicClock for ManualClock {
 
 fn limit(count: usize, bytes: usize, policy: FullPolicy) -> BudgetLimit {
     BudgetLimit::new(count, bytes, policy)
+}
+
+fn accepted<T>(outcome: QueuePushOutcome<T>) -> QueuePushOutcome<T> {
+    assert!(
+        !matches!(&outcome, QueuePushOutcome::Rejected { .. }),
+        "queue item should be admitted"
+    );
+    outcome
+}
+
+fn rejected<T>(outcome: QueuePushOutcome<T>) -> (T, QueuePushRejection) {
+    match outcome {
+        QueuePushOutcome::Rejected { item, rejection } => (item, rejection),
+        _ => panic!("queue item should be rejected"),
+    }
 }
 
 #[test]
@@ -144,7 +160,10 @@ fn rebind_between_siblings_preserves_common_ancestor_accounting() {
         .expect("target budget");
     let mut permit = source.try_acquire_data(8).expect("source permit");
 
-    permit.try_rebind(&target).expect("same-tree rebind");
+    assert_eq!(
+        permit.try_rebind(&target).expect("same-tree rebind"),
+        PermitRebindOutcome::Rebound
+    );
 
     assert_eq!(tree.root().snapshot().current_count, 1);
     assert_eq!(tree.root().snapshot().current_bytes, 8);
@@ -193,12 +212,12 @@ fn failed_rebind_keeps_the_source_permit_valid() {
     let target_owner = target.try_acquire_data(8).expect("fill target");
     let mut source_owner = source.try_acquire_data(8).expect("source permit");
 
-    let error = source_owner
+    let outcome = source_owner
         .try_rebind(&target)
-        .expect_err("full target must reject rebind");
+        .expect("same-tree rebind must return an outcome");
     assert!(matches!(
-        error,
-        PermitRebindError::Budget(ref error) if error.dimension() == BudgetDimension::Count
+        outcome,
+        PermitRebindOutcome::Rejected(ref error) if error.dimension() == BudgetDimension::Count
     ));
     assert_eq!(source.snapshot().current_count, 1);
     assert_eq!(source.snapshot().current_bytes, 8);
@@ -222,7 +241,7 @@ fn rebind_rejects_a_target_from_another_tree() {
         .try_rebind(&target_tree.root())
         .expect_err("cross-tree rebind must fail");
 
-    assert!(matches!(error, PermitRebindError::DifferentTree { .. }));
+    assert_eq!(error, RuntimeContractViolation::PermitTargetInDifferentTree);
     assert_eq!(source.snapshot().current_count, 1);
     assert_eq!(source.snapshot().current_bytes, 8);
     drop(permit);
@@ -313,8 +332,8 @@ fn reject_policy_keeps_depth_and_bytes_bounded_at_two_times_overload() {
     let mut rejected = Vec::new();
 
     for item in 0..8 {
-        if let Err(error) = queue.try_push_data(item, 10) {
-            rejected.push(error.into_item());
+        if let QueuePushOutcome::Rejected { item, .. } = queue.try_push_data(item, 10) {
+            rejected.push(item);
         }
     }
 
@@ -330,14 +349,14 @@ fn coalesce_latest_replaces_pending_state_and_releases_old_permits() {
     let tree = ResourceBudgetTree::new("process", limit(1, 16, FullPolicy::CoalesceLatest)).expect("root budget");
     let queue = BudgetedQueue::new(tree.root());
 
-    assert_eq!(
-        queue.try_push_data("old", 8).expect("old state"),
+    assert!(matches!(
+        accepted(queue.try_push_data("old", 8)),
         QueuePushOutcome::Enqueued
-    );
-    assert_eq!(
-        queue.try_push_data("new", 8).expect("latest state"),
+    ));
+    assert!(matches!(
+        accepted(queue.try_push_data("new", 8)),
         QueuePushOutcome::Coalesced { replaced: 1 }
-    );
+    ));
     assert_eq!(queue.try_pop(), Some("new"));
     assert_eq!(queue.snapshot().coalesced_count, 1);
     assert_eq!(queue.snapshot().retained_bytes, 0);
@@ -356,13 +375,11 @@ fn coalesce_latest_preserves_pending_state_when_an_ancestor_is_exhausted() {
         .expect("sibling child");
     let queue = BudgetedQueue::new(coalescing);
 
-    queue.try_push_data("pending", 8).expect("pending state");
+    accepted(queue.try_push_data("pending", 8));
     let _sibling_permit = sibling.try_acquire_data(8).expect("sibling reservation");
-    let error = queue
-        .try_push_data("replacement", 8)
-        .expect_err("the shared ancestor is exhausted");
+    let (item, _rejection) = rejected(queue.try_push_data("replacement", 8));
 
-    assert_eq!(error.into_item(), "replacement");
+    assert_eq!(item, "replacement");
     assert_eq!(queue.try_pop(), Some("pending"));
     assert_eq!(queue.snapshot().coalesced_count, 0);
 }
@@ -372,12 +389,10 @@ fn coalesce_latest_preserves_pending_state_when_replacement_cannot_fit() {
     let tree = ResourceBudgetTree::new("coalesce-oversized", limit(2, 16, FullPolicy::CoalesceLatest)).expect("tree");
     let queue = BudgetedQueue::new(tree.root());
 
-    queue.try_push_data("retained", 8).expect("initial item");
-    let error = queue
-        .try_push_data("oversized", 17)
-        .expect_err("oversized replacement must be rejected");
+    accepted(queue.try_push_data("retained", 8));
+    let (_item, rejection) = rejected(queue.try_push_data("oversized", 17));
 
-    assert!(matches!(error.kind(), QueuePushErrorKind::BudgetExhausted(_)));
+    assert!(matches!(rejection, QueuePushRejection::BudgetExhausted(_)));
     assert_eq!(queue.try_pop(), Some("retained"));
     assert_eq!(queue.snapshot().coalesced_count, 0);
 }
@@ -387,7 +402,7 @@ fn retain_preserves_order_and_releases_removed_item_permits() {
     let tree = ResourceBudgetTree::new("process", limit(4, 40, FullPolicy::Reject)).expect("root budget");
     let queue = BudgetedQueue::new(tree.root());
     for item in 0..4 {
-        queue.try_push_data(item, 10).expect("queue capacity");
+        accepted(queue.try_push_data(item, 10));
     }
 
     assert_eq!(queue.retain(|item| item % 2 == 0), 2);
@@ -407,12 +422,12 @@ fn drop_stale_policy_uses_virtual_time_and_reports_oldest_age() {
     .expect("root budget");
     let queue = BudgetedQueue::new(tree.root());
 
-    queue.try_push_data("stale", 8).expect("stale item");
+    accepted(queue.try_push_data("stale", 8));
     clock.advance(Duration::from_secs(6));
-    assert_eq!(
-        queue.try_push_data("fresh", 8).expect("fresh item"),
+    assert!(matches!(
+        accepted(queue.try_push_data("fresh", 8)),
         QueuePushOutcome::DroppedStale { dropped: 1 }
-    );
+    ));
     assert_eq!(queue.try_pop(), Some("fresh"));
     assert_eq!(queue.snapshot().dropped_count, 1);
 }
@@ -428,7 +443,7 @@ fn reject_policy_never_discards_aged_work_silently() {
     .expect("tree");
     let queue = BudgetedQueue::new(tree.root());
 
-    queue.try_push_data("required", 8).expect("initial work");
+    accepted(queue.try_push_data("required", 8));
     clock.advance(Duration::from_secs(2));
 
     assert_eq!(queue.try_pop(), Some("required"));
@@ -446,7 +461,7 @@ fn close_slow_consumer_policy_closes_when_oldest_item_exceeds_max_age() {
     .expect("tree");
     let queue = BudgetedQueue::new(tree.root());
 
-    queue.try_push_data("stale", 8).expect("initial item");
+    accepted(queue.try_push_data("stale", 8));
     clock.advance(Duration::from_secs(2));
 
     assert_eq!(queue.try_pop(), None);
@@ -460,10 +475,10 @@ fn slow_consumer_policy_closes_and_drains_the_queue() {
     let tree = ResourceBudgetTree::new("process", limit(1, 16, FullPolicy::CloseSlowConsumer)).expect("root budget");
     let queue = BudgetedQueue::new(tree.root());
 
-    queue.try_push_data("first", 8).expect("first item");
-    let error = queue.try_push_data("second", 8).expect_err("slow consumer must close");
-    assert_eq!(error.kind(), &QueuePushErrorKind::SlowConsumerClosed);
-    assert_eq!(error.into_item(), "second");
+    accepted(queue.try_push_data("first", 8));
+    let (item, rejection) = rejected(queue.try_push_data("second", 8));
+    assert_eq!(rejection, QueuePushRejection::SlowConsumerClosed);
+    assert_eq!(item, "second");
     assert!(queue.is_closed());
     assert!(queue.is_empty());
     let snapshot = queue.snapshot();
@@ -496,7 +511,7 @@ async fn aborted_owner_releases_raii_permit() {
 async fn wait_until_deadline_observes_item_capacity_release() {
     let tree = ResourceBudgetTree::new("wait-count", limit(1, 16, FullPolicy::WaitUntilDeadline)).expect("budget tree");
     let queue = BudgetedQueue::new(tree.root());
-    queue.try_push_data("held", 1).expect("fill item capacity");
+    accepted(queue.try_push_data("held", 1));
 
     let waiting_queue = queue.clone();
     let waiter = tokio::spawn(async move {
@@ -515,13 +530,10 @@ async fn wait_until_deadline_observes_item_capacity_release() {
     assert_eq!(waiting.waiters, 1);
     assert_eq!(waiting.wait_count, 1);
     assert_eq!(queue.try_pop(), Some("held"));
-    assert_eq!(
-        waiter
-            .await
-            .expect("join waiter")
-            .expect("capacity release admits item"),
+    assert!(matches!(
+        accepted(waiter.await.expect("join waiter")),
         QueuePushOutcome::Enqueued
-    );
+    ));
     assert_eq!(queue.try_pop(), Some("waiting"));
     assert_eq!(queue.snapshot().reserved_count, 0);
 }
@@ -530,7 +542,7 @@ async fn wait_until_deadline_observes_item_capacity_release() {
 async fn wait_until_deadline_observes_byte_capacity_release() {
     let tree = ResourceBudgetTree::new("wait-bytes", limit(2, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
     let queue = BudgetedQueue::new(tree.root());
-    queue.try_push_data("held", 8).expect("fill byte capacity");
+    accepted(queue.try_push_data("held", 8));
 
     let waiting_queue = queue.clone();
     let waiter = tokio::spawn(async move {
@@ -547,10 +559,7 @@ async fn wait_until_deadline_observes_byte_capacity_release() {
 
     assert_eq!(queue.snapshot().waiters, 1);
     assert_eq!(queue.try_pop(), Some("held"));
-    waiter
-        .await
-        .expect("join waiter")
-        .expect("byte capacity release admits item");
+    accepted(waiter.await.expect("join waiter"));
     assert_eq!(queue.try_pop(), Some("waiting"));
     assert_eq!(queue.snapshot().retained_bytes, 0);
 }
@@ -560,7 +569,7 @@ async fn wait_until_deadline_returns_original_item_when_deadline_wins() {
     let tree =
         ResourceBudgetTree::new("wait-deadline", limit(1, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
     let queue = BudgetedQueue::new(tree.root());
-    queue.try_push_data("held", 8).expect("fill queue");
+    accepted(queue.try_push_data("held", 8));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
 
     let waiting_queue = queue.clone();
@@ -572,12 +581,9 @@ async fn wait_until_deadline_returns_original_item_when_deadline_wins() {
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(5)).await;
 
-    let error = waiter
-        .await
-        .expect("join waiter")
-        .expect_err("deadline must reject waiting item");
-    assert_eq!(error.kind(), &QueuePushErrorKind::DeadlineExceeded);
-    assert_eq!(error.into_item(), "original");
+    let (item, rejection) = rejected(waiter.await.expect("join waiter"));
+    assert_eq!(rejection, QueuePushRejection::DeadlineExceeded);
+    assert_eq!(item, "original");
     let snapshot = queue.snapshot();
     assert_eq!(snapshot.waiters, 0);
     assert_eq!(snapshot.wait_count, 1);
@@ -589,7 +595,7 @@ async fn wait_until_deadline_returns_original_item_when_deadline_wins() {
 async fn wait_until_deadline_close_wakes_waiter_and_returns_original_item() {
     let tree = ResourceBudgetTree::new("wait-close", limit(1, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
     let queue = BudgetedQueue::new(tree.root());
-    queue.try_push_data("held", 8).expect("fill queue");
+    accepted(queue.try_push_data("held", 8));
 
     let waiting_queue = queue.clone();
     let waiter = tokio::spawn(async move {
@@ -606,12 +612,9 @@ async fn wait_until_deadline_close_wakes_waiter_and_returns_original_item() {
     assert_eq!(queue.snapshot().waiters, 1);
     queue.close();
 
-    let error = waiter
-        .await
-        .expect("join waiter")
-        .expect_err("closed queue must reject waiting item");
-    assert_eq!(error.kind(), &QueuePushErrorKind::Closed);
-    assert_eq!(error.into_item(), "original");
+    let (item, rejection) = rejected(waiter.await.expect("join waiter"));
+    assert_eq!(rejection, QueuePushRejection::Closed);
+    assert_eq!(item, "original");
     assert_eq!(queue.snapshot().waiters, 0);
 }
 
@@ -622,13 +625,14 @@ async fn wait_until_deadline_oversized_item_fails_without_waiting() {
     let queue = BudgetedQueue::new(tree.root());
     let before = tokio::time::Instant::now();
 
-    let error = queue
-        .push_until("oversized", 9, BudgetClass::Data, before + Duration::from_secs(30))
-        .await
-        .expect_err("item can never fit byte capacity");
+    let (item, rejection) = rejected(
+        queue
+            .push_until("oversized", 9, BudgetClass::Data, before + Duration::from_secs(30))
+            .await,
+    );
 
-    assert!(matches!(error.kind(), QueuePushErrorKind::BudgetExhausted(_)));
-    assert_eq!(error.into_item(), "oversized");
+    assert!(matches!(rejection, QueuePushRejection::BudgetExhausted(_)));
+    assert_eq!(item, "oversized");
     assert_eq!(tokio::time::Instant::now(), before);
     assert_eq!(queue.snapshot().wait_count, 0);
 }
@@ -644,24 +648,25 @@ async fn wait_until_deadline_rejects_item_that_cannot_fit_ancestor_data_reserve(
     let queue = BudgetedQueue::new(child);
     let before = tokio::time::Instant::now();
 
-    let error = queue
-        .push_until(
-            "too-large-for-data",
-            5,
-            BudgetClass::Data,
-            before + Duration::from_secs(30),
-        )
-        .await
-        .expect_err("ancestor data reserve permanently excludes item");
+    let (item, rejection) = rejected(
+        queue
+            .push_until(
+                "too-large-for-data",
+                5,
+                BudgetClass::Data,
+                before + Duration::from_secs(30),
+            )
+            .await,
+    );
 
-    match error.kind() {
-        QueuePushErrorKind::BudgetExhausted(error) => {
+    match rejection {
+        QueuePushRejection::BudgetExhausted(error) => {
             assert_eq!(error.dimension(), BudgetDimension::Bytes);
             assert_eq!(error.exhausted_path(), "reserved-root");
         }
         other => panic!("unexpected error: {other:?}"),
     }
-    assert_eq!(error.into_item(), "too-large-for-data");
+    assert_eq!(item, "too-large-for-data");
     assert_eq!(tokio::time::Instant::now(), before);
     assert_eq!(queue.snapshot().wait_count, 0);
 }
@@ -672,22 +677,23 @@ async fn wait_until_deadline_returns_rate_exhaustion_without_capacity_wait() {
     let wait_limit = limit(1, 8, FullPolicy::WaitUntilDeadline).with_rate(RateLimit::new(1, 1));
     let tree = ResourceBudgetTree::with_clock("rate-wait", wait_limit, clock).expect("budget tree");
     let queue = BudgetedQueue::new(tree.root());
-    queue.try_push_data("first", 1).expect("consume initial rate token");
+    accepted(queue.try_push_data("first", 1));
     assert_eq!(queue.try_pop(), Some("first"));
     let before = tokio::time::Instant::now();
 
-    let error = queue
-        .push_until("second", 1, BudgetClass::Data, before + Duration::from_secs(30))
-        .await
-        .expect_err("rate exhaustion is not capacity-release driven");
+    let (item, rejection) = rejected(
+        queue
+            .push_until("second", 1, BudgetClass::Data, before + Duration::from_secs(30))
+            .await,
+    );
 
-    match error.kind() {
-        QueuePushErrorKind::BudgetExhausted(error) => {
+    match rejection {
+        QueuePushRejection::BudgetExhausted(error) => {
             assert_eq!(error.dimension(), BudgetDimension::Rate);
         }
         other => panic!("unexpected error: {other:?}"),
     }
-    assert_eq!(error.into_item(), "second");
+    assert_eq!(item, "second");
     assert_eq!(tokio::time::Instant::now(), before);
     let snapshot = queue.snapshot();
     assert_eq!(snapshot.wait_count, 0);
@@ -724,10 +730,7 @@ async fn ancestor_release_wakes_waiting_child() {
     assert_eq!(queue.snapshot().waiters, 1);
     drop(sibling_permit);
 
-    waiter
-        .await
-        .expect("join waiter")
-        .expect("ancestor release must wake child");
+    accepted(waiter.await.expect("join waiter"));
     assert_eq!(queue.try_pop(), Some("child"));
     assert_eq!(tree.root().snapshot().current_count, 0);
 }
@@ -737,7 +740,7 @@ async fn cancelled_waiter_and_panicking_owner_restore_metrics_and_permits() {
     let tree = ResourceBudgetTree::new("wait-cancel", limit(1, 8, FullPolicy::WaitUntilDeadline)).expect("budget tree");
     let budget = tree.root();
     let queue = BudgetedQueue::new(budget.clone());
-    queue.try_push_data("held", 8).expect("fill queue");
+    accepted(queue.try_push_data("held", 8));
 
     let waiting_queue = queue.clone();
     let waiter = tokio::spawn(async move {

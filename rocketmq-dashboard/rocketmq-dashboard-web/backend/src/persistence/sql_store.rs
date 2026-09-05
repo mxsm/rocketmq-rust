@@ -1349,7 +1349,6 @@ mod tests {
     use super::*;
     use crate::config::SqlPoolConfig;
     use crate::model::DashboardConfigView;
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
 
     fn sqlite_config(path: PathBuf) -> StorageConfig {
@@ -1365,7 +1364,7 @@ mod tests {
     fn sqlite_initialization_uses_a_real_file_and_migrations_are_idempotent() {
         let directory = tempfile::tempdir().expect("temp dir");
         let database_path = directory.path().join("dashboard.db");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let config = sqlite_config(database_path.clone());
             let first = SqlPersistence::initialize(&config, owner.root_context().component("sqlite-first"))
@@ -1391,7 +1390,7 @@ mod tests {
     #[test]
     fn closed_sqlite_pool_reports_storage_as_unavailable() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = SqlPersistence::initialize(
                 &sqlite_config(directory.path().join("dashboard.db")),
@@ -1408,7 +1407,7 @@ mod tests {
     #[test]
     fn missing_migration_table_reports_storage_as_unavailable() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = SqlPersistence::initialize(
                 &sqlite_config(directory.path().join("dashboard.db")),
@@ -1430,7 +1429,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let database_path = directory.path().join("legacy.db");
         create_legacy_sqlite_table(&database_path);
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let result = SqlPersistence::initialize(
                 &sqlite_config(database_path),
@@ -1445,7 +1444,7 @@ mod tests {
     #[test]
     fn sqlite_read_snapshot_keeps_monitor_owner_and_rules_aligned_during_concurrent_delete() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = SqlPersistence::initialize(
                 &sqlite_config(directory.path().join("dashboard.db")),
@@ -1554,7 +1553,7 @@ mod tests {
     }
 
     fn initialize_docker_backend(config: StorageConfig) {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let first =
                 SqlPersistence::initialize(&config, owner.root_context().component("docker-storage-test-first"))
@@ -1708,7 +1707,7 @@ mod tests {
     }
 
     fn create_legacy_sqlite_table(path: &std::path::Path) {
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let options = SqliteConnectOptions::new().filename(path).create_if_missing(true);
             let pool = SqlitePoolOptions::new()

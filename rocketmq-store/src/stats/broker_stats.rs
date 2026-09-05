@@ -134,7 +134,6 @@ impl<MS: BrokerReadStore> BrokerStats<MS> {
 mod tests {
     use std::sync::OnceLock;
 
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
 
     use crate::config::store_runtime_config::StoreRuntimeConfig;
@@ -144,7 +143,7 @@ mod tests {
     fn test_task_group() -> rocketmq_runtime::TaskGroup {
         static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
         OWNER
-            .get_or_init(|| RuntimeOwner::new(RuntimeConfig::default()).expect("test runtime owner should start"))
+            .get_or_init(|| RuntimeOwner::new().expect("test runtime owner should start"))
             .root_context()
             .component("broker-stats-test")
             .task_group()

@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_error::CanonicalCondition;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::BlockingLane;
@@ -15,10 +16,10 @@ use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeDiagnosticsViewV1;
-use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
+use rocketmq_runtime::ScheduledTaskRegistrationOutcome;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroupLifecycleState;
@@ -51,32 +52,32 @@ fn owned_runtime_entrypoints_use_runtime_owner() {
     let runtime_owner_entrypoints = [
         (
             "rocketmq-broker/src/bin/broker_bootstrap_server.rs",
-            "RuntimeOwner::new(broker_runtime_config())",
+            "RuntimeOwner::plan(broker_runtime_config())",
             "broker runtime shutdown report is unhealthy",
         ),
         (
             "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
-            "RuntimeOwner::new(namesrv_runtime_config())",
+            "RuntimeOwner::plan(namesrv_runtime_config())",
             "namesrv runtime shutdown report is unhealthy",
         ),
         (
             "rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs",
-            "RuntimeOwner::new(proxy_runtime_config())",
+            "RuntimeOwner::plan(proxy_runtime_config())",
             "proxy runtime shutdown report is unhealthy",
         ),
         (
             "rocketmq-controller/src/bin/controller_bootstrap.rs",
-            "RuntimeOwner::new(controller_runtime_config())",
+            "RuntimeOwner::plan(controller_runtime_config())",
             "controller runtime shutdown report is unhealthy",
         ),
         (
             "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/main.rs",
-            "RuntimeOwner::new(admin_tui_runtime_config())",
+            "RuntimeOwner::plan(admin_tui_runtime_config())",
             "rocketmq-admin-tui runtime shutdown report is unhealthy",
         ),
         (
             "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/main.rs",
-            "RuntimeOwner::new(admin_cli_runtime_config())",
+            "RuntimeOwner::plan(admin_cli_runtime_config())",
             "rocketmq-admin-cli runtime shutdown report is unhealthy",
         ),
     ];
@@ -105,7 +106,7 @@ fn broker_entrypoint_uses_runtime_owner_and_service_context() {
         .unwrap_or_else(|error| panic!("failed to read {entrypoint}: {error}"));
 
     assert!(
-        source.contains("RuntimeOwner::new(broker_runtime_config())"),
+        source.contains("RuntimeOwner::plan(broker_runtime_config())"),
         "{entrypoint} must use RuntimeOwner as the owned runtime boundary"
     );
     assert!(
@@ -132,7 +133,7 @@ fn namesrv_entrypoint_uses_runtime_owner_and_service_context() {
         .unwrap_or_else(|error| panic!("failed to read {entrypoint}: {error}"));
 
     assert!(
-        source.contains("RuntimeOwner::new(namesrv_runtime_config())"),
+        source.contains("RuntimeOwner::plan(namesrv_runtime_config())"),
         "{entrypoint} must use RuntimeOwner as the owned runtime boundary"
     );
     assert!(
@@ -166,16 +167,21 @@ fn server_runtime_config_supports_optional_thread_stack_size() {
     assert_eq!(config.thread_stack_size, None);
 
     config.thread_stack_size = Some(16 * 1024 * 1024);
-    RuntimeOwner::new(config)
+    RuntimeOwner::plan(config)
+        .expect("test runtime config is valid")
+        .build()
         .expect("runtime owner should accept a positive thread stack size")
         .shutdown_runtime_blocking()
         .expect("runtime owner should shutdown outside Tokio runtime");
 
     let mut invalid = RuntimeConfig::server_default("invalid-stack-runtime");
     invalid.thread_stack_size = Some(0);
+    let Err(error) = RuntimeOwner::plan(invalid) else {
+        panic!("zero stack size must be rejected");
+    };
     assert!(matches!(
-        RuntimeOwner::new(invalid),
-        Err(RuntimeError::InvalidConfig(message)) if message.contains("thread_stack_size")
+        error,
+        rocketmq_runtime::RuntimeContractViolation::InvalidConfiguration { .. }
     ));
 }
 
@@ -495,18 +501,20 @@ async fn child_creation_fails_after_parent_closing() {
     let report = parent.shutdown(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
 
-    assert!(matches!(
+    assert_eq!(
         parent
             .try_child("late-child")
-            .expect_err("closed task group must reject children"),
-        RuntimeError::TaskGroupClosing { .. }
-    ));
-    assert!(matches!(
+            .expect_err("closed task group must reject children")
+            .condition(),
+        CanonicalCondition::Unavailable
+    );
+    assert_eq!(
         service
             .try_component("late-component")
-            .expect_err("closed service context must reject components"),
-        RuntimeError::TaskGroupClosing { .. }
-    ));
+            .expect_err("closed service context must reject components")
+            .condition(),
+        CanonicalCondition::Unavailable
+    );
 }
 
 #[tokio::test]
@@ -549,12 +557,13 @@ async fn task_group_enters_poisoned_state_after_task_panic_and_rejects_new_work(
     .await
     .expect("task group should enter poisoned state after task panic");
 
-    assert!(matches!(
+    assert_eq!(
         group
             .spawn_service("late-task-after-panic", async {})
-            .expect_err("poisoned task group should reject new tasks"),
-        RuntimeError::TaskGroupClosing { .. }
-    ));
+            .expect_err("poisoned task group should reject new tasks")
+            .condition(),
+        CanonicalCondition::Unavailable
+    );
     let report = group.shutdown(Duration::from_secs(1)).await;
     assert_eq!(report.panicked, 1, "{}", report.to_json());
     assert_eq!(group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
@@ -842,7 +851,7 @@ async fn task_group_concurrent_spawn_shutdown_leaves_no_metadata() {
                             first_spawned.notify_one();
                         }
                     }
-                    Err(RuntimeError::TaskGroupClosing { .. }) => {
+                    Err(error) if error.condition() == CanonicalCondition::Unavailable => {
                         rejected.fetch_add(1, Ordering::SeqCst);
                     }
                     Err(error) => panic!("unexpected task group spawn error: {error}"),
@@ -1009,6 +1018,35 @@ async fn scheduled_spawn_failure_rolls_back_registered_metrics() {
     );
 }
 
+#[tokio::test]
+async fn scheduled_duplicate_is_an_outcome_without_replacing_driver_or_metrics() {
+    let context = RuntimeContext::from_current("scheduled-duplicate-test");
+    let scheduled = context.service_context("scheduled").scheduled_tasks("duplicate");
+
+    let first = scheduled
+        .schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_delay("stable-task", Duration::from_secs(60)),
+            || async {},
+        )
+        .expect("first schedule should start");
+    assert!(matches!(first, ScheduledTaskRegistrationOutcome::Scheduled(_)));
+    let before = scheduled.snapshot();
+
+    let duplicate = scheduled
+        .schedule_fixed_delay(
+            ScheduledTaskConfig::fixed_rate("stable-task", Duration::from_millis(1)),
+            || async {},
+        )
+        .expect("duplicate registration is a normal outcome");
+    assert_eq!(duplicate, ScheduledTaskRegistrationOutcome::AlreadyPresent);
+    assert_eq!(scheduled.snapshot().len(), 1);
+    assert_eq!(scheduled.snapshot()[0].mode, before[0].mode);
+    assert_eq!(scheduled.group().task_count(), 1);
+
+    let report = scheduled.shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn blocking_executor_limits_concurrency() {
     let context = RuntimeContext::from_current("blocking-test");
@@ -1046,7 +1084,10 @@ fn blocking_lanes_share_one_global_budget_and_preserve_waiting_lane_reservations
         blocking_lane_policies: BlockingLanePolicies::uniform(lane_policy),
         ..RuntimeConfig::default()
     };
-    let owner = RuntimeOwner::new(config).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(config)
+        .expect("runtime config should be valid")
+        .build()
+        .expect("runtime owner should start");
     let context = owner.root_context().component("global-blocking-budget-test");
 
     owner.block_on(async {
@@ -1157,14 +1198,14 @@ fn blocking_global_budget_rejects_capacity_without_one_reservation_per_lane() {
         ..RuntimeConfig::default()
     };
 
-    let error = match RuntimeOwner::new(config) {
+    let error = match RuntimeOwner::plan(config) {
         Ok(_) => panic!("three lanes require three minimum reservations"),
         Err(error) => error,
     };
-    assert!(
-        matches!(error, RuntimeError::InvalidConfig(ref message) if message.contains("at least 3")),
-        "{error:?}"
-    );
+    assert!(matches!(
+        error,
+        rocketmq_runtime::RuntimeContractViolation::InvalidConfiguration { .. }
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1211,10 +1252,7 @@ async fn blocking_executor_rejects_work_when_bounded_queue_is_full() {
         .spawn_io("rejected", || 3usize)
         .await
         .expect_err("work beyond max_queue_depth must be rejected");
-    assert!(matches!(
-        error,
-        RuntimeError::BlockingQueueFull { max_queue_depth: 1, .. }
-    ));
+    assert_eq!(error.condition(), CanonicalCondition::ResourceExhausted);
 
     release_tx.send(()).expect("running task should be released");
     assert_eq!(
@@ -1249,7 +1287,7 @@ async fn blocking_executor_rejects_expired_deadline_before_running_operation() {
         .await
         .expect_err("an expired deadline must reject blocking work");
 
-    assert!(matches!(error, RuntimeError::BlockingQueueTimeout { .. }));
+    assert_eq!(error.condition(), CanonicalCondition::DeadlineExceeded);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(executor.snapshot().tasks.is_empty());
 }
@@ -1290,7 +1328,7 @@ async fn blocking_executor_absolute_deadline_bounds_running_task_and_reaps_it() 
         .await
         .expect("the deadline-bound task should join")
         .expect_err("the absolute deadline must bound a running blocking task");
-    assert!(matches!(error, RuntimeError::BlockingTaskTimeoutStillRunning { .. }));
+    assert_eq!(error.condition(), CanonicalCondition::DeadlineExceeded);
     assert_eq!(executor.snapshot().timed_out_still_running, 1);
 
     release_tx
@@ -1413,13 +1451,7 @@ async fn blocking_executor_rejects_long_running_spawn_blocking() {
         .await
         .expect_err("long-running blocking work must use a dedicated thread");
 
-    assert!(matches!(
-        error,
-        RuntimeError::UnsupportedBlockingKind {
-            kind: BlockingKind::LongRunning,
-            ..
-        }
-    ));
+    assert_eq!(error.condition(), CanonicalCondition::Unimplemented);
     let snapshot = context.blocking(BlockingLane::StorageIo).snapshot();
     assert_eq!(snapshot.blocking_still_running, 0);
     assert!(snapshot.tasks.is_empty(), "{snapshot:?}");
@@ -1461,7 +1493,7 @@ async fn blocking_executor_reports_timeout_until_reaper_cleans_late_exit() {
         .expect("caller should receive task timeout")
         .expect("spawn task should join")
         .expect_err("blocking timeout should be reported while closure is still running");
-    assert!(matches!(error, RuntimeError::BlockingTaskTimeoutStillRunning { .. }));
+    assert_eq!(error.condition(), CanonicalCondition::DeadlineExceeded);
 
     let snapshot = executor.snapshot();
     assert_eq!(snapshot.timed_out_still_running, 1, "{snapshot:?}");
@@ -1502,7 +1534,10 @@ fn runtime_owner_uses_configured_blocking_policy_in_shutdown_report() {
         task_timeout: Duration::from_millis(20),
         ..BlockingPoolPolicy::default()
     };
-    let owner = RuntimeOwner::new(config).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(config)
+        .expect("runtime config should be valid")
+        .build()
+        .expect("runtime owner should start");
     let context = owner.root_context().component("configured-blocking-test");
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -1516,7 +1551,7 @@ fn runtime_owner_uses_configured_blocking_policy_in_shutdown_report() {
             })
             .await
             .expect_err("configured task_timeout should return while blocking closure is still running");
-        assert!(matches!(error, RuntimeError::BlockingTaskTimeoutStillRunning { .. }));
+        assert_eq!(error.condition(), CanonicalCondition::DeadlineExceeded);
 
         started_rx.await.expect("blocking task should signal that it started");
 
@@ -1555,7 +1590,10 @@ fn runtime_owner_drop_shutdowns_root_group_when_not_explicitly_closed() {
         shutdown_timeout: Duration::from_millis(50),
         ..RuntimeConfig::default()
     };
-    let owner = RuntimeOwner::new(config).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(config)
+        .expect("runtime config should be valid")
+        .build()
+        .expect("runtime owner should start");
     let context = owner.root_context().component("owner-drop-test");
 
     owner.block_on(async {
@@ -1585,7 +1623,10 @@ fn runtime_owner_shutdown_background_closes_root_group_without_drop_fallback() {
         shutdown_timeout: Duration::from_millis(50),
         ..RuntimeConfig::default()
     };
-    let owner = RuntimeOwner::new(config).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(config)
+        .expect("runtime config should be valid")
+        .build()
+        .expect("runtime owner should start");
     let context = owner.root_context().component("owner-background-test");
 
     owner.block_on(async {

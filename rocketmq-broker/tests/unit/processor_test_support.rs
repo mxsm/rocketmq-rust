@@ -128,9 +128,18 @@ where
 {
     let mut runtime_config = RuntimeConfig::server_default(label);
     runtime_config.thread_stack_size = Some(16 * 1024 * 1024);
-    let owner = RuntimeOwner::new(runtime_config).expect("processor runtime owner");
-    let server_context = owner.root_context().component(format!("{label}.server"));
-    let runner_context = owner.root_context().component(format!("{label}.runner"));
+    let owner = RuntimeOwner::plan(runtime_config)
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("processor runtime owner");
+    let server_context = owner.root_context().component(
+        rocketmq_runtime::ScopeId::try_new(format!("{label}.server"))
+            .expect("the server scope has a fixed nonblank suffix"),
+    );
+    let runner_context = owner.root_context().component(
+        rocketmq_runtime::ScopeId::try_new(format!("{label}.runner"))
+            .expect("the runner scope has a fixed nonblank suffix"),
+    );
     let server = TransportServer::new(
         Arc::new(ServerConfig {
             bind_address: "127.0.0.1".to_owned(),

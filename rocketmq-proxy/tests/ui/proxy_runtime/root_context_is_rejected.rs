@@ -4,7 +4,7 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 fn main() {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("compile-fail")).unwrap();
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("compile-fail")).expect("test runtime configuration is valid").build().unwrap();
     let _ = ProxyRuntime::builder(
         ProxyConfig::default(),
         owner.root_context(),

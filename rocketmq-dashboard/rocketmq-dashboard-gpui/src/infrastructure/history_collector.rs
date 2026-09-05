@@ -243,11 +243,11 @@ mod tests {
     }
 
     fn runtime() -> RuntimeOwner {
-        RuntimeOwner::new_with_memory_limit(
-            RuntimeConfig::for_parallelism("history-collector-test", 2),
-            ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory"),
-        )
-        .expect("runtime")
+        RuntimeOwner::plan(RuntimeConfig::for_parallelism("history-collector-test", 2))
+            .expect("test runtime configuration is valid")
+            .with_memory_limit(ProcessMemoryLimit::configured(256 * 1024 * 1024).expect("memory"))
+            .build()
+            .expect("runtime")
     }
 
     #[test]

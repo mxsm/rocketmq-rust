@@ -1137,10 +1137,12 @@ impl BrokerRuntime {
         let network = validated_config.sections().network();
         let store_host = SocketAddr::new(network.bind_address(), network.listen_port());
         let scheduled_task_manager = BrokerScheduledTasks::new_with_task_group(service_context.task_group().clone());
-        let metadata_io = Some(MetadataIoActor::start(
-            &service_context.component("broker.metadata-io"),
-            MetadataIoConfig::default(),
-        ));
+        let metadata_io = Some(
+            MetadataIoConfig::default()
+                .into_plan()
+                .expect("default metadata I/O config is valid")
+                .start(&service_context.component("broker.metadata-io")),
+        );
         let broker_outer_api = BrokerOuterAPI::new_with_remoting_command_factory(
             Arc::new(TransportClientConfig::default()),
             service_context.component("broker.outer-api"),

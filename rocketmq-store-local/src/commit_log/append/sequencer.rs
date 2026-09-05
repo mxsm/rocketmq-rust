@@ -16,14 +16,15 @@
 
 use std::fmt;
 
-use rocketmq_runtime::resource_budget::BudgetConfigError;
 use rocketmq_runtime::resource_budget::BudgetLimit;
 use rocketmq_runtime::resource_budget::BudgetedItem;
 use rocketmq_runtime::resource_budget::BudgetedQueue;
 use rocketmq_runtime::resource_budget::FullPolicy;
-use rocketmq_runtime::resource_budget::QueuePushErrorKind;
+use rocketmq_runtime::resource_budget::QueuePushOutcome;
+use rocketmq_runtime::resource_budget::QueuePushRejection;
 use rocketmq_runtime::resource_budget::QueueSnapshot;
 use rocketmq_runtime::resource_budget::ResourceBudgetTree;
+use rocketmq_runtime::RuntimeContractViolation;
 use tokio_util::sync::CancellationToken;
 
 use super::micro_batch::MicroBatch;
@@ -48,10 +49,10 @@ impl AppendSequencer {
     ///
     /// # Errors
     ///
-    /// Returns [`BudgetConfigError`] when configured queue capacities are invalid.
+    /// Returns [`RuntimeContractViolation`] when configured queue capacities are invalid.
     pub fn bounded<T>(
         config: AppendSequencerConfig,
-    ) -> Result<(AppendSequencerSender<T>, AppendSequencerReceiver<T>), BudgetConfigError> {
+    ) -> Result<(AppendSequencerSender<T>, AppendSequencerReceiver<T>), RuntimeContractViolation> {
         let budget = ResourceBudgetTree::new(
             "commitlog-append",
             BudgetLimit::new(config.queue_capacity, config.queue_bytes, FullPolicy::Reject),
@@ -96,20 +97,22 @@ impl<T> AppendSequencerSender<T> {
     /// Returns whether the request was accepted or rejected with ownership preserved.
     pub fn try_submit(&self, request: T, retained_bytes: usize) -> AppendAdmissionOutcome<T> {
         match self.queue.try_push_data(request, retained_bytes) {
-            Ok(_) => AppendAdmissionOutcome::Accepted,
-            Err(error) => {
-                let reason = match error.kind() {
-                    QueuePushErrorKind::BudgetExhausted(_) | QueuePushErrorKind::DeadlineExceeded => {
+            QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } | QueuePushOutcome::DroppedStale { .. } => {
+                AppendAdmissionOutcome::Accepted
+            }
+            QueuePushOutcome::Rejected {
+                item: request,
+                rejection,
+            } => {
+                let reason = match rejection {
+                    QueuePushRejection::BudgetExhausted(_) | QueuePushRejection::DeadlineExceeded => {
                         AppendAdmissionRejection::Saturated
                     }
-                    QueuePushErrorKind::Closed | QueuePushErrorKind::SlowConsumerClosed => {
+                    QueuePushRejection::Closed | QueuePushRejection::SlowConsumerClosed => {
                         AppendAdmissionRejection::Closed
                     }
                 };
-                AppendAdmissionOutcome::Rejected {
-                    request: error.into_item(),
-                    reason,
-                }
+                AppendAdmissionOutcome::Rejected { request, reason }
             }
         }
     }

@@ -634,7 +634,8 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
                         MetadataDeadline::after(Duration::from_secs(5)),
                     )
                     .await
-                    .map_err(crate::runtime_to_rocketmq_error)?;
+                    .map_err(crate::runtime_to_rocketmq_error)
+                    .and_then(crate::require_metadata_durability)?;
                 return Ok(());
             }
         }

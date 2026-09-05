@@ -839,7 +839,9 @@ mod tests {
     async fn network_maintenance_uses_verified_credentials_not_bootstrap_authentication_state() {
         const AUTHENTICATED_OPAQUE: i32 = 5_508;
         const FORGED_OPAQUE: i32 = 5_509;
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("maintenance-network-auth"))
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("maintenance-network-auth"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("maintenance network test runtime");
         let server_context = owner.root_context().component("maintenance-network-auth.server");
         let runner_context = owner.root_context().component("maintenance-network-auth.runner");

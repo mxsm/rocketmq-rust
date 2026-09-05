@@ -16,6 +16,7 @@ use rocketmq_runtime::BlockingExecutor;
 #[cfg(test)]
 use rocketmq_runtime::BlockingExecutorSnapshot;
 use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeOperation;
 use rocketmq_runtime::RuntimeResult;
 
 /// Narrow access to the root-owned metadata blocking lane.
@@ -41,11 +42,7 @@ impl AuthBlockingExecutor {
     {
         self.executor
             .as_ref()
-            .ok_or_else(|| {
-                RuntimeError::InvalidConfig(
-                    "Auth metadata I/O requires an injected ChildServiceContext metadata lane".to_string(),
-                )
-            })?
+            .ok_or_else(|| RuntimeError::context_unavailable(RuntimeOperation::AuthMetadataIoLane))?
             .spawn_io(name, operation)
             .await
     }

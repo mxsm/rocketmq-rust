@@ -37,6 +37,7 @@ use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
+use rocketmq_runtime::MetadataIoAdmissionOutcome;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -85,13 +86,22 @@ impl TopicQueueMappingManager {
         if content.is_empty() {
             return;
         }
-        if let Err(error) = metadata_io.submit_next_accepted(
+        match metadata_io.submit_next(
             "broker.topic-queue-mapping",
             self.config_file_path(),
             content.into_bytes(),
             MetadataDeadline::after(Duration::from_secs(5)),
         ) {
-            error!(%error, operation, "Failed to admit topic queue mapping snapshot");
+            Ok(MetadataIoAdmissionOutcome::Accepted(_)) => {}
+            Ok(MetadataIoAdmissionOutcome::TargetConflict(_request)) => {
+                warn!(
+                    operation,
+                    "Metadata target conflict rejected topic queue mapping snapshot"
+                );
+            }
+            Err(error) => {
+                error!(%error, operation, "Failed to admit topic queue mapping snapshot");
+            }
         }
     }
 
@@ -387,7 +397,8 @@ impl TopicQueueMappingManager {
                     MetadataDeadline::after(Duration::from_secs(5)),
                 )
                 .await
-                .map_err(crate::runtime_to_rocketmq_error)?;
+                .map_err(crate::runtime_to_rocketmq_error)
+                .and_then(crate::require_metadata_durability)?;
             return Ok(());
         }
         let error_path = file_name.clone();

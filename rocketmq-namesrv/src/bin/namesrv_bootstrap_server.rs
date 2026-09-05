@@ -108,7 +108,10 @@ fn main() -> Result<()> {
     if print_release_version_if_requested("rocketmq-namesrv-rust") {
         return Ok(());
     }
-    let owner = RuntimeOwner::new(namesrv_runtime_config()).context("failed to build namesrv runtime")?;
+    let owner = RuntimeOwner::plan(namesrv_runtime_config())
+        .expect("namesrv runtime profile is internally valid")
+        .build()
+        .context("failed to build namesrv runtime")?;
     let service_context = owner.root_context().component("rocketmq-namesrv-runtime");
     let lifecycle =
         ServiceLifecycle::from_env("rocketmq-namesrv").context("invalid NameServer lifecycle configuration")?;

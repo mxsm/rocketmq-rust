@@ -28,12 +28,14 @@ use rocketmq_store::test_support::run_store_rocksdb_maintenance_lifecycle_probe;
 use rocketmq_store::test_support::StoreRocksDbMaintenanceLifecycleProbe;
 
 fn run_lifecycle_probe() -> StoreRocksDbMaintenanceLifecycleProbe {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: 2,
         max_blocking_threads: 4,
         thread_name: "rocketmq-store-rocksdb-maintenance-bench".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("store RocksDB maintenance benchmark runtime should start");
     let context = owner.root_context().component("store-rocksdb-maintenance-bench");
     let output = owner.block_on(run_store_rocksdb_maintenance_lifecycle_probe(context));

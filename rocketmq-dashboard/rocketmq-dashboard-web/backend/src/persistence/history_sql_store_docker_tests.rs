@@ -20,7 +20,6 @@ use crate::model::MetricSample;
 use crate::model::StorageBackend;
 use crate::persistence::TimeRange;
 use crate::persistence::history_repository::HistoryQuery;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 #[test]
@@ -28,7 +27,7 @@ use rocketmq_runtime::RuntimeOwner;
 fn docker_sqlite_history_reopens_a_mounted_database() {
     let data_path = std::env::var("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH")
         .expect("ROCKETMQ_DASHBOARD_STORAGE_TEST_SQLITE_PATH must be set by the storage test runner");
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     owner.block_on(async {
         let config = StorageConfig {
             backend: StorageBackend::Sqlite,

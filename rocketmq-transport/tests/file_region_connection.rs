@@ -21,7 +21,6 @@ use std::time::Duration;
 use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::RemotingCommand;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_transport::api::file_transfer_snapshot;
 use rocketmq_transport::api::ConnectionState;
@@ -35,7 +34,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
 fn runtime_owner() -> RuntimeOwner {
-    RuntimeOwner::new(RuntimeConfig::default()).expect("test runtime owner")
+    RuntimeOwner::new().expect("test runtime owner")
 }
 
 fn region_with_prefix(prefix_len: usize, body: &[u8]) -> (Arc<std::fs::File>, FileRegion) {

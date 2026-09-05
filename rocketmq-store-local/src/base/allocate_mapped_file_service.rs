@@ -1081,7 +1081,7 @@ impl AllocateMappedFileService {
             Err(error) => {
                 warn!(
                     queue = "mapped-file-allocation",
-                    reason = %error,
+                    ?error,
                     charged_bytes,
                     "mapped-file allocation request rejected by Store budget"
                 );
@@ -2451,11 +2451,11 @@ mod tests {
     fn shutdown_drains_releasable_pending_cleanup() {
         let temp_dir = tempdir().expect("temp dir");
         let file_path = temp_dir.path().join("00000000000000000000");
-        let runtime_owner = RuntimeOwner::new_with_memory_limit(
-            RuntimeConfig::default(),
-            ProcessMemoryLimit::configured(64 * 1024 * 1024).expect("test memory limit"),
-        )
-        .expect("test runtime owner");
+        let runtime_owner = RuntimeOwner::plan(RuntimeConfig::default())
+            .expect("default runtime configuration is valid")
+            .with_memory_limit(ProcessMemoryLimit::configured(64 * 1024 * 1024).expect("test memory limit"))
+            .build()
+            .expect("test runtime owner");
         let runtime_context = runtime_owner.root_context().component("allocation-cleanup-test");
         let service = AllocateMappedFileService::new_with_config_and_storage_io(
             None,
@@ -2494,11 +2494,11 @@ mod tests {
         let temp_dir = tempdir().expect("temp dir");
         let file_path = temp_dir.path().join("00000000000000000000");
         let file_path_text = file_path.to_string_lossy().into_owned();
-        let runtime_owner = RuntimeOwner::new_with_memory_limit(
-            RuntimeConfig::default(),
-            ProcessMemoryLimit::configured(64 * 1024 * 1024).expect("test memory limit"),
-        )
-        .expect("test runtime owner");
+        let runtime_owner = RuntimeOwner::plan(RuntimeConfig::default())
+            .expect("default runtime configuration is valid")
+            .with_memory_limit(ProcessMemoryLimit::configured(64 * 1024 * 1024).expect("test memory limit"))
+            .build()
+            .expect("test runtime owner");
         let runtime_context = runtime_owner
             .root_context()
             .component("allocation-claimed-shutdown-test");

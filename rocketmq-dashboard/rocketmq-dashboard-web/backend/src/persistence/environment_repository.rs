@@ -495,13 +495,12 @@ mod tests {
     use crate::model::ConsumerMonitorRule;
     use crate::model::DashboardConfigView;
     use crate::model::StorageBackend;
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
 
     #[test]
     fn file_environment_delete_transaction_rolls_back_all_collections_on_write_failure() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &StorageConfig {
@@ -580,7 +579,7 @@ mod tests {
     fn file_environment_delete_reopens_and_recovers_after_rollback_cleanup_fails() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let root = directory.path().join("dashboard");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let store = FilePersistence::initialize(
                 &StorageConfig {

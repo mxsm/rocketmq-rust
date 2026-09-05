@@ -263,8 +263,10 @@ mod tests {
     use crate::session_view::EmbeddedSessionRecord;
 
     fn control(deadline: Option<RequestDeadline>) -> (RuntimeOwner, RequestControlView) {
-        let runtime =
-            RuntimeOwner::new(RuntimeConfig::server_default("deferred-expiry-policy")).expect("expiry test runtime");
+        let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("deferred-expiry-policy"))
+            .expect("runtime configuration is valid")
+            .build()
+            .expect("expiry test runtime");
         let session = Arc::new(EmbeddedSessionRecord::new(9819));
         let parent = runtime
             .root_context()

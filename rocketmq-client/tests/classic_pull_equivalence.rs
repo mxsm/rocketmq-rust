@@ -73,7 +73,9 @@ fn typed_options_validate_java_pull_arguments() {
 
 #[test]
 fn configured_facade_fails_closed_before_start_without_unsupported_error() {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("classic-pull-equivalence"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("classic-pull-equivalence"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("runtime owner should start");
     let runtime = client_runtime(&owner, "client");
     let consumer = DefaultMQPullConsumer::builder(runtime.clone())
@@ -115,8 +117,10 @@ fn configured_facade_fails_closed_before_start_without_unsupported_error() {
 
 #[test]
 fn detached_legacy_constructor_reports_missing_runtime_instead_of_unsupported() {
-    let owner =
-        RuntimeOwner::new(RuntimeConfig::server_default("classic-pull-detached")).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("classic-pull-detached"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime owner should start");
     let consumer = DefaultMQPullConsumer::with_consumer_group("ClassicPullGroup");
 
     owner.block_on(async {
@@ -162,8 +166,10 @@ fn schedule_compatibility_types_are_live_or_fail_closed() {
 
 #[test]
 fn configured_facade_owns_start_and_shutdown_lifecycle() {
-    let owner =
-        RuntimeOwner::new(RuntimeConfig::server_default("classic-pull-lifecycle")).expect("runtime owner should start");
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("classic-pull-lifecycle"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime owner should start");
     let runtime = client_runtime(&owner, "client");
     let consumer = DefaultMQPullConsumer::builder(runtime.clone())
         .consumer_group("ClassicPullLifecycleGroup")
@@ -210,7 +216,9 @@ fn queue_listener_can_be_registered_before_start() {
         }
     }
 
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("classic-pull-listener-lifecycle"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("classic-pull-listener-lifecycle"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("runtime owner should start");
     let runtime = client_runtime(&owner, "client");
     let consumer = DefaultMQPullConsumer::builder(runtime.clone())
@@ -241,7 +249,9 @@ fn configured_schedule_service_cancels_and_joins_its_coordinator() {
     struct Callback;
     impl PullTaskCallback for Callback {}
 
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("classic-pull-schedule-lifecycle"))
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("classic-pull-schedule-lifecycle"))
+        .expect("test runtime configuration is valid")
+        .build()
         .expect("runtime owner should start");
     let runtime = client_runtime(&owner, "client");
     let service = MQPullConsumerScheduleService::with_client_runtime(runtime.clone(), "ClassicPullScheduleGroup")

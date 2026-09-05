@@ -30,7 +30,6 @@ use rocketmq_error::NetworkError;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
@@ -579,7 +578,7 @@ async fn typed_response_write_and_flush_failures_are_possibly_partial_with_a_typ
 
 #[tokio::test]
 async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoning_typed_send() {
-    let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+    let owner = RuntimeOwner::new().expect("runtime owner");
     let blocking = owner
         .root_context()
         .component("typed-sendfile-preflight-test")

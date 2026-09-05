@@ -141,8 +141,10 @@ async fn pop_lite_deferred_embedded_origin_is_rejected_before_capacity_take() {
         service: Arc::clone(&service),
         observed: Arc::clone(&observed),
     };
-    let runtime =
-        RuntimeOwner::new(RuntimeConfig::server_default("pop-lite-embedded-origin")).expect("embedded PopLite runtime");
+    let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("pop-lite-embedded-origin"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("embedded PopLite runtime");
     let context = runtime.root_context().component("pop-lite.embedded-origin");
     let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
         processor,

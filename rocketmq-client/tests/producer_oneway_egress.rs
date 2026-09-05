@@ -23,11 +23,11 @@ use rocketmq_runtime::RuntimeOwner;
 
 #[test]
 fn producer_to_writer_transfer_keeps_one_process_charge() {
-    let owner = RuntimeOwner::new_with_memory_limit(
-        RuntimeConfig::default(),
-        ProcessMemoryLimit::configured(4096).expect("memory limit"),
-    )
-    .expect("runtime owner");
+    let owner = RuntimeOwner::plan(RuntimeConfig::default())
+        .expect("default runtime configuration is valid")
+        .with_memory_limit(ProcessMemoryLimit::configured(4096).expect("memory limit"))
+        .build()
+        .expect("runtime owner");
     let process = owner.root_context().component("client").process_budget();
     let producer = process
         .child("producer-egress", BudgetLimit::new(8, 4096, FullPolicy::Reject))
@@ -51,11 +51,11 @@ fn producer_to_writer_transfer_keeps_one_process_charge() {
 
 #[test]
 fn aggregate_producer_and_writer_usage_cannot_exceed_process_ceiling() {
-    let owner = RuntimeOwner::new_with_memory_limit(
-        RuntimeConfig::default(),
-        ProcessMemoryLimit::configured(1024).expect("memory limit"),
-    )
-    .expect("runtime owner");
+    let owner = RuntimeOwner::plan(RuntimeConfig::default())
+        .expect("default runtime configuration is valid")
+        .with_memory_limit(ProcessMemoryLimit::configured(1024).expect("memory limit"))
+        .build()
+        .expect("runtime owner");
     let process = owner.root_context().component("client").process_budget();
     let producer = process
         .child("producer-egress", BudgetLimit::new(8, 1024, FullPolicy::Reject))

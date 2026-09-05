@@ -188,10 +188,9 @@ impl OperationContext {
             || self.is_cancelled()
             || self.inner.deadline.is_some_and(|deadline| deadline <= Instant::now())
         {
-            return Err(RuntimeError::LifecycleOperation {
-                operation: "spawn_operation",
-                message: "operation is cancelled or its deadline has expired".to_string(),
-            });
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::SpawnOperation,
+            ));
         }
         Ok(OperationTaskRegistration::new(Arc::clone(&self.inner.active_tasks)))
     }
@@ -226,10 +225,9 @@ impl OperationContext {
     fn bind_owner(&self, owner_id: TaskGroupId) -> RuntimeResult<()> {
         let mut bound_owner = self.inner.owner_id.lock();
         match *bound_owner {
-            Some(bound_owner) if bound_owner != owner_id => Err(RuntimeError::LifecycleOperation {
-                operation: "operation_owner",
-                message: "operation tasks must use one component owner".to_string(),
-            }),
+            Some(bound_owner) if bound_owner != owner_id => {
+                Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner))
+            }
             Some(_) => Ok(()),
             None => {
                 *bound_owner = Some(owner_id);
@@ -240,10 +238,9 @@ impl OperationContext {
 
     fn ensure_owner(&self, owner_id: TaskGroupId) -> RuntimeResult<()> {
         match *self.inner.owner_id.lock() {
-            Some(bound_owner) if bound_owner != owner_id => Err(RuntimeError::LifecycleOperation {
-                operation: "operation_owner",
-                message: "operation shutdown used a different component owner".to_string(),
-            }),
+            Some(bound_owner) if bound_owner != owner_id => {
+                Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner))
+            }
             _ => Ok(()),
         }
     }

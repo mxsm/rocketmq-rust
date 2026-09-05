@@ -103,7 +103,10 @@ impl AsyncWrite for PanicOnWrite {
 
 impl ControlHarness {
     fn new(name: &'static str, owner: u64) -> (Self, crate::dispatch::RequestControlView) {
-        let runtime = RuntimeOwner::new(RuntimeConfig::server_default(name)).expect("deferred responder runtime owner");
+        let runtime = RuntimeOwner::plan(RuntimeConfig::server_default(name))
+            .expect("test runtime configuration is valid")
+            .build()
+            .expect("deferred responder runtime owner");
         let parent = runtime.root_context().component(name).task_group().clone();
         let session = EmbeddedSessionRecord::new(owner);
         let control = crate::dispatch::RequestControlView::from_meta(

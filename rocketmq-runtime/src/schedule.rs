@@ -21,46 +21,47 @@ pub mod task;
 /// Trigger types and operations.
 pub mod trigger;
 
-use std::error::Error;
-use std::fmt;
-
 pub use executor::ExecutorPool;
 pub use task::Task;
 pub use task::TaskContext;
 pub use task::TaskResult;
 pub use task::TaskStatus;
 
-/// Scheduler error type
-#[derive(Debug)]
-pub enum SchedulerError {
-    /// Represents the task not found case.
-    TaskNotFound(String),
-    /// Represents the task already exists case.
-    TaskAlreadyExists(String),
-    /// Represents the executor error case.
-    ExecutorError(String),
-    /// Represents the trigger error case.
-    TriggerError(String),
-    /// Represents the system error case.
-    SystemError(String),
+/// Normal state observed when starting a scheduler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulerStartOutcome {
+    /// The scheduler loops were started.
+    Started,
+    /// The scheduler was already running.
+    AlreadyRunning,
 }
 
-impl fmt::Display for SchedulerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SchedulerError::TaskNotFound(id) => write!(f, "Task not found: {id}"),
-            SchedulerError::TaskAlreadyExists(id) => write!(f, "Task already exists: {id}"),
-            SchedulerError::ExecutorError(msg) => write!(f, "Executor error: {msg}"),
-            SchedulerError::TriggerError(msg) => write!(f, "Trigger error: {msg}"),
-            SchedulerError::SystemError(msg) => write!(f, "System error: {msg}"),
-        }
-    }
+/// Result of registering a schedule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleRegistrationOutcome {
+    /// The task was registered under this job identifier.
+    Scheduled(String),
+    /// A task or job with the requested identity already exists.
+    AlreadyPresent,
 }
 
-impl Error for SchedulerError {}
+/// Result of changing a scheduler registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleControlOutcome {
+    /// The requested change was applied.
+    Applied,
+    /// The requested job or execution is not present.
+    NotFound,
+}
 
-/// Alias for the scheduler result type.
-pub type SchedulerResult<T> = Result<T, SchedulerError>;
+/// Result of immediately starting a registered task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScheduleExecutionOutcome {
+    /// A task execution was started under this identifier.
+    Started(String),
+    /// The requested job is not present.
+    NotFound,
+}
 
 /// Simple scheduler types and operations.
 pub mod simple_scheduler {
@@ -143,21 +144,11 @@ pub mod simple_scheduler {
         done: oneshot::Receiver<()>,
     }
 
-    fn spawn_scheduled_task<F>(
-        task_group: &TaskGroup,
-        operation: &'static str,
-        task_name: String,
-        future: F,
-    ) -> Result<RuntimeTaskId>
+    fn spawn_scheduled_task<F>(task_group: &TaskGroup, task_name: String, future: F) -> Result<RuntimeTaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        task_group
-            .spawn_service(task_name, future)
-            .map_err(|error| RuntimeError::LifecycleOperation {
-                operation,
-                message: error.to_string(),
-            })
+        task_group.spawn_service(task_name, future)
     }
 
     #[derive(Debug, Clone)]
@@ -250,16 +241,14 @@ pub mod simple_scheduler {
             self.counter.fetch_add(1, Ordering::Relaxed)
         }
 
-        fn task_group(&self, operation: &'static str) -> Result<TaskGroup> {
+        fn task_group(&self, operation: crate::RuntimeOperation) -> Result<TaskGroup> {
             let mut task_group = self.task_group.write();
             if let Some(task_group) = task_group.as_ref() {
                 return Ok(task_group.clone());
             }
 
-            let handle = tokio::runtime::Handle::try_current().map_err(|error| RuntimeError::LifecycleOperation {
-                operation,
-                message: format!("requires a Tokio runtime: {error}"),
-            })?;
+            let handle =
+                tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::context_unavailable(operation))?;
             let new_group = TaskGroup::root("rocketmq.simple-scheduled-task-manager", RuntimeHandle::new(handle));
             *task_group = Some(new_group.clone());
             Ok(new_group)
@@ -271,7 +260,7 @@ pub mod simple_scheduler {
         /// reserved for compatibility adapters that already share this scheduler boundary and
         /// need to parent additional owned child groups under it.
         pub fn compatibility_task_group(&self) -> Result<TaskGroup> {
-            self.task_group("ScheduledTaskManager::compatibility_task_group")
+            self.task_group(crate::RuntimeOperation::SpawnSchedulerTask)
         }
 
         /// Adds a fixed-rate scheduled task to the task manager.
@@ -391,18 +380,15 @@ pub mod simple_scheduler {
             let id = self.next_id();
             let token = CancellationToken::new();
             let token_child = token.clone();
-            let task_group = self.task_group("ScheduledTaskManager::add_scheduled_task")?;
+            let task_group = self.task_group(crate::RuntimeOperation::SpawnSchedulerTask)?;
 
             let task_fn = Arc::new(Mutex::new(task_fn));
 
             let (done_tx, done) = oneshot::channel();
             let driver_group = task_group.clone();
             let run_group = task_group.clone();
-            let runtime_task_id = spawn_scheduled_task(
-                &driver_group,
-                "ScheduledTaskManager::add_scheduled_task",
-                format!("scheduled-task-manager.driver.{id}"),
-                {
+            let runtime_task_id =
+                spawn_scheduled_task(&driver_group, format!("scheduled-task-manager.driver.{id}"), {
                     let task_fn = task_fn;
                     async move {
                         match mode {
@@ -520,8 +506,7 @@ pub mod simple_scheduler {
                         }
                         drop(done_tx);
                     }
-                },
-            )?;
+                })?;
 
             self.tasks.write().insert(
                 id,
@@ -815,6 +800,7 @@ mod tests {
 
     use crate::RuntimeContext;
     use crate::RuntimeResult;
+    use rocketmq_error::CanonicalCondition;
     use tokio::time;
 
     use crate::schedule::simple_scheduler::*;
@@ -849,8 +835,9 @@ mod tests {
             )
             .expect_err("adding a scheduled task without a Tokio runtime should fail");
 
-        assert!(
-            error.to_string().contains("requires a Tokio runtime"),
+        assert_eq!(
+            error.condition(),
+            CanonicalCondition::Unavailable,
             "unexpected error: {error}"
         );
         assert_eq!(manager.task_count(), 0);
@@ -868,11 +855,32 @@ mod tests {
             )
             .expect_err("adding an async scheduled task without a Tokio runtime should fail");
 
-        assert!(
-            error.to_string().contains("requires a Tokio runtime"),
+        assert_eq!(
+            error.condition(),
+            CanonicalCondition::Unavailable,
             "unexpected error: {error}"
         );
         assert_eq!(manager.task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn closed_task_group_spawn_preserves_its_runtime_error_identity() {
+        let context = RuntimeContext::from_current("closed-scheduled-task-group");
+        let parent = context.service_context("scheduler-service").task_group().clone();
+        let manager = ScheduledTaskManager::new_with_task_group(parent.clone());
+        let _report = parent.shutdown(Duration::ZERO).await;
+
+        let error = manager
+            .add_scheduled_task(
+                ScheduleMode::FixedDelay,
+                Duration::ZERO,
+                Duration::from_secs(1),
+                |_token| async move { Ok(()) },
+            )
+            .expect_err("closed task group must reject a scheduled task");
+
+        assert_eq!(error.operation(), crate::RuntimeOperation::SpawnTaskGroupTask);
+        assert_eq!(error.condition(), CanonicalCondition::Unavailable);
     }
 
     #[tokio::test]

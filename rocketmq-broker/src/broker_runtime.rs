@@ -59,8 +59,8 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoConfig;
-use rocketmq_runtime::MetadataIoError;
 use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
@@ -436,7 +436,8 @@ where
             metadata_io
                 .submit_next_durable(resource, manager.config_file_path(), content.into_bytes(), deadline)
                 .await
-                .map_err(crate::runtime_to_rocketmq_error)?;
+                .map_err(crate::runtime_to_rocketmq_error)
+                .and_then(crate::require_metadata_durability)?;
             return Ok(());
         }
     }
@@ -782,7 +783,7 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     ack_message_processor: Option<Arc<AckMessageProcessor<MS>>>,
     notification_processor: Option<Arc<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<Arc<QueryAssignmentProcessor>>,
-    metadata_io: Option<Result<MetadataIoActor, MetadataIoError>>,
+    metadata_io: Option<Result<MetadataIoActor, RuntimeError>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<Arc<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
@@ -798,8 +799,10 @@ pub(crate) fn broker_task_group_or_current(
     no_runtime_warning: &'static str,
 ) -> Option<TaskGroup> {
     let name = name.into();
+    let scope = rocketmq_runtime::ScopeId::try_new(name)
+        .expect("broker task-group callers use fixed nonblank lifecycle labels");
     service_context
-        .map(|service_context| service_context.component(name).task_group().clone())
+        .map(|service_context| service_context.component(scope).task_group().clone())
         .or_else(|| {
             warn!("{no_runtime_warning}");
             None

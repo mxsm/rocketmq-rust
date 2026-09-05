@@ -344,7 +344,9 @@ mod tests {
 
     #[tokio::test]
     async fn prepared_security_continues_to_broker_acl_and_acl_remains_fail_closed() {
-        let owner = RuntimeOwner::new(RuntimeConfig::server_default("broker-prepared-security-test"))
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("broker-prepared-security-test"))
+            .expect("runtime configuration is valid")
+            .build()
             .expect("prepared security test runtime");
         let service = owner.root_context().component("broker-prepared-security");
 

@@ -35,7 +35,8 @@ use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::FullPolicy;
-use rocketmq_runtime::QueuePushErrorKind;
+use rocketmq_runtime::QueuePushOutcome;
+use rocketmq_runtime::QueuePushRejection;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
 use smallvec::SmallVec;
@@ -219,7 +220,7 @@ impl ClusterExecutionLanes {
             }
         };
         match push_result {
-            Ok(_) => {
+            QueuePushOutcome::Enqueued | QueuePushOutcome::Coalesced { .. } | QueuePushOutcome::DroppedStale { .. } => {
                 self.counters.admitted.fetch_add(1, Ordering::Relaxed);
                 if created {
                     Ok(Some(ClusterLaneRegistration {
@@ -231,8 +232,7 @@ impl ClusterExecutionLanes {
                     Ok(None)
                 }
             }
-            Err(error) => {
-                let kind = error.kind().clone();
+            QueuePushOutcome::Rejected { item: _item, rejection } => {
                 if created {
                     registry.remove(&key);
                     registered.queue.close();
@@ -249,14 +249,14 @@ impl ClusterExecutionLanes {
                     oldest_age_ms = snapshot.oldest_age.map(|age| age.as_millis() as u64),
                     total_depth = root_snapshot.current_count,
                     total_retained_bytes = root_snapshot.current_bytes,
-                    ?kind,
+                    ?rejection,
                     "proxy cluster command admission rejected"
                 );
-                match kind {
-                    QueuePushErrorKind::BudgetExhausted(_) | QueuePushErrorKind::DeadlineExceeded => {
+                match rejection {
+                    QueuePushRejection::BudgetExhausted(_) | QueuePushRejection::DeadlineExceeded => {
                         Err(ProxyError::too_many_requests("proxy-cluster-command-queue"))
                     }
-                    QueuePushErrorKind::Closed | QueuePushErrorKind::SlowConsumerClosed => Err(ProxyError::Transport {
+                    QueuePushRejection::Closed | QueuePushRejection::SlowConsumerClosed => Err(ProxyError::Transport {
                         message: "proxy cluster command execution is unavailable".to_owned(),
                     }),
                 }

@@ -349,7 +349,10 @@ pub(crate) mod network {
                     TransportClient::builder(
                         Arc::new(TransportClientConfig::default()),
                         DefaultRequestProcessor,
-                        runtime_context.service_context(format!("client-{index}")),
+                        runtime_context.service_context(
+                            rocketmq_runtime::ScopeId::try_new(format!("client-{index}"))
+                                .expect("the benchmark client scope has a fixed nonblank prefix"),
+                        ),
                     )
                     .build()
                     .context("build route benchmark transport client")?,

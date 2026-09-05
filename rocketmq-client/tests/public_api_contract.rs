@@ -68,7 +68,10 @@ fn client_consumers_use_only_intentional_root_exports() {
     .with_nameserver_discovery(discovery.clone());
     assert!(options.nameserver_discovery().is_some());
 
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("public-api-contract")).unwrap();
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("public-api-contract"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .unwrap();
     let runtime = ClientRuntime::try_new(
         owner.root_context().component("client"),
         ClientRuntimeConfig::default(),

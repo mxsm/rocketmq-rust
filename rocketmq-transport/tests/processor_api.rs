@@ -615,8 +615,7 @@ fn api_processor_side_contracts_are_typed_and_body_free() {
 
 #[test]
 fn api_network_dispatcher_and_server_are_public_nameable_facades() {
-    let runtime =
-        rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::default()).expect("public facade runtime");
+    let runtime = rocketmq_runtime::RuntimeOwner::new().expect("public facade runtime");
     let service_context = runtime.root_context().component("public-facades");
     let security =
         std::sync::Arc::new(rocketmq_transport::api::TransportSecurity::development_insecure_loopback(None, None));

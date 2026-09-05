@@ -1196,10 +1196,12 @@ impl Builder {
         );
 
         let service_context = self.service_context.component("rocketmq-namesrv");
-        let metadata_io = Some(MetadataIoActor::start(
-            &service_context.component("namesrv.metadata-io"),
-            MetadataIoConfig::default(),
-        ));
+        let metadata_io = Some(
+            MetadataIoConfig::default()
+                .into_plan()
+                .expect("default metadata I/O config is valid")
+                .start(&service_context.component("namesrv.metadata-io")),
+        );
         let config_metadata_io = metadata_io.clone();
         let cluster_test_route_lookup = if name_server_config.cluster_test {
             self.cluster_test_route_lookup.or_else(|| {
@@ -1347,7 +1349,7 @@ pub(crate) struct NameServerRuntimeInner {
     config_update_lock: parking_lot::Mutex<()>,
     config_transaction_lock: tokio::sync::Mutex<()>,
     config_generations: parking_lot::RwLock<ConfigGenerationState>,
-    config_metadata_io: Option<Result<MetadataIoActor, rocketmq_runtime::MetadataIoError>>,
+    config_metadata_io: Option<Result<MetadataIoActor, rocketmq_runtime::RuntimeError>>,
     auth_runtime: OnceLock<Arc<AuthRuntime>>,
     route_info_manager: Arc<RouteInfoManager>,
     route_response_cache: Arc<RouteResponseCache>,
@@ -2056,9 +2058,11 @@ mod tests {
         static OWNER: std::sync::OnceLock<rocketmq_runtime::RuntimeOwner> = std::sync::OnceLock::new();
         OWNER
             .get_or_init(|| {
-                rocketmq_runtime::RuntimeOwner::new(rocketmq_runtime::RuntimeConfig::server_default(
+                rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::server_default(
                     "namesrv-bootstrap-test",
                 ))
+                .expect("runtime configuration is valid")
+                .build()
                 .expect("test runtime owner should build")
             })
             .root_context()

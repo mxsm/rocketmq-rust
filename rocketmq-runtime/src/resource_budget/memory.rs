@@ -12,11 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(target_os = "linux")]
 use std::io;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 
 use sysinfo::System;
+
+use crate::RuntimeContractPolicy;
+use crate::RuntimeContractViolation;
+use crate::RuntimeError;
+use crate::RuntimeResult;
 
 const EXPLICIT_MEMORY_LIMIT_ENV: &str = "ROCKETMQ_PROCESS_MEMORY_LIMIT_BYTES";
 
@@ -43,14 +49,17 @@ pub struct ProcessMemoryLimit {
 }
 
 impl ProcessMemoryLimit {
-    /// Creates the detect value.
-    pub fn detect() -> Result<Self, MemoryLimitError> {
+    /// Detects the effective process memory limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when process, cgroup, or environment
+    /// discovery cannot provide a finite limit.
+    pub fn detect() -> RuntimeResult<Self> {
         if let Some(value) = std::env::var_os(EXPLICIT_MEMORY_LIMIT_ENV) {
             let value = value.to_string_lossy();
-            let bytes = parse_positive_bytes(&value).ok_or_else(|| MemoryLimitError::InvalidEnvironment {
-                name: EXPLICIT_MEMORY_LIMIT_ENV,
-                value: value.into_owned(),
-            })?;
+            let bytes = parse_positive_bytes(&value)
+                .ok_or_else(|| RuntimeError::configuration(crate::RuntimeOperation::DetectProcessMemoryLimit))?;
             return Ok(Self {
                 bytes,
                 source: MemoryLimitSource::Environment,
@@ -58,12 +67,19 @@ impl ProcessMemoryLimit {
         }
 
         detect_platform_limit()
+            .map_err(|source| RuntimeError::internal(crate::RuntimeOperation::DetectProcessMemoryLimit, source))
     }
 
-    /// Creates the configured value.
-    pub fn configured(bytes: u64) -> Result<Self, MemoryLimitError> {
+    /// Creates an explicitly configured process memory limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when `bytes` is zero.
+    pub fn configured(bytes: u64) -> Result<Self, RuntimeContractViolation> {
         if bytes == 0 {
-            return Err(MemoryLimitError::ZeroConfiguredLimit);
+            return Err(RuntimeContractViolation::InvalidMemoryLimit {
+                policy: RuntimeContractPolicy::ConfiguredMemoryLimitPositive,
+            });
         }
         Ok(Self {
             bytes,
@@ -83,10 +99,17 @@ impl ProcessMemoryLimit {
         self.source
     }
 
-    /// Returns the fraction.
-    pub fn fraction(self, numerator: u64, denominator: u64) -> Result<u64, MemoryLimitError> {
+    /// Returns a positive bounded fraction of this limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation for a zero, inverted, or out-of-range
+    /// fraction.
+    pub fn fraction(self, numerator: u64, denominator: u64) -> Result<u64, RuntimeContractViolation> {
         if numerator == 0 || denominator == 0 || numerator > denominator {
-            return Err(MemoryLimitError::InvalidFraction { numerator, denominator });
+            return Err(RuntimeContractViolation::InvalidMemoryLimit {
+                policy: RuntimeContractPolicy::MemoryFractionPositiveAndBounded,
+            });
         }
         let bytes = (u128::from(self.bytes) * u128::from(numerator)) / u128::from(denominator);
         Ok(bytes as u64)
@@ -94,43 +117,16 @@ impl ProcessMemoryLimit {
 }
 
 #[derive(Debug, thiserror::Error)]
-/// Identifies the memory limit error state.
-pub enum MemoryLimitError {
-    #[error("environment variable {name} must contain a positive byte count, got {value:?}")]
-    /// Represents the invalid environment case.
-    InvalidEnvironment {
-        /// The name value.
-        name: &'static str,
-        /// The value value.
-        value: String,
-    },
-    #[error("configured process memory limit must be greater than zero")]
-    /// Represents the zero configured limit case.
-    ZeroConfiguredLimit,
-    #[error("invalid memory budget fraction {numerator}/{denominator}")]
-    /// Represents the invalid fraction case.
-    InvalidFraction {
-        /// The numerator value.
-        numerator: u64,
-        /// The denominator value.
-        denominator: u64,
-    },
-    #[error("failed to read process memory limit from {path}: {source}")]
-    /// Represents the read case.
-    Read {
-        /// The struct field value.
-        path: &'static str,
-        #[source]
-        /// The struct field value.
-        source: io::Error,
-    },
+enum MemoryLimitDiscoveryFailure {
+    #[cfg(target_os = "linux")]
+    #[error("failed to read process memory limit")]
+    Read(#[source] io::Error),
     #[error("no finite process, cgroup, or host memory limit is available")]
-    /// Represents the unavailable case.
     Unavailable,
 }
 
 #[cfg(target_os = "linux")]
-fn detect_platform_limit() -> Result<ProcessMemoryLimit, MemoryLimitError> {
+fn detect_platform_limit() -> Result<ProcessMemoryLimit, MemoryLimitDiscoveryFailure> {
     const CGROUP_V2: &str = "/sys/fs/cgroup/memory.max";
     const CGROUP_V1: &str = "/sys/fs/cgroup/memory/memory.limit_in_bytes";
 
@@ -150,17 +146,17 @@ fn detect_platform_limit() -> Result<ProcessMemoryLimit, MemoryLimitError> {
         .flatten()
         .min_by_key(|(bytes, _)| *bytes)
         .map(|(bytes, source)| ProcessMemoryLimit { bytes, source })
-        .ok_or(MemoryLimitError::Unavailable)
+        .ok_or(MemoryLimitDiscoveryFailure::Unavailable)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn detect_platform_limit() -> Result<ProcessMemoryLimit, MemoryLimitError> {
+fn detect_platform_limit() -> Result<ProcessMemoryLimit, MemoryLimitDiscoveryFailure> {
     host_physical_memory()
         .map(|bytes| ProcessMemoryLimit {
             bytes,
             source: MemoryLimitSource::HostPhysicalMemory,
         })
-        .ok_or(MemoryLimitError::Unavailable)
+        .ok_or(MemoryLimitDiscoveryFailure::Unavailable)
 }
 
 fn host_physical_memory() -> Option<u64> {
@@ -171,11 +167,11 @@ fn host_physical_memory() -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_optional(path: &'static str) -> Result<Option<String>, MemoryLimitError> {
+fn read_optional(path: &'static str) -> Result<Option<String>, MemoryLimitDiscoveryFailure> {
     match std::fs::read_to_string(Path::new(path)) {
         Ok(value) => Ok(Some(value)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(MemoryLimitError::Read { path, source }),
+        Err(source) => Err(MemoryLimitDiscoveryFailure::Read(source)),
     }
 }
 
@@ -210,6 +206,13 @@ mod tests {
         assert_eq!(limit.fraction(4, 4).expect("whole"), u64::MAX);
         assert!(limit.fraction(0, 4).is_err());
         assert!(limit.fraction(5, 4).is_err());
+    }
+
+    #[test]
+    fn platform_memory_detection_returns_a_positive_limit() {
+        let limit = ProcessMemoryLimit::detect().expect("test host must expose a process memory limit");
+
+        assert!(limit.bytes() > 0);
     }
 
     #[cfg(target_os = "linux")]

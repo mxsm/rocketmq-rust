@@ -417,7 +417,6 @@ mod tests {
     use crate::service::create_or_update_consumer_monitor;
     use rocketmq_admin_core::client_adapter::ClientRuntime;
     use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -499,7 +498,7 @@ mod tests {
     #[test]
     fn aborted_config_service_request_commits_and_publishes_the_same_revision() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let (state, client_runtime) = test_state(&owner, directory.path().join("dashboard")).await;
             let initial = state.published().environment;
@@ -559,7 +558,7 @@ mod tests {
     #[test]
     fn aborted_monitor_service_request_still_finishes_its_owned_persistence() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let owner = RuntimeOwner::new(RuntimeConfig::default()).expect("runtime owner");
+        let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let (state, client_runtime) = test_state(&owner, directory.path().join("dashboard")).await;
             let environment_id = state.published().environment.environment_id;

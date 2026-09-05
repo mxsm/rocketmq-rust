@@ -64,7 +64,9 @@ fn test_service_context() -> ChildServiceContext {
     static OWNER: OnceLock<RuntimeOwner> = OnceLock::new();
     OWNER
         .get_or_init(|| {
-            RuntimeOwner::new(RuntimeConfig::server_default("commitlog-recovery-tests"))
+            RuntimeOwner::plan(RuntimeConfig::server_default("commitlog-recovery-tests"))
+                .expect("test runtime configuration is valid")
+                .build()
                 .expect("commitlog recovery test runtime should start")
         })
         .root_context()

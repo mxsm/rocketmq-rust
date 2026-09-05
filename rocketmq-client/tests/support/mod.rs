@@ -22,10 +22,12 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
 static TEST_RUNTIME_OWNER: LazyLock<RuntimeOwner> = LazyLock::new(|| {
-    RuntimeOwner::new(RuntimeConfig {
+    RuntimeOwner::plan(RuntimeConfig {
         thread_name: "rocketmq-client-integration-test".to_string(),
         ..Default::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("client integration-test runtime owner should start")
 });
 

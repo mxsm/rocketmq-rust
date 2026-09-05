@@ -37,11 +37,13 @@ const BODY_SIZE: usize = 64 * 1024;
 const SENDFILE_BODY_SIZE: usize = 4 * 1024 * 1024;
 
 fn run_report(body_size: usize) -> HaTransferBenchmarkReport {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: 1,
         thread_name: "rocketmq-ha-transfer-bench".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("HA transfer benchmark runtime should start");
     let output = owner.block_on(run_ha_bytes_vectored_benchmark_report(body_size));
     owner
@@ -52,11 +54,13 @@ fn run_report(body_size: usize) -> HaTransferBenchmarkReport {
 
 #[cfg(target_os = "linux")]
 fn run_sendfile_report(body_size: usize) -> HaSendfileBenchmarkReport {
-    let owner = RuntimeOwner::new(RuntimeConfig {
+    let owner = RuntimeOwner::plan(RuntimeConfig {
         worker_threads: 1,
         thread_name: "rocketmq-ha-sendfile-bench".to_string(),
         ..RuntimeConfig::default()
     })
+    .expect("test runtime configuration is valid")
+    .build()
     .expect("HA sendfile benchmark runtime should start");
     let output = owner
         .block_on(run_ha_vectored_sendfile_benchmark_report(body_size))

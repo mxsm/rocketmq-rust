@@ -167,7 +167,10 @@ async fn start_server_with_registry<P>(
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    let owner = RuntimeOwner::new(RuntimeConfig::server_default("pull-message-leaf")).expect("Pull runtime owner");
+    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("pull-message-leaf"))
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("Pull runtime owner");
     let server_context = owner.root_context().component("pull-message.server");
     let runner_context = owner.root_context().component("pull-message.runner");
     let server = TransportServer::new(

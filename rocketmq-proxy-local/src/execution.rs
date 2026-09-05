@@ -695,7 +695,10 @@ mod tests {
 
     fn execution_contexts(name: &str) -> (ChildServiceContext, ChildServiceContext) {
         let runtime = rocketmq_runtime::RuntimeContext::try_from_current(name).expect("runtime context");
-        let service = runtime.service_context(format!("{name}.service"));
+        let service = runtime.service_context(
+            rocketmq_runtime::ScopeId::try_new(format!("{name}.service"))
+                .expect("local execution test contexts use the fixed .service suffix"),
+        );
         let lanes = service.component("lanes");
         (service, lanes)
     }

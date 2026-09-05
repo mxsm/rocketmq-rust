@@ -59,7 +59,7 @@ fn dispatcher_task_result_preserves_original_error_kind() {
 fn dispatcher_startup_failed_uses_service_error_kind() {
     let error = dispatcher_startup_failed(
         "spawn test worker",
-        rocketmq_runtime::RuntimeError::InsideTokioRuntime("task group closed"),
+        rocketmq_runtime::RuntimeError::internal_failure(rocketmq_runtime::RuntimeOperation::DispatcherTaskGroup),
     );
 
     assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);

@@ -2818,6 +2818,24 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use error::RuntimeContractPolicy",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use error::RuntimeContractPolicy",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "closed identifier for deterministic runtime contract rules",
+          "removal_condition": "retain while public runtime contract violations expose policy identity"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use error::RuntimeContractViolation",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use error::RuntimeContractViolation",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use error::RuntimeError",
           "identity": "rocketmq-runtime/src/lib.rs:pub use error::RuntimeError",
           "owner": "runtime",
@@ -2944,15 +2962,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use metadata_io::MetadataIoError",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoError",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use metadata_io::MetadataIoOperation",
           "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoOperation",
           "owner": "runtime",
@@ -3016,15 +3025,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use resource_budget::BudgetAcquireError",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::BudgetAcquireError",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use resource_budget::BudgetCapacity",
           "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::BudgetCapacity",
           "owner": "runtime",
@@ -3043,15 +3043,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use resource_budget::BudgetConfigError",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::BudgetConfigError",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use resource_budget::BudgetDimension",
           "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::BudgetDimension",
           "owner": "runtime",
@@ -3063,6 +3054,15 @@
           "category": "stable",
           "declaration": "pub use resource_budget::BudgetLimit",
           "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::BudgetLimit",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use resource_budget::BudgetRejection",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::BudgetRejection",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
           "rationale": "deliberate root entry point",
@@ -3106,15 +3106,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use resource_budget::MemoryLimitError",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::MemoryLimitError",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use resource_budget::MemoryLimitSource",
           "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::MemoryLimitSource",
           "owner": "runtime",
@@ -3133,6 +3124,15 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use resource_budget::PermitRebindOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::PermitRebindOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use resource_budget::ProcessMemoryLimit",
           "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::ProcessMemoryLimit",
           "owner": "runtime",
@@ -3142,26 +3142,17 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use resource_budget::QueuePushError",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::QueuePushError",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use resource_budget::QueuePushErrorKind",
-          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::QueuePushErrorKind",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use resource_budget::QueuePushOutcome",
           "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::QueuePushOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use resource_budget::QueuePushRejection",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::QueuePushRejection",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
           "rationale": "deliberate root entry point",
@@ -3207,6 +3198,42 @@
           "category": "stable",
           "declaration": "pub use resource_budget::SystemMonotonicClock",
           "identity": "rocketmq-runtime/src/lib.rs:pub use resource_budget::SystemMonotonicClock",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use schedule::ScheduleControlOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use schedule::ScheduleControlOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use schedule::ScheduleExecutionOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use schedule::ScheduleExecutionOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use schedule::ScheduleRegistrationOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use schedule::ScheduleRegistrationOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use schedule::SchedulerStartOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use schedule::SchedulerStartOutcome",
           "owner": "runtime",
           "path": "rocketmq-runtime/src/lib.rs",
           "rationale": "deliberate root entry point",
@@ -3754,15 +3781,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::resource_budget::PermitRebindError",
-          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::resource_budget::PermitRebindError",
-          "owner": "runtime",
-          "path": "rocketmq-runtime/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use crate::resource_budget::ResourceBudget",
           "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::resource_budget::ResourceBudget",
           "owner": "runtime",
@@ -3823,9 +3841,90 @@
           "path": "rocketmq-runtime/src/public_api.rs",
           "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use error::RuntimeOperation",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use error::RuntimeOperation",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "closed operation metadata for runtime error classification",
+          "removal_condition": "retain while runtime errors expose operation metadata"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use executor_service::FuturesExecutorPlan",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::FuturesExecutorPlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "fallible futures executor construction plan",
+          "removal_condition": "retain while executor construction remains plan-then-build"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use executor_service::ScheduledExecutorServicePlan",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::ScheduledExecutorServicePlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "fallible scheduled executor construction plan",
+          "removal_condition": "retain while executor construction remains plan-then-build"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use executor_service::TokioExecutorServicePlan",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use executor_service::TokioExecutorServicePlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "fallible Tokio executor construction plan",
+          "removal_condition": "retain while executor construction remains plan-then-build"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use metadata_io::MetadataIoAdmissionOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoAdmissionOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "source-free metadata admission result",
+          "removal_condition": "retain while metadata admission is a public outcome"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use metadata_io::MetadataIoDurabilityOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoDurabilityOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "source-free metadata durability result",
+          "removal_condition": "retain while metadata durability is a public outcome"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use metadata_io::MetadataIoPlan",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use metadata_io::MetadataIoPlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "validated metadata I/O construction plan",
+          "removal_condition": "retain while metadata I/O uses plan-then-start construction"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use scheduled::ScheduledTaskRegistrationOutcome",
+          "identity": "rocketmq-runtime/src/lib.rs:pub use scheduled::ScheduledTaskRegistrationOutcome",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/lib.rs",
+          "rationale": "source-free scheduled registration result",
+          "removal_condition": "retain while duplicate registration is a public outcome"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::owner::RuntimeOwnerPlan",
+          "identity": "rocketmq-runtime/src/public_api.rs:pub use crate::owner::RuntimeOwnerPlan",
+          "owner": "runtime",
+          "path": "rocketmq-runtime/src/public_api.rs",
+          "rationale": "validated owned-runtime construction plan",
+          "removal_condition": "retain while runtime ownership uses plan-then-build construction"
         }
       ],
-      "maximum_exports": 134
+      "maximum_exports": 145
     },
     "rocketmq-store": {
       "entries": [
@@ -3891,6 +3990,33 @@
           "path": "rocketmq-store/src/public_api.rs",
           "rationale": "deliberate root entry point",
           "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::base::commit_log_dispatcher::MessageIndexRuntimeHandle",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::base::commit_log_dispatcher::MessageIndexRuntimeHandle",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "deliberate broker-owned message-index runtime boundary",
+          "removal_condition": "retain while message-index runtime coordination remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::base::commit_log_dispatcher::MessageIndexRuntimeSnapshot",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::base::commit_log_dispatcher::MessageIndexRuntimeSnapshot",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "deliberate broker-owned message-index runtime boundary",
+          "removal_condition": "retain while message-index runtime coordination remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::base::commit_log_dispatcher::MessageIndexRuntimeSource",
+          "identity": "rocketmq-store/src/public_api.rs:pub use crate::base::commit_log_dispatcher::MessageIndexRuntimeSource",
+          "owner": "store",
+          "path": "rocketmq-store/src/public_api.rs",
+          "rationale": "deliberate broker-owned message-index runtime boundary",
+          "removal_condition": "retain while message-index runtime coordination remains supported"
         },
         {
           "category": "stable",
@@ -5639,7 +5765,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 201
+      "maximum_exports": 204
     },
     "rocketmq-store-local": {
       "entries": [
