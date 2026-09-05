@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix(transport):** Remove unused `RuntimeConfig` imports that break Linux sendfile test and benchmark compilation with warnings denied ([#10026](https://github.com/mxsm/rocketmq-rust/issues/10026))
+
 ### Added
 
 - **test(remoting):** Add comprehensive test coverage for `QueryMessageResponseHeader` including integration with RemotingCommand, boundary checks, and error handling
