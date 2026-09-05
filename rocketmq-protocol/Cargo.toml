@@ -46,7 +46,7 @@ rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_json_any_key.workspace = true
-simd-json = { version = "0.17", optional = true }
+simd-json = { version = "0.18", optional = true }
 thiserror.workspace = true
 zstd = "0.13"
 

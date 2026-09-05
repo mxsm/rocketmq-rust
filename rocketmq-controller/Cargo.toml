@@ -46,9 +46,10 @@ openraft = { version = "=0.10.0-alpha.21", default-features = false, features = 
   "serde",
   "tokio-rt",
 ] }
-# OpenRaft prereleases use caret constraints internally. Keep the companion
-# crates on the same alpha so Cargo cannot resolve a newer, incompatible ABI.
-openraft-macros   = "=0.10.0-alpha.21"
+# OpenRaft prereleases use caret constraints internally. Keep the runtime crates
+# aligned with the core ABI. Pin macros separately: alpha.34 preserves the
+# runtime-related expansions used by alpha.21.
+openraft-macros   = "=0.10.0-alpha.34"
 openraft-rt       = "=0.10.0-alpha.21"
 openraft-rt-tokio = "=0.10.0-alpha.21"
 
