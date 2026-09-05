@@ -24,7 +24,6 @@ mod linux_bench {
     use criterion::Throughput;
     use rocketmq_protocol::protocol::RemotingCommand;
     use rocketmq_runtime::BlockingExecutor;
-    use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
     use rocketmq_transport::api::FileRegion;
     use rocketmq_transport::api::FileTransferMode;
