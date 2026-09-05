@@ -407,6 +407,17 @@ mod tests {
     }
 
     #[test]
+    fn storage_not_started_facade_uses_corrected_boundary_projection() {
+        let error = StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Start);
+        let public = error.public_view().expect("valid storage public view");
+        let projection = public.projection();
+
+        assert_eq!("storage.lifecycle.not_started", public.code().as_str());
+        assert_eq!(rocketmq_error::HttpStatusCode::CONFLICT, projection.http().status);
+        assert_eq!(rocketmq_error::CliExitCode::DATA, projection.cli().exit_code);
+    }
+
+    #[test]
     fn storage_error_rejects_non_storage_catalog_identity() {
         assert!(StoreError::try_new(&PROTOCOL_HEADER_INVALID, StoreOperation::Read).is_none());
         assert!(

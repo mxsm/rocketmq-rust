@@ -90,6 +90,14 @@ impl ComponentId {
     pub const RUNTIME: Self = Self("runtime");
     /// Transport services.
     pub const TRANSPORT: Self = Self("transport");
+    /// Broker services.
+    pub const BROKER: Self = Self("broker");
+    /// Client services.
+    pub const CLIENT: Self = Self("client");
+    /// Administrative tools.
+    pub const TOOLS: Self = Self("tools");
+    /// Observability services.
+    pub const OBSERVABILITY: Self = Self("observability");
 
     /// Returns the stable component name.
     #[inline]
@@ -164,22 +172,11 @@ pub enum ErrorSeverity {
 ///
 /// [`Self::try_new`] accepts only reviewed catalog identity using the lowercase
 /// dotted grammar. Source display text and runtime values must not become
-/// catalog identity. [`Self::new`] remains available for transitional static
-/// codes, including the existing uppercase [`crate::ErrorKind`] values.
+/// catalog identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ErrorCode(&'static str);
 
 impl ErrorCode {
-    /// Creates a stable error code without catalog-code validation.
-    ///
-    /// This constructor preserves the current static `ErrorKind` code set,
-    /// whose uppercase underscore-delimited values predate the canonical
-    /// catalog grammar. New catalog descriptors should use [`Self::try_new`].
-    #[inline]
-    pub const fn new(value: &'static str) -> Self {
-        Self(value)
-    }
-
     /// Attempts to create a canonical catalog code.
     ///
     /// Canonical codes have at least three dot-separated segments. Every

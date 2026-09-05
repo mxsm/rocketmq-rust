@@ -155,16 +155,16 @@ mod tests {
     fn print_content_requires_path() {
         let error = print_content(None, None, None).unwrap_err();
 
-        assert_eq!(error.spec().cli.exit_code, CliExitCode::USAGE);
-        assert_eq!(error.spec().code.as_str(), "ILLEGAL_ARGUMENT");
+        assert_eq!(error.descriptor().projection().cli().exit_code, CliExitCode::USAGE);
+        assert_eq!(error.descriptor().code().as_str(), "core.argument.invalid");
     }
 
     #[test]
     fn print_content_rejects_invalid_range() {
         let error = print_content(Some(2), Some(1), Some("missing.log".into())).unwrap_err();
 
-        assert_eq!(error.spec().cli.exit_code, CliExitCode::USAGE);
-        assert_eq!(error.spec().code.as_str(), "ILLEGAL_ARGUMENT");
+        assert_eq!(error.descriptor().projection().cli().exit_code, CliExitCode::USAGE);
+        assert_eq!(error.descriptor().code().as_str(), "core.argument.invalid");
     }
 
     #[test]

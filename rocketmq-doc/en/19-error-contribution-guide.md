@@ -19,11 +19,12 @@ migration evidence.
 
 The effective central API now includes the one-pointer, non-`Clone` canonical
 `Error`, `Result<T>`, `SharedError = Arc<Error>`, typed `ErrorContext`, safe
-views, and the complete policy fields on the exact 35-entry declarative
+views, and the complete policy fields on the exact 98-entry declarative
 catalog. `StoreError` owns one canonical `Error`; `RuntimeError` and
-`TransportError` clone through `SharedError`. The legacy public
-`RocketMQError` enum, `ErrorKind`, `ErrorSpec`, and their consumers remain
-effective until their own migration stages land.
+`TransportError` clone through `SharedError`. The public `RocketMQError` enum
+and structural `ErrorKind` remain typed domain surfaces, but the legacy
+`ErrorSpec`, scope/category metadata, and parallel recovery/projection tables
+have been removed.
 
 1. Preserve typed sources for I/O, serde, storage, raft, transport, and runtime
    failures. Do not replace a source with rendered text.
@@ -121,12 +122,13 @@ focused regression evidence when affected.
 For a current API change:
 
 1. Reuse the owning crate's existing typed shape where possible.
-2. Preserve the typed source and record deliberate redaction.
-3. Keep boundary status and remark handling local until the canonical adapter
-   migration lands; do not add a new semantic mapping table.
-4. Add focused tests for source preservation, redaction, and boundary output.
-5. Add or update the inventory row. Mark target fields pending when catalog
-   migration has not happened; itemized classification remains a follow-up.
+2. Add or reuse one canonical descriptor and associate every retained leaf.
+3. Preserve the typed source and record deliberate redaction with only fields
+   allowed by the descriptor schema.
+4. Keep protocol conversion in the owning adapter, sourced from the
+   descriptor's explicit projection; do not add another semantic mapping table.
+5. Add focused tests for association, source preservation, redaction, and
+   boundary output, then update the inventory evidence.
 
 For a target migration, the owning change assigns the catalog's stable dotted
 code, `CanonicalCondition`, fixed public message, severity, `RecoveryHint`,
@@ -136,9 +138,9 @@ implementation requirements for that wave, not current API imports.
 
 ## Boundary and redaction rules
 
-Future boundary adapters project catalog metadata into local protocol
-primitives and safe views. Until the adapter exists, preserve the current
-mapper without parsing display text or making an arbitrary remark authoritative.
+Boundary adapters project catalog metadata into local protocol primitives and
+safe views. Preserve any still-local operation decision without parsing display
+text or making an arbitrary remark authoritative.
 
 Public output uses only `PublicErrorView`; controlled diagnostics may use
 `DiagnosticView` with visibility checks and redaction. `SecretPresenceOnly`
@@ -176,8 +178,8 @@ fingerprint requirement.
 
 ## Review checklist
 
-- Is the change following the current crate API rather than assuming a future
-  canonical type is importable?
+- Does every retained typed leaf associate with the single canonical descriptor
+  catalog without a parallel spec or policy table?
 - Are Outcome/Decision/Rejection, ContractViolation, private leaf `Error`,
   domain facade, and opaque canonical `Error` kept distinct where migrated?
 - Are public leaf errors, arbitrary remarks, and source stringification kept

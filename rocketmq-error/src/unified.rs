@@ -32,13 +32,12 @@ pub use crate::filter_error::FilterError;
 pub use crate::observability_error::ObservabilityError;
 
 use crate::boundary::BoundaryErrorView;
+use crate::catalog::*;
 use crate::context::ErrorContext;
-use crate::field::FieldKey;
-use crate::field::SecretPresenceField;
 use crate::fields;
 use crate::kind::ErrorKind;
 use crate::shared::SharedRocketMQError;
-use crate::spec::ErrorSpec;
+use crate::ErrorDescriptor;
 pub use network::NetworkError;
 pub use protocol::ProtocolError;
 pub use rpc::RpcClientError;
@@ -649,13 +648,6 @@ pub enum RocketMQError {
     #[error("Not initialized: {0}")]
     /// Represents the not initialized case.
     NotInitialized(String),
-
-    #[error("Message is missing required property: {property}")]
-    /// Represents the missing required message property case.
-    MissingRequiredMessageProperty {
-        /// The property value.
-        property: &'static str,
-    },
 }
 
 // ============================================================================
@@ -731,40 +723,100 @@ impl RocketMQError {
             Self::Service(_) => ErrorKind::Service,
             Self::InvalidVersionOrdinal(_) => ErrorKind::InvalidVersionOrdinal,
             Self::NotInitialized(_) => ErrorKind::NotInitialized,
-            Self::MissingRequiredMessageProperty { .. } => ErrorKind::MissingRequiredMessageProperty,
         }
     }
 
-    /// Return the static metadata for this error.
-    #[inline]
-    pub fn spec(&self) -> &'static ErrorSpec {
-        self.kind().spec()
+    /// Returns the canonical descriptor for this error.
+    pub fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self {
+            Self::Shared(error) => error.as_error().descriptor(),
+            Self::Network(error) => error.descriptor(),
+            Self::Serialization(error) => error.descriptor(),
+            Self::Protocol(error) => error.descriptor(),
+            Self::Rpc(error) => error.descriptor(),
+            Self::Authentication(error) => error.descriptor(),
+            Self::Controller(error) => controller_descriptor(error),
+            Self::InvalidProperty(_) => &PROTOCOL_MESSAGE_PROPERTY_INVALID,
+            Self::BrokerNotFound { .. } => &BROKER_LOOKUP_NOT_FOUND,
+            Self::BrokerRegistrationFailed { .. } => &BROKER_REGISTRATION_FAILED,
+            Self::BrokerOperationFailed { .. } => &BROKER_OPERATION_FAILED,
+            Self::TopicNotExist { .. } => &BROKER_TOPIC_NOT_FOUND,
+            Self::QueueNotExist { .. } => &BROKER_QUEUE_NOT_FOUND,
+            Self::SubscriptionGroupNotExist { .. } => &BROKER_SUBSCRIPTION_GROUP_NOT_FOUND,
+            Self::QueueIdOutOfRange { .. } => &BROKER_QUEUE_ID_OUT_OF_RANGE,
+            Self::MessageTooLarge { .. } => &BROKER_MESSAGE_TOO_LARGE,
+            Self::MessageValidationFailed { .. } => &BROKER_MESSAGE_INVALID,
+            Self::RetryLimitExceeded { .. } => &CLIENT_RETRY_BUDGET_EXHAUSTED,
+            Self::TransactionRejected => &BROKER_TRANSACTION_REJECTED,
+            Self::BrokerPermissionDenied { .. } | Self::TopicSendingForbidden { .. } => &AUTH_PERMISSION_DENIED,
+            Self::NotMasterBroker { .. } => &BROKER_LEADERSHIP_NOT_MASTER,
+            Self::MessageLookupFailed { .. } | Self::QueryNotFound { .. } => &BROKER_QUERY_NOT_FOUND,
+            Self::BrokerAsyncTaskFailed { .. } => &BROKER_TASK_FAILED,
+            Self::RequestBodyInvalid { .. } | Self::RequestBodySource { .. } => &PROTOCOL_BODY_INVALID,
+            Self::RequestHeaderError(_) | Self::RequestHeaderSource { .. } => &PROTOCOL_HEADER_INVALID,
+            Self::AuthenticationSource { .. } => &AUTH_OPERATION_FAILED,
+            Self::ResponseProcessFailed { .. } => &PROTOCOL_RESPONSE_FAILED,
+            Self::RouteNotFound { .. } => &ROUTE_TOPIC_NOT_FOUND,
+            Self::RouteInconsistent { .. } => &ROUTE_TOPIC_INCONSISTENT,
+            Self::RouteRegistrationConflict { .. } | Self::RouteVersionConflict { .. } => &ROUTE_REGISTRATION_CONFLICT,
+            Self::ClusterNotFound { .. } => &ROUTE_CLUSTER_NOT_FOUND,
+            Self::ClientNotStarted => &CLIENT_LIFECYCLE_NOT_STARTED,
+            Self::ClientAlreadyStarted => &CLIENT_LIFECYCLE_ALREADY_STARTED,
+            Self::ClientShuttingDown => &CLIENT_LIFECYCLE_SHUTTING_DOWN,
+            Self::ClientInvalidState { .. } => &CLIENT_LIFECYCLE_INVALID_STATE,
+            Self::ProducerNotAvailable | Self::ConsumerNotAvailable => &CLIENT_COMPONENT_UNAVAILABLE,
+            Self::Tools(error) => error.descriptor(),
+            Self::Filter(error) => error.descriptor(),
+            Self::Observability(error) => error.descriptor(),
+            Self::StorageReadFailed { .. } => &STORAGE_READ_FAILED,
+            Self::StorageWriteFailed { .. } => &STORAGE_WRITE_FAILED,
+            Self::StorageCorrupted { .. } => &STORAGE_STATE_CORRUPTED,
+            Self::StorageOutOfSpace { .. } => &STORAGE_CAPACITY_EXHAUSTED,
+            Self::StorageLockFailed { .. } => &STORAGE_BACKEND_UNAVAILABLE,
+            Self::ConfigParseFailed { .. } => &CORE_CONFIGURATION_PARSE_FAILED,
+            Self::ConfigMissing { .. } => &CORE_CONFIGURATION_MISSING,
+            Self::ConfigInvalidValue { .. } => &CORE_CONFIGURATION_INVALID,
+            Self::AuthConfigInvalid { .. } => &AUTH_CONFIGURATION_INVALID,
+            Self::AuthHotReloadFailed { .. } => &AUTH_CONFIGURATION_RELOAD_FAILED,
+            Self::ControllerNotLeader { .. } => &CONTROLLER_LEADERSHIP_NOT_LEADER,
+            Self::ControllerRaftError { .. } | Self::ControllerSnapshotFailed { .. } => &CONTROLLER_CONSENSUS_FAILED,
+            Self::ControllerConsensusTimeout { .. } => &CONTROLLER_CONSENSUS_TIMED_OUT,
+            Self::IO(_) => &CORE_IO_FAILED,
+            Self::IllegalArgument(_) => &CORE_ARGUMENT_INVALID,
+            Self::Timeout { .. } => &CORE_OPERATION_TIMED_OUT,
+            Self::Internal { .. } | Self::InvariantViolation { .. } => &CORE_INTERNAL_FAILURE,
+            Self::Service(_) => &CORE_SERVICE_FAILED,
+            Self::InvalidVersionOrdinal(_) => &PROTOCOL_VERSION_UNSUPPORTED,
+            Self::NotInitialized(_) => &CORE_LIFECYCLE_NOT_INITIALIZED,
+        }
     }
 
     /// Return the stable external message for this error.
     ///
     /// `Display` and `Debug` remain diagnostic surfaces and may include local
-    /// details. Boundary adapters should use this public message together with
-    /// [`Self::context`] when building API, CLI, log, or protocol responses.
+    /// details. API, CLI, and protocol adapters should consume
+    /// [`Self::boundary_view`] so exposure and field visibility are applied.
     #[inline]
     pub fn public_message(&self) -> &'static str {
-        self.spec().public_message
+        self.descriptor().public_message()
     }
 
-    /// Return redaction-aware structured context for this error.
+    /// Return descriptor-valid diagnostic context for this error.
     ///
     /// The returned context is a snapshot derived from the current enum variant.
     /// Secret-bearing details are represented only by value-free presence
-    /// markers so adapters cannot observe the original input.
+    /// markers so consumers cannot observe the original input. The context may
+    /// still contain diagnostic-only fields and is not itself a public-boundary
+    /// projection; boundary adapters should use [`Self::boundary_view`].
     pub fn context(&self) -> ErrorContext {
         match self {
             Self::Shared(error) => error.as_error().context(),
-            Self::Network(error) => ErrorContext::new().with_text(fields::ADDR, error.addr()),
-            Self::Serialization(_) => secret_presence_context(fields::SERIALIZATION_ERROR_PRESENT),
-            Self::Protocol(_) => secret_presence_context(fields::PROTOCOL_ERROR_PRESENT),
-            Self::Rpc(_) => secret_presence_context(fields::RPC_ERROR_PRESENT),
-            Self::Authentication(_) => secret_presence_context(fields::AUTH_ERROR_PRESENT),
-            Self::Controller(_) => secret_presence_context(fields::CONTROLLER_ERROR_PRESENT),
+            Self::Network(error) => error.context(),
+            Self::Serialization(error) => error.context(),
+            Self::Protocol(error) => error.context(),
+            Self::Rpc(error) => error.context(),
+            Self::Authentication(error) => error.context(),
+            Self::Controller(error) => controller_context(error),
             Self::InvalidProperty(property) => ErrorContext::new().with_text(fields::PROPERTY, property),
             Self::BrokerNotFound { name } => ErrorContext::new().with_text(fields::BROKER, name),
             Self::BrokerRegistrationFailed { name, .. } => ErrorContext::new()
@@ -809,23 +861,24 @@ impl RocketMQError {
             }
             Self::MessageLookupFailed { offset } => ErrorContext::new().with_i64(fields::OFFSET, *offset),
             Self::QueryNotFound { resource } => ErrorContext::new().with_text(fields::RESOURCE, resource),
-            Self::TopicSendingForbidden { topic } => ErrorContext::new().with_text(fields::TOPIC, topic),
+            Self::TopicSendingForbidden { .. } => ErrorContext::new().with_text(fields::OPERATION, "send"),
             Self::BrokerAsyncTaskFailed { task, .. } => ErrorContext::new()
                 .with_text(fields::TASK, *task)
-                .with_secret_presence(fields::CONTEXT_PRESENT),
+                .with_secret_presence(fields::CONTEXT_PRESENT)
+                .with_secret_presence(fields::SOURCE_PRESENT),
             Self::RequestBodyInvalid { operation, .. } => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
-                .with_secret_presence(fields::REASON_PRESENT),
+                .with_secret_presence(fields::INVALID_VALUE_PRESENT),
             Self::RequestBodySource { operation, .. } => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
-                .with_secret_presence(fields::SOURCE_DETAIL_PRESENT),
-            Self::RequestHeaderError(_) => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
+                .with_secret_presence(fields::SOURCE_PRESENT),
+            Self::RequestHeaderError(_) => ErrorContext::new().with_secret_presence(fields::INVALID_VALUE_PRESENT),
             Self::RequestHeaderSource { operation, .. } => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
-                .with_secret_presence(fields::SOURCE_DETAIL_PRESENT),
+                .with_secret_presence(fields::SOURCE_PRESENT),
             Self::AuthenticationSource { operation, .. } => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
-                .with_secret_presence(fields::SOURCE_DETAIL_PRESENT),
+                .with_secret_presence(fields::SOURCE_PRESENT),
             Self::ResponseProcessFailed { operation, .. } => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
                 .with_secret_presence(fields::REASON_PRESENT),
@@ -840,24 +893,30 @@ impl RocketMQError {
                 .with_u64(fields::EXPECTED_U64, *expected)
                 .with_u64(fields::ACTUAL_U64, *actual),
             Self::ClusterNotFound { cluster } => ErrorContext::new().with_text(fields::CLUSTER, cluster),
-            Self::ClientNotStarted
-            | Self::ClientAlreadyStarted
-            | Self::ClientShuttingDown
-            | Self::ProducerNotAvailable
-            | Self::ConsumerNotAvailable => ErrorContext::new(),
+            Self::ClientNotStarted | Self::ClientAlreadyStarted | Self::ClientShuttingDown => ErrorContext::new(),
+            Self::ProducerNotAvailable => ErrorContext::new().with_text(fields::CLIENT_ROLE, "producer"),
+            Self::ConsumerNotAvailable => ErrorContext::new().with_text(fields::CLIENT_ROLE, "consumer"),
             Self::ClientInvalidState { expected, actual } => ErrorContext::new()
                 .with_text(fields::EXPECTED_STATE, *expected)
                 .with_text(fields::ACTUAL_STATE, actual),
             Self::Tools(error) => error.context(),
-            Self::Filter(FilterError::Compile(error)) => error.context(),
-            Self::Filter(_) => ErrorContext::new().with_secret_presence(fields::FILTER_ERROR_PRESENT),
+            Self::Filter(error) => error.context(),
             Self::Observability(error) => error.context(),
-            Self::StorageReadFailed { .. } | Self::StorageWriteFailed { .. } => ErrorContext::new()
-                .with_secret_presence(fields::PATH_PRESENT)
-                .with_secret_presence(fields::REASON_PRESENT),
-            Self::StorageCorrupted { .. } | Self::StorageOutOfSpace { .. } | Self::StorageLockFailed { .. } => {
-                ErrorContext::new().with_secret_presence(fields::PATH_PRESENT)
-            }
+            Self::StorageReadFailed { .. } => ErrorContext::new()
+                .with_text(fields::STORE_OPERATION, "read")
+                .with_secret_presence(fields::STORE_DETAIL_PRESENT),
+            Self::StorageWriteFailed { .. } => ErrorContext::new()
+                .with_text(fields::STORE_OPERATION, "write")
+                .with_secret_presence(fields::STORE_DETAIL_PRESENT),
+            Self::StorageCorrupted { .. } => ErrorContext::new()
+                .with_text(fields::STORE_OPERATION, "read")
+                .with_secret_presence(fields::STORE_DETAIL_PRESENT),
+            Self::StorageOutOfSpace { .. } => ErrorContext::new()
+                .with_text(fields::STORE_OPERATION, "write")
+                .with_secret_presence(fields::STORE_DETAIL_PRESENT),
+            Self::StorageLockFailed { .. } => ErrorContext::new()
+                .with_text(fields::STORE_OPERATION, "lock")
+                .with_secret_presence(fields::STORE_DETAIL_PRESENT),
             Self::ConfigParseFailed { key, .. } => ErrorContext::new()
                 .with_text(fields::KEY, *key)
                 .with_secret_presence(fields::REASON_PRESENT),
@@ -876,27 +935,34 @@ impl RocketMQError {
                 Some(leader_id) => ErrorContext::new().with_u64(fields::LEADER_ID, *leader_id),
                 None => ErrorContext::new(),
             },
-            Self::ControllerRaftError { .. } | Self::ControllerSnapshotFailed { .. } => {
-                ErrorContext::new().with_secret_presence(fields::REASON_PRESENT)
-            }
+            Self::ControllerRaftError { .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::ControllerSnapshotFailed { .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
+                .with_text(fields::PHASE, "snapshot")
+                .with_secret_presence(fields::REASON_PRESENT),
             Self::ControllerConsensusTimeout { operation, timeout_ms } => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
                 .with_u64(fields::TIMEOUT_MS, *timeout_ms),
-            Self::IO(_) => secret_presence_context(fields::IO_ERROR_PRESENT),
+            Self::IO(_) => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "io")
+                .with_secret_presence(fields::SOURCE_PRESENT),
             Self::IllegalArgument(_) => ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT),
             Self::Timeout { operation, timeout_ms } => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
                 .with_u64(fields::TIMEOUT_MS, *timeout_ms),
             Self::Internal { operation, .. } => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
-                .with_secret_presence(fields::INTERNAL_ERROR_PRESENT),
-            Self::InvariantViolation { invariant } => ErrorContext::new().with_text(fields::INVARIANT, *invariant),
-            Self::Service(_) => secret_presence_context(fields::SERVICE_ERROR_PRESENT),
-            Self::InvalidVersionOrdinal(ordinal) => ErrorContext::new().with_u64(fields::ORDINAL, u64::from(*ordinal)),
-            Self::NotInitialized(_) => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
-            Self::MissingRequiredMessageProperty { property } => {
-                ErrorContext::new().with_text(fields::PROPERTY, *property)
+                .with_secret_presence(fields::SOURCE_PRESENT),
+            Self::InvariantViolation { .. } => {
+                ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "invariant_violation")
             }
+            Self::Service(_) => ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "service"),
+            Self::InvalidVersionOrdinal(ordinal) => ErrorContext::new().with_u64(fields::ORDINAL, u64::from(*ordinal)),
+            Self::NotInitialized(_) => ErrorContext::new()
+                .with_text(fields::COMPONENT_NAME, "rocketmq")
+                .with_secret_presence(fields::REASON_PRESENT),
         }
     }
 
@@ -904,20 +970,7 @@ impl RocketMQError {
     /// boundaries.
     #[inline]
     pub fn boundary_view(&self) -> BoundaryErrorView {
-        let spec = self.spec();
-        BoundaryErrorView::new(
-            spec.kind,
-            spec.code,
-            spec.category,
-            spec.public_message,
-            self.context(),
-            spec.remoting,
-            spec.grpc,
-            spec.http,
-            spec.cli,
-            spec.recovery,
-            spec.observe,
-        )
+        BoundaryErrorView::new(self.descriptor(), self.context())
     }
 
     /// Create a network connection failed error
@@ -1225,22 +1278,10 @@ impl RocketMQError {
     // Controller Error Constructors
     // ============================================================================
 
-    /// Create a controller not leader error
-    #[inline]
-    pub fn controller_not_leader(leader_id: Option<u64>) -> Self {
-        Self::Controller(ControllerError::NotLeader { leader_id })
-    }
-
     /// Create a controller Raft error
     #[inline]
     pub fn controller_raft_error(reason: impl Into<String>) -> Self {
         Self::Controller(ControllerError::Raft(reason.into()))
-    }
-
-    /// Create a controller metadata not found error
-    #[inline]
-    pub fn controller_metadata_not_found(key: impl Into<String>) -> Self {
-        Self::Controller(ControllerError::MetadataNotFound { key: key.into() })
     }
 
     /// Create a controller invalid request error
@@ -1308,8 +1349,72 @@ impl From<FilterCompileError> for RocketMQError {
     }
 }
 
-fn secret_presence_context(key: FieldKey<SecretPresenceField>) -> ErrorContext {
-    ErrorContext::new().with_secret_presence(key)
+fn controller_descriptor(error: &ControllerError) -> &'static ErrorDescriptor {
+    match error {
+        ControllerError::Raft(_) | ControllerError::RaftSource { .. } => &CONTROLLER_CONSENSUS_FAILED,
+        ControllerError::InvalidRequest(_) | ControllerError::InvalidRequestSource { .. } => {
+            &CONTROLLER_REQUEST_INVALID
+        }
+        ControllerError::NotInitialized(_) => &CONTROLLER_LIFECYCLE_NOT_INITIALIZED,
+        ControllerError::ConfigError(_) => &CONTROLLER_CONFIGURATION_INVALID,
+        ControllerError::Timeout { .. } => &CONTROLLER_CONSENSUS_TIMED_OUT,
+        ControllerError::Io(_)
+        | ControllerError::InitializationFailed
+        | ControllerError::SerializationError(_)
+        | ControllerError::SerializationSource { .. }
+        | ControllerError::StorageError(_)
+        | ControllerError::StorageSource { .. }
+        | ControllerError::RuntimeError(_)
+        | ControllerError::RuntimeSource { .. }
+        | ControllerError::Shutdown => &CONTROLLER_INTERNAL_FAILURE,
+    }
+}
+
+fn controller_context(error: &ControllerError) -> ErrorContext {
+    match error {
+        ControllerError::Io(_) => ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "io")
+            .with_secret_presence(fields::SOURCE_PRESENT),
+        ControllerError::Raft(_) => ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
+            .with_secret_presence(fields::REASON_PRESENT),
+        ControllerError::RaftSource { .. } => ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
+            .with_secret_presence(fields::REASON_PRESENT)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+        ControllerError::InvalidRequest(_) => ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "request")
+            .with_secret_presence(fields::REASON_PRESENT),
+        ControllerError::InvalidRequestSource { .. } => ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "request")
+            .with_secret_presence(fields::REASON_PRESENT)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+        ControllerError::NotInitialized(_) => ErrorContext::new()
+            .with_text(fields::COMPONENT_NAME, "controller")
+            .with_secret_presence(fields::REASON_PRESENT),
+        ControllerError::InitializationFailed => ErrorContext::new().with_text(fields::PHASE, "initialization"),
+        ControllerError::ConfigError(_) => ErrorContext::new()
+            .with_text(fields::KEY, "controller")
+            .with_secret_presence(fields::REASON_PRESENT),
+        ControllerError::SerializationError(_) => {
+            ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "serialize")
+        }
+        ControllerError::SerializationSource { .. } => ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "serialize")
+            .with_secret_presence(fields::SOURCE_PRESENT),
+        ControllerError::StorageError(_) => ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "storage"),
+        ControllerError::StorageSource { .. } => ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "storage")
+            .with_secret_presence(fields::SOURCE_PRESENT),
+        ControllerError::Timeout { timeout_ms } => ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
+            .with_u64(fields::TIMEOUT_MS, *timeout_ms),
+        ControllerError::RuntimeError(_) => ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "runtime"),
+        ControllerError::RuntimeSource { operation, .. } => ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+        ControllerError::Shutdown => ErrorContext::new().with_text(fields::PHASE, "shutdown"),
+    }
 }
 
 // ============================================================================

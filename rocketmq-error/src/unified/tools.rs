@@ -21,6 +21,18 @@ use thiserror::Error;
 use crate::context::ErrorContext;
 use crate::fields;
 use crate::kind::ErrorKind;
+use crate::ErrorDescriptor;
+use crate::AUTH_PERMISSION_DENIED;
+use crate::BROKER_LOOKUP_NOT_FOUND;
+use crate::BROKER_SUBSCRIPTION_GROUP_NOT_FOUND;
+use crate::BROKER_TOPIC_NOT_FOUND;
+use crate::CORE_ARGUMENT_INVALID;
+use crate::CORE_CONFIGURATION_INVALID;
+use crate::CORE_INTERNAL_FAILURE;
+use crate::CORE_OPERATION_TIMED_OUT;
+use crate::ROUTE_CLUSTER_NOT_FOUND;
+use crate::TOOLS_OPERATION_FAILED;
+use crate::TRANSPORT_CONNECTION_FAILED;
 
 /// Tools-specific errors for admin operations
 #[derive(Debug, Error)]
@@ -298,39 +310,72 @@ impl ToolsError {
         }
     }
 
+    /// Returns the canonical descriptor for this tools failure.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self {
+            Self::TopicNotFound { .. } => &BROKER_TOPIC_NOT_FOUND,
+            Self::ClusterNotFound { .. } => &ROUTE_CLUSTER_NOT_FOUND,
+            Self::BrokerNotFound { .. } => &BROKER_LOOKUP_NOT_FOUND,
+            Self::ConsumerGroupNotFound { .. } => &BROKER_SUBSCRIPTION_GROUP_NOT_FOUND,
+            Self::NameServerUnreachable { .. } => &TRANSPORT_CONNECTION_FAILED,
+            Self::NameServerConfigInvalid { .. }
+            | Self::InvalidConfiguration { .. }
+            | Self::MissingRequiredField { .. }
+            | Self::TopicInvalid { .. }
+            | Self::ClusterInvalid { .. } => &CORE_CONFIGURATION_INVALID,
+            Self::ValidationError { .. } | Self::ValidationFailed { .. } | Self::InvalidPermission { .. } => {
+                &CORE_ARGUMENT_INVALID
+            }
+            Self::PermissionDenied { .. } => &AUTH_PERMISSION_DENIED,
+            Self::OperationTimeout { .. } => &CORE_OPERATION_TIMED_OUT,
+            Self::Internal { .. } => &CORE_INTERNAL_FAILURE,
+            Self::TopicAlreadyExists { .. } | Self::BrokerOffline { .. } | Self::ConsumerOffline { .. } => {
+                &TOOLS_OPERATION_FAILED
+            }
+        }
+    }
+
     /// Return redaction-aware context for external tools surfaces.
     pub fn context(&self) -> ErrorContext {
         match self {
-            Self::TopicNotFound { topic } | Self::TopicAlreadyExists { topic } => {
-                ErrorContext::new().with_text(fields::TOPIC, topic)
-            }
-            Self::TopicInvalid { .. } | Self::ClusterInvalid { .. } => {
-                ErrorContext::new().with_secret_presence(fields::REASON_PRESENT)
-            }
-            Self::ClusterNotFound { cluster } => ErrorContext::new().with_text(fields::CLUSTER, cluster),
-            Self::BrokerNotFound { broker } | Self::BrokerOffline { broker } => {
-                ErrorContext::new().with_text(fields::BROKER, broker)
-            }
-            Self::ConsumerGroupNotFound { group } => ErrorContext::new().with_text(fields::GROUP, group),
-            Self::ConsumerOffline { consumer } => ErrorContext::new().with_text(fields::CONSUMER, consumer),
-            Self::NameServerUnreachable { addr } => ErrorContext::new().with_text(fields::ADDR, addr),
-            Self::NameServerConfigInvalid { .. } => ErrorContext::new().with_secret_presence(fields::REASON_PRESENT),
-            Self::InvalidConfiguration { field, .. } | Self::ValidationError { field, .. } => ErrorContext::new()
-                .with_text(fields::FIELD, field)
+            Self::TopicNotFound { topic } => ErrorContext::new().with_text(fields::TOPIC, topic),
+            Self::TopicAlreadyExists { topic } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "create_topic")
+                .with_text(fields::TOPIC, topic),
+            Self::TopicInvalid { .. } => ErrorContext::new()
+                .with_text(fields::KEY, "topic")
                 .with_secret_presence(fields::REASON_PRESENT),
-            Self::MissingRequiredField { field } => ErrorContext::new().with_text(fields::FIELD, field),
-            Self::ValidationFailed { .. } => ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT),
+            Self::ClusterNotFound { cluster } => ErrorContext::new().with_text(fields::CLUSTER, cluster),
+            Self::ClusterInvalid { .. } => ErrorContext::new()
+                .with_text(fields::KEY, "cluster")
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::BrokerNotFound { broker } => ErrorContext::new().with_text(fields::BROKER, broker),
+            Self::BrokerOffline { broker } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "contact_broker")
+                .with_text(fields::BROKER, broker),
+            Self::ConsumerGroupNotFound { group } => ErrorContext::new().with_text(fields::GROUP, group),
+            Self::ConsumerOffline { consumer } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "contact_consumer")
+                .with_text(fields::CONSUMER, consumer),
+            Self::NameServerUnreachable { .. } => ErrorContext::new()
+                .with_text(fields::PHASE, "connect_nameserver")
+                .with_secret_presence(fields::REMOTE_ADDR_PRESENT),
+            Self::NameServerConfigInvalid { .. } => ErrorContext::new()
+                .with_text(fields::KEY, "nameserver")
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::InvalidConfiguration { field, .. } => ErrorContext::new()
+                .with_text(fields::KEY, field)
+                .with_secret_presence(fields::VALUE_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::MissingRequiredField { field } => ErrorContext::new().with_text(fields::KEY, field),
+            Self::ValidationError { .. } | Self::ValidationFailed { .. } | Self::InvalidPermission { .. } => {
+                ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT)
+            }
             Self::PermissionDenied { operation } => ErrorContext::new().with_text(fields::OPERATION, operation),
-            Self::InvalidPermission { value, allowed } => ErrorContext::new()
-                .with_i64(fields::PERMISSION_VALUE, i64::from(*value))
-                .with_text(
-                    fields::ALLOWED,
-                    allowed.iter().map(i32::to_string).collect::<Vec<_>>().join(","),
-                ),
             Self::OperationTimeout { operation, duration_ms } => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, operation)
-                .with_u64(fields::DURATION_MS, *duration_ms),
-            Self::Internal { .. } => ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT),
+                .with_u64(fields::TIMEOUT_MS, *duration_ms),
+            Self::Internal { .. } => ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "tools"),
         }
     }
 }

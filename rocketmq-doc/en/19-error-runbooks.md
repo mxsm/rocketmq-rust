@@ -83,7 +83,7 @@ Symptoms:
 
 Action:
 
-1. Check the `ErrorKind` and `ErrorSpec.grpc` entry.
+1. Check the error's canonical descriptor and its gRPC projection.
 2. Update central metadata first when the mapping is generic.
 3. Update `rocketmq-proxy::status` only when local gRPC translation is needed.
 4. Add a proxy status test for the affected error.
@@ -111,16 +111,20 @@ cargo test -p rocketmq-common debug_and_display_redact_secret_key
 python scripts/error_architecture_guard.py
 ```
 
-## Runbook: New Error Kind Needs Mapping
+## Runbook: New Error Leaf Needs a Descriptor
 
 Action:
 
-1. Add the `ErrorKind`.
-2. Add the `ErrorSpec` row.
-3. Fill remoting, gRPC, HTTP, CLI, retry, severity, and observability metadata.
-4. Add registry completeness tests.
+1. Add or reuse the structural `ErrorKind` only when local exhaustive matching
+   requires it.
+2. Add one canonical descriptor and associate every retained direct and wrapped
+   leaf with it.
+3. Fill code, class, condition, fault, component, fixed message, recovery hint,
+   severity, exposure, backtrace policy, remoting/gRPC/HTTP/CLI projections, and
+   ordered context schema.
+4. Extend the exact catalog snapshot and association completeness tests.
 5. Add at least one boundary test if the error crosses remoting, gRPC, HTTP, or
-   CLI.
+   CLI; Generic exposure must have no dynamic public fields.
 
 ## Pull Request Evidence
 
@@ -130,7 +134,8 @@ Every error architecture PR should include:
 - A short description of the affected boundary or domain.
 - Focused tests for the changed crate.
 - `python scripts/error_architecture_guard.py`.
-- `cargo fmt --all` for Rust changes.
+- package-scoped `cargo fmt -p <package> -- --check` for every affected root
+  workspace package.
 - Required clippy command for affected Rust projects.
 
 Use [Error Architecture Contribution Guide](19-error-contribution-guide.md) as

@@ -18,38 +18,10 @@ use rocketmq_error::descriptor_by_code;
 use rocketmq_error::fields;
 use rocketmq_error::BacktracePolicy;
 use rocketmq_error::CanonicalCondition;
-use rocketmq_error::CliExitCode;
-use rocketmq_error::ComponentId;
-use rocketmq_error::ContextVisibility;
 use rocketmq_error::ErrorClass;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorDescriptor;
-use rocketmq_error::ErrorSeverity;
-use rocketmq_error::Exposure;
-use rocketmq_error::FaultAttribution;
-use rocketmq_error::FieldValueKind;
-use rocketmq_error::GrpcPayloadCode;
-use rocketmq_error::GrpcStatusCode;
-use rocketmq_error::HttpStatusCode;
-use rocketmq_error::RecoveryHint;
-use rocketmq_error::RemotingResponseCode;
 use rocketmq_error::ALL_DESCRIPTORS;
-use rocketmq_error::AUTH_CREDENTIALS_INVALID;
-use rocketmq_error::AUTH_PERMISSION_DENIED;
-use rocketmq_error::CONTROLLER_LEADERSHIP_NOT_LEADER;
-use rocketmq_error::CORE_INTERNAL_FAILURE;
-use rocketmq_error::PROTOCOL_HEADER_INVALID;
-use rocketmq_error::PROTOCOL_VERSION_UNSUPPORTED;
-use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
-use rocketmq_error::RUNTIME_BUILD_FAILED;
-use rocketmq_error::RUNTIME_CAPACITY_EXHAUSTED;
-use rocketmq_error::RUNTIME_CONFIGURATION_FAILED;
-use rocketmq_error::RUNTIME_CONTEXT_UNAVAILABLE;
-use rocketmq_error::RUNTIME_INTERNAL_FAILURE;
-use rocketmq_error::RUNTIME_IO_FAILED;
-use rocketmq_error::RUNTIME_OPERATION_TIMED_OUT;
-use rocketmq_error::RUNTIME_OPERATION_UNSUPPORTED;
-use rocketmq_error::RUNTIME_TASK_JOIN_FAILED;
 use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
 use rocketmq_error::STORAGE_CAPACITY_EXHAUSTED;
 use rocketmq_error::STORAGE_INTERNAL_FAILURE;
@@ -62,691 +34,153 @@ use rocketmq_error::STORAGE_READ_FAILED;
 use rocketmq_error::STORAGE_REQUEST_INVALID;
 use rocketmq_error::STORAGE_STATE_CORRUPTED;
 use rocketmq_error::STORAGE_WRITE_FAILED;
-use rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED;
-use rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT;
-use rocketmq_error::TRANSPORT_DISPATCH_FAILED;
-use rocketmq_error::TRANSPORT_REQUEST_TIMEOUT;
-use rocketmq_error::TRANSPORT_RESPONSE_FAILED;
-use rocketmq_error::TRANSPORT_SESSION_FAILED;
-use rocketmq_error::TRANSPORT_START_FAILED;
 
-#[derive(Debug)]
-struct ExpectedDescriptor {
-    descriptor: ErrorDescriptor,
-    code: &'static str,
-    class: ErrorClass,
-    condition: CanonicalCondition,
-    fault: FaultAttribution,
-    component: ComponentId,
-    public_message: &'static str,
-    severity: ErrorSeverity,
-    recovery_hint: RecoveryHint,
-    backtrace: BacktracePolicy,
-    exposure: Exposure,
-    remoting: RemotingResponseCode,
-    grpc_payload: GrpcPayloadCode,
-    grpc_status: GrpcStatusCode,
-    http: HttpStatusCode,
-    cli: CliExitCode,
-}
-
-const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
-    ExpectedDescriptor {
-        descriptor: PROTOCOL_HEADER_INVALID,
-        code: "protocol.header.invalid",
-        class: ErrorClass::VALIDATION,
-        condition: CanonicalCondition::InvalidArgument,
-        fault: FaultAttribution::Caller,
-        component: ComponentId::PROTOCOL,
-        public_message: "Request header is invalid",
-        severity: ErrorSeverity::Info,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::InvalidParameter,
-        grpc_payload: GrpcPayloadCode::BadRequest,
-        grpc_status: GrpcStatusCode::InvalidArgument,
-        http: HttpStatusCode::BAD_REQUEST,
-        cli: CliExitCode::USAGE,
-    },
-    ExpectedDescriptor {
-        descriptor: ROUTE_TOPIC_NOT_FOUND,
-        code: "route.topic.not_found",
-        class: ErrorClass::ROUTING,
-        condition: CanonicalCondition::NotFound,
-        fault: FaultAttribution::RemotePeer,
-        component: ComponentId::ROUTE,
-        public_message: "Topic route was not found",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::RefreshRoute,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::TopicNotExist,
-        grpc_payload: GrpcPayloadCode::TopicNotFound,
-        grpc_status: GrpcStatusCode::NotFound,
-        http: HttpStatusCode::NOT_FOUND,
-        cli: CliExitCode::NOT_FOUND,
-    },
-    ExpectedDescriptor {
-        descriptor: AUTH_CREDENTIALS_INVALID,
-        code: "auth.credentials.invalid",
-        class: ErrorClass::AUTHENTICATION,
-        condition: CanonicalCondition::Unauthenticated,
-        fault: FaultAttribution::Caller,
-        component: ComponentId::AUTH,
-        public_message: "Authentication credentials are invalid",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::RefreshCredentials,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::NoPermission,
-        grpc_payload: GrpcPayloadCode::Unauthorized,
-        grpc_status: GrpcStatusCode::Unauthenticated,
-        http: HttpStatusCode::UNAUTHORIZED,
-        cli: CliExitCode::PERMISSION,
-    },
-    ExpectedDescriptor {
-        descriptor: AUTH_PERMISSION_DENIED,
-        code: "auth.permission.denied",
-        class: ErrorClass::AUTHORIZATION,
-        condition: CanonicalCondition::PermissionDenied,
-        fault: FaultAttribution::Caller,
-        component: ComponentId::AUTH,
-        public_message: "Permission was denied",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::NoPermission,
-        grpc_payload: GrpcPayloadCode::Forbidden,
-        grpc_status: GrpcStatusCode::PermissionDenied,
-        http: HttpStatusCode::FORBIDDEN,
-        cli: CliExitCode::PERMISSION,
-    },
-    ExpectedDescriptor {
-        descriptor: TRANSPORT_ADMISSION_QUEUE_SATURATED,
-        code: "transport.admission.queue_saturated",
-        class: ErrorClass::CAPACITY,
-        condition: CanonicalCondition::ResourceExhausted,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::TRANSPORT,
-        public_message: "Transport admission queue is saturated",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::Backoff,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::SystemBusy,
-        grpc_payload: GrpcPayloadCode::TooManyRequests,
-        grpc_status: GrpcStatusCode::ResourceExhausted,
-        http: HttpStatusCode::TOO_MANY_REQUESTS,
-        cli: CliExitCode::TEMPORARY_FAILURE,
-    },
-    ExpectedDescriptor {
-        descriptor: CONTROLLER_LEADERSHIP_NOT_LEADER,
-        code: "controller.leadership.not_leader",
-        class: ErrorClass::ROUTING,
-        condition: CanonicalCondition::FailedPrecondition,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::CONTROLLER,
-        public_message: "Controller is not the leader",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::RefreshLeader,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::ControllerNotLeader,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::FailedPrecondition,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: TRANSPORT_CONNECTION_TIMEOUT,
-        code: "transport.connection.timeout",
-        class: ErrorClass::TIMEOUT,
-        condition: CanonicalCondition::DeadlineExceeded,
-        fault: FaultAttribution::Dependency,
-        component: ComponentId::TRANSPORT,
-        public_message: "Transport connection timed out",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::Backoff,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::SystemBusy,
-        grpc_payload: GrpcPayloadCode::RequestTimeout,
-        grpc_status: GrpcStatusCode::DeadlineExceeded,
-        http: HttpStatusCode::GATEWAY_TIMEOUT,
-        cli: CliExitCode::TEMPORARY_FAILURE,
-    },
-    ExpectedDescriptor {
-        descriptor: TRANSPORT_REQUEST_TIMEOUT,
-        code: "transport.request.timeout",
-        class: ErrorClass::TIMEOUT,
-        condition: CanonicalCondition::DeadlineExceeded,
-        fault: FaultAttribution::Dependency,
-        component: ComponentId::TRANSPORT,
-        public_message: "Transport request timed out",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::Backoff,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemBusy,
-        grpc_payload: GrpcPayloadCode::RequestTimeout,
-        grpc_status: GrpcStatusCode::DeadlineExceeded,
-        http: HttpStatusCode::GATEWAY_TIMEOUT,
-        cli: CliExitCode::TEMPORARY_FAILURE,
-    },
-    ExpectedDescriptor {
-        descriptor: TRANSPORT_START_FAILED,
-        code: "transport.start.failed",
-        class: ErrorClass::UNAVAILABLE,
-        condition: CanonicalCondition::Unavailable,
-        fault: FaultAttribution::Unknown,
-        component: ComponentId::TRANSPORT,
-        public_message: "Transport server could not be started",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Unavailable,
-        http: HttpStatusCode::SERVICE_UNAVAILABLE,
-        cli: CliExitCode::UNAVAILABLE,
-    },
-    ExpectedDescriptor {
-        descriptor: TRANSPORT_DISPATCH_FAILED,
-        code: "transport.dispatch.failed",
-        class: ErrorClass::INTERNAL,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::TRANSPORT,
-        public_message: "Transport request dispatch failed",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::OnDemand,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: TRANSPORT_RESPONSE_FAILED,
-        code: "transport.response.failed",
-        class: ErrorClass::INTERNAL,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::Dependency,
-        component: ComponentId::TRANSPORT,
-        public_message: "Transport response delivery failed",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::OnDemand,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: TRANSPORT_SESSION_FAILED,
-        code: "transport.session.failed",
-        class: ErrorClass::UNAVAILABLE,
-        condition: CanonicalCondition::Unavailable,
-        fault: FaultAttribution::Dependency,
-        component: ComponentId::TRANSPORT,
-        public_message: "Transport session operation failed",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::Backoff,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Unavailable,
-        http: HttpStatusCode::SERVICE_UNAVAILABLE,
-        cli: CliExitCode::UNAVAILABLE,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_LIFECYCLE_NOT_STARTED,
-        code: "storage.lifecycle.not_started",
-        class: ErrorClass::VALIDATION,
-        condition: CanonicalCondition::FailedPrecondition,
-        fault: FaultAttribution::Caller,
-        component: ComponentId::STORAGE,
-        public_message: "Storage service is not started",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::FailedPrecondition,
-        http: HttpStatusCode::SERVICE_UNAVAILABLE,
-        cli: CliExitCode::UNAVAILABLE,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_BACKEND_UNAVAILABLE,
-        code: "storage.backend.unavailable",
-        class: ErrorClass::UNAVAILABLE,
-        condition: CanonicalCondition::Unavailable,
-        fault: FaultAttribution::Dependency,
-        component: ComponentId::STORAGE,
-        public_message: "Storage backend is unavailable",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::Backoff,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Unavailable,
-        http: HttpStatusCode::SERVICE_UNAVAILABLE,
-        cli: CliExitCode::UNAVAILABLE,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_REQUEST_INVALID,
-        code: "storage.request.invalid",
-        class: ErrorClass::VALIDATION,
-        condition: CanonicalCondition::InvalidArgument,
-        fault: FaultAttribution::Caller,
-        component: ComponentId::STORAGE,
-        public_message: "Storage request is invalid",
-        severity: ErrorSeverity::Info,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::InvalidParameter,
-        grpc_payload: GrpcPayloadCode::BadRequest,
-        grpc_status: GrpcStatusCode::InvalidArgument,
-        http: HttpStatusCode::BAD_REQUEST,
-        cli: CliExitCode::USAGE,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_MAPPED_FILE_NOT_FOUND,
-        code: "storage.mapped_file.not_found",
-        class: ErrorClass::IO,
-        condition: CanonicalCondition::NotFound,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::STORAGE,
-        public_message: "Mapped file was not found",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::QueryNotFound,
-        grpc_payload: GrpcPayloadCode::NotFound,
-        grpc_status: GrpcStatusCode::NotFound,
-        http: HttpStatusCode::NOT_FOUND,
-        cli: CliExitCode::NOT_FOUND,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_CAPACITY_EXHAUSTED,
-        code: "storage.capacity.exhausted",
-        class: ErrorClass::CAPACITY,
-        condition: CanonicalCondition::ResourceExhausted,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::STORAGE,
-        public_message: "Storage capacity is exhausted",
-        severity: ErrorSeverity::Critical,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::ResourceExhausted,
-        http: HttpStatusCode::INSUFFICIENT_STORAGE,
-        cli: CliExitCode::DATA,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_READ_FAILED,
-        code: "storage.read.failed",
-        class: ErrorClass::IO,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::STORAGE,
-        public_message: "Storage read failed",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_WRITE_FAILED,
-        code: "storage.write.failed",
-        class: ErrorClass::IO,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::STORAGE,
-        public_message: "Storage write failed",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_IO_FAILED,
-        code: "storage.io.failed",
-        class: ErrorClass::IO,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::STORAGE,
-        public_message: "Storage I/O operation failed",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_STATE_CORRUPTED,
-        code: "storage.state.corrupted",
-        class: ErrorClass::DATA_CORRUPTION,
-        condition: CanonicalCondition::DataLoss,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::STORAGE,
-        public_message: "Storage state is corrupted",
-        severity: ErrorSeverity::Critical,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::OnDemand,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::DataLoss,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::DATA,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_OPERATION_TIMED_OUT,
-        code: "storage.operation.timed_out",
-        class: ErrorClass::TIMEOUT,
-        condition: CanonicalCondition::DeadlineExceeded,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::STORAGE,
-        public_message: "Storage operation timed out",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::Backoff,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemBusy,
-        grpc_payload: GrpcPayloadCode::RequestTimeout,
-        grpc_status: GrpcStatusCode::DeadlineExceeded,
-        http: HttpStatusCode::GATEWAY_TIMEOUT,
-        cli: CliExitCode::TEMPORARY_FAILURE,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_OPERATION_UNSUPPORTED,
-        code: "storage.operation.unsupported",
-        class: ErrorClass::UNSUPPORTED,
-        condition: CanonicalCondition::Unimplemented,
-        fault: FaultAttribution::Configuration,
-        component: ComponentId::STORAGE,
-        public_message: "Storage operation is unsupported",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::RequestCodeNotSupported,
-        grpc_payload: GrpcPayloadCode::Unsupported,
-        grpc_status: GrpcStatusCode::Unimplemented,
-        http: HttpStatusCode::BAD_REQUEST,
-        cli: CliExitCode::USAGE,
-    },
-    ExpectedDescriptor {
-        descriptor: STORAGE_INTERNAL_FAILURE,
-        code: "storage.internal.failure",
-        class: ErrorClass::INTERNAL,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::Unknown,
-        component: ComponentId::STORAGE,
-        public_message: "Internal storage failure",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::OnDemand,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: PROTOCOL_VERSION_UNSUPPORTED,
-        code: "protocol.version.unsupported",
-        class: ErrorClass::UNSUPPORTED,
-        condition: CanonicalCondition::Unimplemented,
-        fault: FaultAttribution::Caller,
-        component: ComponentId::PROTOCOL,
-        public_message: "Protocol version is unsupported",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::RequestCodeNotSupported,
-        grpc_payload: GrpcPayloadCode::Unsupported,
-        grpc_status: GrpcStatusCode::Unimplemented,
-        http: HttpStatusCode::BAD_REQUEST,
-        cli: CliExitCode::USAGE,
-    },
-    ExpectedDescriptor {
-        descriptor: CORE_INTERNAL_FAILURE,
-        code: "core.internal.failure",
-        class: ErrorClass::INTERNAL,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::Unknown,
-        component: ComponentId::CORE,
-        public_message: "Internal error",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::OnDemand,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: RUNTIME_CONFIGURATION_FAILED,
-        code: "runtime.configuration.failed",
-        class: ErrorClass::VALIDATION,
-        condition: CanonicalCondition::InvalidArgument,
-        fault: FaultAttribution::Configuration,
-        component: ComponentId::RUNTIME,
-        public_message: "Runtime configuration is invalid",
-        severity: ErrorSeverity::Info,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::InvalidParameter,
-        grpc_payload: GrpcPayloadCode::BadRequest,
-        grpc_status: GrpcStatusCode::InvalidArgument,
-        http: HttpStatusCode::BAD_REQUEST,
-        cli: CliExitCode::USAGE,
-    },
-    ExpectedDescriptor {
-        descriptor: RUNTIME_BUILD_FAILED,
-        code: "runtime.build.failed",
-        class: ErrorClass::UNAVAILABLE,
-        condition: CanonicalCondition::Unavailable,
-        fault: FaultAttribution::Configuration,
-        component: ComponentId::RUNTIME,
-        public_message: "Runtime could not be started",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Unavailable,
-        http: HttpStatusCode::SERVICE_UNAVAILABLE,
-        cli: CliExitCode::UNAVAILABLE,
-    },
-    ExpectedDescriptor {
-        descriptor: RUNTIME_IO_FAILED,
-        code: "runtime.io.failed",
-        class: ErrorClass::IO,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::RUNTIME,
-        public_message: "Runtime I/O operation failed",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: RUNTIME_CONTEXT_UNAVAILABLE,
-        code: "runtime.context.unavailable",
-        class: ErrorClass::UNAVAILABLE,
-        condition: CanonicalCondition::Unavailable,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::RUNTIME,
-        public_message: "Runtime context is unavailable",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Unavailable,
-        http: HttpStatusCode::SERVICE_UNAVAILABLE,
-        cli: CliExitCode::UNAVAILABLE,
-    },
-    ExpectedDescriptor {
-        descriptor: RUNTIME_CAPACITY_EXHAUSTED,
-        code: "runtime.capacity.exhausted",
-        class: ErrorClass::CAPACITY,
-        condition: CanonicalCondition::ResourceExhausted,
-        fault: FaultAttribution::LocalResource,
-        component: ComponentId::RUNTIME,
-        public_message: "Runtime capacity is exhausted",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::Backoff,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemBusy,
-        grpc_payload: GrpcPayloadCode::TooManyRequests,
-        grpc_status: GrpcStatusCode::ResourceExhausted,
-        http: HttpStatusCode::TOO_MANY_REQUESTS,
-        cli: CliExitCode::TEMPORARY_FAILURE,
-    },
-    ExpectedDescriptor {
-        descriptor: RUNTIME_OPERATION_TIMED_OUT,
-        code: "runtime.operation.timed_out",
-        class: ErrorClass::TIMEOUT,
-        condition: CanonicalCondition::DeadlineExceeded,
-        fault: FaultAttribution::Dependency,
-        component: ComponentId::RUNTIME,
-        public_message: "Runtime operation timed out",
-        severity: ErrorSeverity::Warn,
-        recovery_hint: RecoveryHint::Backoff,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemBusy,
-        grpc_payload: GrpcPayloadCode::RequestTimeout,
-        grpc_status: GrpcStatusCode::DeadlineExceeded,
-        http: HttpStatusCode::GATEWAY_TIMEOUT,
-        cli: CliExitCode::TEMPORARY_FAILURE,
-    },
-    ExpectedDescriptor {
-        descriptor: RUNTIME_OPERATION_UNSUPPORTED,
-        code: "runtime.operation.unsupported",
-        class: ErrorClass::UNSUPPORTED,
-        condition: CanonicalCondition::Unimplemented,
-        fault: FaultAttribution::Caller,
-        component: ComponentId::RUNTIME,
-        public_message: "Runtime operation is unsupported",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::Never,
-        backtrace: BacktracePolicy::Never,
-        exposure: Exposure::Public,
-        remoting: RemotingResponseCode::RequestCodeNotSupported,
-        grpc_payload: GrpcPayloadCode::Unsupported,
-        grpc_status: GrpcStatusCode::Unimplemented,
-        http: HttpStatusCode::BAD_REQUEST,
-        cli: CliExitCode::USAGE,
-    },
-    ExpectedDescriptor {
-        descriptor: RUNTIME_TASK_JOIN_FAILED,
-        code: "runtime.task.join_failed",
-        class: ErrorClass::BUG,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::Bug,
-        component: ComponentId::RUNTIME,
-        public_message: "Runtime task failed",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::OnDemand,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
-    ExpectedDescriptor {
-        descriptor: RUNTIME_INTERNAL_FAILURE,
-        code: "runtime.internal.failure",
-        class: ErrorClass::INTERNAL,
-        condition: CanonicalCondition::Internal,
-        fault: FaultAttribution::Unknown,
-        component: ComponentId::RUNTIME,
-        public_message: "Runtime operation failed",
-        severity: ErrorSeverity::Error,
-        recovery_hint: RecoveryHint::OperatorAction,
-        backtrace: BacktracePolicy::OnDemand,
-        exposure: Exposure::Generic,
-        remoting: RemotingResponseCode::SystemError,
-        grpc_payload: GrpcPayloadCode::InternalError,
-        grpc_status: GrpcStatusCode::Internal,
-        http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-        cli: CliExitCode::SOFTWARE,
-    },
+const EXPECTED_DESCRIPTOR_SNAPSHOTS: &[&str] = &[
+    "protocol.header.invalid|validation|InvalidArgument|Caller|protocol|Request header is invalid|Info|never|Never|Public|29|BadRequest|InvalidArgument|400|64|operation:Diagnostic:Text:Some(64),invalid_value_present:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "route.topic.not_found|routing|NotFound|RemotePeer|route|Topic route was not found|Warn|refresh_route|Never|Public|17|TopicNotFound|NotFound|404|66|topic:Public:Text:Some(127)",
+    "auth.credentials.invalid|authentication|Unauthenticated|Caller|auth|Authentication credentials are invalid|Error|refresh_credentials|Never|Generic|16|Unauthorized|Unauthenticated|401|77|credentials_present:SecretPresenceOnly:Presence:None",
+    "auth.permission.denied|authorization|PermissionDenied|Caller|auth|Permission was denied|Error|never|Never|Public|16|Forbidden|PermissionDenied|403|77|operation:Public:Text:Some(64)",
+    "transport.admission.queue_saturated|capacity|ResourceExhausted|LocalResource|transport|Transport admission queue is saturated|Warn|backoff|Never|Public|2|TooManyRequests|ResourceExhausted|429|75|remote_addr:Diagnostic:Text:Some(256)",
+    "controller.leadership.not_leader|routing|FailedPrecondition|LocalResource|controller|Controller is not the leader|Warn|refresh_leader|Never|Public|2007|InternalError|FailedPrecondition|409|65|leader_id:Diagnostic:U64:None",
+    "transport.connection.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport connection timed out|Warn|backoff|Never|Public|2|RequestTimeout|DeadlineExceeded|504|75|timeout_ms:Public:U64:None,remote_addr:Diagnostic:Text:Some(256)",
+    "transport.request.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport request timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "transport.start.failed|unavailable|Unavailable|Unknown|transport|Transport server could not be started|Error|operator_action|Never|Generic|1|InternalError|Unavailable|503|69|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "transport.dispatch.failed|internal|Internal|LocalResource|transport|Transport request dispatch failed|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "transport.response.failed|internal|Internal|Dependency|transport|Transport response delivery failed|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "transport.session.failed|unavailable|Unavailable|Dependency|transport|Transport session operation failed|Error|backoff|Never|Generic|1|InternalError|Unavailable|503|69|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "storage.lifecycle.not_started|validation|FailedPrecondition|Caller|storage|Storage service is not started|Warn|never|Never|Public|1|InternalError|FailedPrecondition|409|65|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.backend.unavailable|unavailable|Unavailable|Dependency|storage|Storage backend is unavailable|Error|backoff|Never|Generic|1|InternalError|Unavailable|503|69|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.request.invalid|validation|InvalidArgument|Caller|storage|Storage request is invalid|Info|never|Never|Public|29|BadRequest|InvalidArgument|400|64|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.mapped_file.not_found|io|NotFound|LocalResource|storage|Mapped file was not found|Warn|never|Never|Generic|22|NotFound|NotFound|404|66|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.capacity.exhausted|capacity|ResourceExhausted|LocalResource|storage|Storage capacity is exhausted|Critical|operator_action|Never|Generic|1|InternalError|ResourceExhausted|507|65|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.read.failed|io|Internal|LocalResource|storage|Storage read failed|Error|operator_action|Never|Generic|1|InternalError|Internal|500|70|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.write.failed|io|Internal|LocalResource|storage|Storage write failed|Error|operator_action|Never|Generic|1|InternalError|Internal|500|70|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.io.failed|io|Internal|LocalResource|storage|Storage I/O operation failed|Error|operator_action|Never|Generic|1|InternalError|Internal|500|70|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.state.corrupted|data_corruption|DataLoss|LocalResource|storage|Storage state is corrupted|Critical|operator_action|OnDemand|Generic|1|InternalError|DataLoss|500|65|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.operation.timed_out|timeout|DeadlineExceeded|LocalResource|storage|Storage operation timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.operation.unsupported|unsupported|Unimplemented|Configuration|storage|Storage operation is unsupported|Error|never|Never|Public|3|Unsupported|Unimplemented|400|64|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "storage.internal.failure|internal|Internal|Unknown|storage|Internal storage failure|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|store_operation:Diagnostic:Text:Some(64),store_component:Diagnostic:Text:Some(64),store_detail:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "protocol.version.unsupported|unsupported|Unimplemented|Caller|protocol|Protocol version is unsupported|Error|never|Never|Public|3|Unsupported|Unimplemented|400|64|ordinal:Public:U64:None",
+    "core.internal.failure|internal|Internal|Unknown|core|Internal error|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "runtime.configuration.failed|validation|InvalidArgument|Configuration|runtime|Runtime configuration is invalid|Info|never|Never|Public|29|BadRequest|InvalidArgument|400|78|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "runtime.build.failed|unavailable|Unavailable|Configuration|runtime|Runtime could not be started|Error|operator_action|Never|Generic|1|InternalError|Unavailable|503|69|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "runtime.io.failed|io|Internal|LocalResource|runtime|Runtime I/O operation failed|Error|operator_action|Never|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "runtime.context.unavailable|unavailable|Unavailable|LocalResource|runtime|Runtime context is unavailable|Error|never|Never|Generic|1|InternalError|Unavailable|503|69|operation:Diagnostic:Text:Some(64)",
+    "runtime.capacity.exhausted|capacity|ResourceExhausted|LocalResource|runtime|Runtime capacity is exhausted|Warn|backoff|Never|Generic|2|TooManyRequests|ResourceExhausted|429|75|operation:Diagnostic:Text:Some(64)",
+    "runtime.operation.timed_out|timeout|DeadlineExceeded|Dependency|runtime|Runtime operation timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|operation:Diagnostic:Text:Some(64)",
+    "runtime.operation.unsupported|unsupported|Unimplemented|Caller|runtime|Runtime operation is unsupported|Error|never|Never|Public|3|Unsupported|Unimplemented|400|64|operation:Diagnostic:Text:Some(64)",
+    "runtime.task.join_failed|bug|Internal|Bug|runtime|Runtime task failed|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "runtime.internal.failure|internal|Internal|Unknown|runtime|Runtime operation failed|Error|operator_action|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "transport.endpoint.invalid|validation|InvalidArgument|Caller|transport|Transport endpoint is invalid|Info|never|Never|Generic|2|BadRequest|InvalidArgument|400|64|remote_addr:SecretPresenceOnly:Presence:None",
+    "transport.remote.rate_limited|capacity|ResourceExhausted|RemotePeer|transport|Remote transport peer rate limited the request|Warn|backoff|Never|Generic|2|TooManyRequests|ResourceExhausted|429|75|remote_addr:Diagnostic:Text:Some(256),limit:Diagnostic:U64:None",
+    "transport.write.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport write timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|phase:Diagnostic:Text:Some(32),timeout_ms:Public:U64:None,remote_addr:SecretPresenceOnly:Presence:None",
+    "transport.response.timeout|timeout|DeadlineExceeded|Dependency|transport|Transport response timed out|Warn|backoff|Never|Generic|2|RequestTimeout|DeadlineExceeded|504|75|phase:Diagnostic:Text:Some(32),timeout_ms:Public:U64:None,remote_addr:SecretPresenceOnly:Presence:None",
+    "transport.dns.failed|unavailable|Unavailable|Dependency|transport|Transport DNS resolution failed|Error|backoff|Never|Generic|2|InternalError|Unavailable|503|69|host:SecretPresenceOnly:Presence:None,reason:SecretPresenceOnly:Presence:None",
+    "transport.connection.failed|unavailable|Unavailable|Dependency|transport|Transport connection operation failed|Error|backoff|Never|Generic|2|InternalError|Unavailable|503|69|phase:Diagnostic:Text:Some(32),remote_addr:SecretPresenceOnly:Presence:None,reason:SecretPresenceOnly:Presence:None",
+    "core.serialization.failed|internal|Internal|Unknown|core|Serialization failed|Error|never|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),format:Diagnostic:Text:Some(64),field:Public:Text:Some(64),source_present:SecretPresenceOnly:Presence:None,detail:SecretPresenceOnly:Presence:None",
+    "protocol.body.invalid|validation|InvalidArgument|Caller|protocol|Request body is invalid|Info|never|Never|Generic|29|BadRequest|InvalidArgument|400|64|operation:Diagnostic:Text:Some(64),invalid_value_present:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "protocol.encoding.unsupported|unsupported|Unimplemented|Caller|protocol|Protocol encoding is unsupported|Error|never|Never|Public|3|Unsupported|Unimplemented|400|64|serialization_type:Public:U64:None",
+    "protocol.request.unsupported|unsupported|Unimplemented|Caller|protocol|Protocol request is unsupported|Error|never|Never|Public|3|Unsupported|Unimplemented|400|64|request_code:Public:I64:None",
+    "rpc.broker_address.not_found|routing|NotFound|Dependency|client|RPC broker address was not found|Error|backoff|Never|Generic|1|NotFound|NotFound|404|66|broker:Diagnostic:Text:Some(127)",
+    "rpc.request.unsupported|unsupported|Unimplemented|Caller|client|RPC request is unsupported|Error|never|Never|Generic|1|Unsupported|Unimplemented|400|64|request_code:Public:I64:None",
+    "auth.operation.failed|internal|Internal|Dependency|auth|Authentication operation failed|Error|never|OnDemand|Generic|16|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "controller.internal.failure|internal|Internal|Unknown|controller|Controller operation failed|Error|never|OnDemand|Generic|2015|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),phase:Diagnostic:Text:Some(32),source_present:SecretPresenceOnly:Presence:None",
+    "controller.request.invalid|validation|InvalidArgument|Caller|controller|Controller request is invalid|Info|never|Never|Generic|2015|BadRequest|InvalidArgument|400|64|operation:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "controller.configuration.invalid|validation|InvalidArgument|Configuration|controller|Controller configuration is invalid|Error|never|Never|Generic|2015|BadRequest|InvalidArgument|400|78|key:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None",
+    "controller.lifecycle.not_initialized|validation|FailedPrecondition|LocalResource|controller|Controller is not initialized|Error|never|Never|Generic|2015|InternalError|FailedPrecondition|409|65|component:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None",
+    "protocol.message.property.invalid|validation|InvalidArgument|Caller|protocol|Message property is invalid|Info|never|Never|Public|13|BadRequest|InvalidArgument|400|64|property:Public:Text:Some(127)",
+    "broker.lookup.not_found|routing|NotFound|RemotePeer|broker|Broker was not found|Error|switch_broker|Never|Public|211|NotFound|NotFound|404|66|broker:Diagnostic:Text:Some(127)",
+    "broker.registration.failed|unavailable|Unavailable|Dependency|broker|Broker registration failed|Error|switch_broker|Never|Generic|1|InternalError|Unavailable|503|69|broker:Diagnostic:Text:Some(127),reason:SecretPresenceOnly:Presence:None",
+    "broker.operation.failed|internal|Internal|RemotePeer|broker|Broker operation failed|Error|switch_broker|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),broker_code:Diagnostic:I64:None,broker_addr:Diagnostic:Text:Some(256),message:SecretPresenceOnly:Presence:None",
+    "broker.topic.not_found|routing|NotFound|RemotePeer|broker|Topic does not exist|Warn|never|Never|Public|17|TopicNotFound|NotFound|404|66|topic:Public:Text:Some(127)",
+    "broker.queue.not_found|routing|NotFound|RemotePeer|broker|Queue does not exist|Warn|switch_broker|Never|Public|22|NotFound|NotFound|404|66|topic:Public:Text:Some(127),queue_id:Public:I64:None",
+    "broker.subscription_group.not_found|routing|NotFound|RemotePeer|broker|Subscription group does not exist|Warn|backoff|Never|Public|26|ConsumerGroupNotFound|NotFound|404|66|group:Public:Text:Some(127)",
+    "broker.queue.id_out_of_range|validation|InvalidArgument|Caller|broker|Queue id is out of range|Error|never|Never|Public|1|BadRequest|InvalidArgument|400|64|topic:Public:Text:Some(127),queue_id:Public:I64:None,max_queue_id:Public:I64:None",
+    "broker.message.too_large|capacity|ResourceExhausted|Caller|broker|Message body is too large|Error|never|Never|Public|13|MessageBodyTooLarge|ResourceExhausted|413|65|actual_bytes:Public:U64:None,limit_bytes:Public:U64:None",
+    "broker.message.invalid|validation|InvalidArgument|Caller|broker|Message validation failed|Error|never|Never|Generic|13|BadRequest|InvalidArgument|400|64|reason:SecretPresenceOnly:Presence:None",
+    "client.retry.budget_exhausted|capacity|ResourceExhausted|LocalResource|client|Retry budget was exhausted|Warn|never|Never|Public|2|TooManyRequests|ResourceExhausted|429|75|group:Public:Text:Some(127),current:Public:I64:None,max:Public:I64:None",
+    "broker.transaction.rejected|internal|Aborted|RemotePeer|broker|Transaction message was rejected|Error|never|Never|Public|1|BadRequest|Aborted|409|65|",
+    "broker.leadership.not_master|routing|FailedPrecondition|RemotePeer|broker|Broker is not the master|Warn|refresh_leader|Never|Generic|501|InternalError|FailedPrecondition|409|65|master_address:Diagnostic:Text:Some(256)",
+    "broker.query.not_found|routing|NotFound|RemotePeer|broker|Broker query result was not found|Warn|backoff|Never|Public|22|NotFound|NotFound|404|66|resource:Public:Text:Some(127),offset:Diagnostic:I64:None",
+    "broker.task.failed|internal|Internal|LocalResource|broker|Broker asynchronous task failed|Error|never|OnDemand|Generic|1|InternalError|Internal|500|70|task:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None,context:SecretPresenceOnly:Presence:None",
+    "protocol.response.failed|validation|InvalidArgument|RemotePeer|protocol|Response processing failed|Info|never|Never|Generic|29|BadRequest|InvalidArgument|400|64|operation:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None",
+    "route.topic.inconsistent|internal|Internal|RemotePeer|route|Topic route data is inconsistent|Error|refresh_route|OnDemand|Public|1|InternalError|Internal|500|70|topic:Public:Text:Some(127),reason:SecretPresenceOnly:Presence:None",
+    "route.registration.conflict|routing|Aborted|RemotePeer|route|Route registration conflict|Error|refresh_route|Never|Public|1|BadRequest|Aborted|409|65|broker:Diagnostic:Text:Some(127),reason:SecretPresenceOnly:Presence:None,expected:Diagnostic:U64:None,actual:Diagnostic:U64:None",
+    "route.cluster.not_found|routing|NotFound|RemotePeer|route|Cluster was not found|Error|never|Never|Public|211|NotFound|NotFound|404|66|cluster:Public:Text:Some(127)",
+    "client.lifecycle.not_started|validation|FailedPrecondition|Caller|client|Client is not started|Error|never|Never|Public|1|InternalError|FailedPrecondition|409|65|",
+    "client.lifecycle.already_started|validation|AlreadyExists|Caller|client|Client is already started|Error|never|Never|Public|1|BadRequest|AlreadyExists|409|65|",
+    "client.lifecycle.shutting_down|unavailable|Unavailable|LocalResource|client|Client is shutting down|Error|never|Never|Public|1|InternalError|Unavailable|503|69|",
+    "client.lifecycle.invalid_state|validation|FailedPrecondition|Caller|client|Client state is invalid|Error|never|Never|Public|1|InternalError|FailedPrecondition|409|65|expected:Diagnostic:Text:Some(64),actual:Diagnostic:Text:Some(64)",
+    "client.component.unavailable|unavailable|Unavailable|LocalResource|client|Client component is unavailable|Error|switch_broker|Never|Public|1|InternalError|Unavailable|503|69|client_role:Public:Text:Some(32)",
+    "rpc.request.failed|unavailable|Unavailable|Dependency|client|RPC request failed|Error|backoff|Never|Generic|1|InternalError|Unavailable|503|69|remote_addr:Diagnostic:Text:Some(256),request_code:Public:I64:None,timeout_ms:Public:U64:None,source_present:SecretPresenceOnly:Presence:None",
+    "rpc.response.failed|internal|Internal|RemotePeer|client|RPC response failed|Error|backoff|Never|Generic|1|InternalError|Internal|500|70|remote_code:Diagnostic:I64:None,message:SecretPresenceOnly:Presence:None",
+    "tools.operation.failed|internal|Internal|Dependency|tools|Administrative operation failed|Error|backoff|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),topic:Public:Text:Some(127),broker:Diagnostic:Text:Some(127),consumer:Diagnostic:Text:Some(127)",
+    "protocol.filter.invalid|validation|InvalidArgument|Unknown|protocol|Filter operation failed|Info|never|Never|Generic|1|BadRequest|InvalidArgument|400|64|filter_kind:Diagnostic:Text:Some(64),filter_compile_kind:Diagnostic:Text:Some(64),filter_compile_stage:Diagnostic:Text:Some(64),filter_compile_position:Diagnostic:U64:None,filter_compile_source:Diagnostic:Text:Some(64),position:Diagnostic:U64:None,limit:Diagnostic:U64:None",
+    "observability.feature.disabled|unsupported|FailedPrecondition|Configuration|observability|Observability feature is disabled|Info|never|Never|Public|29|InternalError|FailedPrecondition|409|78|feature:Public:Text:Some(64)",
+    "observability.configuration.invalid|validation|InvalidArgument|Configuration|observability|Observability configuration is invalid|Info|never|Never|Generic|29|BadRequest|InvalidArgument|400|78|reason:SecretPresenceOnly:Presence:None",
+    "observability.initialization.failed|internal|Internal|Dependency|observability|Observability initialization failed|Error|backoff|OnDemand|Generic|1|InternalError|Internal|500|70|observability_signal:Diagnostic:Text:Some(32),reason:SecretPresenceOnly:Presence:None",
+    "observability.log_filter.invalid|validation|InvalidArgument|Configuration|observability|Observability log filter is invalid|Info|never|Never|Generic|29|BadRequest|InvalidArgument|400|78|filter:SecretPresenceOnly:Presence:None,error:SecretPresenceOnly:Presence:None",
+    "observability.subscriber.installation_failed|internal|FailedPrecondition|LocalResource|observability|Observability subscriber installation failed|Error|never|OnDemand|Public|1|InternalError|FailedPrecondition|409|65|attempted:Diagnostic:Bool:None,installed:Diagnostic:Bool:None",
+    "observability.shutdown.failed|internal|Internal|Dependency|observability|Observability shutdown failed|Error|backoff|OnDemand|Generic|1|InternalError|Internal|500|70|observability_signal:Diagnostic:Text:Some(32),reason:SecretPresenceOnly:Presence:None",
+    "core.configuration.parse_failed|validation|InvalidArgument|Configuration|core|Configuration parsing failed|Error|never|Never|Generic|29|BadRequest|InvalidArgument|400|78|key:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None",
+    "core.configuration.missing|validation|InvalidArgument|Configuration|core|Required configuration is missing|Info|never|Never|Generic|29|BadRequest|InvalidArgument|400|78|key:Diagnostic:Text:Some(64)",
+    "core.configuration.invalid|validation|InvalidArgument|Configuration|core|Configuration value is invalid|Info|never|Never|Generic|29|BadRequest|InvalidArgument|400|78|key:Diagnostic:Text:Some(64),value:SecretPresenceOnly:Presence:None,reason:SecretPresenceOnly:Presence:None",
+    "auth.configuration.invalid|validation|InvalidArgument|Configuration|auth|Authentication configuration is invalid|Error|never|Never|Generic|29|BadRequest|InvalidArgument|400|78|key:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None",
+    "auth.configuration.reload_failed|internal|Internal|LocalResource|auth|Authentication configuration reload failed|Error|never|OnDemand|Generic|1|InternalError|Internal|500|70|path:SecretPresenceOnly:Presence:None,reason:SecretPresenceOnly:Presence:None",
+    "controller.consensus.failed|internal|Internal|Dependency|controller|Controller consensus operation failed|Error|never|OnDemand|Generic|2015|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),phase:Diagnostic:Text:Some(32),reason:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "controller.consensus.timed_out|timeout|DeadlineExceeded|Dependency|controller|Controller consensus operation timed out|Error|never|Never|Generic|2015|RequestTimeout|DeadlineExceeded|504|75|operation:Diagnostic:Text:Some(64),timeout_ms:Public:U64:None",
+    "core.io.failed|io|Internal|LocalResource|core|I/O operation failed|Error|never|Never|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "core.argument.invalid|validation|InvalidArgument|Caller|core|Argument is invalid|Info|never|Never|Generic|29|BadRequest|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "core.operation.timed_out|timeout|DeadlineExceeded|Dependency|core|Operation timed out|Warn|backoff|Never|Public|2|RequestTimeout|DeadlineExceeded|504|75|operation:Diagnostic:Text:Some(64),timeout_ms:Public:U64:None",
+    "core.service.failed|internal|Internal|LocalResource|core|Service lifecycle operation failed|Error|never|OnDemand|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64)",
+    "core.lifecycle.not_initialized|validation|FailedPrecondition|Caller|core|Component is not initialized|Error|never|Never|Generic|1|InternalError|FailedPrecondition|409|65|component:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None",
 ];
 
+fn descriptor_snapshot(descriptor: &ErrorDescriptor) -> String {
+    let fields = descriptor
+        .fields()
+        .iter()
+        .map(|field| {
+            format!(
+                "{}:{:?}:{:?}:{:?}",
+                field.name(),
+                field.visibility(),
+                field.value_kind(),
+                field.text_byte_limit()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let projection = descriptor.projection();
+
+    format!(
+        "{}|{}|{:?}|{:?}|{}|{}|{:?}|{}|{:?}|{:?}|{}|{:?}|{:?}|{}|{}|{}",
+        descriptor.code(),
+        descriptor.class(),
+        descriptor.condition(),
+        descriptor.fault(),
+        descriptor.component(),
+        descriptor.public_message(),
+        descriptor.severity(),
+        descriptor.recovery_hint().as_str(),
+        descriptor.backtrace_policy(),
+        descriptor.exposure(),
+        projection.remoting().code.as_i32(),
+        projection.grpc().payload,
+        projection.grpc().status,
+        projection.http().status.as_u16(),
+        projection.cli().exit_code.as_i32(),
+        fields
+    )
+}
+
 #[test]
-fn representative_descriptor_table_is_exact() {
-    assert_eq!(EXPECTED_DESCRIPTORS.len(), 35);
-    assert_eq!(ALL_DESCRIPTORS.len(), EXPECTED_DESCRIPTORS.len());
+fn descriptor_catalog_snapshot_is_exact() {
+    assert_eq!(EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 98);
+    assert_eq!(ALL_DESCRIPTORS.len(), EXPECTED_DESCRIPTOR_SNAPSHOTS.len());
 
-    for (actual, expected) in ALL_DESCRIPTORS.iter().zip(EXPECTED_DESCRIPTORS) {
-        assert_eq!(*actual, expected.descriptor, "{}", expected.code);
-        assert_eq!(actual.code().as_str(), expected.code);
-        assert_eq!(actual.class(), expected.class, "{}", expected.code);
-        assert_eq!(actual.condition(), expected.condition, "{}", expected.code);
-        assert_eq!(actual.fault(), expected.fault, "{}", expected.code);
-        assert_eq!(actual.component(), expected.component, "{}", expected.code);
-        assert_eq!(actual.public_message(), expected.public_message, "{}", expected.code);
-        assert_eq!(actual.severity(), expected.severity, "{}", expected.code);
-        assert_eq!(actual.recovery_hint(), expected.recovery_hint, "{}", expected.code);
-        assert_eq!(actual.backtrace_policy(), expected.backtrace, "{}", expected.code);
-        assert_eq!(actual.exposure(), expected.exposure, "{}", expected.code);
-
-        let projection = actual.projection();
-        assert_eq!(projection.remoting().code, expected.remoting, "{}", expected.code);
-        assert_eq!(projection.grpc().payload, expected.grpc_payload, "{}", expected.code);
-        assert_eq!(projection.grpc().status, expected.grpc_status, "{}", expected.code);
-        assert_eq!(projection.http().status, expected.http, "{}", expected.code);
-        assert_eq!(projection.cli().exit_code, expected.cli, "{}", expected.code);
+    for (descriptor, expected) in ALL_DESCRIPTORS.iter().zip(EXPECTED_DESCRIPTOR_SNAPSHOTS) {
+        assert_eq!(descriptor_snapshot(descriptor), *expected, "{}", descriptor.code());
     }
 }
 
@@ -784,39 +218,20 @@ fn on_demand_backtraces_are_limited_to_internal_bug_or_data_loss_descriptors() {
 
 #[test]
 fn transport_convergence_descriptors_are_exact() {
-    let mut matched = 0;
-    for expected in EXPECTED_DESCRIPTORS.iter().filter(|expected| {
-        matches!(
-            expected.code,
-            "transport.request.timeout"
-                | "transport.start.failed"
-                | "transport.dispatch.failed"
-                | "transport.response.failed"
-                | "transport.session.failed"
-        )
-    }) {
-        matched += 1;
-        let actual = descriptor_by_code(expected.code).expect("transport descriptor");
-        assert_eq!(*actual, expected.descriptor, "{}", expected.code);
-        assert_eq!(actual.condition(), expected.condition, "{}", expected.code);
-        assert_eq!(actual.public_message(), expected.public_message, "{}", expected.code);
-        assert_eq!(actual.severity(), expected.severity, "{}", expected.code);
-        assert_eq!(actual.recovery_hint(), expected.recovery_hint, "{}", expected.code);
-
-        let projection = actual.projection();
-        assert_eq!(projection.remoting().code, expected.remoting, "{}", expected.code);
-        assert_eq!(projection.grpc().payload, expected.grpc_payload, "{}", expected.code);
-        assert_eq!(projection.grpc().status, expected.grpc_status, "{}", expected.code);
-        assert_eq!(projection.http().status, expected.http, "{}", expected.code);
-        assert_eq!(projection.cli().exit_code, expected.cli, "{}", expected.code);
+    for code in [
+        "transport.request.timeout",
+        "transport.start.failed",
+        "transport.dispatch.failed",
+        "transport.response.failed",
+        "transport.session.failed",
+    ] {
+        let descriptor = descriptor_by_code(code).expect("transport descriptor");
         assert_eq!(
-            actual.fields(),
+            descriptor.fields(),
             [fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-            "{}",
-            expected.code
+            "{code}"
         );
     }
-    assert_eq!(matched, 5);
 }
 
 #[test]
@@ -859,113 +274,6 @@ fn public_messages_and_protocol_values_are_boundary_safe() {
 }
 
 #[test]
-fn representative_descriptor_field_schemas_are_exact_and_ordered() {
-    let expected = [
-        (
-            PROTOCOL_HEADER_INVALID,
-            vec![
-                fields::OPERATION_DIAGNOSTIC.schema(),
-                fields::INVALID_VALUE_PRESENT.schema(),
-            ],
-        ),
-        (ROUTE_TOPIC_NOT_FOUND, vec![fields::TOPIC.schema()]),
-        (AUTH_CREDENTIALS_INVALID, vec![fields::CREDENTIALS_PRESENT.schema()]),
-        (AUTH_PERMISSION_DENIED, vec![fields::OPERATION.schema()]),
-        (TRANSPORT_ADMISSION_QUEUE_SATURATED, vec![fields::REMOTE_ADDR.schema()]),
-        (CONTROLLER_LEADERSHIP_NOT_LEADER, vec![fields::LEADER_ID.schema()]),
-        (
-            TRANSPORT_CONNECTION_TIMEOUT,
-            vec![fields::TIMEOUT_MS.schema(), fields::REMOTE_ADDR.schema()],
-        ),
-        (
-            TRANSPORT_REQUEST_TIMEOUT,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (
-            TRANSPORT_START_FAILED,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (
-            TRANSPORT_DISPATCH_FAILED,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (
-            TRANSPORT_RESPONSE_FAILED,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (
-            TRANSPORT_SESSION_FAILED,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (
-            STORAGE_STATE_CORRUPTED,
-            vec![
-                fields::STORE_OPERATION.schema(),
-                fields::STORE_COMPONENT.schema(),
-                fields::STORE_DETAIL_PRESENT.schema(),
-                fields::SOURCE_PRESENT.schema(),
-            ],
-        ),
-        (PROTOCOL_VERSION_UNSUPPORTED, vec![fields::ORDINAL.schema()]),
-        (
-            CORE_INTERNAL_FAILURE,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (
-            RUNTIME_CONFIGURATION_FAILED,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (
-            RUNTIME_BUILD_FAILED,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (
-            RUNTIME_IO_FAILED,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (RUNTIME_CONTEXT_UNAVAILABLE, vec![fields::OPERATION_DIAGNOSTIC.schema()]),
-        (RUNTIME_CAPACITY_EXHAUSTED, vec![fields::OPERATION_DIAGNOSTIC.schema()]),
-        (RUNTIME_OPERATION_TIMED_OUT, vec![fields::OPERATION_DIAGNOSTIC.schema()]),
-        (
-            RUNTIME_OPERATION_UNSUPPORTED,
-            vec![fields::OPERATION_DIAGNOSTIC.schema()],
-        ),
-        (
-            RUNTIME_TASK_JOIN_FAILED,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-        (
-            RUNTIME_INTERNAL_FAILURE,
-            vec![fields::OPERATION_DIAGNOSTIC.schema(), fields::SOURCE_PRESENT.schema()],
-        ),
-    ];
-
-    for (descriptor, fields) in expected {
-        assert_eq!(descriptor.fields(), fields, "{}", descriptor.code());
-        let mut names = HashSet::new();
-        for schema in descriptor.fields() {
-            assert!(names.insert(schema.name()), "duplicate {}", schema.name());
-            assert!(schema.text_byte_limit().is_none_or(|limit| limit <= 256));
-        }
-    }
-
-    assert_eq!(
-        PROTOCOL_HEADER_INVALID.fields()[0].visibility(),
-        ContextVisibility::Diagnostic
-    );
-    assert_eq!(ROUTE_TOPIC_NOT_FOUND.fields()[0].value_kind(), FieldValueKind::Text);
-    assert_eq!(
-        CONTROLLER_LEADERSHIP_NOT_LEADER.fields()[0].value_kind(),
-        FieldValueKind::U64
-    );
-    assert_eq!(STORAGE_STATE_CORRUPTED.fields()[0].value_kind(), FieldValueKind::Text);
-    assert_eq!(
-        AUTH_CREDENTIALS_INVALID.fields()[0].value_kind(),
-        FieldValueKind::Presence
-    );
-}
-
-#[test]
 fn every_storage_descriptor_has_the_exact_allowed_fields() {
     let storage_descriptors = [
         STORAGE_LIFECYCLE_NOT_STARTED,
@@ -996,7 +304,6 @@ fn every_storage_descriptor_has_the_exact_allowed_fields() {
 #[test]
 fn descriptor_construction_and_catalog_macro_remain_private() {
     let descriptor_source = include_str!("../src/descriptor.rs");
-    let policy_source = include_str!("../src/policy.rs");
     let projection_source = include_str!("../src/projection.rs");
     let catalog_source = include_str!("../src/catalog.rs");
     let crate_root = include_str!("../src/lib.rs");
@@ -1010,7 +317,6 @@ fn descriptor_construction_and_catalog_macro_remain_private() {
     assert!(!descriptor_source.contains("pub exposure: Exposure"));
     assert!(!descriptor_source.contains("pub backtrace: BacktracePolicy"));
     assert!(descriptor_source.contains("pub enum ErrorSeverity"));
-    assert!(!policy_source.contains("pub enum ErrorSeverity"));
     assert!(!projection_source.contains("pub remoting: RemotingSpec"));
     assert!(catalog_source.contains("macro_rules! define_error_catalog"));
     for required in [

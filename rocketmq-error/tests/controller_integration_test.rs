@@ -19,11 +19,11 @@ use rocketmq_error::RocketMQError;
 
 #[test]
 fn test_controller_error_into_rocketmq_error() {
-    let controller_err = ControllerError::NotLeader { leader_id: Some(1) };
+    let controller_err = ControllerError::Raft("append failed".to_owned());
     let rocketmq_err: RocketMQError = controller_err.into();
 
     assert!(matches!(rocketmq_err, RocketMQError::Controller(_)));
-    assert!(rocketmq_err.to_string().contains("Not leader"));
+    assert!(rocketmq_err.to_string().contains("append failed"));
 }
 
 #[test]
@@ -37,25 +37,10 @@ fn test_controller_error_from_conversion() {
 
 #[test]
 fn test_controller_error_constructors() {
-    // Test not leader constructor
-    let err = RocketMQError::controller_not_leader(Some(3));
-    assert!(matches!(
-        err,
-        RocketMQError::Controller(ControllerError::NotLeader { leader_id: Some(3) })
-    ));
-
     // Test Raft error constructor
     let err = RocketMQError::controller_raft_error("consensus failed");
     assert!(matches!(err, RocketMQError::Controller(ControllerError::Raft(_))));
     assert!(err.to_string().contains("consensus failed"));
-
-    // Test metadata not found constructor
-    let err = RocketMQError::controller_metadata_not_found("broker-a");
-    assert!(matches!(
-        err,
-        RocketMQError::Controller(ControllerError::MetadataNotFound { .. })
-    ));
-    assert!(err.to_string().contains("broker-a"));
 
     // Test invalid request constructor
     let err = RocketMQError::controller_invalid_request("missing field");
@@ -79,7 +64,7 @@ fn test_controller_error_constructors() {
 #[test]
 fn test_controller_error_result_propagation() {
     fn returns_controller_error() -> Result<(), ControllerError> {
-        Err(ControllerError::NotLeader { leader_id: None })
+        Err(ControllerError::Timeout { timeout_ms: 500 })
     }
 
     fn returns_rocketmq_error() -> Result<(), RocketMQError> {
@@ -100,18 +85,12 @@ fn test_all_controller_error_variants_convert() {
     let test_cases = vec![
         ControllerError::Io(io::Error::other("test")),
         ControllerError::Raft("raft error".to_string()),
-        ControllerError::NotLeader { leader_id: Some(1) },
-        ControllerError::MetadataNotFound {
-            key: "test".to_string(),
-        },
         ControllerError::InvalidRequest("invalid".to_string()),
-        ControllerError::BrokerRegistrationFailed("failed".to_string()),
         ControllerError::NotInitialized("not init".to_string()),
         ControllerError::InitializationFailed,
         ControllerError::ConfigError("config error".to_string()),
         ControllerError::SerializationError("ser error".to_string()),
         ControllerError::StorageError("storage error".to_string()),
-        ControllerError::NetworkError("network error".to_string()),
         ControllerError::Timeout { timeout_ms: 1000 },
         ControllerError::RuntimeError("runtime error".to_string()),
         ControllerError::runtime_source("join controller task", io::Error::other("task failed")),

@@ -110,7 +110,7 @@ fn golden_error_classes_use_the_real_cli_exit_and_error_code_mappings() {
             error_kinds.insert(error_kind.to_string());
             let error = error_for(error_kind);
             assert_eq!(
-                error.spec().code.as_str(),
+                error.descriptor().code().as_str(),
                 scenario.expected_error_code.as_deref().unwrap()
             );
             assert_eq!(

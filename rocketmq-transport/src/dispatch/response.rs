@@ -235,11 +235,11 @@ impl fmt::Debug for ResponseOperationalFailure {
         match self {
             Self::Encode { source } => {
                 debug.field("progress", &WriteProgress::NotStarted.as_str());
-                debug.field("source_code", &source.kind().code().as_str());
+                debug.field("source_code", &source.descriptor().code().as_str());
             }
             Self::Transport { progress, source } => {
                 debug.field("progress", &progress.as_str());
-                debug.field("source_code", &source.kind().code().as_str());
+                debug.field("source_code", &source.descriptor().code().as_str());
             }
         }
         debug.finish()
@@ -255,7 +255,7 @@ impl fmt::Display for ResponseOperationalFailure {
                     formatter,
                     " (progress={}, source_code={})",
                     WriteProgress::NotStarted.as_str(),
-                    source.kind().code().as_str()
+                    source.descriptor().code().as_str()
                 )?;
             }
             Self::Transport { progress, source } => {
@@ -263,7 +263,7 @@ impl fmt::Display for ResponseOperationalFailure {
                     formatter,
                     " (progress={}, source_code={})",
                     progress.as_str(),
-                    source.kind().code().as_str()
+                    source.descriptor().code().as_str()
                 )?;
             }
         }

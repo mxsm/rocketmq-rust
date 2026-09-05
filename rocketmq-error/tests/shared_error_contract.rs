@@ -25,11 +25,12 @@ use rocketmq_error::SharedRocketMQError;
 
 fn assert_shared_contract(error: RocketMQError) {
     let expected_kind = error.kind();
+    let expected_descriptor = error.descriptor();
     let expected_context = error.context();
     let expected_boundary = error.boundary_view();
-    let expected_retry = error.retry();
+    let expected_recovery_hint = error.recovery_hint();
     let expected_severity = error.severity();
-    let expected_redaction = error.redaction();
+    let expected_exposure = error.exposure();
     let expected_display = error.to_string();
     let expected_source = error.source().map(ToString::to_string);
     let expected_nested_source = error
@@ -42,11 +43,12 @@ fn assert_shared_contract(error: RocketMQError) {
 
     for snapshot in [&shared, &cloned] {
         assert_eq!(snapshot.kind(), expected_kind);
+        assert_eq!(snapshot.descriptor(), expected_descriptor);
         assert_eq!(snapshot.context(), expected_context);
         assert_eq!(snapshot.boundary_view(), expected_boundary);
-        assert_eq!(snapshot.retry(), expected_retry);
+        assert_eq!(snapshot.recovery_hint(), expected_recovery_hint);
         assert_eq!(snapshot.severity(), expected_severity);
-        assert_eq!(snapshot.redaction(), expected_redaction);
+        assert_eq!(snapshot.exposure(), expected_exposure);
         assert_eq!(snapshot.to_string(), expected_display);
     }
     assert!(std::ptr::eq(shared.as_error(), cloned.as_error()));

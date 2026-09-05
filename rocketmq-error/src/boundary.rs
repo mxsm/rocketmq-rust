@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::descriptor::ErrorCode;
-use crate::ErrorCategory;
+use crate::BacktracePolicy;
+use crate::CanonicalCondition;
+use crate::ComponentId;
+use crate::ErrorClass;
+use crate::ErrorCode;
 use crate::ErrorContext;
-use crate::ErrorKind;
+use crate::ErrorDescriptor;
 use crate::ErrorSeverity;
-use crate::ObserveSpec;
-use crate::RecoverySpec;
-use crate::RetryClass;
+use crate::Exposure;
+use crate::FaultAttribution;
+use crate::RecoveryHint;
 
 /// Public, redaction-aware projection of a typed RocketMQ error.
 ///
@@ -29,132 +32,125 @@ use crate::RetryClass;
 /// stable metadata, public messages, and redacted context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundaryErrorView {
-    kind: ErrorKind,
-    code: ErrorCode,
-    category: ErrorCategory,
-    message: &'static str,
+    descriptor: &'static ErrorDescriptor,
     context: ErrorContext,
-    remoting: RemotingSpec,
-    grpc: GrpcSpec,
-    http: HttpSpec,
-    cli: CliSpec,
-    recovery: RecoverySpec,
-    observe: ObserveSpec,
 }
 
 impl BoundaryErrorView {
-    #[allow(clippy::too_many_arguments)]
     #[inline]
-    pub(crate) fn new(
-        kind: ErrorKind,
-        code: ErrorCode,
-        category: ErrorCategory,
-        message: &'static str,
-        context: ErrorContext,
-        remoting: RemotingSpec,
-        grpc: GrpcSpec,
-        http: HttpSpec,
-        cli: CliSpec,
-        recovery: RecoverySpec,
-        observe: ObserveSpec,
-    ) -> Self {
+    pub(crate) fn new(descriptor: &'static ErrorDescriptor, context: ErrorContext) -> Self {
         Self {
-            kind,
-            code,
-            category,
-            message,
-            context,
-            remoting,
-            grpc,
-            http,
-            cli,
-            recovery,
-            observe,
+            descriptor,
+            context: context.public_projection(descriptor),
         }
     }
 
+    /// Returns the authoritative catalog descriptor.
     #[inline]
-    /// Returns the stable semantic error kind.
-    pub const fn kind(&self) -> ErrorKind {
-        self.kind
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        self.descriptor
     }
 
+    /// Returns the stable canonical error code.
     #[inline]
-    /// Returns the stable numeric error code.
     pub const fn code(&self) -> ErrorCode {
-        self.code
+        self.descriptor.code()
     }
 
+    /// Returns the descriptor's error class.
     #[inline]
-    /// Returns the owning subsystem category.
-    pub const fn category(&self) -> ErrorCategory {
-        self.category
+    pub const fn class(&self) -> ErrorClass {
+        self.descriptor.class()
     }
 
+    /// Returns the descriptor's canonical condition.
     #[inline]
+    pub const fn condition(&self) -> CanonicalCondition {
+        self.descriptor.condition()
+    }
+
+    /// Returns the descriptor's fault attribution.
+    #[inline]
+    pub const fn fault(&self) -> FaultAttribution {
+        self.descriptor.fault()
+    }
+
+    /// Returns the descriptor's owning component.
+    #[inline]
+    pub const fn component(&self) -> ComponentId {
+        self.descriptor.component()
+    }
+
     /// Returns the redaction-safe static error message.
+    #[inline]
     pub const fn message(&self) -> &'static str {
-        self.message
+        self.descriptor.public_message()
     }
 
+    /// Returns the descriptor-validated structured context.
     #[inline]
-    /// Returns the redaction-safe structured context.
     pub const fn context(&self) -> &ErrorContext {
         &self.context
     }
 
-    #[inline]
     /// Returns the RocketMQ remoting response mapping.
+    #[inline]
     pub const fn remoting(&self) -> RemotingSpec {
-        self.remoting
+        self.descriptor.projection().remoting()
     }
 
-    #[inline]
     /// Returns the gRPC payload and transport-status mapping.
+    #[inline]
     pub const fn grpc(&self) -> GrpcSpec {
-        self.grpc
+        self.descriptor.projection().grpc()
     }
 
-    #[inline]
     /// Returns the HTTP status mapping.
+    #[inline]
     pub const fn http(&self) -> HttpSpec {
-        self.http
+        self.descriptor.projection().http()
     }
 
-    #[inline]
     /// Returns the CLI exit-code mapping.
+    #[inline]
     pub const fn cli(&self) -> CliSpec {
-        self.cli
+        self.descriptor.projection().cli()
     }
 
+    /// Returns the descriptor's recovery hint.
     #[inline]
-    /// Returns the retry and recovery policy.
-    pub const fn recovery(&self) -> RecoverySpec {
-        self.recovery
+    pub const fn recovery_hint(&self) -> RecoveryHint {
+        self.descriptor.recovery_hint()
     }
 
+    /// Returns whether the descriptor recommends an automatic recovery attempt.
     #[inline]
-    /// Returns the retry classification.
-    pub const fn retry(&self) -> RetryClass {
-        self.recovery.retry
-    }
-
-    #[inline]
-    /// Returns whether the retry classification permits another attempt.
     pub const fn is_retryable(&self) -> bool {
-        !matches!(self.retry(), RetryClass::Never)
+        matches!(
+            self.recovery_hint(),
+            RecoveryHint::Backoff
+                | RecoveryHint::RefreshRoute
+                | RecoveryHint::RefreshLeader
+                | RecoveryHint::SwitchBroker
+        )
     }
 
-    #[inline]
-    /// Returns the observability classification.
-    pub const fn observe(&self) -> ObserveSpec {
-        self.observe
-    }
-
-    #[inline]
     /// Returns the operational severity.
+    #[inline]
     pub const fn severity(&self) -> ErrorSeverity {
-        self.observe.severity
+        self.descriptor.severity()
+    }
+
+    /// Returns the public exposure policy.
+    #[inline]
+    pub const fn exposure(&self) -> Exposure {
+        self.descriptor.exposure()
+    }
+
+    /// Returns the backtrace capture policy.
+    #[inline]
+    pub const fn backtrace_policy(&self) -> BacktracePolicy {
+        self.descriptor.backtrace_policy()
     }
 }
 
@@ -215,46 +211,6 @@ impl RemotingSpec {
     pub const fn new(code: RemotingResponseCode) -> Self {
         Self { code }
     }
-
-    #[inline]
-    /// Returns the mapping for the supplied error kind.
-    pub const fn for_kind(kind: ErrorKind) -> Self {
-        Self::new(match kind {
-            ErrorKind::Authentication | ErrorKind::BrokerPermissionDenied | ErrorKind::TopicSendingForbidden => {
-                RemotingResponseCode::NoPermission
-            }
-            ErrorKind::TopicNotExist | ErrorKind::RouteNotFound => RemotingResponseCode::TopicNotExist,
-            ErrorKind::SubscriptionGroupNotExist => RemotingResponseCode::SubscriptionGroupNotExist,
-            ErrorKind::BrokerNotFound | ErrorKind::ClusterNotFound => RemotingResponseCode::BrokerNotExist,
-            ErrorKind::QueueNotExist | ErrorKind::MessageLookupFailed | ErrorKind::QueryNotFound => {
-                RemotingResponseCode::QueryNotFound
-            }
-            ErrorKind::MessageTooLarge | ErrorKind::MessageValidationFailed | ErrorKind::InvalidProperty => {
-                RemotingResponseCode::MessageIllegal
-            }
-            ErrorKind::IllegalArgument
-            | ErrorKind::RequestBodyInvalid
-            | ErrorKind::RequestHeaderError
-            | ErrorKind::ResponseProcessFailed
-            | ErrorKind::ConfigParseFailed
-            | ErrorKind::ConfigMissing
-            | ErrorKind::ConfigInvalidValue
-            | ErrorKind::AuthConfigInvalid
-            | ErrorKind::ObservabilityFeatureDisabled
-            | ErrorKind::ObservabilityConfigInvalid
-            | ErrorKind::ObservabilityLogFilterInvalid
-            | ErrorKind::MissingRequiredMessageProperty => RemotingResponseCode::InvalidParameter,
-            ErrorKind::Protocol | ErrorKind::InvalidVersionOrdinal => RemotingResponseCode::RequestCodeNotSupported,
-            ErrorKind::Network | ErrorKind::Timeout | ErrorKind::RetryLimitExceeded => RemotingResponseCode::SystemBusy,
-            ErrorKind::NotMasterBroker => RemotingResponseCode::NotLeaderForQueue,
-            ErrorKind::ControllerNotLeader => RemotingResponseCode::ControllerNotLeader,
-            ErrorKind::Controller
-            | ErrorKind::ControllerRaftError
-            | ErrorKind::ControllerConsensusTimeout
-            | ErrorKind::ControllerSnapshotFailed => RemotingResponseCode::ControllerJraftInternalError,
-            _ => RemotingResponseCode::SystemError,
-        })
-    }
 }
 
 /// gRPC payload-code primitive.
@@ -302,12 +258,16 @@ pub enum GrpcStatusCode {
     PermissionDenied,
     /// Represents the not found case.
     NotFound,
+    /// Represents the already exists case.
+    AlreadyExists,
     /// Represents the deadline exceeded case.
     DeadlineExceeded,
     /// Represents the resource exhausted case.
     ResourceExhausted,
     /// Represents the failed precondition case.
     FailedPrecondition,
+    /// Represents the aborted case.
+    Aborted,
     /// Represents the unimplemented case.
     Unimplemented,
     /// Represents the unavailable case.
@@ -332,59 +292,6 @@ impl GrpcSpec {
     /// Creates a new `GrpcSpec`.
     pub const fn new(payload: GrpcPayloadCode, status: GrpcStatusCode) -> Self {
         Self { payload, status }
-    }
-
-    #[inline]
-    /// Returns the mapping for the supplied error kind.
-    pub const fn for_kind(kind: ErrorKind) -> Self {
-        match kind {
-            ErrorKind::Authentication => Self::new(GrpcPayloadCode::Unauthorized, GrpcStatusCode::Unauthenticated),
-            ErrorKind::BrokerPermissionDenied | ErrorKind::TopicSendingForbidden => {
-                Self::new(GrpcPayloadCode::Forbidden, GrpcStatusCode::PermissionDenied)
-            }
-            ErrorKind::TopicNotExist | ErrorKind::RouteNotFound => {
-                Self::new(GrpcPayloadCode::TopicNotFound, GrpcStatusCode::NotFound)
-            }
-            ErrorKind::SubscriptionGroupNotExist => {
-                Self::new(GrpcPayloadCode::ConsumerGroupNotFound, GrpcStatusCode::NotFound)
-            }
-            ErrorKind::BrokerNotFound
-            | ErrorKind::QueueNotExist
-            | ErrorKind::ClusterNotFound
-            | ErrorKind::MessageLookupFailed
-            | ErrorKind::QueryNotFound => Self::new(GrpcPayloadCode::NotFound, GrpcStatusCode::NotFound),
-            ErrorKind::MessageTooLarge => {
-                Self::new(GrpcPayloadCode::MessageBodyTooLarge, GrpcStatusCode::ResourceExhausted)
-            }
-            ErrorKind::IllegalArgument
-            | ErrorKind::InvalidProperty
-            | ErrorKind::MessageValidationFailed
-            | ErrorKind::RequestBodyInvalid
-            | ErrorKind::RequestHeaderError
-            | ErrorKind::ResponseProcessFailed
-            | ErrorKind::ConfigParseFailed
-            | ErrorKind::ConfigMissing
-            | ErrorKind::ConfigInvalidValue
-            | ErrorKind::AuthConfigInvalid
-            | ErrorKind::ObservabilityFeatureDisabled
-            | ErrorKind::ObservabilityConfigInvalid
-            | ErrorKind::ObservabilityLogFilterInvalid
-            | ErrorKind::MissingRequiredMessageProperty => {
-                Self::new(GrpcPayloadCode::BadRequest, GrpcStatusCode::InvalidArgument)
-            }
-            ErrorKind::Protocol | ErrorKind::InvalidVersionOrdinal => {
-                Self::new(GrpcPayloadCode::Unsupported, GrpcStatusCode::Unimplemented)
-            }
-            ErrorKind::Network => Self::new(GrpcPayloadCode::RequestTimeout, GrpcStatusCode::DeadlineExceeded),
-            ErrorKind::Timeout => Self::new(GrpcPayloadCode::ProxyTimeout, GrpcStatusCode::DeadlineExceeded),
-            ErrorKind::RetryLimitExceeded => {
-                Self::new(GrpcPayloadCode::TooManyRequests, GrpcStatusCode::ResourceExhausted)
-            }
-            ErrorKind::NotMasterBroker | ErrorKind::ControllerNotLeader => {
-                Self::new(GrpcPayloadCode::InternalError, GrpcStatusCode::FailedPrecondition)
-            }
-            _ => Self::new(GrpcPayloadCode::InternalError, GrpcStatusCode::Internal),
-        }
     }
 }
 
@@ -444,49 +351,6 @@ impl HttpSpec {
     pub const fn new(status: HttpStatusCode) -> Self {
         Self { status }
     }
-
-    #[inline]
-    /// Returns the mapping for the supplied error kind.
-    pub const fn for_kind(kind: ErrorKind) -> Self {
-        Self::new(match kind {
-            ErrorKind::Authentication => HttpStatusCode::UNAUTHORIZED,
-            ErrorKind::BrokerPermissionDenied | ErrorKind::TopicSendingForbidden => HttpStatusCode::FORBIDDEN,
-            ErrorKind::TopicNotExist
-            | ErrorKind::RouteNotFound
-            | ErrorKind::SubscriptionGroupNotExist
-            | ErrorKind::BrokerNotFound
-            | ErrorKind::QueueNotExist
-            | ErrorKind::ClusterNotFound
-            | ErrorKind::MessageLookupFailed
-            | ErrorKind::QueryNotFound => HttpStatusCode::NOT_FOUND,
-            ErrorKind::RouteRegistrationConflict
-            | ErrorKind::RouteVersionConflict
-            | ErrorKind::ClientAlreadyStarted
-            | ErrorKind::ClientInvalidState => HttpStatusCode::CONFLICT,
-            ErrorKind::MessageTooLarge => HttpStatusCode::PAYLOAD_TOO_LARGE,
-            ErrorKind::IllegalArgument
-            | ErrorKind::InvalidProperty
-            | ErrorKind::MessageValidationFailed
-            | ErrorKind::RequestBodyInvalid
-            | ErrorKind::RequestHeaderError
-            | ErrorKind::ResponseProcessFailed
-            | ErrorKind::ConfigParseFailed
-            | ErrorKind::ConfigMissing
-            | ErrorKind::ConfigInvalidValue
-            | ErrorKind::AuthConfigInvalid
-            | ErrorKind::ObservabilityFeatureDisabled
-            | ErrorKind::ObservabilityConfigInvalid
-            | ErrorKind::ObservabilityLogFilterInvalid
-            | ErrorKind::MissingRequiredMessageProperty
-            | ErrorKind::Protocol
-            | ErrorKind::InvalidVersionOrdinal => HttpStatusCode::BAD_REQUEST,
-            ErrorKind::Network => HttpStatusCode::SERVICE_UNAVAILABLE,
-            ErrorKind::Timeout => HttpStatusCode::GATEWAY_TIMEOUT,
-            ErrorKind::RetryLimitExceeded => HttpStatusCode::TOO_MANY_REQUESTS,
-            ErrorKind::StorageOutOfSpace => HttpStatusCode::INSUFFICIENT_STORAGE,
-            _ => HttpStatusCode::INTERNAL_SERVER_ERROR,
-        })
-    }
 }
 
 /// CLI exit-code primitive.
@@ -537,42 +401,28 @@ impl CliSpec {
     pub const fn new(exit_code: CliExitCode) -> Self {
         Self { exit_code }
     }
+}
 
-    #[inline]
-    /// Returns the mapping for the supplied error kind.
-    pub const fn for_kind(kind: ErrorKind) -> Self {
-        Self::new(match kind {
-            ErrorKind::Authentication | ErrorKind::BrokerPermissionDenied | ErrorKind::TopicSendingForbidden => {
-                CliExitCode::PERMISSION
-            }
-            ErrorKind::TopicNotExist
-            | ErrorKind::RouteNotFound
-            | ErrorKind::SubscriptionGroupNotExist
-            | ErrorKind::BrokerNotFound
-            | ErrorKind::QueueNotExist
-            | ErrorKind::ClusterNotFound
-            | ErrorKind::MessageLookupFailed
-            | ErrorKind::QueryNotFound => CliExitCode::NOT_FOUND,
-            ErrorKind::IllegalArgument
-            | ErrorKind::InvalidProperty
-            | ErrorKind::MessageValidationFailed
-            | ErrorKind::RequestBodyInvalid
-            | ErrorKind::RequestHeaderError
-            | ErrorKind::ResponseProcessFailed
-            | ErrorKind::MissingRequiredMessageProperty
-            | ErrorKind::Protocol
-            | ErrorKind::InvalidVersionOrdinal => CliExitCode::USAGE,
-            ErrorKind::ConfigParseFailed
-            | ErrorKind::ConfigMissing
-            | ErrorKind::ConfigInvalidValue
-            | ErrorKind::AuthConfigInvalid
-            | ErrorKind::ObservabilityFeatureDisabled
-            | ErrorKind::ObservabilityConfigInvalid
-            | ErrorKind::ObservabilityLogFilterInvalid => CliExitCode::CONFIG,
-            ErrorKind::Network | ErrorKind::Timeout | ErrorKind::RetryLimitExceeded => CliExitCode::TEMPORARY_FAILURE,
-            ErrorKind::StorageCorrupted | ErrorKind::StorageOutOfSpace => CliExitCode::DATA,
-            ErrorKind::Tools => CliExitCode::UNAVAILABLE,
-            _ => CliExitCode::SOFTWARE,
-        })
+#[cfg(test)]
+mod tests {
+    use super::BoundaryErrorView;
+    use crate::fields;
+    use crate::ErrorContext;
+    use crate::ROUTE_TOPIC_NOT_FOUND;
+    use crate::RPC_REQUEST_FAILED;
+
+    #[test]
+    fn boundary_context_enforces_descriptor_exposure() {
+        let generic = BoundaryErrorView::new(
+            &RPC_REQUEST_FAILED,
+            ErrorContext::new().with_i64(fields::REQUEST_CODE, 10),
+        );
+        assert!(generic.context().is_empty());
+
+        let public = BoundaryErrorView::new(
+            &ROUTE_TOPIC_NOT_FOUND,
+            ErrorContext::new().with_text(fields::TOPIC, "TopicA"),
+        );
+        assert_eq!(public.context().to_string(), "topic=TopicA");
     }
 }

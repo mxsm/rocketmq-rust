@@ -25,7 +25,7 @@ fn four_boundary_mappings_match_the_golden_contract() {
         (
             RocketMQError::authentication_failed("invalid signature"),
             (
-                "AUTHENTICATION_FAILED",
+                "auth.credentials.invalid",
                 RemotingResponseCode::NoPermission,
                 GrpcPayloadCode::Unauthorized,
                 GrpcStatusCode::Unauthenticated,
@@ -36,7 +36,7 @@ fn four_boundary_mappings_match_the_golden_contract() {
         (
             RocketMQError::route_not_found("orders"),
             (
-                "ROUTE_NOT_FOUND",
+                "route.topic.not_found",
                 RemotingResponseCode::TopicNotExist,
                 GrpcPayloadCode::TopicNotFound,
                 GrpcStatusCode::NotFound,
@@ -47,7 +47,7 @@ fn four_boundary_mappings_match_the_golden_contract() {
         (
             RocketMQError::illegal_argument("queue id"),
             (
-                "ILLEGAL_ARGUMENT",
+                "core.argument.invalid",
                 RemotingResponseCode::InvalidParameter,
                 GrpcPayloadCode::BadRequest,
                 GrpcStatusCode::InvalidArgument,
@@ -60,10 +60,10 @@ fn four_boundary_mappings_match_the_golden_contract() {
                 path: "commitlog".to_owned(),
             },
             (
-                "STORAGE_OUT_OF_SPACE",
+                "storage.capacity.exhausted",
                 RemotingResponseCode::SystemError,
                 GrpcPayloadCode::InternalError,
-                GrpcStatusCode::Internal,
+                GrpcStatusCode::ResourceExhausted,
                 HttpStatusCode::INSUFFICIENT_STORAGE,
                 CliExitCode::DATA,
             ),

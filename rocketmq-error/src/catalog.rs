@@ -97,13 +97,32 @@ macro_rules! define_error_catalog {
             };
         )+
 
-        /// Every canonical descriptor currently declared by `rocketmq-error`.
-        ///
-        /// The catalog declaration emits this slice together with its named
-        /// constants so a declared descriptor cannot be omitted from lookup.
-        pub const ALL_DESCRIPTORS: &[ErrorDescriptor] = &[$($name),+];
     };
 }
+
+mod auth;
+mod broker;
+mod client;
+mod controller;
+mod core;
+mod observability;
+mod protocol;
+mod route;
+mod rpc;
+mod tools;
+mod transport;
+
+pub use auth::*;
+pub use broker::*;
+pub use client::*;
+pub use controller::*;
+pub use core::*;
+pub use observability::*;
+pub use protocol::*;
+pub use route::*;
+pub use rpc::*;
+pub use tools::*;
+pub use transport::*;
 
 define_error_catalog! {
     /// Invalid request-header syntax or values.
@@ -118,7 +137,11 @@ define_error_catalog! {
         recovery_hint: RecoveryHint::Never,
         backtrace: BacktracePolicy::Never,
         exposure: Exposure::Public,
-        fields: [fields::OPERATION_DIAGNOSTIC, fields::INVALID_VALUE_PRESENT],
+        fields: [
+            fields::OPERATION_DIAGNOSTIC,
+            fields::INVALID_VALUE_PRESENT,
+            fields::SOURCE_PRESENT,
+        ],
         projection: {
             remoting: RemotingResponseCode::InvalidParameter,
             grpc: {
@@ -240,8 +263,8 @@ define_error_catalog! {
                 payload: GrpcPayloadCode::InternalError,
                 status: GrpcStatusCode::FailedPrecondition,
             },
-            http: HttpStatusCode::INTERNAL_SERVER_ERROR,
-            cli: CliExitCode::SOFTWARE,
+            http: HttpStatusCode::CONFLICT,
+            cli: CliExitCode::DATA,
         },
     }
     /// Timed-out transport connection attempt.
@@ -406,8 +429,8 @@ define_error_catalog! {
                 payload: GrpcPayloadCode::InternalError,
                 status: GrpcStatusCode::FailedPrecondition,
             },
-            http: HttpStatusCode::SERVICE_UNAVAILABLE,
-            cli: CliExitCode::UNAVAILABLE,
+            http: HttpStatusCode::CONFLICT,
+            cli: CliExitCode::DATA,
         },
     }
     /// Configured storage backend is unavailable.
@@ -784,7 +807,7 @@ define_error_catalog! {
                 status: GrpcStatusCode::InvalidArgument,
             },
             http: HttpStatusCode::BAD_REQUEST,
-            cli: CliExitCode::USAGE,
+            cli: CliExitCode::CONFIG,
         },
     }
     /// Runtime construction failed.
@@ -972,6 +995,110 @@ define_error_catalog! {
         },
     }
 }
+
+/// Every canonical descriptor currently declared by `rocketmq-error`.
+///
+/// This is the sole iterable catalog authority used by exact-code lookup.
+pub const ALL_DESCRIPTORS: &[ErrorDescriptor] = &[
+    PROTOCOL_HEADER_INVALID,
+    ROUTE_TOPIC_NOT_FOUND,
+    AUTH_CREDENTIALS_INVALID,
+    AUTH_PERMISSION_DENIED,
+    TRANSPORT_ADMISSION_QUEUE_SATURATED,
+    CONTROLLER_LEADERSHIP_NOT_LEADER,
+    TRANSPORT_CONNECTION_TIMEOUT,
+    TRANSPORT_REQUEST_TIMEOUT,
+    TRANSPORT_START_FAILED,
+    TRANSPORT_DISPATCH_FAILED,
+    TRANSPORT_RESPONSE_FAILED,
+    TRANSPORT_SESSION_FAILED,
+    STORAGE_LIFECYCLE_NOT_STARTED,
+    STORAGE_BACKEND_UNAVAILABLE,
+    STORAGE_REQUEST_INVALID,
+    STORAGE_MAPPED_FILE_NOT_FOUND,
+    STORAGE_CAPACITY_EXHAUSTED,
+    STORAGE_READ_FAILED,
+    STORAGE_WRITE_FAILED,
+    STORAGE_IO_FAILED,
+    STORAGE_STATE_CORRUPTED,
+    STORAGE_OPERATION_TIMED_OUT,
+    STORAGE_OPERATION_UNSUPPORTED,
+    STORAGE_INTERNAL_FAILURE,
+    PROTOCOL_VERSION_UNSUPPORTED,
+    CORE_INTERNAL_FAILURE,
+    RUNTIME_CONFIGURATION_FAILED,
+    RUNTIME_BUILD_FAILED,
+    RUNTIME_IO_FAILED,
+    RUNTIME_CONTEXT_UNAVAILABLE,
+    RUNTIME_CAPACITY_EXHAUSTED,
+    RUNTIME_OPERATION_TIMED_OUT,
+    RUNTIME_OPERATION_UNSUPPORTED,
+    RUNTIME_TASK_JOIN_FAILED,
+    RUNTIME_INTERNAL_FAILURE,
+    TRANSPORT_ENDPOINT_INVALID,
+    TRANSPORT_REMOTE_RATE_LIMITED,
+    TRANSPORT_WRITE_TIMEOUT,
+    TRANSPORT_RESPONSE_TIMEOUT,
+    TRANSPORT_DNS_FAILED,
+    TRANSPORT_CONNECTION_FAILED,
+    CORE_SERIALIZATION_FAILED,
+    PROTOCOL_BODY_INVALID,
+    PROTOCOL_ENCODING_UNSUPPORTED,
+    PROTOCOL_REQUEST_UNSUPPORTED,
+    RPC_BROKER_ADDRESS_NOT_FOUND,
+    RPC_REQUEST_UNSUPPORTED,
+    AUTH_OPERATION_FAILED,
+    CONTROLLER_INTERNAL_FAILURE,
+    CONTROLLER_REQUEST_INVALID,
+    CONTROLLER_CONFIGURATION_INVALID,
+    CONTROLLER_LIFECYCLE_NOT_INITIALIZED,
+    PROTOCOL_MESSAGE_PROPERTY_INVALID,
+    BROKER_LOOKUP_NOT_FOUND,
+    BROKER_REGISTRATION_FAILED,
+    BROKER_OPERATION_FAILED,
+    BROKER_TOPIC_NOT_FOUND,
+    BROKER_QUEUE_NOT_FOUND,
+    BROKER_SUBSCRIPTION_GROUP_NOT_FOUND,
+    BROKER_QUEUE_ID_OUT_OF_RANGE,
+    BROKER_MESSAGE_TOO_LARGE,
+    BROKER_MESSAGE_INVALID,
+    CLIENT_RETRY_BUDGET_EXHAUSTED,
+    BROKER_TRANSACTION_REJECTED,
+    BROKER_LEADERSHIP_NOT_MASTER,
+    BROKER_QUERY_NOT_FOUND,
+    BROKER_TASK_FAILED,
+    PROTOCOL_RESPONSE_FAILED,
+    ROUTE_TOPIC_INCONSISTENT,
+    ROUTE_REGISTRATION_CONFLICT,
+    ROUTE_CLUSTER_NOT_FOUND,
+    CLIENT_LIFECYCLE_NOT_STARTED,
+    CLIENT_LIFECYCLE_ALREADY_STARTED,
+    CLIENT_LIFECYCLE_SHUTTING_DOWN,
+    CLIENT_LIFECYCLE_INVALID_STATE,
+    CLIENT_COMPONENT_UNAVAILABLE,
+    RPC_REQUEST_FAILED,
+    RPC_RESPONSE_FAILED,
+    TOOLS_OPERATION_FAILED,
+    PROTOCOL_FILTER_INVALID,
+    OBSERVABILITY_FEATURE_DISABLED,
+    OBSERVABILITY_CONFIGURATION_INVALID,
+    OBSERVABILITY_INITIALIZATION_FAILED,
+    OBSERVABILITY_LOG_FILTER_INVALID,
+    OBSERVABILITY_SUBSCRIBER_INSTALLATION_FAILED,
+    OBSERVABILITY_SHUTDOWN_FAILED,
+    CORE_CONFIGURATION_PARSE_FAILED,
+    CORE_CONFIGURATION_MISSING,
+    CORE_CONFIGURATION_INVALID,
+    AUTH_CONFIGURATION_INVALID,
+    AUTH_CONFIGURATION_RELOAD_FAILED,
+    CONTROLLER_CONSENSUS_FAILED,
+    CONTROLLER_CONSENSUS_TIMED_OUT,
+    CORE_IO_FAILED,
+    CORE_ARGUMENT_INVALID,
+    CORE_OPERATION_TIMED_OUT,
+    CORE_SERVICE_FAILED,
+    CORE_LIFECYCLE_NOT_INITIALIZED,
+];
 
 /// Returns the registered descriptor for `code`.
 ///

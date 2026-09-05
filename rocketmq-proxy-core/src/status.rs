@@ -294,6 +294,8 @@ impl ProxyStatusMapper {
             GrpcStatusCode::DeadlineExceeded => TonicCode::DeadlineExceeded,
             GrpcStatusCode::ResourceExhausted => TonicCode::ResourceExhausted,
             GrpcStatusCode::FailedPrecondition => TonicCode::FailedPrecondition,
+            GrpcStatusCode::AlreadyExists => TonicCode::AlreadyExists,
+            GrpcStatusCode::Aborted => TonicCode::Aborted,
             GrpcStatusCode::Unimplemented => TonicCode::Unimplemented,
             GrpcStatusCode::Unavailable => TonicCode::Unavailable,
             GrpcStatusCode::DataLoss => TonicCode::DataLoss,
@@ -483,6 +485,16 @@ mod tests {
             ProxyStatusMapper::grpc_status_to_tonic_code(GrpcStatusCode::DataLoss),
             tonic::Code::DataLoss
         );
+    }
+
+    #[test]
+    fn newly_declared_statuses_map_exhaustively_to_tonic() {
+        for (status, expected) in [
+            (GrpcStatusCode::AlreadyExists, tonic::Code::AlreadyExists),
+            (GrpcStatusCode::Aborted, tonic::Code::Aborted),
+        ] {
+            assert_eq!(ProxyStatusMapper::grpc_status_to_tonic_code(status), expected);
+        }
     }
 
     #[test]

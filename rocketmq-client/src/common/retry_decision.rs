@@ -14,8 +14,9 @@
 
 use std::collections::HashSet;
 
+use rocketmq_error::ErrorKind;
 use rocketmq_error::NetworkError;
-use rocketmq_error::RetryClass;
+use rocketmq_error::RecoveryHint;
 use rocketmq_error::RocketMQError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,18 +72,24 @@ pub(crate) struct ProducerSendFaultDecision {
 impl ClientRetryDecision {
     #[inline]
     pub(crate) fn from_error(error: &RocketMQError) -> Self {
-        Self::from_retry_class(error.kind().spec().recovery.retry)
+        if matches!(
+            error.kind(),
+            ErrorKind::SubscriptionGroupNotExist | ErrorKind::MessageLookupFailed | ErrorKind::QueryNotFound
+        ) {
+            return Self::Immediate;
+        }
+
+        Self::from_recovery_hint(error.descriptor().recovery_hint())
     }
 
     #[inline]
-    pub(crate) const fn from_retry_class(retry: RetryClass) -> Self {
-        match retry {
-            RetryClass::Never => Self::NoRetry,
-            RetryClass::Immediate => Self::Immediate,
-            RetryClass::AfterBackoff => Self::Backoff,
-            RetryClass::RefreshRoute => Self::RefreshRoute,
-            RetryClass::SwitchBroker => Self::SwitchBroker,
-            RetryClass::RefreshLeader => Self::RefreshLeader,
+    pub(crate) const fn from_recovery_hint(recovery_hint: RecoveryHint) -> Self {
+        match recovery_hint {
+            RecoveryHint::Never | RecoveryHint::RefreshCredentials | RecoveryHint::OperatorAction => Self::NoRetry,
+            RecoveryHint::Backoff => Self::Backoff,
+            RecoveryHint::RefreshRoute => Self::RefreshRoute,
+            RecoveryHint::RefreshLeader => Self::RefreshLeader,
+            RecoveryHint::SwitchBroker => Self::SwitchBroker,
         }
     }
 
@@ -156,11 +163,11 @@ pub(crate) fn producer_send_retry_decision(
         return ClientRetryDecision::NoRetry;
     }
 
-    match error {
+    match retry_policy_error(error) {
         RocketMQError::BrokerOperationFailed { code, .. } => {
             // Java producer retries only configured broker response codes for send.
             // This allowlist is the explicit broker-protocol compatibility boundary
-            // and intentionally overrides the generic BrokerOperationFailed RetryClass.
+            // and intentionally overrides the generic BrokerOperationFailed recovery hint.
             if retry_response_codes.contains(code) {
                 ClientRetryDecision::SwitchBroker
             } else {
@@ -199,7 +206,7 @@ pub(crate) fn producer_send_fault_decision(
 #[inline]
 fn is_terminal_send_error(error: &RocketMQError) -> bool {
     matches!(
-        error,
+        retry_policy_error(error),
         RocketMQError::Timeout { .. }
             | RocketMQError::ClientNotStarted
             | RocketMQError::ClientShuttingDown
@@ -211,9 +218,19 @@ fn is_terminal_send_error(error: &RocketMQError) -> bool {
     )
 }
 
+#[inline]
+fn retry_policy_error(error: &RocketMQError) -> &RocketMQError {
+    match error {
+        RocketMQError::Shared(shared) => shared.as_error(),
+        error => error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_error::RpcClientError;
+    use rocketmq_error::SharedRocketMQError;
 
     const fn effect(
         retry: bool,
@@ -316,7 +333,7 @@ mod tests {
         for (error, expected_decision, expected_effect) in cases {
             assert_eq!(ClientRetryDecision::from_error(&error), expected_decision);
             assert_eq!(
-                ClientRetryDecision::from_retry_class(error.kind().spec().recovery.retry),
+                ClientRetryDecision::from_recovery_hint(error.descriptor().recovery_hint()),
                 expected_decision
             );
             assert_eq!(expected_decision.effect(), expected_effect);
@@ -324,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn producer_send_retry_priority_is_terminal_then_broker_allowlist_then_spec() {
+    fn producer_send_retry_priority_is_terminal_then_broker_allowlist_then_descriptor() {
         let timeout = RocketMQError::Timeout {
             operation: "SEND_MESSAGE",
             timeout_ms: 3_000,
@@ -355,6 +372,141 @@ mod tests {
             producer_send_retry_decision(&network_error, &HashSet::new()),
             ClientRetryDecision::Backoff
         );
+    }
+
+    fn assert_no_retry_for_direct_and_shared(error: RocketMQError) {
+        let retry_codes = HashSet::new();
+
+        assert_eq!(ClientRetryDecision::from_error(&error), ClientRetryDecision::NoRetry);
+        assert_eq!(async_send_retry_decision(&error), ClientRetryDecision::NoRetry);
+        assert_eq!(
+            producer_send_retry_decision(&error, &retry_codes),
+            ClientRetryDecision::NoRetry
+        );
+
+        let shared = SharedRocketMQError::new(error).into_error();
+        assert_eq!(ClientRetryDecision::from_error(&shared), ClientRetryDecision::NoRetry);
+        assert_eq!(async_send_retry_decision(&shared), ClientRetryDecision::NoRetry);
+        assert_eq!(
+            producer_send_retry_decision(&shared, &retry_codes),
+            ClientRetryDecision::NoRetry
+        );
+    }
+
+    fn assert_backoff_for_direct_and_shared(error: RocketMQError) {
+        let retry_codes = HashSet::new();
+
+        assert_eq!(ClientRetryDecision::from_error(&error), ClientRetryDecision::Backoff);
+        assert_eq!(async_send_retry_decision(&error), ClientRetryDecision::Backoff);
+        assert_eq!(
+            producer_send_retry_decision(&error, &retry_codes),
+            ClientRetryDecision::Backoff
+        );
+
+        let shared = SharedRocketMQError::new(error).into_error();
+        assert_eq!(ClientRetryDecision::from_error(&shared), ClientRetryDecision::Backoff);
+        assert_eq!(async_send_retry_decision(&shared), ClientRetryDecision::Backoff);
+        assert_eq!(
+            producer_send_retry_decision(&shared, &retry_codes),
+            ClientRetryDecision::Backoff
+        );
+    }
+
+    #[test]
+    fn descriptor_never_stops_the_three_approved_retry_cases() {
+        assert_no_retry_for_direct_and_shared(RocketMQError::RetryLimitExceeded {
+            group: "producer-a".into(),
+            current: 3,
+            max: 2,
+        });
+        assert_no_retry_for_direct_and_shared(RocketMQError::Network(NetworkError::InvalidAddress {
+            addr: "not-an-address".into(),
+        }));
+        assert_no_retry_for_direct_and_shared(RocketMQError::Rpc(RpcClientError::UnsupportedRequestCode { code: 999 }));
+    }
+
+    #[test]
+    fn descriptor_backoff_controls_remain_retryable() {
+        assert_backoff_for_direct_and_shared(RocketMQError::network_connection_failed(
+            "broker-a:10911",
+            "connection failed",
+        ));
+        assert_backoff_for_direct_and_shared(RocketMQError::Rpc(RpcClientError::request_failed(
+            "broker-a:10911",
+            10,
+            3_000,
+            std::io::Error::other("request failed"),
+        )));
+        assert_backoff_for_direct_and_shared(RocketMQError::Rpc(RpcClientError::unexpected_response_code(
+            1,
+            "SYSTEM_ERROR",
+        )));
+    }
+
+    #[test]
+    fn operation_owned_immediate_retry_cases_are_preserved() {
+        for error in [
+            RocketMQError::SubscriptionGroupNotExist {
+                group: "consumer-a".into(),
+            },
+            RocketMQError::MessageLookupFailed { offset: 42 },
+            RocketMQError::QueryNotFound {
+                resource: "message-key".into(),
+            },
+        ] {
+            assert_eq!(ClientRetryDecision::from_error(&error), ClientRetryDecision::Immediate);
+            let shared = SharedRocketMQError::new(error).into_error();
+            assert_eq!(ClientRetryDecision::from_error(&shared), ClientRetryDecision::Immediate);
+        }
+    }
+
+    #[test]
+    fn shared_terminal_send_errors_keep_direct_no_retry_behavior() {
+        for error in [
+            RocketMQError::Timeout {
+                operation: "SEND_MESSAGE",
+                timeout_ms: 3_000,
+            },
+            RocketMQError::Network(NetworkError::ConnectionTimeout {
+                addr: "broker-a:10911".into(),
+                timeout_ms: 3_000,
+            }),
+            RocketMQError::Network(NetworkError::RequestTimeout {
+                addr: "broker-a:10911".into(),
+                timeout_ms: 3_000,
+            }),
+            RocketMQError::Network(NetworkError::TooManyRequests {
+                addr: "broker-a:10911".into(),
+                limit: 1,
+            }),
+        ] {
+            assert_eq!(async_send_retry_decision(&error), ClientRetryDecision::NoRetry);
+            assert_eq!(
+                producer_send_retry_decision(&error, &HashSet::new()),
+                ClientRetryDecision::NoRetry
+            );
+
+            let shared = SharedRocketMQError::new(error).into_error();
+            assert_eq!(async_send_retry_decision(&shared), ClientRetryDecision::NoRetry);
+            assert_eq!(
+                producer_send_retry_decision(&shared, &HashSet::new()),
+                ClientRetryDecision::NoRetry
+            );
+        }
+    }
+
+    #[test]
+    fn shared_broker_errors_keep_response_code_allowlist_behavior() {
+        for (retry_codes, expected) in [
+            (HashSet::from([12]), ClientRetryDecision::SwitchBroker),
+            (HashSet::from([13]), ClientRetryDecision::NoRetry),
+        ] {
+            let direct = RocketMQError::broker_operation_failed("SEND_MESSAGE", 12, "system busy");
+            assert_eq!(producer_send_retry_decision(&direct, &retry_codes), expected);
+
+            let shared = SharedRocketMQError::new(direct).into_error();
+            assert_eq!(producer_send_retry_decision(&shared, &retry_codes), expected);
+        }
     }
 
     #[test]

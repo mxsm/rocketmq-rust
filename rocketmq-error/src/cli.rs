@@ -16,7 +16,7 @@
 
 use crate::descriptor::ErrorCode;
 use crate::CliExitCode;
-use crate::ErrorCategory;
+use crate::ComponentId;
 use crate::ErrorContext;
 use crate::RocketMQError;
 
@@ -25,20 +25,20 @@ use crate::RocketMQError;
 pub struct CliErrorView {
     exit_code: CliExitCode,
     code: ErrorCode,
-    category: ErrorCategory,
+    component: ComponentId,
     message: &'static str,
     context: ErrorContext,
 }
 
 impl CliErrorView {
-    /// Build a CLI view from the central error spec registry.
+    /// Builds a CLI view from the canonical descriptor catalog.
     #[inline]
     pub fn from_error(error: &RocketMQError) -> Self {
         let view = error.boundary_view();
         Self {
             exit_code: view.cli().exit_code,
             code: view.code(),
-            category: view.category(),
+            component: view.component(),
             message: view.message(),
             context: view.context().clone(),
         }
@@ -57,9 +57,9 @@ impl CliErrorView {
     }
 
     #[inline]
-    /// Returns the category.
-    pub const fn category(&self) -> ErrorCategory {
-        self.category
+    /// Returns the catalog component.
+    pub const fn component(&self) -> ComponentId {
+        self.component
     }
 
     #[inline]
@@ -77,9 +77,9 @@ impl CliErrorView {
     /// Render a one-line, redaction-aware stderr message.
     pub fn render_stderr(&self) -> String {
         let mut rendered = format!(
-            "Error: code={}, category={}, exit_code={}, message={}",
+            "Error: code={}, component={}, exit_code={}, message={}",
             self.code,
-            self.category,
+            self.component,
             self.exit_code.as_i32(),
             self.message
         );
@@ -106,24 +106,27 @@ mod tests {
     use crate::RocketMQError;
 
     #[test]
-    fn cli_view_uses_spec_exit_code_and_stable_code() {
+    fn cli_view_uses_descriptor_exit_code_and_stable_code() {
         let error = RocketMQError::validation_failed("topic", "topic must not be empty");
         let view = CliErrorView::from_error(&error);
 
         assert_eq!(view.exit_code(), CliExitCode::USAGE);
-        assert_eq!(view.code().as_str(), "ILLEGAL_ARGUMENT");
-        assert_eq!(view.category().as_str(), "system");
-        assert_eq!(view.message(), "Argument is illegal");
-        assert!(view.render_stderr().contains("code=ILLEGAL_ARGUMENT"));
+        assert_eq!(view.code().as_str(), "core.argument.invalid");
+        assert_eq!(view.component().as_str(), "core");
+        assert_eq!(view.message(), "Argument is invalid");
+        assert!(view.render_stderr().contains("code=core.argument.invalid"));
     }
 
     #[test]
-    fn cli_view_renders_redacted_context() {
+    fn cli_view_suppresses_generic_context_and_keeps_declared_public_fields() {
         let error = RocketMQError::storage_read_failed("C:/secret/token/file", "permission denied");
         let rendered = CliErrorView::from_error(&error).render_stderr();
 
-        assert!(rendered.contains("code=STORAGE_READ_FAILED"));
-        assert!(rendered.contains("path=<redacted>"));
+        assert!(rendered.contains("code=storage.read.failed"));
+        assert!(!rendered.contains("context={"));
         assert!(!rendered.contains("secret/token"));
+
+        let public = CliErrorView::from_error(&RocketMQError::route_not_found("TopicA")).render_stderr();
+        assert!(public.contains("context={topic=TopicA}"));
     }
 }

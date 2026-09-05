@@ -130,6 +130,16 @@
       "reason": "The opaque canonical core removes duplicate descriptor, context, and source storage from the unreleased Store, Runtime, and Transport facades. Arc-backed cloneable facades and the authorization projection that reads RuntimeError metadata cannot retain const callability without duplicating canonical policy, so the affected const qualifiers are removed while runtime values, typed sources, safe views, authorization classification, and operational behavior remain unchanged.",
       "approved_by": "repository-owner",
       "approved_on": "2026-09-05"
+    },
+    {
+      "id": "API-0.9-014",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_error::{spec::{ErrorSpec,ALL_ERROR_SPECS,error_spec}, policy::{RetryClass,RecoverySpec,ObserveSpec}, kind::{ErrorScope,ErrorCategory,ErrorKind::{ALL,from_code,code,scope,category,spec,MissingRequiredMessageProperty}}, context::RedactionPolicy, boundary::{BoundaryErrorView::{kind,category,retry,recovery,observe},RemotingSpec::for_kind,GrpcSpec::for_kind,HttpSpec::for_kind,CliSpec::for_kind}, domain::DomainError::{spec,retry,recovery,redaction}, cli::CliErrorView::category, descriptor::ErrorCode::new, controller_error::ControllerError::{NotLeader,MetadataNotFound,BrokerRegistrationFailed,NetworkError}, unified::{RocketMQError::{MissingRequiredMessageProperty,spec,controller_not_leader,controller_metadata_not_found},protocol::ProtocolError::{BodyMissing,DecodeError,HeaderMissing,InvalidMessage,UnsupportedVersion,ChecksumMismatch,header_missing,invalid_message,checksum_mismatch}}}",
+      "replacement": "rocketmq_error::{ErrorDescriptor,descriptor_by_code,ALL_DESCRIPTORS,DomainError::{descriptor,recovery_hint,exposure},BoundaryErrorView::{descriptor,class,condition,fault,component,recovery_hint,exposure,backtrace_policy},CliErrorView::component,GrpcStatusCode::{AlreadyExists,Aborted}} plus leaf-specific descriptor and diagnostic-context associations",
+      "reason": "The repository owner approved the unreleased E1-3 migration from the legacy 73-row ErrorSpec and derived policy tables to one explicit 98-descriptor catalog. Dead Protocol, Controller, and MissingRequiredMessageProperty shapes are removed rather than retained as aliases; every live remoting numeric code remains frozen while the reviewed HTTP, gRPC, CLI, recovery, exposure, and field-schema semantics move to the canonical descriptors.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-09-05"
     }
   ],
   "frozen_contracts": [

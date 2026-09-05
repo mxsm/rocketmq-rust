@@ -18,6 +18,13 @@ use std::error::Error as StdError;
 
 use thiserror::Error;
 
+use crate::fields;
+use crate::ErrorContext;
+use crate::ErrorDescriptor;
+use crate::AUTH_CREDENTIALS_INVALID;
+use crate::AUTH_OPERATION_FAILED;
+use crate::AUTH_PERMISSION_DENIED;
+
 /// Authentication error types.
 ///
 /// This enum represents various authentication errors that can occur during
@@ -91,6 +98,37 @@ pub enum AuthError {
 }
 
 impl AuthError {
+    /// Returns the canonical descriptor for this authentication failure.
+    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self {
+            Self::AuthorizationFailed(_) => &AUTH_PERMISSION_DENIED,
+            Self::ContextCreationError(_) | Self::Operation { .. } => &AUTH_OPERATION_FAILED,
+            Self::MissingDateTime(_)
+            | Self::InvalidAuthorizationHeader(_)
+            | Self::InvalidCredential(_)
+            | Self::InvalidHexSignature(_)
+            | Self::AuthenticationFailed(_)
+            | Self::UserNotFound(_)
+            | Self::InvalidSignature(_)
+            | Self::RequestTimestampExpired { .. }
+            | Self::InvalidUserStatus(_) => &AUTH_CREDENTIALS_INVALID,
+        }
+    }
+
+    /// Returns descriptor-valid context without exposing credentials or reasons.
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::AuthorizationFailed(_) => ErrorContext::new().with_text(fields::OPERATION, "authorize"),
+            Self::ContextCreationError(_) => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "create_context")
+                .with_secret_presence(fields::REASON_PRESENT),
+            Self::Operation { operation, .. } => ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+                .with_secret_presence(fields::SOURCE_PRESENT),
+            _ => ErrorContext::new().with_secret_presence(fields::CREDENTIALS_PRESENT),
+        }
+    }
+
     /// Preserves the typed cause of an authentication operation failure.
     pub fn operation(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
         Self::Operation {
