@@ -17,8 +17,144 @@ use std::fmt;
 use crate::field::FieldSchema;
 use crate::projection::ProjectionSpec;
 use crate::CanonicalCondition;
-use crate::ErrorSeverity;
 use crate::RecoveryHint;
+
+/// Broad classification used for stable diagnostic policy.
+///
+/// Values are closed to the associated constants exposed by this crate. The
+/// catalog owns the class for every descriptor; error instances and domain
+/// facades cannot override it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ErrorClass(&'static str);
+
+impl ErrorClass {
+    /// Deterministic input or contract validation failure.
+    pub const VALIDATION: Self = Self("validation");
+    /// Authentication failure.
+    pub const AUTHENTICATION: Self = Self("authentication");
+    /// Authorization failure.
+    pub const AUTHORIZATION: Self = Self("authorization");
+    /// Routing or leadership failure.
+    pub const ROUTING: Self = Self("routing");
+    /// Resource-capacity failure.
+    pub const CAPACITY: Self = Self("capacity");
+    /// Deadline or timeout failure.
+    pub const TIMEOUT: Self = Self("timeout");
+    /// Temporarily unavailable service or resource.
+    pub const UNAVAILABLE: Self = Self("unavailable");
+    /// Input/output failure.
+    pub const IO: Self = Self("io");
+    /// Corrupted or irrecoverable data.
+    pub const DATA_CORRUPTION: Self = Self("data_corruption");
+    /// Unsupported operation or capability.
+    pub const UNSUPPORTED: Self = Self("unsupported");
+    /// Internal operational failure.
+    pub const INTERNAL: Self = Self("internal");
+    /// Violation of an implementation invariant.
+    pub const BUG: Self = Self("bug");
+
+    /// Returns the stable class name.
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Display for ErrorClass {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+/// Catalog owner for a canonical descriptor.
+///
+/// Domain-specific operation and subcomponent values remain typed context and
+/// do not replace this catalog-level owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ComponentId(&'static str);
+
+impl ComponentId {
+    /// Canonical error core.
+    pub const CORE: Self = Self("core");
+    /// Protocol encoding and validation.
+    pub const PROTOCOL: Self = Self("protocol");
+    /// Route discovery and leadership.
+    pub const ROUTE: Self = Self("route");
+    /// Authentication and authorization.
+    pub const AUTH: Self = Self("auth");
+    /// Controller services.
+    pub const CONTROLLER: Self = Self("controller");
+    /// Storage services.
+    pub const STORAGE: Self = Self("storage");
+    /// Runtime services.
+    pub const RUNTIME: Self = Self("runtime");
+    /// Transport services.
+    pub const TRANSPORT: Self = Self("transport");
+
+    /// Returns the stable component name.
+    #[inline]
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl fmt::Display for ComponentId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+/// Party or resource attributed with a canonical failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FaultAttribution {
+    /// The caller supplied invalid input or violated a contract.
+    Caller,
+    /// A remote peer failed or rejected an operation.
+    RemotePeer,
+    /// A local resource failed or became exhausted.
+    LocalResource,
+    /// A required dependency failed.
+    Dependency,
+    /// Configuration caused the failure.
+    Configuration,
+    /// An implementation invariant was violated.
+    Bug,
+    /// The failure cannot be attributed safely.
+    Unknown,
+}
+
+/// Public-context exposure policy for a descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Exposure {
+    /// The fixed message and descriptor-approved public fields may be exposed.
+    Public,
+    /// Only the fixed descriptor message may be exposed.
+    Generic,
+}
+
+/// Catalog-controlled backtrace capture policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BacktracePolicy {
+    /// Never capture a backtrace.
+    Never,
+    /// Capture only when the standard library's backtrace environment enables it.
+    OnDemand,
+}
+
+/// Default severity for logs, metrics, traces, and alert routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ErrorSeverity {
+    /// Diagnostic-only failure.
+    Debug,
+    /// Informational failure.
+    Info,
+    /// Warning-level failure.
+    Warn,
+    /// Error-level failure.
+    Error,
+    /// Critical failure requiring immediate attention.
+    Critical,
+}
 
 /// Stable machine-readable error code.
 ///
@@ -77,23 +213,30 @@ impl fmt::Display for ErrorCode {
 
 /// Immutable catalog metadata for one canonical error identity.
 ///
-/// A descriptor owns the stable code, protocol-independent condition, fixed
-/// public message, operational severity, recovery hint, and explicit boundary
-/// projections for an error. Its ordered field schemas define the only context
-/// accepted by later descriptor-aware views. Catalog consumers can inspect
-/// this metadata but cannot construct or modify descriptors outside this crate.
+/// A descriptor owns stable identity, classification, fault attribution,
+/// component ownership, the fixed public message, operational policy, public
+/// exposure, backtrace capture, and explicit boundary projections. Its ordered
+/// field schemas define the only context accepted by descriptor-aware views.
+/// Catalog consumers can inspect this metadata but cannot construct or modify
+/// descriptors outside this crate.
 ///
 /// ```compile_fail
 /// use rocketmq_error::{
-///     CanonicalCondition, ErrorCode, ErrorDescriptor, ErrorSeverity, RecoveryHint,
+///     BacktracePolicy, CanonicalCondition, ComponentId, ErrorClass, ErrorCode,
+///     ErrorDescriptor, ErrorSeverity, Exposure, FaultAttribution, RecoveryHint,
 /// };
 ///
 /// let descriptor = ErrorDescriptor {
 ///     code: ErrorCode::try_new("example.operation.failed").unwrap(),
+///     class: ErrorClass::INTERNAL,
 ///     condition: CanonicalCondition::Internal,
+///     fault: FaultAttribution::Unknown,
+///     component: ComponentId::CORE,
 ///     public_message: "The operation failed",
 ///     severity: ErrorSeverity::Error,
 ///     recovery_hint: RecoveryHint::OperatorAction,
+///     backtrace: BacktracePolicy::OnDemand,
+///     exposure: Exposure::Generic,
 ///     projection: todo!(),
 ///     fields: &[],
 /// };
@@ -101,10 +244,15 @@ impl fmt::Display for ErrorCode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErrorDescriptor {
     code: ErrorCode,
+    class: ErrorClass,
     condition: CanonicalCondition,
+    fault: FaultAttribution,
+    component: ComponentId,
     public_message: &'static str,
     severity: ErrorSeverity,
     recovery_hint: RecoveryHint,
+    backtrace: BacktracePolicy,
+    exposure: Exposure,
     projection: ProjectionSpec,
     fields: &'static [FieldSchema],
 }
@@ -113,10 +261,15 @@ impl ErrorDescriptor {
     #[inline]
     pub(crate) const fn try_new(
         code: ErrorCode,
+        class: ErrorClass,
         condition: CanonicalCondition,
+        fault: FaultAttribution,
+        component: ComponentId,
         public_message: &'static str,
         severity: ErrorSeverity,
         recovery_hint: RecoveryHint,
+        backtrace: BacktracePolicy,
+        exposure: Exposure,
         projection: ProjectionSpec,
         fields: &'static [FieldSchema],
     ) -> Option<Self> {
@@ -125,10 +278,15 @@ impl ErrorDescriptor {
         }
         Some(Self {
             code,
+            class,
             condition,
+            fault,
+            component,
             public_message,
             severity,
             recovery_hint,
+            backtrace,
+            exposure,
             projection,
             fields,
         })
@@ -140,10 +298,28 @@ impl ErrorDescriptor {
         self.code
     }
 
+    /// Returns the broad catalog-owned class.
+    #[inline]
+    pub const fn class(&self) -> ErrorClass {
+        self.class
+    }
+
     /// Returns the protocol-independent canonical condition.
     #[inline]
     pub const fn condition(&self) -> CanonicalCondition {
         self.condition
+    }
+
+    /// Returns the catalog-owned fault attribution.
+    #[inline]
+    pub const fn fault(&self) -> FaultAttribution {
+        self.fault
+    }
+
+    /// Returns the catalog component that owns this descriptor.
+    #[inline]
+    pub const fn component(&self) -> ComponentId {
+        self.component
     }
 
     /// Returns the fixed, boundary-safe public message.
@@ -162,6 +338,18 @@ impl ErrorDescriptor {
     #[inline]
     pub const fn recovery_hint(&self) -> RecoveryHint {
         self.recovery_hint
+    }
+
+    /// Returns the catalog-controlled backtrace policy.
+    #[inline]
+    pub const fn backtrace_policy(&self) -> BacktracePolicy {
+        self.backtrace
+    }
+
+    /// Returns the public-context exposure policy.
+    #[inline]
+    pub const fn exposure(&self) -> Exposure {
+        self.exposure
     }
 
     /// Returns the explicit boundary projections.

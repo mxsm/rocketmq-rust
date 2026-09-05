@@ -40,7 +40,7 @@ pub const fn project_policy_decision(decision: PolicyDecision) -> DetailedDecisi
 /// fixed denial output from `rocketmq-security-api` rather than returning the
 /// source error to a peer.
 #[must_use]
-pub const fn project_authorization_error(error: &AuthorizationError) -> LayerFailureKind {
+pub fn project_authorization_error(error: &AuthorizationError) -> LayerFailureKind {
     match error {
         AuthorizationError::ConfigurationError(_)
         | AuthorizationError::NotInitialized(_)

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::descriptor::ErrorSeverity;
 use crate::ErrorKind;
 
 /// Retry or recovery classification for one error kind.
@@ -79,21 +80,6 @@ impl RecoverySpec {
             _ => RetryClass::Never,
         })
     }
-}
-
-/// Default severity for logs, metrics, traces, and alert routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ErrorSeverity {
-    /// Represents the debug case.
-    Debug,
-    /// Represents the info case.
-    Info,
-    /// Represents the warn case.
-    Warn,
-    /// Represents the error case.
-    Error,
-    /// Represents the critical case.
-    Critical,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

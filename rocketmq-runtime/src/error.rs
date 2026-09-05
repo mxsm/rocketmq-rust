@@ -12,17 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::backtrace::Backtrace;
 use std::error::Error;
 use std::fmt;
+use std::panic::Location;
 use std::sync::Arc;
 
 use rocketmq_error::CanonicalCondition;
 use rocketmq_error::DiagnosticView;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::PublicErrorView;
 use rocketmq_error::RecoveryHint;
+use rocketmq_error::SharedError;
 
 use crate::resource_budget::BudgetDimension;
 
@@ -465,65 +469,63 @@ impl RuntimeContractViolation {
 /// expose implementation variants for callers to match.
 #[derive(Clone)]
 pub struct RuntimeError {
-    descriptor: &'static ErrorDescriptor,
+    error: SharedError,
     operation: RuntimeOperation,
     component: Arc<str>,
-    context: ErrorContext,
-    source: Option<Arc<dyn Error + Send + Sync + 'static>>,
 }
 
 impl RuntimeError {
     /// Creates a source-free operational failure.
     #[must_use]
+    #[track_caller]
     fn new(descriptor: &'static ErrorDescriptor, operation: RuntimeOperation, component: impl Into<Arc<str>>) -> Self {
+        let error = CanonicalError::new(descriptor).with_context(runtime_context(operation, false));
         Self {
-            descriptor,
-            context: runtime_context(operation, false),
+            error: Arc::new(error),
             operation,
             component: component.into(),
-            source: None,
         }
     }
 
     /// Creates an operational failure while retaining its typed cause.
     #[must_use]
+    #[track_caller]
     fn caused_by(
         descriptor: &'static ErrorDescriptor,
         operation: RuntimeOperation,
         component: impl Into<Arc<str>>,
         source: impl Error + Send + Sync + 'static,
     ) -> Self {
+        let error = CanonicalError::caused_by(descriptor, source).with_context(runtime_context(operation, true));
         Self {
-            descriptor,
-            context: runtime_context(operation, true),
+            error: Arc::new(error),
             operation,
             component: component.into(),
-            source: Some(Arc::new(source)),
         }
     }
 
     /// Returns the catalog descriptor.
     #[must_use]
-    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
-        self.descriptor
+    pub fn descriptor(&self) -> &'static ErrorDescriptor {
+        self.error.descriptor()
     }
 
     /// Returns the stable catalog code.
     #[must_use]
-    pub const fn code(&self) -> ErrorCode {
-        self.descriptor.code()
+    pub fn code(&self) -> ErrorCode {
+        self.error.code()
     }
 
     /// Returns the descriptor-owned canonical condition.
     #[must_use]
-    pub const fn condition(&self) -> CanonicalCondition {
-        self.descriptor.condition()
+    pub fn condition(&self) -> CanonicalCondition {
+        self.error.condition()
     }
 
     /// Returns the descriptor-owned recovery hint.
     #[must_use]
-    pub const fn recovery_hint(&self) -> RecoveryHint {
-        self.descriptor.recovery_hint()
+    pub fn recovery_hint(&self) -> RecoveryHint {
+        self.error.recovery_hint()
     }
 
     /// Returns the closed operation label.
@@ -540,8 +542,20 @@ impl RuntimeError {
 
     /// Returns bounded descriptor context.
     #[must_use]
-    pub const fn context(&self) -> &ErrorContext {
-        &self.context
+    pub fn context(&self) -> &ErrorContext {
+        self.error.context()
+    }
+
+    /// Returns the first-promotion caller location.
+    #[must_use]
+    pub fn location(&self) -> &'static Location<'static> {
+        self.error.location()
+    }
+
+    /// Returns the catalog-controlled captured backtrace, when enabled.
+    #[must_use]
+    pub fn backtrace(&self) -> Option<&Backtrace> {
+        self.error.backtrace()
     }
 
     /// Creates a safe public projection when the context matches the descriptor.
@@ -551,7 +565,7 @@ impl RuntimeError {
     /// Returns an error only if an internal descriptor/context invariant has
     /// been violated.
     pub fn public_view(&self) -> Result<PublicErrorView<'_>, rocketmq_error::ViewContextViolation> {
-        PublicErrorView::try_new(self.descriptor, &self.context)
+        self.error.public_view()
     }
 
     /// Creates a controlled diagnostic projection when the context matches the descriptor.
@@ -561,11 +575,12 @@ impl RuntimeError {
     /// Returns an error only if an internal descriptor/context invariant has
     /// been violated.
     pub fn diagnostic_view(&self) -> Result<DiagnosticView<'_>, rocketmq_error::ViewContextViolation> {
-        DiagnosticView::try_new(self.descriptor, &self.context)
+        self.error.diagnostic_view()
     }
 
     /// Creates an external configuration failure.
     #[must_use]
+    #[track_caller]
     pub fn configuration(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_CONFIGURATION_FAILED,
@@ -576,6 +591,7 @@ impl RuntimeError {
 
     /// Creates a configuration-loading failure while retaining its typed source.
     #[must_use]
+    #[track_caller]
     pub fn configuration_failure(operation: RuntimeOperation, source: impl Error + Send + Sync + 'static) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_CONFIGURATION_FAILED,
@@ -587,6 +603,7 @@ impl RuntimeError {
 
     /// Creates a runtime-build failure while retaining the build source.
     #[must_use]
+    #[track_caller]
     pub fn build(operation: RuntimeOperation, source: std::io::Error) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_BUILD_FAILED,
@@ -598,6 +615,7 @@ impl RuntimeError {
 
     /// Creates an I/O failure while retaining the I/O source.
     #[must_use]
+    #[track_caller]
     pub fn io(operation: RuntimeOperation, source: std::io::Error) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_IO_FAILED,
@@ -609,6 +627,7 @@ impl RuntimeError {
 
     /// Creates a runtime-context-unavailable failure.
     #[must_use]
+    #[track_caller]
     pub fn context_unavailable(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_CONTEXT_UNAVAILABLE,
@@ -619,6 +638,7 @@ impl RuntimeError {
 
     /// Creates an operational capacity-exhausted failure.
     #[must_use]
+    #[track_caller]
     pub fn capacity(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_CAPACITY_EXHAUSTED,
@@ -629,6 +649,7 @@ impl RuntimeError {
 
     /// Creates an operation timeout failure.
     #[must_use]
+    #[track_caller]
     pub fn timed_out(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_OPERATION_TIMED_OUT,
@@ -639,6 +660,7 @@ impl RuntimeError {
 
     /// Creates an unsupported-operation failure.
     #[must_use]
+    #[track_caller]
     pub fn unsupported(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_OPERATION_UNSUPPORTED,
@@ -649,6 +671,7 @@ impl RuntimeError {
 
     /// Creates a task join failure while retaining the join source.
     #[must_use]
+    #[track_caller]
     pub fn join(operation: RuntimeOperation, source: tokio::task::JoinError) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_TASK_JOIN_FAILED,
@@ -660,6 +683,7 @@ impl RuntimeError {
 
     /// Creates an internal runtime failure while retaining a typed source.
     #[must_use]
+    #[track_caller]
     pub fn internal(operation: RuntimeOperation, source: impl Error + Send + Sync + 'static) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_INTERNAL_FAILURE,
@@ -671,6 +695,7 @@ impl RuntimeError {
 
     /// Creates a source-free internal runtime failure.
     #[must_use]
+    #[track_caller]
     pub fn internal_failure(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_INTERNAL_FAILURE,
@@ -694,7 +719,7 @@ fn runtime_context(operation: RuntimeOperation, source_present: bool) -> ErrorCo
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code(), self.descriptor.public_message())
+        fmt::Display::fmt(self.error.as_ref(), formatter)
     }
 }
 
@@ -706,18 +731,19 @@ impl fmt::Debug for RuntimeError {
             .field("condition", &self.condition())
             .field("operation", &self.operation)
             .field("component", &self.component)
-            .field("has_source", &self.source.is_some())
+            .field("has_source", &self.error.source().is_some())
             .finish()
     }
 }
 
 impl Error for RuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.as_deref().map(|source| source as &(dyn Error + 'static))
+        self.error.source()
     }
 }
 
 impl From<std::io::Error> for RuntimeError {
+    #[track_caller]
     fn from(source: std::io::Error) -> Self {
         Self::io(RuntimeOperation::ReadFile, source)
     }
@@ -751,6 +777,31 @@ mod tests {
         assert!(!format!("{error:?}").contains(SENTINEL));
         assert!(error.public_view().is_ok());
         assert!(error.diagnostic_view().is_ok());
+    }
+
+    #[test]
+    fn runtime_clone_shares_source_location_and_backtrace() {
+        let caller_line = line!() + 1;
+        let error = RuntimeError::internal(RuntimeOperation::PersistRuntimeMetadata, io::Error::other("typed leaf"));
+        let cloned = error.clone();
+
+        assert!(Arc::ptr_eq(&error.error, &cloned.error));
+        assert!(std::ptr::eq(
+            error.source().expect("runtime source"),
+            cloned.source().expect("cloned runtime source")
+        ));
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .is_some());
+        assert_eq!(error.location().file(), file!());
+        assert_eq!(error.location().line(), caller_line);
+
+        match (error.backtrace(), cloned.backtrace()) {
+            (Some(left), Some(right)) => assert!(std::ptr::eq(left, right)),
+            (None, None) => {}
+            _ => panic!("a clone must share the canonical backtrace state"),
+        }
     }
 
     #[test]

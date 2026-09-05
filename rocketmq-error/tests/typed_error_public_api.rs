@@ -16,6 +16,7 @@
 fn error_crate_public_api_exposes_only_typed_error_surface() {
     let source = include_str!("../src/lib.rs");
     let context_source = include_str!("../src/context.rs");
+    let core_source = include_str!("../src/error.rs");
     let removed_symbols = [
         concat!("Legacy", "RocketMQResult"),
         concat!("pub enum Rocket", "mqError"),
@@ -53,6 +54,7 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
         "controller_error",
         "descriptor",
         "domain",
+        "error",
         "field",
         "filter_error",
         "kind",
@@ -93,4 +95,23 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
         .expect("diagnostic view");
     assert_eq!(public.code(), descriptor.code());
     assert_eq!(diagnostic.projection(), projection);
+
+    let error = rocketmq_error::Error::new(&rocketmq_error::CORE_INTERNAL_FAILURE);
+    let result: rocketmq_error::Result<()> = Err(error);
+    let shared: rocketmq_error::SharedError = match result {
+        Ok(()) => panic!("expected canonical error"),
+        Err(error) => std::sync::Arc::new(error),
+    };
+    assert_eq!(shared.class(), rocketmq_error::ErrorClass::INTERNAL);
+    assert_eq!(shared.component(), rocketmq_error::ComponentId::CORE);
+    assert_eq!(shared.fault(), rocketmq_error::FaultAttribution::Unknown);
+    assert_eq!(shared.exposure(), rocketmq_error::Exposure::Generic);
+    assert_eq!(shared.backtrace_policy(), rocketmq_error::BacktracePolicy::OnDemand);
+
+    assert!(core_source.contains("pub struct Error {"));
+    assert!(core_source.contains("inner: Box<ErrorInner>"));
+    assert!(core_source.contains("struct ErrorInner {"));
+    assert!(core_source.contains("pub type SharedError = Arc<Error>;"));
+    assert!(!core_source.contains("impl Clone for Error"));
+    assert!(!core_source.contains("operation:"));
 }

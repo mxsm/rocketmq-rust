@@ -16,12 +16,17 @@ use std::collections::HashSet;
 
 use rocketmq_error::descriptor_by_code;
 use rocketmq_error::fields;
+use rocketmq_error::BacktracePolicy;
 use rocketmq_error::CanonicalCondition;
 use rocketmq_error::CliExitCode;
+use rocketmq_error::ComponentId;
 use rocketmq_error::ContextVisibility;
+use rocketmq_error::ErrorClass;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::ErrorSeverity;
+use rocketmq_error::Exposure;
+use rocketmq_error::FaultAttribution;
 use rocketmq_error::FieldValueKind;
 use rocketmq_error::GrpcPayloadCode;
 use rocketmq_error::GrpcStatusCode;
@@ -69,10 +74,15 @@ use rocketmq_error::TRANSPORT_START_FAILED;
 struct ExpectedDescriptor {
     descriptor: ErrorDescriptor,
     code: &'static str,
+    class: ErrorClass,
     condition: CanonicalCondition,
+    fault: FaultAttribution,
+    component: ComponentId,
     public_message: &'static str,
     severity: ErrorSeverity,
     recovery_hint: RecoveryHint,
+    backtrace: BacktracePolicy,
+    exposure: Exposure,
     remoting: RemotingResponseCode,
     grpc_payload: GrpcPayloadCode,
     grpc_status: GrpcStatusCode,
@@ -84,10 +94,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: PROTOCOL_HEADER_INVALID,
         code: "protocol.header.invalid",
+        class: ErrorClass::VALIDATION,
         condition: CanonicalCondition::InvalidArgument,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::PROTOCOL,
         public_message: "Request header is invalid",
         severity: ErrorSeverity::Info,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::InvalidParameter,
         grpc_payload: GrpcPayloadCode::BadRequest,
         grpc_status: GrpcStatusCode::InvalidArgument,
@@ -97,10 +112,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: ROUTE_TOPIC_NOT_FOUND,
         code: "route.topic.not_found",
+        class: ErrorClass::ROUTING,
         condition: CanonicalCondition::NotFound,
+        fault: FaultAttribution::RemotePeer,
+        component: ComponentId::ROUTE,
         public_message: "Topic route was not found",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::RefreshRoute,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::TopicNotExist,
         grpc_payload: GrpcPayloadCode::TopicNotFound,
         grpc_status: GrpcStatusCode::NotFound,
@@ -110,10 +130,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: AUTH_CREDENTIALS_INVALID,
         code: "auth.credentials.invalid",
+        class: ErrorClass::AUTHENTICATION,
         condition: CanonicalCondition::Unauthenticated,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::AUTH,
         public_message: "Authentication credentials are invalid",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::RefreshCredentials,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::NoPermission,
         grpc_payload: GrpcPayloadCode::Unauthorized,
         grpc_status: GrpcStatusCode::Unauthenticated,
@@ -123,10 +148,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: AUTH_PERMISSION_DENIED,
         code: "auth.permission.denied",
+        class: ErrorClass::AUTHORIZATION,
         condition: CanonicalCondition::PermissionDenied,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::AUTH,
         public_message: "Permission was denied",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::NoPermission,
         grpc_payload: GrpcPayloadCode::Forbidden,
         grpc_status: GrpcStatusCode::PermissionDenied,
@@ -136,10 +166,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: TRANSPORT_ADMISSION_QUEUE_SATURATED,
         code: "transport.admission.queue_saturated",
+        class: ErrorClass::CAPACITY,
         condition: CanonicalCondition::ResourceExhausted,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport admission queue is saturated",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::SystemBusy,
         grpc_payload: GrpcPayloadCode::TooManyRequests,
         grpc_status: GrpcStatusCode::ResourceExhausted,
@@ -149,10 +184,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: CONTROLLER_LEADERSHIP_NOT_LEADER,
         code: "controller.leadership.not_leader",
+        class: ErrorClass::ROUTING,
         condition: CanonicalCondition::FailedPrecondition,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::CONTROLLER,
         public_message: "Controller is not the leader",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::RefreshLeader,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::ControllerNotLeader,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::FailedPrecondition,
@@ -162,10 +202,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: TRANSPORT_CONNECTION_TIMEOUT,
         code: "transport.connection.timeout",
+        class: ErrorClass::TIMEOUT,
         condition: CanonicalCondition::DeadlineExceeded,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport connection timed out",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::SystemBusy,
         grpc_payload: GrpcPayloadCode::RequestTimeout,
         grpc_status: GrpcStatusCode::DeadlineExceeded,
@@ -175,10 +220,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: TRANSPORT_REQUEST_TIMEOUT,
         code: "transport.request.timeout",
+        class: ErrorClass::TIMEOUT,
         condition: CanonicalCondition::DeadlineExceeded,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport request timed out",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemBusy,
         grpc_payload: GrpcPayloadCode::RequestTimeout,
         grpc_status: GrpcStatusCode::DeadlineExceeded,
@@ -188,10 +238,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: TRANSPORT_START_FAILED,
         code: "transport.start.failed",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::Unknown,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport server could not be started",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Unavailable,
@@ -201,10 +256,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: TRANSPORT_DISPATCH_FAILED,
         code: "transport.dispatch.failed",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport request dispatch failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -214,10 +274,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: TRANSPORT_RESPONSE_FAILED,
         code: "transport.response.failed",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport response delivery failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -227,10 +292,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: TRANSPORT_SESSION_FAILED,
         code: "transport.session.failed",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::TRANSPORT,
         public_message: "Transport session operation failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Unavailable,
@@ -240,10 +310,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_LIFECYCLE_NOT_STARTED,
         code: "storage.lifecycle.not_started",
+        class: ErrorClass::VALIDATION,
         condition: CanonicalCondition::FailedPrecondition,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::STORAGE,
         public_message: "Storage service is not started",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::FailedPrecondition,
@@ -253,10 +328,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_BACKEND_UNAVAILABLE,
         code: "storage.backend.unavailable",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::STORAGE,
         public_message: "Storage backend is unavailable",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Unavailable,
@@ -266,10 +346,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_REQUEST_INVALID,
         code: "storage.request.invalid",
+        class: ErrorClass::VALIDATION,
         condition: CanonicalCondition::InvalidArgument,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::STORAGE,
         public_message: "Storage request is invalid",
         severity: ErrorSeverity::Info,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::InvalidParameter,
         grpc_payload: GrpcPayloadCode::BadRequest,
         grpc_status: GrpcStatusCode::InvalidArgument,
@@ -279,10 +364,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_MAPPED_FILE_NOT_FOUND,
         code: "storage.mapped_file.not_found",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::NotFound,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Mapped file was not found",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::QueryNotFound,
         grpc_payload: GrpcPayloadCode::NotFound,
         grpc_status: GrpcStatusCode::NotFound,
@@ -292,10 +382,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_CAPACITY_EXHAUSTED,
         code: "storage.capacity.exhausted",
+        class: ErrorClass::CAPACITY,
         condition: CanonicalCondition::ResourceExhausted,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage capacity is exhausted",
         severity: ErrorSeverity::Critical,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::ResourceExhausted,
@@ -305,10 +400,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_READ_FAILED,
         code: "storage.read.failed",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage read failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -318,10 +418,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_WRITE_FAILED,
         code: "storage.write.failed",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage write failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -331,10 +436,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_IO_FAILED,
         code: "storage.io.failed",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage I/O operation failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -344,10 +454,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_STATE_CORRUPTED,
         code: "storage.state.corrupted",
+        class: ErrorClass::DATA_CORRUPTION,
         condition: CanonicalCondition::DataLoss,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage state is corrupted",
         severity: ErrorSeverity::Critical,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::DataLoss,
@@ -357,10 +472,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_OPERATION_TIMED_OUT,
         code: "storage.operation.timed_out",
+        class: ErrorClass::TIMEOUT,
         condition: CanonicalCondition::DeadlineExceeded,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::STORAGE,
         public_message: "Storage operation timed out",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemBusy,
         grpc_payload: GrpcPayloadCode::RequestTimeout,
         grpc_status: GrpcStatusCode::DeadlineExceeded,
@@ -370,10 +490,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_OPERATION_UNSUPPORTED,
         code: "storage.operation.unsupported",
+        class: ErrorClass::UNSUPPORTED,
         condition: CanonicalCondition::Unimplemented,
+        fault: FaultAttribution::Configuration,
+        component: ComponentId::STORAGE,
         public_message: "Storage operation is unsupported",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::RequestCodeNotSupported,
         grpc_payload: GrpcPayloadCode::Unsupported,
         grpc_status: GrpcStatusCode::Unimplemented,
@@ -383,10 +508,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: STORAGE_INTERNAL_FAILURE,
         code: "storage.internal.failure",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Unknown,
+        component: ComponentId::STORAGE,
         public_message: "Internal storage failure",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -396,10 +526,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: PROTOCOL_VERSION_UNSUPPORTED,
         code: "protocol.version.unsupported",
+        class: ErrorClass::UNSUPPORTED,
         condition: CanonicalCondition::Unimplemented,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::PROTOCOL,
         public_message: "Protocol version is unsupported",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::RequestCodeNotSupported,
         grpc_payload: GrpcPayloadCode::Unsupported,
         grpc_status: GrpcStatusCode::Unimplemented,
@@ -409,10 +544,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: CORE_INTERNAL_FAILURE,
         code: "core.internal.failure",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Unknown,
+        component: ComponentId::CORE,
         public_message: "Internal error",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -422,10 +562,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: RUNTIME_CONFIGURATION_FAILED,
         code: "runtime.configuration.failed",
+        class: ErrorClass::VALIDATION,
         condition: CanonicalCondition::InvalidArgument,
+        fault: FaultAttribution::Configuration,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime configuration is invalid",
         severity: ErrorSeverity::Info,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::InvalidParameter,
         grpc_payload: GrpcPayloadCode::BadRequest,
         grpc_status: GrpcStatusCode::InvalidArgument,
@@ -435,10 +580,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: RUNTIME_BUILD_FAILED,
         code: "runtime.build.failed",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::Configuration,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime could not be started",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Unavailable,
@@ -448,10 +598,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: RUNTIME_IO_FAILED,
         code: "runtime.io.failed",
+        class: ErrorClass::IO,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime I/O operation failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -461,10 +616,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: RUNTIME_CONTEXT_UNAVAILABLE,
         code: "runtime.context.unavailable",
+        class: ErrorClass::UNAVAILABLE,
         condition: CanonicalCondition::Unavailable,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime context is unavailable",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Unavailable,
@@ -474,10 +634,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: RUNTIME_CAPACITY_EXHAUSTED,
         code: "runtime.capacity.exhausted",
+        class: ErrorClass::CAPACITY,
         condition: CanonicalCondition::ResourceExhausted,
+        fault: FaultAttribution::LocalResource,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime capacity is exhausted",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemBusy,
         grpc_payload: GrpcPayloadCode::TooManyRequests,
         grpc_status: GrpcStatusCode::ResourceExhausted,
@@ -487,10 +652,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: RUNTIME_OPERATION_TIMED_OUT,
         code: "runtime.operation.timed_out",
+        class: ErrorClass::TIMEOUT,
         condition: CanonicalCondition::DeadlineExceeded,
+        fault: FaultAttribution::Dependency,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime operation timed out",
         severity: ErrorSeverity::Warn,
         recovery_hint: RecoveryHint::Backoff,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemBusy,
         grpc_payload: GrpcPayloadCode::RequestTimeout,
         grpc_status: GrpcStatusCode::DeadlineExceeded,
@@ -500,10 +670,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: RUNTIME_OPERATION_UNSUPPORTED,
         code: "runtime.operation.unsupported",
+        class: ErrorClass::UNSUPPORTED,
         condition: CanonicalCondition::Unimplemented,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime operation is unsupported",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Public,
         remoting: RemotingResponseCode::RequestCodeNotSupported,
         grpc_payload: GrpcPayloadCode::Unsupported,
         grpc_status: GrpcStatusCode::Unimplemented,
@@ -513,10 +688,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: RUNTIME_TASK_JOIN_FAILED,
         code: "runtime.task.join_failed",
+        class: ErrorClass::BUG,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Bug,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime task failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -526,10 +706,15 @@ const EXPECTED_DESCRIPTORS: &[ExpectedDescriptor] = &[
     ExpectedDescriptor {
         descriptor: RUNTIME_INTERNAL_FAILURE,
         code: "runtime.internal.failure",
+        class: ErrorClass::INTERNAL,
         condition: CanonicalCondition::Internal,
+        fault: FaultAttribution::Unknown,
+        component: ComponentId::RUNTIME,
         public_message: "Runtime operation failed",
         severity: ErrorSeverity::Error,
         recovery_hint: RecoveryHint::OperatorAction,
+        backtrace: BacktracePolicy::OnDemand,
+        exposure: Exposure::Generic,
         remoting: RemotingResponseCode::SystemError,
         grpc_payload: GrpcPayloadCode::InternalError,
         grpc_status: GrpcStatusCode::Internal,
@@ -546,10 +731,15 @@ fn representative_descriptor_table_is_exact() {
     for (actual, expected) in ALL_DESCRIPTORS.iter().zip(EXPECTED_DESCRIPTORS) {
         assert_eq!(*actual, expected.descriptor, "{}", expected.code);
         assert_eq!(actual.code().as_str(), expected.code);
+        assert_eq!(actual.class(), expected.class, "{}", expected.code);
         assert_eq!(actual.condition(), expected.condition, "{}", expected.code);
+        assert_eq!(actual.fault(), expected.fault, "{}", expected.code);
+        assert_eq!(actual.component(), expected.component, "{}", expected.code);
         assert_eq!(actual.public_message(), expected.public_message, "{}", expected.code);
         assert_eq!(actual.severity(), expected.severity, "{}", expected.code);
         assert_eq!(actual.recovery_hint(), expected.recovery_hint, "{}", expected.code);
+        assert_eq!(actual.backtrace_policy(), expected.backtrace, "{}", expected.code);
+        assert_eq!(actual.exposure(), expected.exposure, "{}", expected.code);
 
         let projection = actual.projection();
         assert_eq!(projection.remoting().code, expected.remoting, "{}", expected.code);
@@ -557,6 +747,38 @@ fn representative_descriptor_table_is_exact() {
         assert_eq!(projection.grpc().status, expected.grpc_status, "{}", expected.code);
         assert_eq!(projection.http().status, expected.http, "{}", expected.code);
         assert_eq!(projection.cli().exit_code, expected.cli, "{}", expected.code);
+    }
+}
+
+#[test]
+fn on_demand_backtraces_are_limited_to_internal_bug_or_data_loss_descriptors() {
+    for descriptor in ALL_DESCRIPTORS {
+        if descriptor.backtrace_policy() == BacktracePolicy::OnDemand {
+            assert!(
+                matches!(descriptor.class(), ErrorClass::INTERNAL | ErrorClass::BUG)
+                    || descriptor.condition() == CanonicalCondition::DataLoss,
+                "{}",
+                descriptor.code()
+            );
+        }
+
+        if matches!(
+            descriptor.class(),
+            ErrorClass::VALIDATION
+                | ErrorClass::AUTHENTICATION
+                | ErrorClass::AUTHORIZATION
+                | ErrorClass::CAPACITY
+                | ErrorClass::TIMEOUT
+                | ErrorClass::UNAVAILABLE
+                | ErrorClass::UNSUPPORTED
+        ) {
+            assert_eq!(
+                descriptor.backtrace_policy(),
+                BacktracePolicy::Never,
+                "{}",
+                descriptor.code()
+            );
+        }
     }
 }
 
@@ -774,6 +996,7 @@ fn every_storage_descriptor_has_the_exact_allowed_fields() {
 #[test]
 fn descriptor_construction_and_catalog_macro_remain_private() {
     let descriptor_source = include_str!("../src/descriptor.rs");
+    let policy_source = include_str!("../src/policy.rs");
     let projection_source = include_str!("../src/projection.rs");
     let catalog_source = include_str!("../src/catalog.rs");
     let crate_root = include_str!("../src/lib.rs");
@@ -781,8 +1004,27 @@ fn descriptor_construction_and_catalog_macro_remain_private() {
     assert!(descriptor_source.contains("pub(crate) const fn try_new("));
     assert!(projection_source.contains("pub(crate) const fn new("));
     assert!(!descriptor_source.contains("pub code: ErrorCode"));
+    assert!(!descriptor_source.contains("pub class: ErrorClass"));
+    assert!(!descriptor_source.contains("pub fault: FaultAttribution"));
+    assert!(!descriptor_source.contains("pub component: ComponentId"));
+    assert!(!descriptor_source.contains("pub exposure: Exposure"));
+    assert!(!descriptor_source.contains("pub backtrace: BacktracePolicy"));
+    assert!(descriptor_source.contains("pub enum ErrorSeverity"));
+    assert!(!policy_source.contains("pub enum ErrorSeverity"));
     assert!(!projection_source.contains("pub remoting: RemotingSpec"));
     assert!(catalog_source.contains("macro_rules! define_error_catalog"));
+    for required in [
+        "class: $class:path",
+        "fault: $fault:path",
+        "component: $component:path",
+        "backtrace: $backtrace:path",
+        "exposure: $exposure:path",
+    ] {
+        assert!(
+            catalog_source.contains(required),
+            "missing required macro field {required}"
+        );
+    }
     assert!(!catalog_source.contains("#[macro_export]"));
     assert!(!crate_root.contains("pub mod catalog;"));
     assert!(!crate_root.contains("pub mod descriptor;"));

@@ -2,7 +2,7 @@
 title: "Error Architecture Inventory"
 permalink: /docs/error-inventory/
 excerpt: "Current RocketMQ Rust error ownership and migration inventory."
-last_modified_at: 2026-08-31T00:00:00+08:00
+last_modified_at: 2026-09-05T00:00:00+08:00
 toc: true
 classes: wide
 ---
@@ -29,9 +29,16 @@ arbitrary, and source `Display` output remains observable; neither is stable
 semantic data.
 
 The target vocabulary is the exact five-layer model in the [Error Architecture
-Redesign ADR](07-error-architecture-adr.md). The itemized classifications below
-remain pending implementation; the presence of a target schema or migration wave
-does not assert that any implementation row is complete.
+Redesign ADR](07-error-architecture-adr.md). The tables remain a pinned baseline;
+individual rows may be advanced only by their recorded implementation issue.
+
+Live implementation note: issue #10049 closes the canonical carrier portion of
+the target. `rocketmq-error` now exposes a one-pointer, non-`Clone` `Error`,
+`Result<T>`, and `SharedError = Arc<Error>` backed by a private `ErrorInner` and
+an exact 35-entry catalog. `StoreError` owns the canonical value, while
+`RuntimeError` and `TransportError` clone one shared canonical value and
+delegate `source()` directly to the original typed leaf. This note does not
+advance the legacy 73-spec, remaining domain, retry, or boundary rows.
 
 ## Counting scope and methodology
 
@@ -111,7 +118,7 @@ is changed.
 | ContractViolation | Caller, protocol, and invariant violations distinct from operational failures | Not yet uniformly separated |
 | Private leaf `Error` | Domain implementation errors retain typed sources behind private representation | Current domain errors vary; public mega-enum remains central |
 | Domain operational facade | Narrow domain facade hides private leaves while retaining source and policy information | Opaque `StoreError` exists; other domains vary |
-| Opaque canonical `Error` with safe projections | One canonical value with private representation projected through `PublicErrorView` and `DiagnosticView` | Target migration from public mega-enum is pending |
+| Opaque canonical `Error` with safe projections | One canonical value with private representation projected through `PublicErrorView` and `DiagnosticView` | Core carrier and Store/Runtime/Transport facade ownership implemented by issue #10049; public mega-enum migration remains pending |
 
 `ErrorCatalog`, boundary adapters, and presentation/observability are supporting
 mechanisms for these five layers, not extra layers. The declarative catalog is
@@ -122,11 +129,12 @@ message, severity, `RecoveryHint`, and projection metadata.
 
 Every catalog entry must declaratively own:
 
-- one stable dotted code;
-- one `CanonicalCondition`;
-- one fixed public message;
-- severity and `RecoveryHint`; and
-- projection metadata for remoting, gRPC, HTTP, CLI, and observability.
+- one stable dotted code and class;
+- one `CanonicalCondition`, fault attribution, and component owner;
+- one fixed public message, severity, and `RecoveryHint`;
+- backtrace and public-exposure policy;
+- projection metadata for remoting, gRPC, HTTP, CLI, and observability; and
+- an ordered typed-field schema.
 
 Catalog codes use lowercase dotted stable domain semantics, for example
 `storage.commit_log.corrupt_record`. A code must never contain a dynamic topic,
@@ -143,10 +151,11 @@ Context visibility is explicit:
   its value.
 
 `PublicErrorView` contains catalog-approved identity, fixed public message,
-safe public context, and boundary-safe projection fields. `DiagnosticView` may
-add redacted diagnostic context and typed source information according to
-visibility policy. Free-form remarks and source `Display` text are not fields
-that define either view.
+safe public context, and boundary-safe projection fields; Generic exposure
+suppresses dynamic public fields. `DiagnosticView` adds only declared bounded
+diagnostic values and value-free redaction markers. It never exposes the
+source, caller location, or backtrace. Free-form remarks and source `Display`
+text are not fields that define either view.
 
 `RetryDecision` is separate from catalog identity and error rendering. It uses
 operation idempotency, operation stage, and remaining budget together with the
@@ -301,7 +310,7 @@ gate.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `rocketmq_store_api::checkpoint_artifact::CheckpointArtifactError` | `rocketmq-store-api` — [rocketmq-store-api/src/checkpoint_artifact.rs:42](../../rocketmq-store-api/src/checkpoint_artifact.rs#L42) | removed public baseline declaration | rocketmq-store, rocketmq-store-local, rocketmq-store-rocksdb migrated together | PrivateLeaf | `StoreContractViolation::CheckpointArtifact*` plus private `CheckpointArtifactIoError` behind `StoreError` | N/A | yes — filesystem failures retain operation, path, and `io::Error`; six deterministic cases retain their typed evidence in the canonical contract | Storage / rocketmq-store-api | 2 (Storage vertical) | implemented by issue #9935 |
 | `rocketmq_store_api::checkpoint::CheckpointValidationError` | `rocketmq-store-api` — [rocketmq-store-api/src/checkpoint.rs:288](../../rocketmq-store-api/src/checkpoint.rs#L288) | removed public baseline declaration | rocketmq-store-local, rocketmq-store-rocksdb migrated together | Contract | `StoreContractViolation::Checkpoint*` | N/A | N/A — retains checkpoint semantic values and identifiers; no causal source exists | Storage / rocketmq-store-api | 2 (Storage vertical) | implemented by issue #9935 |
-| `rocketmq_store_api::error::StoreError` | `rocketmq-store-api` — [rocketmq-store-api/src/error.rs:193](../../rocketmq-store-api/src/error.rs#L193) | pub; Rustdoc/API reachability checked | rocketmq-broker, rocketmq-store, rocketmq-store-rocksdb | Facade | `sole storage StoreError facade with stable catalog metadata and boxed typed source/context` | existing | yes — the existing boxed source chain is the canonical cross-backend preservation point | Storage / rocketmq-store-api | 2 (Storage vertical) | pending implementation |
+| `rocketmq_store_api::error::StoreError` | `rocketmq-store-api` — [rocketmq-store-api/src/error.rs:193](../../rocketmq-store-api/src/error.rs#L193) | pub; Rustdoc/API reachability checked | rocketmq-broker, rocketmq-store, rocketmq-store-rocksdb | Facade | `sole storage StoreError facade owning one opaque canonical Error plus closed operation/component metadata` | existing | yes — boxed and concrete typed causes remain direct canonical source leaves | Storage / rocketmq-store-api | 2 (Storage vertical) | implemented by issues #9940 and #10049 |
 | `rocketmq_store_api::ha_contract::HaContractError` | `rocketmq-store-api` — [rocketmq-store-api/src/ha_contract.rs:444](../../rocketmq-store-api/src/ha_contract.rs#L444) | removed public baseline declaration | rocketmq-controller migrated together | Contract | `StoreContractViolation::Ha*` | N/A | N/A — retains epoch, broker ID, replica/ACK policy, offset, and lease-generation evidence; no term or source is stored | Storage / rocketmq-store-api | 2 (Storage vertical) | implemented by issue #9935 |
 | `rocketmq_store_api::AppendReceiptError` | `rocketmq-store-api` — [rocketmq-store-api/src/lib.rs:185](../../rocketmq-store-api/src/lib.rs#L185) | removed public baseline declaration | rocketmq-store migrated together | Contract | `StoreContractViolation::AppendReceipt*` | N/A | N/A — retains receipt invariant values; no nested source exists | Storage / rocketmq-store-api | 2 (Storage vertical) | implemented by issue #9935 |
 | `rocketmq_store_api::progress::DerivedRecordIdError` | `rocketmq-store-api` — [rocketmq-store-api/src/progress.rs:124](../../rocketmq-store-api/src/progress.rs#L124) | removed public baseline declaration | rocketmq-store-local and rocketmq-tieredstore migrated together | Contract | `StoreContractViolation::DerivedRecord*` | N/A | N/A — retains epoch, offset, and record-length evidence | Storage / rocketmq-store-api | 2 (Storage vertical) | implemented by issue #9935 |
@@ -440,7 +449,7 @@ gate.
 | Type | Crate/Path | Visibility | Current Consumers | Category | Target Type | Catalog Code | Source Preserved | Owner | Wave | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `rocketmq_runtime::common::parse_config_file::RedactedConfigError` | `rocketmq-runtime` — `rocketmq-runtime/src/common/parse_config_file.rs` | removed | rocketmq-broker migrated | Delete | `render_safe_config_error` | N/A | yes — `config::ConfigError` remains typed and the public rendering boundary is redacted | Runtime, transport, and foundations / rocketmq-runtime | 3 (Runtime/Protocol/Transport) | implemented by issue #10013 |
-| `rocketmq_runtime::error::RuntimeError` | `rocketmq-runtime` — [rocketmq-runtime/src/error.rs:26](../../rocketmq-runtime/src/error.rs#L26) | pub; Rustdoc/API reachability checked | rocketmq-auth, rocketmq-broker, rocketmq-controller, rocketmq-dashboard-web-backend, rocketmq-proxy, rocketmq-store, rocketmq-store-local, rocketmq-transport | Facade | `catalog-backed opaque RuntimeError` | `runtime.*` | yes — operational I/O and join sources remain typed behind a closed operation and bounded component context; deterministic configuration and lifecycle states use contracts or outcomes | Runtime, transport, and foundations / rocketmq-runtime | 3 (Runtime/Protocol/Transport) | implemented by issue #10013 |
+| `rocketmq_runtime::error::RuntimeError` | `rocketmq-runtime` — [rocketmq-runtime/src/error.rs:26](../../rocketmq-runtime/src/error.rs#L26) | pub; Rustdoc/API reachability checked | rocketmq-auth, rocketmq-broker, rocketmq-controller, rocketmq-dashboard-web-backend, rocketmq-proxy, rocketmq-store, rocketmq-store-local, rocketmq-transport | Facade | `catalog-backed opaque RuntimeError sharing one canonical Error` | `runtime.*` | yes — operational I/O and join sources remain direct typed leaves; clones preserve canonical source, location, backtrace, operation, and bounded component context | Runtime, transport, and foundations / rocketmq-runtime | 3 (Runtime/Protocol/Transport) | implemented by issues #10013 and #10049 |
 | `rocketmq_runtime::metadata_io::MetadataIoError` | `rocketmq-runtime` — `rocketmq-runtime/src/metadata_io.rs` | removed | rocketmq-auth, rocketmq-broker, rocketmq-dashboard-web-backend, rocketmq-namesrv migrated | Facade | `catalog-backed opaque RuntimeError` | `runtime.*` | yes — I/O and worker sources stay typed; operation, component, condition, and recovery remain catalog-derived | Runtime, transport, and foundations / rocketmq-runtime | 3 (Runtime/Protocol/Transport) | implemented by issue #10013 |
 | `rocketmq_runtime::resource_budget::budget::BudgetAcquireError` | `rocketmq-runtime` — `rocketmq-runtime/src/resource_budget/budget.rs` | removed | rocketmq-client-rust, rocketmq-store-local, rocketmq-transport migrated | Outcome | `BudgetRejection` | N/A | N/A — budget path, exhausted ancestor, dimension, and full policy are source-free rejection data | Runtime, transport, and foundations / rocketmq-runtime | 3 (Runtime/Protocol/Transport) | implemented by issue #10013 |
 | `rocketmq_runtime::resource_budget::budget::PermitRebindError` | `rocketmq-runtime` — `rocketmq-runtime/src/resource_budget/budget.rs` | removed | same crate migrated | Outcome | `Result<PermitRebindOutcome, RuntimeContractViolation>` | N/A | N/A — contract invariants and `BudgetRejection` are explicit non-error outcomes | Runtime, transport, and foundations / rocketmq-runtime | 3 (Runtime/Protocol/Transport) | implemented by issue #10013 |
@@ -795,7 +804,7 @@ This table is separate from the 301 `Error` rows. `Keep public` is intentionally
 | `rocketmq_broker::long_polling::pull_deferred::service::PullDeferredRegisterErrorKind` | `rocketmq_broker::long_polling::pull_deferred::service::PullDeferredRegisterError` | pub(crate); not externally reachable | same crate only | Delete | Service and boundary crates / rocketmq-broker | 4 (Service/boundary) | pending implementation | [rocketmq-broker/src/long_polling/pull_deferred/service.rs:1264](../../rocketmq-broker/src/long_polling/pull_deferred/service.rs#L1264); kind() is asserted in acceptance tests; outcome retains prepared registration, responder source, request ID, and failure kind |
 | `rocketmq_client_rust::nameserver_discovery::dns::DnsErrorKind` | `rocketmq_client_rust::nameserver_discovery::dns::DnsResolutionError` | pub(crate); not externally reachable | same crate only | Make private | Service and boundary crates / rocketmq-client-rust | 4 (Service/boundary) | pending implementation | [rocketmq-client/src/nameserver_discovery/dns.rs:44](../../rocketmq-client/src/nameserver_discovery/dns.rs#L44); DnsResolutionError::kind() feeds same-crate retry/category logic and tests; no cross-crate use exists |
 | `rocketmq_proxy_core::error::ProxyErrorKind` | `rocketmq_proxy_core::error::ProxyError` | pub; Rustdoc/API reachability checked | same crate only | Delete | Service and boundary crates / rocketmq-proxy-core | 4 (Service/boundary) | pending implementation | [rocketmq-proxy-core/src/error.rs:21](../../rocketmq-proxy-core/src/error.rs#L21); ProxyError::local_kind() maps every variant and status.rs exhaustively maps Kind to gRPC; catalog projection replaces this second taxonomy |
-| `rocketmq_store_api::error::StoreErrorKind` | `rocketmq_store_api::error::StoreError` | pub; Rustdoc/API reachability checked | rocketmq-broker, rocketmq-store | Delete | Storage / rocketmq-store-api | 2 (Storage vertical) | pending implementation | [rocketmq-store-api/src/error.rs:73](../../rocketmq-store-api/src/error.rs#L73); StoreError::kind() is used by rocketmq-store and broker; keep a compatibility mapping to existing catalog metadata while consumers cut over |
+| `rocketmq_store_api::error::StoreErrorKind` | `rocketmq_store_api::error::StoreError` | removed | none | Delete | Storage / rocketmq-store-api | 2 (Storage vertical) | implemented by issue #9940 | StoreError now uses the descriptor as its sole stable identity; no compatibility Kind remains |
 | `rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionErrorKind` | `rocketmq_store_local::commit_log::append::sequencer::AppendAdmissionError` | pub; Rustdoc/API reachability checked | rocketmq-store | Delete | Storage / rocketmq-store-local | 2 (Storage vertical) | implemented by issue #9957 | [rocketmq-store-local/src/commit_log/append/sequencer.rs:247](../../rocketmq-store-local/src/commit_log/append/sequencer.rs#L247); AppendAdmissionError::kind() exposes Saturated/Closed; rocketmq-store exhaustively maps both to PutMessageStatus, so inline them in the outcome |
 | `rocketmq_store_local::commit_log::record_parser::CommitLogRecordErrorKind` | `rocketmq_store_local::commit_log::record_parser::CommitLogRecordError` | pub; Rustdoc/API reachability checked | rocketmq-store | Delete | Storage / rocketmq-store-local | 2 (Storage vertical) | implemented by issue #9957 | [rocketmq-store-local/src/commit_log/record_parser.rs:99](../../rocketmq-store-local/src/commit_log/record_parser.rs#L99); CommitLogRecordError stores kind; the parser constructs it and rocketmq-store imports/matches it, so inline variants in the contract |
 | `rocketmq_store_local::mapped_file::retirement::activation::ManagedLifecycleActivationErrorKind` | `rocketmq_store_local::mapped_file::retirement::activation::ManagedLifecycleActivationError` | pub; Rustdoc/API reachability checked | rocketmq-store | Delete | Storage / rocketmq-store-local | 2 (Storage vertical) | implemented by issue #9957 | [rocketmq-store-local/src/mapped_file/retirement/activation.rs:43](../../rocketmq-store-local/src/mapped_file/retirement/activation.rs#L43); ManagedLifecycleActivationError::kind() is exhaustively mapped by rocketmq-store managed_recovery; retain the private Error source while deleting this parallel kind |

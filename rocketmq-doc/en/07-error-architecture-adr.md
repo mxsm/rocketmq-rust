@@ -2,7 +2,7 @@
 title: "Error Architecture Redesign ADR"
 permalink: /docs/error-architecture-adr/
 excerpt: "Accepted direction for the RocketMQ Rust error architecture redesign."
-last_modified_at: 2026-08-31T00:00:00+08:00
+last_modified_at: 2026-09-05T00:00:00+08:00
 toc: true
 classes: wide
 ---
@@ -11,10 +11,12 @@ classes: wide
 
 ## Status
 
-Accepted. This decision supersedes the previously accepted transitional
-public `RocketMQError` enum/`ErrorKind`/`ErrorSpec` architecture. The target
-implementation remains pending; this document must not be read as evidence
-that every target type or classification already exists.
+Accepted and partially implemented. The opaque canonical core, its complete
+descriptor policy, and the Store, Runtime, and Transport facade ownership are
+effective. The public `RocketMQError` enum, `ErrorKind`, and `ErrorSpec`
+migration, remaining domain cutovers, retry decisions, and boundary adapters
+are still pending; this document is not evidence that those later stages are
+complete.
 
 ## Context and current state
 
@@ -36,9 +38,13 @@ The baseline has no `RocketmqError` or `Legacy*` aliases, no public
 `StoreError::General`. `AdminErrorCode::RocketMqError` in dashboard code is a
 dashboard response-code name, not evidence of a legacy `rocketmq-error` type.
 
-This distinction matters: the current mega-enum and existing support types are
-effective repository APIs today, while the opaque canonical contract below is
-the migration target.
+Since that pinned baseline, `rocketmq-error` has added a one-pointer,
+non-`Clone` canonical `Error`, `Result<T>`, `SharedError = Arc<Error>`, typed
+context and safe views, and an exact 35-entry declarative catalog. `StoreError`
+owns one canonical `Error`; cloneable `RuntimeError` and `TransportError`
+facades share one canonical value. Their `source()` implementations delegate
+directly to the original typed leaf. The legacy mega-enum and its 73-spec
+migration remain separate follow-up work.
 
 ## Decision
 
@@ -71,18 +77,20 @@ target implementation is effective in each consumer.
    a public mega-enum to classify failures.
 
 The declarative `ErrorCatalog` is a supporting mechanism and the sole owner of
-stable dotted codes, `CanonicalCondition`, fixed public messages, severity,
-`RecoveryHint`, and projection metadata. Boundary adapters project catalog
-metadata into remoting, gRPC, HTTP, CLI, and other local primitives.
+stable dotted codes, class, `CanonicalCondition`, fault attribution, component,
+fixed public messages, severity, `RecoveryHint`, backtrace policy, exposure,
+and projection metadata. Boundary adapters project catalog metadata into
+remoting, gRPC, HTTP, CLI, and other local primitives.
 Presentation and observability render the approved views with redaction; they
 do not create a second semantic catalog.
 
 ### Canonical metadata and views
 
-Each catalog entry owns a stable dotted code and its
-`CanonicalCondition`, fixed public message, severity, `RecoveryHint`, and
-projection metadata. A free-form remark or a source display string is not an
-entry key, policy, or compatibility value.
+Each catalog entry owns a stable dotted code and its class,
+`CanonicalCondition`, fault attribution, component, fixed public message,
+severity, `RecoveryHint`, backtrace policy, exposure, projection, and ordered
+field schema. A free-form remark or a source display string is not an entry
+key, policy, or compatibility value.
 
 Catalog codes use lowercase dotted stable domain semantics, for example
 `storage.commit_log.corrupt_record`. A code must never contain a dynamic topic,
@@ -99,10 +107,11 @@ Context has an explicit visibility class:
   never the value itself.
 
 `PublicErrorView` contains only catalog-approved identity, fixed public message,
-safe public context, and boundary-safe projection fields. `DiagnosticView` may
-add redacted diagnostic context and typed source information subject to its
-visibility policy. Neither view treats arbitrary remarks or source
-stringification as stable input.
+safe public context, and boundary-safe projection fields. A descriptor with
+`Exposure::Generic` exposes no dynamic public context. `DiagnosticView` adds
+only descriptor-declared, bounded diagnostic values and value-free redaction
+markers; it never renders or exposes the source, caller location, or backtrace.
+Typed causes remain available through `std::error::Error::source()`.
 
 `RetryDecision` is a separate decision, not a catalog field copied into an
 error. It considers operation idempotency, operation stage, and remaining
@@ -130,16 +139,16 @@ The migration freezes three accidental contracts now:
 
 | Concern | Effective current repository | Target after migration |
 | --- | --- | --- |
-| Public error value | Large public `RocketMQError` enum | Opaque canonical `Error` with safe projections |
+| Public error value | Opaque canonical `Error` is available; the large public `RocketMQError` enum remains during its pending migration | Opaque canonical `Error` with safe projections and no public mega-enum |
 | Outcome/control flow | Existing APIs mix error and operation-specific outcomes | `Outcome`/`Decision`/`Rejection` are explicit public control-flow concepts |
 | Contract failures | Not uniformly separated from operational errors | `ContractViolation` is a distinct layer |
 | Leaf errors | Domain-specific leaves plus a domain override path | Private leaf `Error` retained behind each domain facade |
-| Domain facades | Opaque `StoreError` exists; other domains vary | Narrow operational facades preserve source and policy information |
-| Catalog | `ErrorKind`, `ErrorSpec`, and `ALL_ERROR_SPECS` exist, but the target declarative ownership is incomplete | `ErrorCatalog` solely owns dotted code, condition, fixed public message, severity, recovery hint, and projections |
-| Context/views | Free-string `ErrorContext` and `BoundaryErrorView` exist | Visibility-tagged context feeds `PublicErrorView` and `DiagnosticView` |
+| Domain facades | `StoreError`, `RuntimeError`, and `TransportError` own/share canonical errors; other domains vary | Narrow operational facades preserve typed sources without duplicating canonical policy |
+| Catalog | Exact 35-entry declarative catalog owns complete canonical policy; legacy `ErrorKind`/`ErrorSpec` still await migration | `ErrorCatalog` solely owns canonical metadata and the legacy spec table is removed |
+| Context/views | Typed visibility context and safe views are effective; legacy boundary views still exist | Visibility-tagged context feeds `PublicErrorView` and `DiagnosticView` at every boundary |
 | Retry | Decisions remain distributed | Separate `RetryDecision` uses idempotency, stage, and budget |
 | Boundaries | Local adapters can emit arbitrary remarks and inspect display text | Adapters project catalog metadata and safe views |
-| Dependencies | `rocketmq-error` still depends on anyhow/config/serde_json | Dependencies are reduced or isolated without widening the public contract |
+| Dependencies | Owner-specific anyhow/config/serde_json dependencies have been removed from `rocketmq-error` | Dependencies stay reduced or isolated without widening the public contract |
 | Sensitive data | Shared `Sensitive` support exists | Public, diagnostic, and secret-presence-only views enforce default redaction |
 
 ## Compatibility and dependency direction
@@ -223,6 +232,6 @@ evidence rather than asserting completion.
 
 This is a deliberate Rust API break with a narrow compatibility promise for
 remoting, gRPC, HTTP, wire, and persistence contracts. Stable semantic meaning
-lives in the declarative catalog, typed causes remain available to controlled
-diagnostics, and safe public views prevent accidental leakage or coupling to
-the mega-enum.
+lives in the declarative catalog, typed causes remain available through the
+standard source chain, and safe views prevent accidental leakage or coupling
+to the mega-enum.

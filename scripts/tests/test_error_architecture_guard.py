@@ -118,6 +118,22 @@ class ErrorArchitectureGuardTests(unittest.TestCase):
             self.assertFalse(self.guard.is_test_context(test_path, 1))
             self.assertEqual([(1, source_line)], list(self.guard.iter_non_test_lines(test_path)))
 
+    def test_allows_only_the_canonical_generic_result_alias(self):
+        alias = "pub type Result<T> = std::result::Result<T, Error>;"
+
+        self.assertIsNone(
+            self.guard.generic_public_result_message("rocketmq-error/src/error.rs", alias)
+        )
+        self.assertIsNotNone(
+            self.guard.generic_public_result_message("rocketmq-model/src/lib.rs", alias)
+        )
+        self.assertIsNotNone(
+            self.guard.generic_public_result_message(
+                "rocketmq-error/src/error.rs",
+                "pub type Result<T> = anyhow::Result<T>;",
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

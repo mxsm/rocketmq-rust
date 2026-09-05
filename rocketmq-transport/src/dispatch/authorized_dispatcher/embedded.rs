@@ -438,7 +438,7 @@ where
 }
 
 fn converge_embedded_result(result: TerminalResult) -> Result<EmbeddedDispatchOutcome, TransportError> {
-    result.map_err(TransportError::dispatch)
+    result.map_err(|source| TransportError::dispatch(source))
 }
 
 struct EmbeddedDeferredLifecycle {

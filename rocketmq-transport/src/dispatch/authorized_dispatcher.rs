@@ -282,7 +282,7 @@ where
                 Some(session_cleanup),
             )
             .await
-            .map_err(TransportError::dispatch)
+            .map_err(|source| TransportError::dispatch(source))
     }
 
     pub(crate) fn open_network_session(&self) -> crate::dispatch::NetworkSession {
@@ -351,7 +351,7 @@ impl AuthorizedDispatchSession {
         if context.deadline().is_some_and(|deadline| deadline.is_expired()) {
             send_handler_boundary_response(&response_session, is_one_way, deadline_response(opaque))
                 .await
-                .map_err(TransportError::dispatch)?;
+                .map_err(|source| TransportError::dispatch(source))?;
             return Ok(DispatchOutcome::Rejected);
         }
         if let Decision::Deny { reason } = self.boundary.security.authorize_for_dispatch(
@@ -371,7 +371,7 @@ impl AuthorizedDispatchSession {
                 .set_opaque(opaque),
             )
             .await
-            .map_err(TransportError::dispatch)?;
+            .map_err(|source| TransportError::dispatch(source))?;
             return Ok(DispatchOutcome::Rejected);
         }
 
@@ -408,7 +408,7 @@ impl AuthorizedDispatchSession {
                 drop(retained_partial);
                 send_handler_boundary_response(&response_session, is_one_way, admission_response(opaque, &rejection))
                     .await
-                    .map_err(TransportError::dispatch)?;
+                    .map_err(|source| TransportError::dispatch(source))?;
                 Ok(DispatchOutcome::Rejected)
             }
             Ok(SessionDispatchAttempt::AdmissionRejected {

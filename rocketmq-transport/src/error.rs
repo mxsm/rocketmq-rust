@@ -12,21 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::backtrace::Backtrace;
 use std::error::Error as StdError;
 use std::fmt;
+use std::panic::Location;
 use std::sync::Arc;
 
 use rocketmq_error::CanonicalCondition;
 use rocketmq_error::DiagnosticView;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::ErrorCode;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::ErrorSeverity;
 use rocketmq_error::PublicErrorView;
 use rocketmq_error::RecoveryHint;
+use rocketmq_error::SharedError;
 use rocketmq_error::ViewContextViolation;
-
-type SharedError = Arc<dyn StdError + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum TransportOperation {
@@ -91,13 +93,12 @@ impl RequestOperation {
 /// retained without rendering source text or request and session identifiers.
 #[derive(Clone)]
 pub struct TransportError {
-    descriptor: &'static ErrorDescriptor,
+    error: SharedError,
     operation: TransportOperation,
-    context: ErrorContext,
-    source: SharedError,
 }
 
 impl TransportError {
+    #[track_caller]
     pub(crate) fn start(source: impl StdError + Send + Sync + 'static) -> Self {
         Self::new(
             &rocketmq_error::TRANSPORT_START_FAILED,
@@ -106,6 +107,7 @@ impl TransportError {
         )
     }
 
+    #[track_caller]
     pub(crate) fn dispatch(source: impl StdError + Send + Sync + 'static) -> Self {
         Self::new(
             &rocketmq_error::TRANSPORT_DISPATCH_FAILED,
@@ -114,6 +116,7 @@ impl TransportError {
         )
     }
 
+    #[track_caller]
     pub(crate) fn resume(source: impl StdError + Send + Sync + 'static) -> Self {
         Self::new(
             &rocketmq_error::TRANSPORT_DISPATCH_FAILED,
@@ -122,6 +125,7 @@ impl TransportError {
         )
     }
 
+    #[track_caller]
     pub(crate) fn response(source: impl StdError + Send + Sync + 'static) -> Self {
         Self::new(
             &rocketmq_error::TRANSPORT_RESPONSE_FAILED,
@@ -130,6 +134,7 @@ impl TransportError {
         )
     }
 
+    #[track_caller]
     pub(crate) fn push(source: impl StdError + Send + Sync + 'static) -> Self {
         Self::new(
             &rocketmq_error::TRANSPORT_SESSION_FAILED,
@@ -138,6 +143,7 @@ impl TransportError {
         )
     }
 
+    #[track_caller]
     pub(crate) fn request_failed(operation: RequestOperation, source: impl StdError + Send + Sync + 'static) -> Self {
         Self::new(
             &rocketmq_error::TRANSPORT_SESSION_FAILED,
@@ -146,6 +152,7 @@ impl TransportError {
         )
     }
 
+    #[track_caller]
     pub(crate) fn request_timeout(operation: RequestOperation, source: impl StdError + Send + Sync + 'static) -> Self {
         Self::new(
             &rocketmq_error::TRANSPORT_REQUEST_TIMEOUT,
@@ -154,6 +161,7 @@ impl TransportError {
         )
     }
 
+    #[track_caller]
     pub(crate) fn close(
         cause: crate::server::SessionCloseCause,
         source: impl StdError + Send + Sync + 'static,
@@ -169,6 +177,7 @@ impl TransportError {
         Self::new(&rocketmq_error::TRANSPORT_SESSION_FAILED, operation, source)
     }
 
+    #[track_caller]
     fn new(
         descriptor: &'static ErrorDescriptor,
         operation: TransportOperation,
@@ -177,42 +186,59 @@ impl TransportError {
         let context = ErrorContext::new()
             .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, operation.as_str())
             .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT);
+        let error = CanonicalError::caused_by(descriptor, source).with_context(context);
         Self {
-            descriptor,
+            error: Arc::new(error),
             operation,
-            context,
-            source: Arc::new(source),
         }
     }
 
     /// Returns the catalog descriptor that owns this failure's identity.
     #[must_use]
-    pub const fn descriptor(&self) -> &'static ErrorDescriptor {
-        self.descriptor
+    pub fn descriptor(&self) -> &'static ErrorDescriptor {
+        self.error.descriptor()
     }
 
     /// Returns the stable dotted catalog code.
     #[must_use]
-    pub const fn code(&self) -> ErrorCode {
-        self.descriptor.code()
+    pub fn code(&self) -> ErrorCode {
+        self.error.code()
     }
 
     /// Returns the protocol-independent condition.
     #[must_use]
-    pub const fn condition(&self) -> CanonicalCondition {
-        self.descriptor.condition()
+    pub fn condition(&self) -> CanonicalCondition {
+        self.error.condition()
     }
 
     /// Returns the catalog-owned severity.
     #[must_use]
-    pub const fn severity(&self) -> ErrorSeverity {
-        self.descriptor.severity()
+    pub fn severity(&self) -> ErrorSeverity {
+        self.error.severity()
     }
 
     /// Returns the catalog-owned recovery hint.
     #[must_use]
-    pub const fn recovery_hint(&self) -> RecoveryHint {
-        self.descriptor.recovery_hint()
+    pub fn recovery_hint(&self) -> RecoveryHint {
+        self.error.recovery_hint()
+    }
+
+    /// Returns the bounded context retained by the canonical error.
+    #[must_use]
+    pub fn context(&self) -> &ErrorContext {
+        self.error.context()
+    }
+
+    /// Returns the first-promotion caller location.
+    #[must_use]
+    pub fn location(&self) -> &'static Location<'static> {
+        self.error.location()
+    }
+
+    /// Returns the catalog-controlled captured backtrace, when enabled.
+    #[must_use]
+    pub fn backtrace(&self) -> Option<&Backtrace> {
+        self.error.backtrace()
     }
 
     /// Creates the descriptor-validated public projection.
@@ -222,7 +248,7 @@ impl TransportError {
     /// Returns a schema violation if the catalog and internally generated
     /// Transport context become inconsistent.
     pub fn public_view(&self) -> Result<PublicErrorView<'_>, ViewContextViolation> {
-        PublicErrorView::try_new(self.descriptor, &self.context)
+        self.error.public_view()
     }
 
     /// Creates the descriptor-validated controlled diagnostic projection.
@@ -232,13 +258,13 @@ impl TransportError {
     /// Returns a schema violation if the catalog and internally generated
     /// Transport context become inconsistent.
     pub fn diagnostic_view(&self) -> Result<DiagnosticView<'_>, ViewContextViolation> {
-        DiagnosticView::try_new(self.descriptor, &self.context)
+        self.error.diagnostic_view()
     }
 }
 
 impl fmt::Display for TransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code(), self.descriptor.public_message())
+        fmt::Display::fmt(self.error.as_ref(), formatter)
     }
 }
 
@@ -256,6 +282,51 @@ impl fmt::Debug for TransportError {
 
 impl StdError for TransportError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        Some(self.source.as_ref())
+        self.error.source()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::*;
+
+    #[test]
+    fn startup_clone_shares_canonical_error_and_direct_typed_source() {
+        let caller_line = line!() + 1;
+        let error = TransportError::start(io::Error::other("bind failed"));
+        let cloned = error.clone();
+
+        assert!(Arc::ptr_eq(&error.error, &cloned.error));
+        assert!(std::ptr::eq(
+            error.source().expect("startup source"),
+            cloned.source().expect("cloned startup source")
+        ));
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .is_some());
+        assert_eq!(error.location().file(), file!());
+        assert_eq!(error.location().line(), caller_line);
+        assert_eq!(error.context().len(), 2);
+
+        match (error.backtrace(), cloned.backtrace()) {
+            (Some(left), Some(right)) => assert!(std::ptr::eq(left, right)),
+            (None, None) => {}
+            _ => panic!("a clone must share the canonical backtrace state"),
+        }
+    }
+
+    #[test]
+    fn closure_map_err_records_the_promotion_site() {
+        let result: Result<(), io::Error> = Err(io::Error::other("dispatch failed"));
+        let caller_line = line!() + 2;
+        let error = result
+            .map_err(|source| TransportError::dispatch(source))
+            .expect_err("dispatch error");
+
+        assert_eq!(error.location().file(), file!());
+        assert_eq!(error.location().line(), caller_line);
     }
 }
