@@ -453,6 +453,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lifecycle_smoke_fixture_supports_all_probe_requests() {
+        let profile = test_profile("provider-smoke-fixture".to_owned());
+        let transport = Arc::new(QueueTransport::new(passing_smoke_responses()));
+        let client = AsyncBuiltinProviderClient::new(profile.clone(), transport.clone()).expect("smoke client");
+        let correlation_id = CorrelationId::new();
+        let context = InvocationContext::new(correlation_id);
+        let requests = [
+            connectivity_request(correlation_id, &profile.model),
+            structured_request(correlation_id, &profile.model),
+            tool_request(correlation_id, &profile.model),
+        ];
+        for request in requests {
+            client
+                .invoke(&context, &request, None)
+                .await
+                .expect("supported smoke probe");
+        }
+        assert!(transport.responses.lock().expect("response queue").is_empty());
+    }
+
+    #[tokio::test]
     #[ignore = "requires ROCKETMQ_SRE_TEST_DATABASE_URL pointing to an isolated PostgreSQL database"]
     async fn postgres_provider_lifecycle_smoke_promote_rollback_retire_and_quarantine() {
         let database_url = std::env::var("ROCKETMQ_SRE_TEST_DATABASE_URL").expect("test database URL must be explicit");
@@ -489,19 +510,23 @@ mod tests {
             .expect("profile B")
             .id;
 
+        let smoke_a = service
+            .run_provider_smoke(&auth, profile_a_id)
+            .await
+            .expect("profile A smoke");
         assert!(
-            service
-                .run_provider_smoke(&auth, profile_a_id)
-                .await
-                .expect("profile A smoke")
-                .overall_ok
+            smoke_a.overall_ok,
+            "profile A smoke failures: {:?}",
+            smoke_a.failure_codes
         );
+        let smoke_b = service
+            .run_provider_smoke(&auth, profile_b_id)
+            .await
+            .expect("profile B smoke");
         assert!(
-            service
-                .run_provider_smoke(&auth, profile_b_id)
-                .await
-                .expect("profile B smoke")
-                .overall_ok
+            smoke_b.overall_ok,
+            "profile B smoke failures: {:?}",
+            smoke_b.failure_codes
         );
         let profile_b_lifecycle = service
             .transition_profile_lifecycle(
@@ -631,8 +656,8 @@ mod tests {
     fn test_profile(id: String) -> rocketmq_sre_model_gateway::ProviderProfile {
         let mut profile = rocketmq_sre_model_gateway::builtin_provider_profiles()
             .into_iter()
-            .find(|profile| profile.id == "deepseek")
-            .expect("DeepSeek profile fixture");
+            .find(|profile| profile.id == "openai")
+            .expect("OpenAI profile fixture with strict tools and specific tool choice");
         profile.id = id;
         profile.credential_ref = None;
         profile
@@ -666,7 +691,7 @@ mod tests {
             status: 200,
             body: json!({
                 "id": "provider-smoke",
-                "model": "deepseek-chat",
+                "model": "gpt-configured",
                 "choices": [{
                     "message": {
                         "role": "assistant",
