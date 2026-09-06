@@ -53,6 +53,10 @@ const STATE_CLOSED: u8 = 2;
 const STATE_SHUTDOWN_COMPLETED: u8 = 3;
 const STATE_POISONED: u8 = 4;
 
+// Apply the large-future boundary before adding lifecycle and tracker wrappers. Waiting for
+// Tokio's spawn boundary leaves their by-value stack frames live during task submission.
+const MAX_INLINE_TASK_FUTURE_SIZE: usize = 16 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 /// Represents task id.
 pub struct TaskId(u64);
@@ -629,6 +633,24 @@ impl TaskGroup {
     }
 
     fn spawn_inner_with_handle<F>(
+        &self,
+        name: Arc<str>,
+        kind: TaskKind,
+        detached_policy: Option<DetachedTaskPolicy>,
+        propagate_panic: bool,
+        future: F,
+    ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        if std::mem::size_of::<F>() > MAX_INLINE_TASK_FUTURE_SIZE {
+            self.spawn_registered(name, kind, detached_policy, propagate_panic, Box::pin(future))
+        } else {
+            self.spawn_registered(name, kind, detached_policy, propagate_panic, future)
+        }
+    }
+
+    fn spawn_registered<F>(
         &self,
         name: Arc<str>,
         kind: TaskKind,
