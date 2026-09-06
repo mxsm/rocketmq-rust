@@ -24,6 +24,7 @@ use clap_complete::shells::Zsh;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_error::CliErrorView;
+use rocketmq_error::CliVerbosity;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 
@@ -38,6 +39,9 @@ const ACL_SECURITY_TOKEN_ENV: &str = "ROCKETMQ_ACL_SECURITY_TOKEN";
 #[command(name = "rocketmq-admin-cli")]
 #[command(about = "Rocketmq Rust admin commands", long_about = None, author="mxsm")]
 pub struct RocketMQCli {
+    #[arg(long, global = true, help = "Include controlled diagnostic fields in error output")]
+    verbose: bool,
+
     #[arg(
         long = "generate-completion",
         value_name = "SHELL",
@@ -50,8 +54,22 @@ pub struct RocketMQCli {
 }
 
 impl RocketMQCli {
-    pub fn parse_from_java_compatible_args() -> Self {
-        Self::parse_from(normalize_java_compatible_args(std::env::args_os()))
+    /// Parses process arguments after translating Java-compatible aliases.
+    ///
+    /// # Errors
+    ///
+    /// Returns Clap's structured parse error for invalid arguments and display
+    /// outcomes such as help or version output.
+    pub fn try_parse_from_java_compatible_args() -> Result<Self, clap::Error> {
+        Self::try_parse_from(normalize_java_compatible_args(std::env::args_os()))
+    }
+
+    fn verbosity(&self) -> CliVerbosity {
+        if self.verbose {
+            CliVerbosity::Verbose
+        } else {
+            CliVerbosity::Default
+        }
     }
 
     pub async fn handle(&self, client_runtime: Arc<ClientRuntime>) -> i32 {
@@ -70,10 +88,13 @@ impl RocketMQCli {
                     generate(Fish, &mut cmd, bin_name, &mut std::io::stdout());
                 }
                 _ => {
-                    return render_cli_error(&RocketMQError::validation_failed(
-                        "generate-completion",
-                        format!("unsupported shell '{shell}', supported shells: bash, zsh, fish"),
-                    ));
+                    return render_cli_error(
+                        &RocketMQError::validation_failed(
+                            "generate-completion",
+                            format!("unsupported shell '{shell}', supported shells: bash, zsh, fish"),
+                        ),
+                        self.verbosity(),
+                    );
                 }
             }
             return 0;
@@ -82,17 +103,20 @@ impl RocketMQCli {
         if let Some(ref commands) = self.commands {
             let credentials = match credentials_from_environment() {
                 Ok(credentials) => credentials,
-                Err(error) => return render_cli_error(&error),
+                Err(error) => return render_cli_error(&error, self.verbosity()),
             };
             if let Err(e) = commands.execute(credentials, client_runtime).await {
-                return render_cli_error(&e);
+                return render_cli_error(&e, self.verbosity());
             }
             0
         } else {
-            render_cli_error(&RocketMQError::validation_failed(
-                "command",
-                "command must be specified; use --help for usage information",
-            ))
+            render_cli_error(
+                &RocketMQError::validation_failed(
+                    "command",
+                    "command must be specified; use --help for usage information",
+                ),
+                self.verbosity(),
+            )
         }
     }
 }
@@ -144,10 +168,11 @@ fn non_blank(value: String) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-fn render_cli_error(error: &RocketMQError) -> i32 {
-    let view = CliErrorView::from_error(error);
-    eprintln!("{}", view.render_stderr());
-    view.exit_code().as_i32()
+/// Writes the single canonical CLI projection and returns its process exit code.
+pub fn render_cli_error(error: &RocketMQError, verbosity: CliVerbosity) -> i32 {
+    let output = CliErrorView::from_error(error).output(verbosity);
+    eprintln!("{}", output.stderr());
+    output.exit_code().as_i32()
 }
 
 fn normalize_java_compatible_args<I>(args: I) -> Vec<OsString>
@@ -185,6 +210,15 @@ mod tests {
         ]);
 
         assert_eq!(args[3], OsString::from("--brokerName"));
+    }
+
+    #[test]
+    fn parses_global_verbose_in_any_argument_position() {
+        let before = RocketMQCli::try_parse_from(["rocketmq-admin-cli", "--verbose", "--generate-completion", "bash"]);
+        let after = RocketMQCli::try_parse_from(["rocketmq-admin-cli", "--generate-completion", "bash", "--verbose"]);
+
+        assert!(before.expect("verbose before subcommand").verbose);
+        assert!(after.expect("verbose after subcommand").verbose);
     }
 
     #[tokio::test]

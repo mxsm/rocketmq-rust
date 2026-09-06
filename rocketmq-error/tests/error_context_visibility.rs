@@ -14,6 +14,7 @@
 
 use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
+use rocketmq_error::CliVerbosity;
 use rocketmq_error::ContextVisibility;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::FieldValueKind;
@@ -176,5 +177,6 @@ fn sentinel_never_enters_context_or_safe_boundary_output() {
     let cli = CliErrorView::from_error(&error);
     assert!(!boundary.context().to_string().contains(SENTINEL));
     assert!(!format!("{boundary:?}").contains(SENTINEL));
-    assert!(!cli.render_stderr().contains(SENTINEL));
+    assert!(!cli.output(CliVerbosity::Default).stderr().contains(SENTINEL));
+    assert!(!cli.output(CliVerbosity::Verbose).stderr().contains(SENTINEL));
 }

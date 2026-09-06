@@ -20,6 +20,9 @@ use clap::Subcommand;
 #[derive(Parser, Debug)]
 #[command(author = "mxsm", version = "0.2.0", about = "RocketMQ CLI(Rust)")]
 pub struct RootCli {
+    #[arg(long, global = true, help = "Include controlled diagnostic fields in error output")]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -121,5 +124,32 @@ mod tests {
         ])
         .expect("parse consolidation");
         assert!(matches!(cli.command, Commands::ConsolidateMultipath { .. }));
+    }
+
+    #[test]
+    fn parses_verbose_in_any_argument_position() {
+        let before = RootCli::try_parse_from([
+            "rocketmq-cli-rust",
+            "--verbose",
+            "downgrade-preflight",
+            "--target-version",
+            "0.9.0",
+            "--config",
+            "broker.toml",
+        ])
+        .expect("verbose before subcommand");
+        let after = RootCli::try_parse_from([
+            "rocketmq-cli-rust",
+            "downgrade-preflight",
+            "--target-version",
+            "0.9.0",
+            "--config",
+            "broker.toml",
+            "--verbose",
+        ])
+        .expect("verbose after subcommand");
+
+        assert!(before.verbose);
+        assert!(after.verbose);
     }
 }

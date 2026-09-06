@@ -622,14 +622,24 @@ def check_required_mapping_adapters() -> list[Finding]:
             "internal_source",
         ],
         ROOT / "rocketmq-error" / "src" / "cli.rs": [
-            "error.boundary_view()",
-            "view.cli().exit_code",
-            "render_stderr",
+            "pub enum CliVerbosity",
+            "pub struct CliOutput",
+            "PublicErrorView::try_new(self.descriptor, &self.context)",
+            "DiagnosticView::try_new(descriptor, context)",
+            "public.projection().cli().exit_code",
+            "ViewValueRef::Redacted",
+            "pub fn output(&self, verbosity: CliVerbosity) -> CliOutput",
         ],
         ROOT / "rocketmq-tools" / "rocketmq-admin" / "rocketmq-admin-cli" / "src" / "rocketmq_cli.rs": [
             "CliErrorView::from_error",
-            "view.exit_code().as_i32()",
+            "CliVerbosity::Verbose",
+            ".output(verbosity)",
+            "output.exit_code().as_i32()",
             "RocketMQError::validation_failed",
+        ],
+        ROOT / "rocketmq-tools" / "rocketmq-admin" / "rocketmq-admin-cli" / "src" / "main.rs": [
+            "render_cli_error(&error, verbosity)",
+            "verbosity_requested()",
         ],
         ROOT
         / "rocketmq-tools"
@@ -651,7 +661,11 @@ def check_required_mapping_adapters() -> list[Finding]:
         / "bin"
         / "rocketmq_cli.rs": [
             "CliErrorView::from_error",
-            "view.exit_code().as_i32()",
+            "CliVerbosity::Verbose",
+            ".output(verbosity)",
+            "ProcessOutcome::Error(output.exit_code())",
+            "Error::caused_by(&STORAGE_WRITE_FAILED, source)",
+            ".with_secret_presence(fields::SOURCE_PRESENT)",
         ],
     }
     findings: list[Finding] = []
@@ -804,6 +818,83 @@ def check_dashboard_http_boundary() -> list[Finding]:
                         "dashboard config/internal source errors must use typed source or redacted response messages",
                     )
                 )
+    return findings
+
+
+CLI_BOUNDARY_FORBIDDEN_TERMS = {
+    "error.boundary_view()": "CLI output must use descriptor-validated safe views",
+    "self.context.to_string()": "default CLI stderr must not render context",
+    "component={}, exit_code={}": "default CLI stderr must contain only code and public message",
+    '", context={"': "default CLI stderr must not include context",
+    ".render_stderr()": "CLI sinks must consume the paired CliOutput projection",
+    ".render_verbose_stderr()": "CLI sinks must consume the paired CliOutput projection",
+    'eprintln!("failed to spawn rocketmq-admin-cli main thread: {error}")': (
+        "admin CLI startup failures must use CliErrorView"
+    ),
+    'eprintln!("failed to initialize or shut down rocketmq-admin-cli: {error}")': (
+        "admin CLI lifecycle failures must use CliErrorView"
+    ),
+    'eprintln!("rocketmq-admin-cli main thread terminated unexpectedly")': (
+        "admin CLI thread failures must use CliErrorView"
+    ),
+    "std::process::exit(1)": "CLI failures must use descriptor-owned exit codes",
+}
+
+
+def cli_boundary_message(line: str) -> str | None:
+    for term, message in CLI_BOUNDARY_FORBIDDEN_TERMS.items():
+        if term in line:
+            return message
+    if ("eprintln!" in line or "println!" in line) and re.search(
+        r"\{(?:error|source)(?::\?)?\}", line
+    ):
+        return "CLI top-level output must not render raw error or source values"
+    return None
+
+
+def cli_store_boundary_message(line: str) -> str | None:
+    if "error.to_string()" in line or ".display().to_string()" in line:
+        return "Store Inspect CLI must retain typed sources and must not stringify paths at the process boundary"
+    return None
+
+
+CLI_OUTPUT_MACRO = re.compile(r"\b(?P<macro>e?println!)\s*\((?P<body>.*?)\)\s*;", re.DOTALL)
+CLI_RAW_VALUE = re.compile(r"\{\s*(?:error|source)(?::[^}]*)?\}|,\s*(?:error|source)\b")
+
+
+def cli_raw_output_sinks(source: str) -> list[tuple[int, str]]:
+    findings: list[tuple[int, str]] = []
+    for match in CLI_OUTPUT_MACRO.finditer(source):
+        macro = match.group("macro")
+        body = match.group("body")
+        line_number = source.count("\n", 0, match.start()) + 1
+        if macro == "eprintln!" and "output.stderr()" not in body:
+            findings.append((line_number, "CLI stderr must use the single CliOutput stderr sink"))
+        elif macro == "println!" and CLI_RAW_VALUE.search(body):
+            findings.append((line_number, "CLI stdout must not render raw error or source values"))
+    return findings
+
+
+def check_cli_boundary() -> list[Finding]:
+    paths = [
+        ROOT / "rocketmq-error" / "src" / "cli.rs",
+        ROOT / "rocketmq-tools" / "rocketmq-admin" / "rocketmq-admin-cli" / "src" / "main.rs",
+        ROOT / "rocketmq-tools" / "rocketmq-admin" / "rocketmq-admin-cli" / "src" / "rocketmq_cli.rs",
+        ROOT / "rocketmq-tools" / "rocketmq-store-inspect" / "src" / "bin" / "rocketmq_cli.rs",
+    ]
+    findings: list[Finding] = []
+    for path in paths:
+        if not path.exists():
+            findings.append(Finding(path, 1, "CLI error boundary file is missing"))
+            continue
+        for line_number, line in iter_non_test_lines(path):
+            if message := cli_boundary_message(line):
+                findings.append(Finding(path, line_number, message))
+            if path == paths[-1] and (message := cli_store_boundary_message(line)):
+                findings.append(Finding(path, line_number, message))
+        for line_number, message in cli_raw_output_sinks(read_text(path)):
+            if not is_test_context(path, line_number):
+                findings.append(Finding(path, line_number, message))
     return findings
 
 
@@ -1346,6 +1437,7 @@ def run() -> int:
         ("proxy grpc boundary", check_proxy_grpc_boundary),
         ("proxy remoting boundary", check_proxy_remoting_boundary),
         ("dashboard http boundary", check_dashboard_http_boundary),
+        ("cli boundary", check_cli_boundary),
         ("client callback boundary", check_client_callback_boundary),
         ("client retry boundary", check_client_retry_boundary),
         ("error descriptor contract", check_error_descriptor_contract),

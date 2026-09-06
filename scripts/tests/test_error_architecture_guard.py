@@ -233,6 +233,70 @@ class ErrorArchitectureGuardTests(unittest.TestCase):
 
         self.assertEqual([], self.guard.check_dashboard_http_boundary())
 
+    def test_cli_boundary_rejects_legacy_context_and_raw_top_level_errors(self):
+        unsafe_lines = (
+            "let view = error.boundary_view();",
+            "rendered.push_str(&self.context.to_string());",
+            '"Error: code={}, component={}, exit_code={}, message={}"',
+            'rendered.push_str(", context={");',
+            "view.render_stderr()",
+            "view.render_verbose_stderr()",
+            'eprintln!("failed to spawn rocketmq-admin-cli main thread: {error}");',
+            'eprintln!("failed to initialize or shut down rocketmq-admin-cli: {error}");',
+            'eprintln!("rocketmq-admin-cli main thread terminated unexpectedly");',
+            'eprintln!("startup failed: {error}");',
+            'eprintln!("{error:?}");',
+            "std::process::exit(1);",
+        )
+
+        for line in unsafe_lines:
+            with self.subTest(line=line):
+                self.assertIsNotNone(self.guard.cli_boundary_message(line))
+
+    def test_cli_boundary_allows_safe_default_and_controlled_verbose_views(self):
+        safe_lines = (
+            "PublicErrorView::try_new(self.descriptor, &self.context)",
+            "DiagnosticView::try_new(descriptor, context)",
+            'format!("ERROR {}: {}", public.code(), public.message())',
+            "CliErrorView::from_error(error).output(verbosity)",
+            "output.exit_code().as_i32()",
+            'eprintln!("{}", output.stderr());',
+        )
+
+        for line in safe_lines:
+            with self.subTest(line=line):
+                self.assertIsNone(self.guard.cli_boundary_message(line))
+
+        self.assertEqual([], self.guard.check_cli_boundary())
+
+    def test_cli_boundary_rejects_store_source_and_path_stringification(self):
+        for line in ("let reason = error.to_string();", "let path = path.display().to_string();"):
+            with self.subTest(line=line):
+                self.assertIsNotNone(self.guard.cli_store_boundary_message(line))
+
+    def test_cli_boundary_rejects_positional_and_multiline_raw_output_sinks(self):
+        source = '''
+eprintln!("{}", error);
+eprintln!(
+    "{:#?}",
+    source
+);
+println!("{}", error);
+'''
+        findings = self.guard.cli_raw_output_sinks(source)
+
+        self.assertEqual(3, len(findings))
+        self.assertTrue(all("raw" in message or "CliOutput" in message for _, message in findings))
+
+    def test_cli_boundary_allows_catalog_stderr_and_non_error_stdout(self):
+        source = '''
+eprintln!("{}", output.stderr());
+println!("version={}", env!("CARGO_PKG_VERSION"));
+println!("source inventory complete");
+'''
+
+        self.assertEqual([], self.guard.cli_raw_output_sinks(source))
+
 
 if __name__ == "__main__":
     unittest.main()

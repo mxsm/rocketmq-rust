@@ -18,6 +18,7 @@ use std::collections::BTreeSet;
 use clap::CommandFactory;
 use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
 use rocketmq_error::CliErrorView;
+use rocketmq_error::CliVerbosity;
 use rocketmq_error::RocketMQError;
 use serde::Deserialize;
 
@@ -114,7 +115,10 @@ fn golden_error_classes_use_the_real_cli_exit_and_error_code_mappings() {
                 scenario.expected_error_code.as_deref().unwrap()
             );
             assert_eq!(
-                CliErrorView::from_error(&error).exit_code().as_i32(),
+                CliErrorView::from_error(&error)
+                    .output(CliVerbosity::Default)
+                    .exit_code()
+                    .as_i32(),
                 scenario.expected_exit_code,
                 "{} error mapping drifted for {}",
                 error_kind,

@@ -132,12 +132,10 @@ fn broker_container_commands_are_excluded_from_help_and_completion() {
         .output()
         .expect("run rocketmq-admin-cli container --help");
 
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(64));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("unrecognized subcommand"),
-        "unexpected stderr: {stderr}"
-    );
+    assert_eq!(stderr, "ERROR core.argument.invalid: Argument is invalid\n");
+    assert!(!stderr.contains("container"));
 
     let completion = Command::new(env!("CARGO_BIN_EXE_rocketmq-admin-cli"))
         .args(["--generate-completion", "bash"])
@@ -151,6 +149,59 @@ fn broker_container_commands_are_excluded_from_help_and_completion() {
             "completion must not advertise excluded operation {excluded}"
         );
     }
+}
+
+#[test]
+fn invalid_arguments_use_catalog_exit_and_safe_default_stderr() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rocketmq-admin-cli"))
+        .arg("--definitely-invalid=password=plain-text")
+        .output()
+        .expect("run rocketmq-admin-cli with invalid arguments");
+
+    assert_eq!(output.status.code(), Some(64));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "ERROR core.argument.invalid: Argument is invalid\n"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("plain-text"));
+}
+
+#[test]
+fn verbose_release_version_is_order_independent() {
+    for arguments in [["--version", "--verbose"], ["--verbose", "--version"]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_rocketmq-admin-cli"))
+            .args(arguments)
+            .output()
+            .expect("run rocketmq-admin-cli verbose version");
+
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("rocketmq-admin-cli"));
+        assert!(stdout.contains("artifact_id="));
+        assert!(stdout.contains("requested_features="));
+        assert!(stdout.contains("effective_features="));
+    }
+}
+
+#[test]
+fn verbose_errors_keep_dynamic_values_redacted() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rocketmq-admin-cli"))
+        .args([
+            "--verbose",
+            "--generate-completion",
+            "password=plain-text\r\nC:\\private\\value",
+        ])
+        .output()
+        .expect("run rocketmq-admin-cli with invalid completion shell");
+
+    assert_eq!(output.status.code(), Some(64));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("ERROR core.argument.invalid: Argument is invalid"));
+    assert!(stderr.contains("message=<redacted>"));
+    assert!(!stderr.contains("plain-text"));
+    assert!(!stderr.contains("private"));
+    assert!(!stderr.contains('\r'));
 }
 
 #[test]

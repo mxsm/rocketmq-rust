@@ -15,9 +15,11 @@
 #![recursion_limit = "256"]
 
 use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
+use rocketmq_admin_cli::rocketmq_cli::render_cli_error;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_admin_core::client_adapter::TelemetryHandle;
+use rocketmq_error::CliVerbosity;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
@@ -32,7 +34,9 @@ fn print_release_version_if_requested(component: &str) -> bool {
     let version = std::ffi::OsStr::new("--version");
     let verbose = std::ffi::OsStr::new("--verbose");
     let requested = (arguments.len() == 1 && arguments[0].as_os_str() == version)
-        || (arguments.len() == 2 && arguments[0].as_os_str() == version && arguments[1].as_os_str() == verbose);
+        || (arguments.len() == 2
+            && arguments.iter().any(|argument| argument.as_os_str() == version)
+            && arguments.iter().any(|argument| argument.as_os_str() == verbose));
     if !requested {
         return false;
     }
@@ -59,27 +63,28 @@ fn main() {
     if print_release_version_if_requested("rocketmq-admin-cli") {
         return;
     }
+    let verbosity = verbosity_requested();
     let handle = match std::thread::Builder::new()
         .name("rocketmq-admin-cli-main".to_string())
         .stack_size(CLI_RUNTIME_STACK_SIZE)
-        .spawn(run_cli_main_thread)
+        .spawn(move || run_cli_main_thread(verbosity))
     {
         Ok(handle) => handle,
         Err(error) => {
-            eprintln!("failed to spawn rocketmq-admin-cli main thread: {error}");
-            std::process::exit(1);
+            let error = RocketMQError::internal("spawn rocketmq-admin-cli main thread", error);
+            std::process::exit(render_cli_error(&error, verbosity));
         }
     };
 
     let exit_code = match handle.join() {
         Ok(Ok(exit_code)) => exit_code,
-        Ok(Err(error)) => {
-            eprintln!("failed to initialize or shut down rocketmq-admin-cli: {error}");
-            1
-        }
+        Ok(Err(error)) => render_cli_error(&error, verbosity),
         Err(_) => {
-            eprintln!("rocketmq-admin-cli main thread terminated unexpectedly");
-            1
+            let error = RocketMQError::internal(
+                "join rocketmq-admin-cli main thread",
+                std::io::Error::other("main thread terminated unexpectedly"),
+            );
+            render_cli_error(&error, verbosity)
         }
     };
     if exit_code != 0 {
@@ -87,7 +92,15 @@ fn main() {
     }
 }
 
-fn run_cli_main_thread() -> RocketMQResult<i32> {
+fn verbosity_requested() -> CliVerbosity {
+    if std::env::args_os().any(|argument| argument == "--verbose") {
+        CliVerbosity::Verbose
+    } else {
+        CliVerbosity::Default
+    }
+}
+
+fn run_cli_main_thread(verbosity: CliVerbosity) -> RocketMQResult<i32> {
     initialize_remoting_defaults(CURRENT_VERSION as i32).map_err(|error| RocketMQError::ConfigParseFailed {
         key: "remoting.command.defaults",
         reason: error.to_string(),
@@ -102,7 +115,7 @@ fn run_cli_main_thread() -> RocketMQResult<i32> {
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     )?;
-    let exit_code = owner.block_on(async_main(client_runtime.clone()));
+    let exit_code = owner.block_on(async_main(client_runtime.clone(), verbosity));
     let client_report = owner.block_on(client_runtime.shutdown());
     if !client_report.is_healthy() {
         tracing::warn!(
@@ -128,7 +141,26 @@ fn admin_cli_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn async_main(client_runtime: std::sync::Arc<ClientRuntime>) -> i32 {
-    let cli = RocketMQCli::parse_from_java_compatible_args();
+async fn async_main(client_runtime: std::sync::Arc<ClientRuntime>, verbosity: CliVerbosity) -> i32 {
+    let cli = match RocketMQCli::try_parse_from_java_compatible_args() {
+        Ok(cli) => cli,
+        Err(error)
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp
+                    | clap::error::ErrorKind::DisplayVersion
+                    | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            ) =>
+        {
+            print!("{error}");
+            return 0;
+        }
+        Err(_) => {
+            return render_cli_error(
+                &RocketMQError::validation_failed("command-line", "invalid command-line arguments"),
+                verbosity,
+            );
+        }
+    };
     cli.handle(client_runtime).await
 }

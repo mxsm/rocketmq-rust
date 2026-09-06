@@ -74,6 +74,8 @@ pub use boundary::RemotingResponseCode;
 pub use boundary::RemotingSpec;
 pub use catalog::*;
 pub use cli::CliErrorView;
+pub use cli::CliOutput;
+pub use cli::CliVerbosity;
 pub use context::ErrorContext;
 pub use context::ErrorContextField;
 pub use context::FieldValueRef;
