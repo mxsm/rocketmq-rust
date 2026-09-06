@@ -67,7 +67,9 @@ use rocketmq_transport::api::TransportContractViolation;
 use rocketmq_transport::api::TransportError;
 use tokio::sync::oneshot;
 
-use crate::long_polling::pending_arrival_latch::PendingArrivalInsertError;
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOperationalError;
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOutcome;
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertRejection;
 use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
 use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
 use crate::long_polling::pending_arrival_latch::PendingOffsetRangeLatch;
@@ -76,6 +78,7 @@ use crate::long_polling::pending_arrival_latch::PendingOffsetTarget;
 
 use super::deadline::LongPollingDeadline;
 use super::deadline::LongPollingDeadlineError;
+use super::deadline::LongPollingDeadlineOutcome;
 use super::index::PopArrival;
 use super::index::PopArrivalView;
 use super::index::PopCandidateReservation;
@@ -84,9 +87,11 @@ use super::index::PopCriteriaKey;
 use super::index::PopCriteriaLimits;
 use super::index::PopFanoutBatch;
 use super::index::PopFanoutCursor;
-use super::index::PopIndexError;
 use super::index::PopIndexLease;
+use super::index::PopIndexOperationalError;
+use super::index::PopIndexRejection;
 use super::index::PopIndexReservation;
+use super::index::PopIndexReserveOutcome;
 use super::index::PopIndexSnapshot;
 use super::index::PopMatchCriteria;
 use super::index::PopSelectionOrder;
@@ -96,6 +101,7 @@ mod continuation;
 pub(crate) use continuation::PopArrivalContinuation;
 use continuation::PopContinuationAdmission;
 pub(crate) use continuation::PopContinuationError;
+pub(crate) use continuation::PopContinuationOutcome;
 use continuation::PopContinuationPermit;
 use continuation::PopPendingArrival;
 use continuation::PopPendingArrivalKey;
@@ -410,7 +416,7 @@ impl PopDeferredService {
         subscription: Option<SubscriptionData>,
         filter: Option<ArcMessageFilter>,
         retained: PopRetainedEstimate,
-    ) -> Result<PreparedPopRegistration, PopDeferredPrepareError> {
+    ) -> Result<PopDeferredPrepareOutcome, PopDeferredPrepareError> {
         let header = request
             .command()
             .decode_command_custom_header::<PopMessageRequestHeader>()
@@ -441,7 +447,7 @@ impl PopDeferredService {
         retained: PopRetainedEstimate,
         wall_now: u64,
         monotonic_now: tokio::time::Instant,
-    ) -> Result<PreparedPopRegistration, PopDeferredPrepareError> {
+    ) -> Result<PopDeferredPrepareOutcome, PopDeferredPrepareError> {
         self.prepare_data_at(request, subscription, filter, retained, wall_now, monotonic_now, None)
     }
 
@@ -454,9 +460,11 @@ impl PopDeferredService {
         wall_now: u64,
         monotonic_now: tokio::time::Instant,
         provenance: Option<PreparedRequestProvenance>,
-    ) -> Result<PreparedPopRegistration, PopDeferredPrepareError> {
+    ) -> Result<PopDeferredPrepareOutcome, PopDeferredPrepareError> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(PopDeferredPrepareError::ServiceClosed);
+            return Ok(PopDeferredPrepareOutcome::Rejected(
+                PopDeferredPrepareRejection::ServiceClosed,
+            ));
         }
         if request.caller_host.is_empty() {
             return Err(PopDeferredPrepareError::MissingCallerHost);
@@ -464,15 +472,31 @@ impl PopDeferredService {
         if self.expiry_margins.recovery().is_zero() || self.expiry_margins.write().is_zero() {
             return Err(PopDeferredPrepareError::InvalidExpiryMargins);
         }
-        let deadline = LongPollingDeadline::checked(
+        let deadline = match LongPollingDeadline::checked(
             request.header.born_time,
             request.header.poll_time,
             wall_now,
             monotonic_now,
         )
-        .map_err(PopDeferredPrepareError::Deadline)?;
+        .map_err(PopDeferredPrepareError::Deadline)?
+        {
+            LongPollingDeadlineOutcome::Pending(deadline) => deadline,
+            LongPollingDeadlineOutcome::Immediate => {
+                return Ok(PopDeferredPrepareOutcome::Rejected(
+                    PopDeferredPrepareRejection::DeadlineElapsed,
+                ));
+            }
+        };
         let key = PopCriteriaKey::from_parts(request.topic(), request.consumer_group(), request.queue_id());
-        let reservation = self.index.reserve(key).map_err(PopDeferredPrepareError::Index)?;
+        let reservation = match self.index.reserve(key) {
+            Ok(PopIndexReserveOutcome::Reserved(reservation)) => reservation,
+            Ok(PopIndexReserveOutcome::Rejected(rejection)) => {
+                return Ok(PopDeferredPrepareOutcome::Rejected(PopDeferredPrepareRejection::Index(
+                    rejection,
+                )));
+            }
+            Err(error) => return Err(PopDeferredPrepareError::Index(error)),
+        };
         let criteria = Arc::new(PopMatchCriteria::new(subscription, filter));
         let resume_bytes = retained
             .resume_bytes
@@ -493,7 +517,11 @@ impl PopDeferredService {
             .map_err(PopDeferredPrepareError::Contract)?;
         let permit = match self.admission.try_reserve(retained_size) {
             DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            outcome => return Err(PopDeferredPrepareError::Admission(outcome)),
+            outcome => {
+                return Ok(PopDeferredPrepareOutcome::Rejected(
+                    PopDeferredPrepareRejection::Admission(outcome),
+                ));
+            }
         };
         let prepared = PreparedPopRegistration {
             request,
@@ -505,9 +533,11 @@ impl PopDeferredService {
         };
         if self.closed.load(Ordering::Acquire) {
             drop(prepared);
-            return Err(PopDeferredPrepareError::ServiceClosed);
+            return Ok(PopDeferredPrepareOutcome::Rejected(
+                PopDeferredPrepareRejection::ServiceClosed,
+            ));
         }
-        Ok(prepared)
+        Ok(PopDeferredPrepareOutcome::Prepared(Box::new(prepared)))
     }
 
     /// Moves the prepared index reservation into `register_with`'s infallible builder.
@@ -515,19 +545,27 @@ impl PopDeferredService {
         &self,
         prepared: PreparedPopRegistration,
         request: &mut RemotingRequest,
-    ) -> Result<DeferredRegistration, PopDeferredRegisterError> {
+    ) -> Result<PopDeferredRegisterOutcome, PopDeferredRegisterError> {
         if !prepared
             .provenance
             .is_some_and(|provenance| provenance.matches(request))
         {
-            return Err(PopDeferredRegisterError::ProvenanceMismatch);
+            return Ok(PopDeferredRegisterOutcome::Rejected(Box::new(
+                PopDeferredRegisterRejection::ProvenanceMismatch,
+            )));
         }
         if self.closed.load(Ordering::Acquire) {
-            return Err(PopDeferredRegisterError::ServiceClosed);
+            return Ok(PopDeferredRegisterOutcome::Rejected(Box::new(
+                PopDeferredRegisterRejection::ServiceClosed,
+            )));
         }
         let responder = match request.take_deferred_responder() {
             DeferredResponderOutcome::Taken(responder) => responder,
-            outcome => return Err(PopDeferredRegisterError::Responder(outcome)),
+            outcome => {
+                return Ok(PopDeferredRegisterOutcome::Rejected(Box::new(
+                    PopDeferredRegisterRejection::Responder(outcome),
+                )));
+            }
         };
         let PreparedPopRegistration {
             request,
@@ -540,17 +578,30 @@ impl PopDeferredService {
         let mut parts = DeferredParts::new(responder, permit);
         match parts.try_with_expiry(deadline.protocol_at(), self.expiry_margins) {
             Ok(DeferredExpiryOutcome::Attached) => {}
-            Ok(outcome) => return Err(PopDeferredRegisterError::Expiry { outcome, parts }),
-            Err(violation) => return Err(PopDeferredRegisterError::Contract { violation, parts }),
+            Ok(outcome) => {
+                return Ok(PopDeferredRegisterOutcome::Rejected(Box::new(
+                    PopDeferredRegisterRejection::Expiry { outcome, parts },
+                )));
+            }
+            Err(violation) => {
+                return Err(PopDeferredRegisterError::Contract {
+                    violation,
+                    parts: Box::new(parts),
+                });
+            }
         }
         match self.registry.register_with(parts, move |id| {
             let index_lease = reservation.publish(id, deadline, Arc::clone(&criteria));
             Ok::<_, Infallible>(ResumePop::new(request, criteria, deadline, index_lease))
         }) {
-            DeferredRegistryOutcome::Registered(registration) => Ok(registration),
+            DeferredRegistryOutcome::Registered(registration) => {
+                Ok(PopDeferredRegisterOutcome::Registered(Box::new(registration)))
+            }
             DeferredRegistryOutcome::DuplicateRequest(recovery) => {
                 release_deferred_registry_recovery(recovery);
-                Err(PopDeferredRegisterError::RegistryRejected)
+                Ok(PopDeferredRegisterOutcome::Rejected(Box::new(
+                    PopDeferredRegisterRejection::RegistryRejected,
+                )))
             }
             DeferredRegistryOutcome::IdentityExhausted(recovery) => {
                 release_deferred_registry_recovery(recovery);
@@ -558,7 +609,9 @@ impl PopDeferredService {
             }
             DeferredRegistryOutcome::ParentCancelled
             | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => Err(PopDeferredRegisterError::RegistryRejected),
+            | DeferredRegistryOutcome::DeadlineExpired => Ok(PopDeferredRegisterOutcome::Rejected(Box::new(
+                PopDeferredRegisterRejection::RegistryRejected,
+            ))),
             DeferredRegistryOutcome::BuilderRejected { error, parts } => {
                 drop(parts);
                 match error {}
@@ -826,8 +879,8 @@ impl PopDeferredService {
         filter_bitmap: Option<&[u8]>,
         properties: Option<&std::collections::HashMap<CheetahString, CheetahString>>,
         cursor: PopFanoutCursor,
-    ) -> Result<PopArrivalContinuation, PopContinuationError> {
-        PopArrivalContinuation::new(
+    ) -> Result<PopContinuationOutcome, PopContinuationError> {
+        PopArrivalContinuation::try_admit(
             &self.continuation_admission,
             topic,
             queue_id,
@@ -862,7 +915,7 @@ impl PopDeferredService {
         filter_bitmap: Option<&[u8]>,
         properties: Option<&std::collections::HashMap<CheetahString, CheetahString>>,
         cursor: PopFanoutCursor,
-    ) -> Result<(), PopPendingArrivalError> {
+    ) -> Result<PopPendingArrivalOutcome, PopPendingArrivalError> {
         let key = PopPendingArrivalKey::new(
             self.pending_arrival_sequence.fetch_add(1, Ordering::Relaxed),
             topic.clone(),
@@ -878,9 +931,19 @@ impl PopDeferredService {
             cursor,
         )
         .map_err(PopPendingArrivalError::Continuation)?;
-        self.pending_arrivals
-            .insert(key, pending)
-            .map_err(PopPendingArrivalError::Latch)
+        match self.pending_arrivals.insert(key, pending) {
+            Ok(PendingArrivalInsertOutcome::Inserted) => Ok(PopPendingArrivalOutcome::Latched),
+            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::Closed)) => {
+                Ok(PopPendingArrivalOutcome::Rejected(PopPendingArrivalRejection::Closed))
+            }
+            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::CountFull)) => Ok(
+                PopPendingArrivalOutcome::Rejected(PopPendingArrivalRejection::CountFull),
+            ),
+            Ok(PendingArrivalInsertOutcome::Rejected(PendingArrivalInsertRejection::BytesFull)) => Ok(
+                PopPendingArrivalOutcome::Rejected(PopPendingArrivalRejection::BytesFull),
+            ),
+            Err(error) => Err(PopPendingArrivalError::Latch(error)),
+        }
     }
 
     pub(crate) fn pending_arrival_reservations(&self) -> Vec<PopPendingArrivalReservation> {
@@ -892,9 +955,9 @@ impl PopDeferredService {
         topic: &CheetahString,
         queue_id: i32,
         logical_offset: i64,
-    ) -> Result<(), PendingArrivalInsertError> {
+    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
         if logical_offset <= 0 || !self.index.has_arrival_target(topic, queue_id) {
-            return Ok(());
+            return Ok(PendingArrivalInsertOutcome::Inserted);
         }
         self.pending_offsets
             .retain_targets(|target| self.index.has_arrival_target(target.topic(), target.queue_id()));
@@ -908,7 +971,7 @@ impl PopDeferredService {
         topic: &CheetahString,
         queue_id: i32,
         queue_offset: i64,
-    ) -> Result<(), PendingArrivalInsertError> {
+    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
         self.pending_offsets
             .merge(PopPendingOffsetTarget::new(topic.clone(), queue_id), queue_offset)
     }
@@ -917,13 +980,17 @@ impl PopDeferredService {
         self.pending_offsets
             .reserve_batch(self.sweep_limit.get())
             .into_iter()
-            .filter_map(|reservation| {
-                let permit = self.continuation_admission.reserve(reservation.retained_bytes()).ok()?;
-                Some(PopPendingOffsetReservation {
-                    reservation,
-                    _permit: permit,
-                })
-            })
+            .filter_map(
+                |reservation| match self.continuation_admission.reserve(reservation.retained_bytes()) {
+                    Ok(continuation::PopContinuationReserveOutcome::Reserved(permit)) => {
+                        Some(PopPendingOffsetReservation {
+                            reservation,
+                            _permit: permit,
+                        })
+                    }
+                    Ok(continuation::PopContinuationReserveOutcome::Rejected(_)) | Err(_) => None,
+                },
+            )
             .collect()
     }
 
@@ -1145,9 +1212,40 @@ const fn combined_budget(left: usize, right: usize) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PopPendingArrivalOutcome {
+    Latched,
+    Rejected(PopPendingArrivalRejection),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PopPendingArrivalRejection {
+    Closed,
+    CountFull,
+    BytesFull,
+}
+
+#[derive(Debug)]
 pub(crate) enum PopPendingArrivalError {
     Continuation(PopContinuationError),
-    Latch(PendingArrivalInsertError),
+    Latch(PendingArrivalInsertOperationalError),
+}
+
+impl fmt::Display for PopPendingArrivalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Continuation(_) => formatter.write_str("POP pending-arrival continuation failed"),
+            Self::Latch(_) => formatter.write_str("POP pending-arrival latch failed"),
+        }
+    }
+}
+
+impl Error for PopPendingArrivalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Continuation(source) => Some(source),
+            Self::Latch(source) => Some(source),
+        }
+    }
 }
 
 fn match_criteria_allocation_bytes() -> Option<usize> {
@@ -1195,7 +1293,6 @@ impl Drop for PopSweepShutdownGuard {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum PopDeferredPrepareErrorKind {
-    ServiceClosed,
     EmbeddedOrigin,
     Header,
     MissingCallerHost,
@@ -1203,20 +1300,50 @@ pub(crate) enum PopDeferredPrepareErrorKind {
     RetainedSizeOverflow,
     Deadline,
     Index,
-    Admission,
     Contract,
 }
 
-pub(crate) enum PopDeferredPrepareError {
+#[must_use]
+pub(crate) enum PopDeferredPrepareOutcome {
+    Prepared(Box<PreparedPopRegistration>),
+    Rejected(PopDeferredPrepareRejection),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum PopDeferredPrepareRejectionKind {
     ServiceClosed,
+    DeadlineElapsed,
+    IndexCapacity,
+    AdmissionCapacity,
+}
+
+pub(crate) enum PopDeferredPrepareRejection {
+    ServiceClosed,
+    DeadlineElapsed,
+    Index(PopIndexRejection),
+    Admission(DeferredAdmissionAcquireOutcome),
+}
+
+impl PopDeferredPrepareRejection {
+    #[must_use]
+    pub(crate) const fn kind(&self) -> PopDeferredPrepareRejectionKind {
+        match self {
+            Self::ServiceClosed => PopDeferredPrepareRejectionKind::ServiceClosed,
+            Self::DeadlineElapsed => PopDeferredPrepareRejectionKind::DeadlineElapsed,
+            Self::Index(_) => PopDeferredPrepareRejectionKind::IndexCapacity,
+            Self::Admission(_) => PopDeferredPrepareRejectionKind::AdmissionCapacity,
+        }
+    }
+}
+
+pub(crate) enum PopDeferredPrepareError {
     EmbeddedOrigin,
     Header(RocketMQError),
     MissingCallerHost,
     InvalidExpiryMargins,
     RetainedSizeOverflow,
     Deadline(LongPollingDeadlineError),
-    Index(PopIndexError),
-    Admission(DeferredAdmissionAcquireOutcome),
+    Index(PopIndexOperationalError),
     Contract(TransportContractViolation),
 }
 
@@ -1224,7 +1351,6 @@ impl PopDeferredPrepareError {
     #[must_use]
     pub(crate) const fn kind(&self) -> PopDeferredPrepareErrorKind {
         match self {
-            Self::ServiceClosed => PopDeferredPrepareErrorKind::ServiceClosed,
             Self::EmbeddedOrigin => PopDeferredPrepareErrorKind::EmbeddedOrigin,
             Self::Header(_) => PopDeferredPrepareErrorKind::Header,
             Self::MissingCallerHost => PopDeferredPrepareErrorKind::MissingCallerHost,
@@ -1232,7 +1358,6 @@ impl PopDeferredPrepareError {
             Self::RetainedSizeOverflow => PopDeferredPrepareErrorKind::RetainedSizeOverflow,
             Self::Deadline(_) => PopDeferredPrepareErrorKind::Deadline,
             Self::Index(_) => PopDeferredPrepareErrorKind::Index,
-            Self::Admission(_) => PopDeferredPrepareErrorKind::Admission,
             Self::Contract(_) => PopDeferredPrepareErrorKind::Contract,
         }
     }
@@ -1260,41 +1385,66 @@ impl Error for PopDeferredPrepareError {
             Self::Deadline(source) => Some(source),
             Self::Index(source) => Some(source),
             Self::Contract(source) => Some(source),
-            Self::ServiceClosed
-            | Self::EmbeddedOrigin
+            Self::EmbeddedOrigin
             | Self::MissingCallerHost
             | Self::InvalidExpiryMargins
-            | Self::RetainedSizeOverflow
-            | Self::Admission(_) => None,
+            | Self::RetainedSizeOverflow => None,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum PopDeferredRegisterErrorKind {
-    ServiceClosed,
-    ProvenanceMismatch,
-    Responder,
-    Expiry,
     Registry,
     Contract,
 }
 
-pub(crate) enum PopDeferredRegisterError {
-    ServiceClosed,
+#[must_use]
+pub(crate) enum PopDeferredRegisterOutcome {
+    Registered(Box<DeferredRegistration>),
+    Rejected(Box<PopDeferredRegisterRejection>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum PopDeferredRegisterRejectionKind {
     ProvenanceMismatch,
+    ServiceClosed,
+    Responder,
+    Expiry,
+    Registry,
+}
+
+pub(crate) enum PopDeferredRegisterRejection {
+    ProvenanceMismatch,
+    ServiceClosed,
     Responder(DeferredResponderOutcome),
     Expiry {
         outcome: DeferredExpiryOutcome,
         parts: DeferredParts,
     },
     RegistryRejected,
+}
+
+impl PopDeferredRegisterRejection {
+    #[must_use]
+    pub(crate) const fn kind(&self) -> PopDeferredRegisterRejectionKind {
+        match self {
+            Self::ProvenanceMismatch => PopDeferredRegisterRejectionKind::ProvenanceMismatch,
+            Self::ServiceClosed => PopDeferredRegisterRejectionKind::ServiceClosed,
+            Self::Responder(_) => PopDeferredRegisterRejectionKind::Responder,
+            Self::Expiry { .. } => PopDeferredRegisterRejectionKind::Expiry,
+            Self::RegistryRejected => PopDeferredRegisterRejectionKind::Registry,
+        }
+    }
+}
+
+pub(crate) enum PopDeferredRegisterError {
     RegistryIdentityExhausted,
     RegistryContract(TransportContractViolation),
     RegistryOperational(TransportError),
     Contract {
         violation: TransportContractViolation,
-        parts: DeferredParts,
+        parts: Box<DeferredParts>,
     },
 }
 
@@ -1314,14 +1464,9 @@ impl PopDeferredRegisterError {
     #[must_use]
     pub(crate) const fn kind(&self) -> PopDeferredRegisterErrorKind {
         match self {
-            Self::ServiceClosed => PopDeferredRegisterErrorKind::ServiceClosed,
-            Self::ProvenanceMismatch => PopDeferredRegisterErrorKind::ProvenanceMismatch,
-            Self::Responder(_) => PopDeferredRegisterErrorKind::Responder,
-            Self::Expiry { .. } => PopDeferredRegisterErrorKind::Expiry,
-            Self::RegistryRejected
-            | Self::RegistryIdentityExhausted
-            | Self::RegistryContract(_)
-            | Self::RegistryOperational(_) => PopDeferredRegisterErrorKind::Registry,
+            Self::RegistryIdentityExhausted | Self::RegistryContract(_) | Self::RegistryOperational(_) => {
+                PopDeferredRegisterErrorKind::Registry
+            }
             Self::Contract { .. } => PopDeferredRegisterErrorKind::Contract,
         }
     }
@@ -1348,12 +1493,7 @@ impl Error for PopDeferredRegisterError {
             Self::RegistryContract(violation) => Some(violation),
             Self::RegistryOperational(error) => Some(error),
             Self::Contract { violation, .. } => Some(violation),
-            Self::ServiceClosed
-            | Self::ProvenanceMismatch
-            | Self::Responder(_)
-            | Self::Expiry { .. }
-            | Self::RegistryRejected
-            | Self::RegistryIdentityExhausted => None,
+            Self::RegistryIdentityExhausted => None,
         }
     }
 }

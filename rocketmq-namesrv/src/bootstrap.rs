@@ -811,7 +811,7 @@ impl NameServerRuntime {
     /// 3. Shutdown route info manager (broker unregistration)
     /// 4. Wait for server task to complete (with timeout)
     /// 5. Release all resources
-    #[instrument(skip(self), name = "runtime_shutdown")]
+    #[instrument(skip(self, deadline), name = "runtime_shutdown")]
     async fn shutdown_until(&mut self, deadline: ShutdownDeadline) -> NameServerShutdownReport {
         let started_at = Instant::now();
         let mut shutdown_report = NameServerShutdownReport::default();

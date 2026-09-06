@@ -47,6 +47,8 @@ use crate::broker_runtime::BrokerMessageStore;
 use crate::broker_runtime::BrokerRuntime;
 use crate::config::broker_config::BrokerConfig;
 use crate::deferred_generation_handoff::DeferredGenerationTarget;
+use crate::long_polling::pop_deferred::service::PopDeferredPrepareOutcome;
+use crate::long_polling::pop_deferred::service::PopDeferredRegisterOutcome;
 use crate::long_polling::pop_deferred::service::PopDeferredService;
 use crate::long_polling::pop_deferred::service::PopRetainedEstimate;
 use crate::processor::notification_processor::NotificationProcessor;
@@ -76,19 +78,25 @@ struct PopLeaf {
 
 impl RequestProcessor for PopLeaf {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let prepared = self
-            .service
-            .prepare(
-                request,
-                None,
-                Some(Arc::clone(&self.filter)),
-                PopRetainedEstimate::default(),
-            )
-            .expect("prepare POP frozen-filter registration");
-        let registration = self
-            .service
-            .register(prepared, request)
-            .expect("register POP frozen-filter request");
+        let prepared = match self.service.prepare(
+            request,
+            None,
+            Some(Arc::clone(&self.filter)),
+            PopRetainedEstimate::default(),
+        ) {
+            Ok(PopDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
+            Ok(PopDeferredPrepareOutcome::Rejected(rejection)) => {
+                panic!("POP frozen-filter preparation was rejected: {:?}", rejection.kind())
+            }
+            Err(error) => panic!("POP frozen-filter preparation failed: {:?}", error.kind()),
+        };
+        let registration = match self.service.register(prepared, request) {
+            Ok(PopDeferredRegisterOutcome::Registered(registration)) => *registration,
+            Ok(PopDeferredRegisterOutcome::Rejected(rejection)) => {
+                panic!("POP frozen-filter registration was rejected: {:?}", rejection.kind())
+            }
+            Err(error) => panic!("POP frozen-filter registration failed: {:?}", error.kind()),
+        };
         Ok(HandlerOutcome::Deferred(registration))
     }
 }

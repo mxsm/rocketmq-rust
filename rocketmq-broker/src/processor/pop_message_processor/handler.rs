@@ -47,9 +47,12 @@ use super::resume::PopStoreReadRequest;
 use super::PopMessageProcessor;
 use super::BORN_TIME;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
-use crate::long_polling::pop_deferred::index::PopIndexErrorKind;
 use crate::long_polling::pop_deferred::service::PopDeferredPrepareError;
+use crate::long_polling::pop_deferred::service::PopDeferredPrepareOutcome;
+use crate::long_polling::pop_deferred::service::PopDeferredPrepareRejection;
 use crate::long_polling::pop_deferred::service::PopDeferredRegisterError;
+use crate::long_polling::pop_deferred::service::PopDeferredRegisterOutcome;
+use crate::long_polling::pop_deferred::service::PopDeferredRegisterRejection;
 use crate::long_polling::pop_deferred::service::PopRetainedEstimate;
 use crate::processor::response_assembly::BrokerResponseParts;
 
@@ -119,11 +122,19 @@ where
                     suspension.message_filter,
                     PopRetainedEstimate::default(),
                 ) {
-                    Ok(prepared) => prepared,
+                    Ok(PopDeferredPrepareOutcome::Prepared(prepared)) => prepared,
+                    Ok(PopDeferredPrepareOutcome::Rejected(rejection)) => {
+                        return self.prepare_rejection_outcome(suspension.head, rejection);
+                    }
                     Err(error) => return self.prepare_error_outcome(suspension.head, error),
                 };
-                match service.register(prepared, request) {
-                    Ok(registration) => Ok(HandlerOutcome::Deferred(registration)),
+                match service.register(*prepared, request) {
+                    Ok(PopDeferredRegisterOutcome::Registered(registration)) => {
+                        Ok(HandlerOutcome::Deferred(*registration))
+                    }
+                    Ok(PopDeferredRegisterOutcome::Rejected(rejection)) => {
+                        self.register_rejection_outcome(suspension.head, *rejection)
+                    }
                     Err(error) => self.register_error_outcome(suspension.head, error),
                 }
             }
@@ -370,36 +381,40 @@ where
         }
     }
 
+    fn prepare_rejection_outcome(
+        &self,
+        mut head: RemotingCommand,
+        rejection: PopDeferredPrepareRejection,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        match rejection {
+            PopDeferredPrepareRejection::DeadlineElapsed => {
+                head.set_code_ref(ResponseCode::PollingTimeout);
+                BrokerResponseParts::command(head)?.into_handler_outcome()
+            }
+            PopDeferredPrepareRejection::Index(_) | PopDeferredPrepareRejection::Admission(_) => {
+                head.set_code_ref(ResponseCode::PollingFull);
+                BrokerResponseParts::command(head)?.into_handler_outcome()
+            }
+            PopDeferredPrepareRejection::ServiceClosed => self.reply_with_code(
+                ResponseCode::ServiceNotAvailable,
+                "the deferred POP service is unavailable",
+            ),
+        }
+    }
+
     fn prepare_error_outcome(
         &self,
         mut head: RemotingCommand,
         error: PopDeferredPrepareError,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         match error {
+            PopDeferredPrepareError::EmbeddedOrigin
+            | PopDeferredPrepareError::Header(_)
+            | PopDeferredPrepareError::MissingCallerHost => self.invalid_reply(0),
             PopDeferredPrepareError::Deadline(_) => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
                 BrokerResponseParts::command(head)?.into_handler_outcome()
             }
-            PopDeferredPrepareError::Index(error)
-                if matches!(
-                    error.kind(),
-                    PopIndexErrorKind::GlobalCapacity | PopIndexErrorKind::BucketCapacity
-                ) =>
-            {
-                head.set_code_ref(ResponseCode::PollingFull);
-                BrokerResponseParts::command(head)?.into_handler_outcome()
-            }
-            PopDeferredPrepareError::Admission(_) => {
-                head.set_code_ref(ResponseCode::PollingFull);
-                BrokerResponseParts::command(head)?.into_handler_outcome()
-            }
-            PopDeferredPrepareError::EmbeddedOrigin
-            | PopDeferredPrepareError::Header(_)
-            | PopDeferredPrepareError::MissingCallerHost => self.invalid_reply(0),
-            PopDeferredPrepareError::ServiceClosed => self.reply_with_code(
-                ResponseCode::ServiceNotAvailable,
-                "the deferred POP service is unavailable",
-            ),
             PopDeferredPrepareError::InvalidExpiryMargins
             | PopDeferredPrepareError::RetainedSizeOverflow
             | PopDeferredPrepareError::Index(_)
@@ -407,37 +422,46 @@ where
         }
     }
 
-    fn register_error_outcome(
+    fn register_rejection_outcome(
         &self,
         mut head: RemotingCommand,
-        error: PopDeferredRegisterError,
+        rejection: PopDeferredRegisterRejection,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        match error {
-            PopDeferredRegisterError::ServiceClosed => self.reply_with_code(
+        match rejection {
+            PopDeferredRegisterRejection::ProvenanceMismatch => self.internal_reply(head.opaque()),
+            PopDeferredRegisterRejection::ServiceClosed => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "the deferred POP service is unavailable",
             ),
-            PopDeferredRegisterError::ProvenanceMismatch => self.internal_reply(head.opaque()),
-            PopDeferredRegisterError::Responder(DeferredResponderOutcome::OneWayRequest) => {
+            PopDeferredRegisterRejection::Responder(DeferredResponderOutcome::OneWayRequest) => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
                 BrokerResponseParts::command(head)?.into_handler_outcome()
             }
-            PopDeferredRegisterError::Responder(DeferredResponderOutcome::Unavailable) => self.reply_with_code(
+            PopDeferredRegisterRejection::Responder(DeferredResponderOutcome::Unavailable) => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "a deferred POP responder is unavailable",
             ),
-            PopDeferredRegisterError::Responder(
+            PopDeferredRegisterRejection::Responder(
                 DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
             ) => self.internal_reply(head.opaque()),
-            PopDeferredRegisterError::Responder(DeferredResponderOutcome::Taken(responder)) => {
+            PopDeferredRegisterRejection::Responder(DeferredResponderOutcome::Taken(responder)) => {
                 drop(responder);
                 self.internal_reply(head.opaque())
             }
-            PopDeferredRegisterError::Expiry { outcome: _, parts } => {
+            PopDeferredRegisterRejection::Expiry { outcome: _, parts } => {
                 drop(parts);
                 self.internal_reply(head.opaque())
             }
-            PopDeferredRegisterError::RegistryRejected => self.internal_reply(head.opaque()),
+            PopDeferredRegisterRejection::RegistryRejected => self.internal_reply(head.opaque()),
+        }
+    }
+
+    fn register_error_outcome(
+        &self,
+        head: RemotingCommand,
+        error: PopDeferredRegisterError,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        match error {
             PopDeferredRegisterError::RegistryIdentityExhausted => self.internal_reply(head.opaque()),
             PopDeferredRegisterError::RegistryContract(violation) => {
                 Err(RocketMQError::internal("register deferred POP request", violation))
@@ -572,7 +596,9 @@ mod tests {
     use super::normalize_born_time;
     use super::RemotingCommand;
     use crate::broker_runtime::BrokerMessageStore;
+    use crate::long_polling::pop_deferred::deadline::LongPollingDeadline;
     use crate::long_polling::pop_deferred::index::PopCriteriaLimits;
+    use crate::long_polling::pop_deferred::service::PopDeferredPrepareError;
     use crate::long_polling::pop_deferred::service::PopDeferredService;
     use crate::processor::processor_test_support::start_processor_server;
 
@@ -639,6 +665,46 @@ mod tests {
             .get_ext_fields()
             .and_then(|fields| fields.get("bornTime"))
             .is_some_and(|value| value != "0"));
+    }
+
+    #[tokio::test]
+    async fn pop_deadline_operational_failure_preserves_owner_response_state() {
+        let runtime = new_test_runtime("pop-deadline-operational").await;
+        let processor = runtime.pop_message_processor_for_test();
+        let deadline_error = LongPollingDeadline::checked(u64::MAX, 1, 0, tokio::time::Instant::now())
+            .expect_err("protocol deadline overflows");
+        let mut head = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+            .set_opaque(98_481)
+            .set_version(501)
+            .set_flag(0b1001)
+            .set_remark("preserved-owner-remark");
+        head.add_ext_field("preserved-owner-key", "preserved-owner-value");
+
+        let outcome = processor
+            .prepare_error_outcome(head, PopDeferredPrepareError::Deadline(deadline_error))
+            .expect("deadline failure has a protocol response");
+        let HandlerOutcome::Reply(response) = outcome else {
+            panic!("deadline failure must reply")
+        };
+        let response = response.into_embedded_response();
+        let head = response.head();
+
+        assert_eq!(head.code(), ResponseCode::PollingTimeout as i32);
+        assert_eq!(head.opaque(), 98_481);
+        assert_eq!(head.version(), 501);
+        assert_eq!(head.flag(), 0b1001);
+        assert_eq!(head.remark().map(CheetahString::as_str), Some("preserved-owner-remark"));
+        assert_eq!(
+            head.get_ext_fields()
+                .and_then(|fields| fields.get("preserved-owner-key"))
+                .map(CheetahString::as_str),
+            Some("preserved-owner-value")
+        );
+
+        let root = runtime.message_store_config().store_path_root_dir.to_string();
+        drop(processor);
+        drop(runtime);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

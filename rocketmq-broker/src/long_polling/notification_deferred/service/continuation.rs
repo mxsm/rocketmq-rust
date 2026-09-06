@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 
-use super::NotificationContinuationError;
+use super::NotificationContinuationOperationalError;
+use super::NotificationContinuationOutcome;
+use super::NotificationContinuationRejection;
 use crate::long_polling::notification_deferred::index::NotificationArrivalView;
 use crate::long_polling::notification_deferred::index::NotificationScanCursor;
 use crate::long_polling::pending_arrival_latch::PendingArrivalValue;
@@ -38,60 +40,62 @@ impl OwnedNotificationArrival {
     pub(super) fn retained_bytes(
         arrival: NotificationArrivalView<'_>,
         cursor: &NotificationScanCursor,
-    ) -> Result<usize, NotificationContinuationError> {
+    ) -> Result<usize, NotificationContinuationOperationalError> {
         let mut bytes = size_of::<NotificationArrivalContinuation>()
             .checked_add(
                 cursor
                     .try_retained_bytes()
-                    .ok_or(NotificationContinuationError::SizeOverflow)?,
+                    .ok_or(NotificationContinuationOperationalError::SizeOverflow)?,
             )
             .and_then(|total| total.checked_add(string_allocation_bound(arrival.topic.len())?))
-            .ok_or(NotificationContinuationError::SizeOverflow)?;
+            .ok_or(NotificationContinuationOperationalError::SizeOverflow)?;
         if let Some(bitmap) = arrival.filter_bit_map {
             let bitmap_bytes =
-                byte_allocation_bound(bitmap.len()).ok_or(NotificationContinuationError::SizeOverflow)?;
+                byte_allocation_bound(bitmap.len()).ok_or(NotificationContinuationOperationalError::SizeOverflow)?;
             bytes = bytes
                 .checked_add(bitmap_bytes)
-                .ok_or(NotificationContinuationError::SizeOverflow)?;
+                .ok_or(NotificationContinuationOperationalError::SizeOverflow)?;
         }
         if let Some(properties) = arrival.properties {
             let bucket_count = properties
                 .len()
                 .checked_mul(2)
                 .and_then(|count| count.checked_add(1))
-                .ok_or(NotificationContinuationError::SizeOverflow)?;
+                .ok_or(NotificationContinuationOperationalError::SizeOverflow)?;
             let bucket_bytes = bucket_count
                 .checked_mul(
                     size_of::<(CheetahString, CheetahString)>()
                         .checked_add(size_of::<u64>())
                         .and_then(|bytes| bytes.checked_add(1))
-                        .ok_or(NotificationContinuationError::SizeOverflow)?,
+                        .ok_or(NotificationContinuationOperationalError::SizeOverflow)?,
                 )
-                .ok_or(NotificationContinuationError::SizeOverflow)?;
+                .ok_or(NotificationContinuationOperationalError::SizeOverflow)?;
             bytes = bytes
                 .checked_add(bucket_bytes)
-                .ok_or(NotificationContinuationError::SizeOverflow)?;
+                .ok_or(NotificationContinuationOperationalError::SizeOverflow)?;
             for (key, value) in properties {
                 let key_bytes =
-                    string_allocation_bound(key.len()).ok_or(NotificationContinuationError::SizeOverflow)?;
-                let value_bytes =
-                    string_allocation_bound(value.len()).ok_or(NotificationContinuationError::SizeOverflow)?;
+                    string_allocation_bound(key.len()).ok_or(NotificationContinuationOperationalError::SizeOverflow)?;
+                let value_bytes = string_allocation_bound(value.len())
+                    .ok_or(NotificationContinuationOperationalError::SizeOverflow)?;
                 bytes = bytes
                     .checked_add(key_bytes)
                     .and_then(|total| total.checked_add(value_bytes))
-                    .ok_or(NotificationContinuationError::SizeOverflow)?;
+                    .ok_or(NotificationContinuationOperationalError::SizeOverflow)?;
             }
         }
         Ok(bytes.max(1))
     }
 
-    pub(super) fn try_from_view(arrival: NotificationArrivalView<'_>) -> Result<Self, NotificationContinuationError> {
+    pub(super) fn try_from_view(
+        arrival: NotificationArrivalView<'_>,
+    ) -> Result<Self, NotificationContinuationOperationalError> {
         let filter_bit_map = match arrival.filter_bit_map {
             Some(bitmap) => {
                 let mut owned = Vec::new();
                 owned
                     .try_reserve_exact(bitmap.len())
-                    .map_err(|_| NotificationContinuationError::Allocation)?;
+                    .map_err(NotificationContinuationOperationalError::Allocation)?;
                 owned.extend_from_slice(bitmap);
                 Some(owned)
             }
@@ -102,7 +106,7 @@ impl OwnedNotificationArrival {
                 let mut owned = HashMap::new();
                 owned
                     .try_reserve(properties.len())
-                    .map_err(|_| NotificationContinuationError::Allocation)?;
+                    .map_err(NotificationContinuationOperationalError::Allocation)?;
                 owned.extend(properties.iter().map(|(key, value)| (key.clone(), value.clone())));
                 Some(owned)
             }
@@ -159,16 +163,16 @@ impl NotificationPendingArrival {
         cursor: NotificationScanCursor,
         remaining_conflicts: usize,
         max_conflicts: usize,
-    ) -> Result<Self, NotificationContinuationError> {
+    ) -> Result<NotificationContinuationOutcome<Self>, NotificationContinuationOperationalError> {
         let retained_bytes = OwnedNotificationArrival::retained_bytes(arrival, &cursor)?;
         let owned = OwnedNotificationArrival::try_from_view(arrival)?;
-        Ok(Self {
+        Ok(NotificationContinuationOutcome::Continued(Self {
             owned,
             cursor,
             remaining_conflicts,
             max_conflicts,
             retained_bytes,
-        })
+        }))
     }
 }
 
@@ -222,24 +226,31 @@ impl ContinuationAdmission {
         }
     }
 
-    pub(super) fn reserve(self: &Arc<Self>, bytes: usize) -> Result<ContinuationPermit, NotificationContinuationError> {
+    pub(super) fn reserve(
+        self: &Arc<Self>,
+        bytes: usize,
+    ) -> Result<NotificationContinuationOutcome<ContinuationPermit>, NotificationContinuationOperationalError> {
         let count = self.count.fetch_add(1, Ordering::AcqRel);
         if count >= self.max_count {
             self.count.fetch_sub(1, Ordering::AcqRel);
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            return Err(NotificationContinuationError::CountFull);
+            return Ok(NotificationContinuationOutcome::Rejected(
+                NotificationContinuationRejection::CountFull,
+            ));
         }
         let mut current = self.bytes.load(Ordering::Acquire);
         loop {
             let Some(next) = current.checked_add(bytes) else {
                 self.count.fetch_sub(1, Ordering::AcqRel);
                 self.rejected.fetch_add(1, Ordering::Relaxed);
-                return Err(NotificationContinuationError::SizeOverflow);
+                return Err(NotificationContinuationOperationalError::SizeOverflow);
             };
             if next > self.max_bytes {
                 self.count.fetch_sub(1, Ordering::AcqRel);
                 self.rejected.fetch_add(1, Ordering::Relaxed);
-                return Err(NotificationContinuationError::BytesFull);
+                return Ok(NotificationContinuationOutcome::Rejected(
+                    NotificationContinuationRejection::BytesFull,
+                ));
             }
             match self
                 .bytes
@@ -249,10 +260,10 @@ impl ContinuationAdmission {
                 Err(observed) => current = observed,
             }
         }
-        Ok(ContinuationPermit {
+        Ok(NotificationContinuationOutcome::Continued(ContinuationPermit {
             admission: Arc::clone(self),
             bytes,
-        })
+        }))
     }
 
     pub(super) fn snapshot(&self) -> ContinuationSnapshot {

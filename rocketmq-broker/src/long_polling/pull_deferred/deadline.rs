@@ -31,7 +31,7 @@ impl PullWaitDeadline {
         effective_timeout_millis: u64,
         wall_now_millis: u64,
         monotonic_now: tokio::time::Instant,
-    ) -> Result<Self, PullWaitDeadlineError> {
+    ) -> Result<PullWaitDeadlineOutcome, PullWaitDeadlineError> {
         let protocol_end_millis = suspend_wall_millis
             .checked_add(effective_timeout_millis)
             .ok_or_else(|| PullWaitDeadlineError::new(PullWaitDeadlineErrorKind::ProtocolOverflow))?;
@@ -39,12 +39,12 @@ impl PullWaitDeadline {
             .checked_add(Duration::from_millis(effective_timeout_millis))
             .ok_or_else(|| PullWaitDeadlineError::new(PullWaitDeadlineErrorKind::MonotonicOverflow))?;
         if wall_now_millis >= protocol_end_millis || monotonic_now >= protocol_at {
-            return Err(PullWaitDeadlineError::new(PullWaitDeadlineErrorKind::AlreadyExpired));
+            return Ok(PullWaitDeadlineOutcome::AlreadyExpired);
         }
-        Ok(Self {
+        Ok(PullWaitDeadlineOutcome::Pending(Self {
             protocol_end_millis,
             protocol_at,
-        })
+        }))
     }
 
     #[must_use]
@@ -58,10 +58,16 @@ impl PullWaitDeadline {
     }
 }
 
+#[must_use]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PullWaitDeadlineOutcome {
+    Pending(PullWaitDeadline),
+    AlreadyExpired,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum PullWaitDeadlineErrorKind {
     ProtocolOverflow,
-    AlreadyExpired,
     MonotonicOverflow,
 }
 
@@ -69,7 +75,6 @@ impl PullWaitDeadlineErrorKind {
     const fn as_str(self) -> &'static str {
         match self {
             Self::ProtocolOverflow => "protocol_overflow",
-            Self::AlreadyExpired => "already_expired",
             Self::MonotonicOverflow => "monotonic_overflow",
         }
     }

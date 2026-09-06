@@ -17,7 +17,12 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::SerializationError;
+use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
 use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
 use rocketmq_model::PopRetryPolicyOutcome;
@@ -88,7 +93,7 @@ impl PopConsumerProfileStore {
         let mut profiles = BTreeMap::new();
         for (key, value) in records {
             let record: StoredProfileRecord = serde_json::from_slice(&value)
-                .map_err(|error| codec_error(format!("profile record JSON is invalid: {error}")))?;
+                .map_err(|error| codec_source_error("deserialize profile record", "JSON", error))?;
             match record {
                 StoredProfileRecord::Profile { mut profile } => {
                     normalize_retry_policy(&mut profile)?;
@@ -179,7 +184,7 @@ impl PopConsumerProfileStore {
         let value = serde_json::to_vec(&StoredProfileRecord::Profile {
             profile: profile.clone(),
         })
-        .map_err(|error| codec_error(format!("profile record encode failed: {error}")))?;
+        .map_err(|error| codec_source_error("serialize profile record", "JSON", error))?;
         self.rocksdb.write_profile_record(
             marker,
             pop_consumer_profile_key(group.as_str()).map_err(broker_storage_error)?,
@@ -208,7 +213,7 @@ impl PopConsumerProfileStore {
             last_seen,
             format_version: POP_CONSUMER_PROFILE_FORMAT_VERSION,
         })
-        .map_err(|error| codec_error(format!("profile tombstone encode failed: {error}")))?;
+        .map_err(|error| codec_source_error("serialize profile tombstone", "JSON", error))?;
         self.rocksdb.write_profile_record(
             marker,
             pop_consumer_profile_key(group.as_str()).map_err(broker_storage_error)?,
@@ -263,7 +268,7 @@ fn validate_profile(profile: &PopConsumerProfile) -> Result<(), RocketMQError> {
         .ok_or_else(|| codec_error("persisted POP profile is missing retry policy"))?;
     retry_policy
         .state()
-        .map_err(|error| codec_error(format!("invalid persisted POP retry policy: {error}")))?;
+        .map_err(|error| codec_source_error("validate persisted POP retry policy", "POP retry policy", error))?;
     if retry_policy.generation != profile.generation || retry_policy.write_version.number() != profile.retry_version {
         return Err(codec_error(
             "persisted POP retry policy generation/version does not match the profile",
@@ -294,13 +299,9 @@ fn next_retry_policy(
     requested: PopRetryPolicy,
     generation: u64,
 ) -> Result<PopRetryPolicy, RocketMQError> {
-    let requested_state = requested.state().map_err(|error| {
-        invalid_profile(
-            "retryPolicy",
-            error.to_string(),
-            "a supported POP retry migration state",
-        )
-    })?;
+    let requested_state = requested
+        .state()
+        .map_err(|error| invalid_profile_source("retryPolicy", error))?;
     let Some(existing) = existing else {
         return Ok(PopRetryPolicy::for_state(requested_state, generation));
     };
@@ -308,12 +309,16 @@ fn next_retry_policy(
         .retry_policy
         .as_ref()
         .ok_or_else(|| codec_error("existing POP profile is missing retry policy"))?;
-    if current.state().map_err(|error| codec_error(error.to_string()))? == requested_state {
+    if current
+        .state()
+        .map_err(|error| codec_source_error("validate existing POP retry policy", "POP retry policy", error))?
+        == requested_state
+    {
         return Ok(PopRetryPolicy::for_state(requested_state, generation));
     }
     match current
         .transition_to(requested_state, generation)
-        .map_err(|_| codec_error("existing POP retry policy is invalid"))?
+        .map_err(|error| codec_source_error("transition existing POP retry policy", "POP retry policy", error))?
     {
         PopRetryPolicyOutcome::Transitioned(policy) => Ok(policy),
         PopRetryPolicyOutcome::Rejected => Err(invalid_profile(
@@ -345,4 +350,92 @@ fn invalid_profile(key: &'static str, value: impl Into<String>, reason: impl Int
 
 fn codec_error(reason: impl Into<String>) -> RocketMQError {
     RocketMQError::deserialization_failed("POP consumer profile", reason.into())
+}
+
+fn codec_source_error(
+    operation: &'static str,
+    format: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> RocketMQError {
+    SerializationError::source(operation, format, source).into()
+}
+
+fn invalid_profile_source(key: &'static str, source: impl std::error::Error + Send + Sync + 'static) -> RocketMQError {
+    RocketMQError::Shared(Arc::new(
+        Error::caused_by(&CORE_CONFIGURATION_INVALID, source).with_context(
+            ErrorContext::new()
+                .with_text(fields::KEY, key)
+                .with_secret_presence(fields::VALUE_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+        ),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as StdError;
+
+    use rocketmq_error::CORE_SERIALIZATION_FAILED;
+    use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
+    use rocketmq_model::ModelContractViolation;
+
+    use super::*;
+
+    fn malformed_retry_policy(generation: u64) -> PopRetryPolicy {
+        PopRetryPolicy {
+            write_version: PopRetryTopicVersion::V1,
+            read_fallback_order: vec![PopRetryTopicVersion::V1],
+            accept_v1: false,
+            accept_v2: false,
+            generation,
+        }
+    }
+
+    fn has_source<T>(error: &(dyn StdError + 'static)) -> bool
+    where
+        T: StdError + 'static,
+    {
+        let mut current = error.source();
+        while let Some(source) = current {
+            if source.downcast_ref::<T>().is_some() {
+                return true;
+            }
+            current = source.source();
+        }
+        false
+    }
+
+    #[test]
+    fn profile_codec_failure_preserves_the_typed_json_source() {
+        let source = serde_json::from_slice::<StoredProfileRecord>(b"{").expect_err("malformed profile JSON must fail");
+        let error = codec_source_error("deserialize profile record", "JSON", source);
+
+        assert_eq!(error.descriptor(), &CORE_SERIALIZATION_FAILED);
+        assert!(has_source::<serde_json::Error>(&error));
+        assert!(!error.to_string().contains("EOF while parsing"));
+    }
+
+    #[test]
+    fn profile_retry_policy_failures_preserve_descriptor_and_typed_source() {
+        let requested = next_retry_policy(None, malformed_retry_policy(1), 2)
+            .expect_err("malformed requested policy must be rejected");
+        assert_eq!(requested.descriptor(), &CORE_CONFIGURATION_INVALID);
+        assert!(has_source::<ModelContractViolation>(&requested));
+        assert!(!requested.to_string().contains("POP retry policy does not describe"));
+
+        let existing = PopConsumerProfile {
+            group: CheetahString::from_static_str("group-a"),
+            subscriptions: Vec::new(),
+            retry_version: 1,
+            retry_policy: Some(malformed_retry_policy(1)),
+            generation: 1,
+            last_seen: 0,
+            format_version: POP_CONSUMER_PROFILE_FORMAT_VERSION,
+        };
+        let persisted = next_retry_policy(Some(&existing), PopRetryPolicy::v2_only(1), 2)
+            .expect_err("malformed persisted policy must fail");
+        assert_eq!(persisted.descriptor(), &CORE_SERIALIZATION_FAILED);
+        assert!(has_source::<ModelContractViolation>(&persisted));
+        assert!(!persisted.to_string().contains("POP retry policy does not describe"));
+    }
 }

@@ -28,6 +28,7 @@ use rocketmq_store::CqExtUnit;
 use rocketmq_store::MessageFilter;
 
 use super::*;
+use crate::long_polling::pop_deferred::deadline::LongPollingDeadlineOutcome;
 
 fn nonzero(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).expect("test value is non-zero")
@@ -50,7 +51,10 @@ fn arrival(group: &str, queue_id: i32) -> PopArrival {
 }
 
 fn deadline(base: tokio::time::Instant, millis: u64) -> LongPollingDeadline {
-    LongPollingDeadline::checked(0, millis + 49, 0, base).expect("test deadline")
+    match LongPollingDeadline::checked(0, millis + 49, 0, base).expect("test deadline") {
+        LongPollingDeadlineOutcome::Pending(deadline) => deadline,
+        LongPollingDeadlineOutcome::Immediate => panic!("test deadline must remain pending"),
+    }
 }
 
 fn match_all() -> Arc<PopMatchCriteria> {

@@ -65,18 +65,24 @@ use rocketmq_transport::api::TransportContractViolation;
 use rocketmq_transport::api::TransportError;
 
 use super::deadline::NotificationWaitDeadline;
-use super::deadline::NotificationWaitDeadlineError;
+use super::deadline::NotificationWaitDeadlineOperationalError;
+use super::deadline::NotificationWaitDeadlineOutcome;
+use super::deadline::NotificationWaitDeadlineRejection;
 use super::index::NotificationArrivalView;
 use super::index::NotificationCandidateReservation;
 use super::index::NotificationCandidateSelection;
 use super::index::NotificationCriteriaIndex;
 use super::index::NotificationCriteriaKey;
 use super::index::NotificationCriteriaLimits;
-use super::index::NotificationIndexError;
+use super::index::NotificationIndexOperationalError;
+use super::index::NotificationIndexReserveOutcome;
+use super::index::NotificationIndexReserveRejection;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
 use super::index::NotificationScanCursor;
-use crate::long_polling::pending_arrival_latch::PendingArrivalInsertError;
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOperationalError;
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertOutcome;
+use crate::long_polling::pending_arrival_latch::PendingArrivalInsertRejection;
 use crate::long_polling::pending_arrival_latch::PendingArrivalLatch;
 use crate::long_polling::pending_arrival_latch::PendingArrivalReservation;
 use crate::long_polling::pending_arrival_latch::PendingOffsetRangeLatch;
@@ -168,21 +174,27 @@ impl NotificationDeferredService {
         subscription: Option<SubscriptionData>,
         filter: Option<ArcMessageFilter>,
         retained: NotificationRetainedEstimate,
-    ) -> Result<PreparedNotificationRegistration, NotificationDeferredPrepareError> {
+    ) -> Result<NotificationDeferredPrepareOutcome, NotificationDeferredPrepareFailure> {
         if request.command().is_oneway_rpc() {
-            return Err(NotificationDeferredPrepareError::OneWay);
+            return Ok(NotificationDeferredPrepareOutcome::Rejected(
+                NotificationDeferredPrepareRejection::OneWay,
+            ));
         }
         let header = request
             .command()
             .decode_command_custom_header::<NotificationRequestHeader>()
-            .map_err(NotificationDeferredPrepareError::Header)?;
+            .map_err(NotificationDeferredPrepareFailure::Header)?;
         let effective_peer = match request.origin() {
             RequestOrigin::Network { peer } => peer.address(),
-            RequestOrigin::Embedded { .. } => return Err(NotificationDeferredPrepareError::EmbeddedOrigin),
-            _ => return Err(NotificationDeferredPrepareError::EmbeddedOrigin),
+            _ => {
+                return Ok(NotificationDeferredPrepareOutcome::Rejected(
+                    NotificationDeferredPrepareRejection::EmbeddedOrigin,
+                ));
+            }
         };
-        let wall_now =
-            i64::try_from(current_millis()).map_err(|_| NotificationDeferredPrepareError::WallTimeOverflow)?;
+        let Ok(wall_now) = i64::try_from(current_millis()) else {
+            return Err(NotificationDeferredPrepareFailure::WallTimeOverflow);
+        };
         self.prepare_data_at(
             NotificationRequestData::new(header, effective_peer),
             subscription,
@@ -203,7 +215,7 @@ impl NotificationDeferredService {
         retained: NotificationRetainedEstimate,
         wall_now: i64,
         monotonic_now: tokio::time::Instant,
-    ) -> Result<PreparedNotificationRegistration, NotificationDeferredPrepareError> {
+    ) -> Result<NotificationDeferredPrepareOutcome, NotificationDeferredPrepareFailure> {
         self.prepare_data_at(request, subscription, filter, retained, wall_now, monotonic_now, None)
     }
 
@@ -220,43 +232,66 @@ impl NotificationDeferredService {
         wall_now: i64,
         monotonic_now: tokio::time::Instant,
         provenance: Option<PreparedRequestProvenance>,
-    ) -> Result<PreparedNotificationRegistration, NotificationDeferredPrepareError> {
+    ) -> Result<NotificationDeferredPrepareOutcome, NotificationDeferredPrepareFailure> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(NotificationDeferredPrepareError::ServiceClosed);
+            return Ok(NotificationDeferredPrepareOutcome::Rejected(
+                NotificationDeferredPrepareRejection::ServiceClosed,
+            ));
         }
         if self.expiry_margins.recovery().is_zero() || self.expiry_margins.write().is_zero() {
-            return Err(NotificationDeferredPrepareError::InvalidExpiryMargins);
+            return Err(NotificationDeferredPrepareFailure::InvalidExpiryMargins);
         }
-        let deadline = NotificationWaitDeadline::checked(
+        let deadline = match NotificationWaitDeadline::checked(
             request.header.born_time,
             request.header.poll_time,
             wall_now,
             monotonic_now,
-        )
-        .map_err(NotificationDeferredPrepareError::Deadline)?;
-        let resume_bytes = retained
-            .resume_bytes
-            .checked_add(request.estimated_dynamic_bytes()?)
-            .ok_or(NotificationDeferredPrepareError::RetainedSizeOverflow)?;
-        let filter_bytes = retained
+        ) {
+            Ok(NotificationWaitDeadlineOutcome::Pending(deadline)) => deadline,
+            Ok(NotificationWaitDeadlineOutcome::Rejected(rejection)) => {
+                return Ok(NotificationDeferredPrepareOutcome::Rejected(
+                    NotificationDeferredPrepareRejection::Deadline(rejection),
+                ));
+            }
+            Err(error) => return Err(NotificationDeferredPrepareFailure::Deadline(error)),
+        };
+        let dynamic_bytes = request.estimated_dynamic_bytes()?;
+        let Some(resume_bytes) = retained.resume_bytes.checked_add(dynamic_bytes) else {
+            return Err(NotificationDeferredPrepareFailure::RetainedSizeOverflow);
+        };
+        let Some(filter_bytes) = retained
             .filter_bytes
             .checked_add(std::mem::size_of::<NotificationMatchCriteria>())
-            .ok_or(NotificationDeferredPrepareError::RetainedSizeOverflow)?;
+        else {
+            return Err(NotificationDeferredPrepareFailure::RetainedSizeOverflow);
+        };
         let retained_size = DeferredRegistry::<ResumeNotification>::try_retained_size(
             DeferredRetainedSizeParts::new(resume_bytes)
                 .with_filter_bytes(filter_bytes)
                 .with_secondary_index_bytes(NotificationCriteriaIndex::<DeferredId>::retained_bytes_per_entry())
                 .with_metadata_bytes(retained.metadata_bytes),
         )
-        .map_err(NotificationDeferredPrepareError::Contract)?;
+        .map_err(NotificationDeferredPrepareFailure::Contract)?;
         let key = NotificationCriteriaKey::from_parts(request.topic(), request.consumer_group(), request.queue_id());
-        let reservation = self
+        let reservation = match self
             .index
             .reserve_at(key, monotonic_now)
-            .map_err(NotificationDeferredPrepareError::Index)?;
+            .map_err(NotificationDeferredPrepareFailure::Index)?
+        {
+            NotificationIndexReserveOutcome::Reserved(reservation) => reservation,
+            NotificationIndexReserveOutcome::Rejected(rejection) => {
+                return Ok(NotificationDeferredPrepareOutcome::Rejected(
+                    NotificationDeferredPrepareRejection::IndexCapacity(rejection),
+                ));
+            }
+        };
         let permit = match self.admission.try_reserve(retained_size) {
             DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
-            outcome => return Err(NotificationDeferredPrepareError::Admission(outcome)),
+            outcome => {
+                return Ok(NotificationDeferredPrepareOutcome::Rejected(
+                    NotificationDeferredPrepareRejection::Admission(outcome),
+                ));
+            }
         };
         let observation = PreparedObservation::new(Arc::clone(&self.prepared));
         let prepared = PreparedNotificationRegistration {
@@ -270,9 +305,11 @@ impl NotificationDeferredService {
         };
         if self.closed.load(Ordering::Acquire) {
             drop(prepared);
-            return Err(NotificationDeferredPrepareError::ServiceClosed);
+            return Ok(NotificationDeferredPrepareOutcome::Rejected(
+                NotificationDeferredPrepareRejection::ServiceClosed,
+            ));
         }
-        Ok(prepared)
+        Ok(NotificationDeferredPrepareOutcome::Prepared(Box::new(prepared)))
     }
 
     /// Takes the responder only after every recoverable reservation succeeds.
@@ -280,19 +317,27 @@ impl NotificationDeferredService {
         &self,
         prepared: PreparedNotificationRegistration,
         request: &mut RemotingRequest,
-    ) -> Result<DeferredRegistration, NotificationDeferredRegisterError> {
+    ) -> Result<NotificationDeferredRegisterOutcome, NotificationDeferredRegisterFailure> {
         if !prepared
             .provenance
             .is_some_and(|provenance| provenance.matches(request))
         {
-            return Err(NotificationDeferredRegisterError::ProvenanceMismatch);
+            return Ok(NotificationDeferredRegisterOutcome::Rejected(Box::new(
+                NotificationDeferredRegisterRejection::ProvenanceMismatch,
+            )));
         }
         if self.closed.load(Ordering::Acquire) {
-            return Err(NotificationDeferredRegisterError::ServiceClosedBeforeTake);
+            return Ok(NotificationDeferredRegisterOutcome::Rejected(Box::new(
+                NotificationDeferredRegisterRejection::ServiceClosedBeforeTake,
+            )));
         }
         let responder = match request.take_deferred_responder() {
             DeferredResponderOutcome::Taken(responder) => responder,
-            outcome => return Err(NotificationDeferredRegisterError::Responder(outcome)),
+            outcome => {
+                return Ok(NotificationDeferredRegisterOutcome::Rejected(Box::new(
+                    NotificationDeferredRegisterRejection::Responder(outcome),
+                )));
+            }
         };
         #[cfg(test)]
         let register_fault = self.register_fault.swap(0, Ordering::AcqRel);
@@ -302,7 +347,9 @@ impl NotificationDeferredService {
         }
         if self.closed.load(Ordering::Acquire) {
             drop(responder);
-            return Err(NotificationDeferredRegisterError::ServiceClosedAfterTake);
+            return Ok(NotificationDeferredRegisterOutcome::Rejected(Box::new(
+                NotificationDeferredRegisterRejection::ServiceClosedAfterTake,
+            )));
         }
         let PreparedNotificationRegistration {
             request,
@@ -326,9 +373,16 @@ impl NotificationDeferredService {
         let mut parts = DeferredParts::new(responder, permit);
         match parts.try_with_expiry(protocol_at, self.expiry_margins) {
             Ok(DeferredExpiryOutcome::Attached) => {}
-            Ok(outcome) => return Err(NotificationDeferredRegisterError::Expiry { outcome, parts }),
+            Ok(outcome) => {
+                return Ok(NotificationDeferredRegisterOutcome::Rejected(Box::new(
+                    NotificationDeferredRegisterRejection::Expiry { outcome, parts },
+                )));
+            }
             Err(violation) => {
-                return Err(NotificationDeferredRegisterError::Contract { violation, parts });
+                return Err(NotificationDeferredRegisterFailure::Contract {
+                    violation,
+                    parts: Box::new(parts),
+                });
             }
         };
         #[cfg(test)]
@@ -340,29 +394,39 @@ impl NotificationDeferredService {
             let index_lease = reservation.publish(id, deadline, Arc::clone(&criteria));
             Ok::<_, Infallible>(ResumeNotification::new(request, criteria, deadline, index_lease))
         }) {
-            DeferredRegistryOutcome::Registered(registration) => Ok(registration),
+            DeferredRegistryOutcome::Registered(registration) => {
+                Ok(NotificationDeferredRegisterOutcome::Registered(Box::new(registration)))
+            }
             DeferredRegistryOutcome::DuplicateRequest(recovery) => {
                 release_deferred_registry_recovery(recovery);
-                Err(NotificationDeferredRegisterError::RegistryRejected)
+                Ok(NotificationDeferredRegisterOutcome::Rejected(Box::new(
+                    NotificationDeferredRegisterRejection::DuplicateRequest,
+                )))
             }
             DeferredRegistryOutcome::IdentityExhausted(recovery) => {
                 release_deferred_registry_recovery(recovery);
-                Err(NotificationDeferredRegisterError::RegistryIdentityExhausted)
+                Err(NotificationDeferredRegisterFailure::IdentityExhausted)
             }
-            DeferredRegistryOutcome::ParentCancelled
-            | DeferredRegistryOutcome::SessionClosed
-            | DeferredRegistryOutcome::DeadlineExpired => Err(NotificationDeferredRegisterError::RegistryRejected),
+            DeferredRegistryOutcome::ParentCancelled => Ok(NotificationDeferredRegisterOutcome::Rejected(Box::new(
+                NotificationDeferredRegisterRejection::ParentCancelled,
+            ))),
+            DeferredRegistryOutcome::SessionClosed => Ok(NotificationDeferredRegisterOutcome::Rejected(Box::new(
+                NotificationDeferredRegisterRejection::SessionClosed,
+            ))),
+            DeferredRegistryOutcome::DeadlineExpired => Ok(NotificationDeferredRegisterOutcome::Rejected(Box::new(
+                NotificationDeferredRegisterRejection::DeadlineExpired,
+            ))),
             DeferredRegistryOutcome::BuilderRejected { error, parts } => {
                 drop(parts);
                 match error {}
             }
             DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
                 release_deferred_registry_recovery(recovery);
-                Err(NotificationDeferredRegisterError::RegistryContract(violation))
+                Err(NotificationDeferredRegisterFailure::RegistryContract(violation))
             }
             DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
                 release_deferred_registry_recovery(recovery);
-                Err(NotificationDeferredRegisterError::RegistryOperational(error))
+                Err(NotificationDeferredRegisterFailure::RegistryOperational(error))
             }
         };
         drop(observation);
@@ -478,32 +542,48 @@ impl NotificationDeferredService {
         &self,
         arrival: NotificationArrivalView<'_>,
         cursor: NotificationScanCursor,
-    ) -> Result<NotificationArrivalContinuation, NotificationContinuationError> {
+    ) -> Result<
+        NotificationContinuationOutcome<NotificationArrivalContinuation>,
+        NotificationContinuationOperationalError,
+    > {
         if cursor.is_complete() {
-            return Err(NotificationContinuationError::Complete);
+            return Ok(NotificationContinuationOutcome::Rejected(
+                NotificationContinuationRejection::AlreadyComplete,
+            ));
         }
         let remaining_conflicts = self.conflict_limit.get().saturating_sub(cursor.conflicts_spent());
         if remaining_conflicts == 0 {
-            return Err(NotificationContinuationError::ConflictBudgetExhausted);
+            return Ok(NotificationContinuationOutcome::Rejected(
+                NotificationContinuationRejection::ConflictBudgetExhausted,
+            ));
         }
         let retained_bytes = OwnedNotificationArrival::retained_bytes(arrival, &cursor)?;
-        let permit = self.continuation_admission.reserve(retained_bytes)?;
+        let permit = match self.continuation_admission.reserve(retained_bytes)? {
+            NotificationContinuationOutcome::Continued(permit) => permit,
+            NotificationContinuationOutcome::Rejected(rejection) => {
+                return Ok(NotificationContinuationOutcome::Rejected(rejection));
+            }
+        };
         let owned = OwnedNotificationArrival::try_from_view(arrival)?;
-        Ok(NotificationArrivalContinuation {
-            owned,
-            cursor,
-            remaining_conflicts,
-            _permit: permit,
-        })
+        Ok(NotificationContinuationOutcome::Continued(
+            NotificationArrivalContinuation {
+                owned,
+                cursor,
+                remaining_conflicts,
+                _permit: permit,
+            },
+        ))
     }
 
     pub(crate) fn latch_arrival(
         &self,
         arrival: NotificationArrivalView<'_>,
         cursor: NotificationScanCursor,
-    ) -> Result<(), NotificationPendingArrivalError> {
+    ) -> Result<NotificationPendingArrivalOutcome, NotificationPendingArrivalOperationalError> {
         if cursor.is_complete() {
-            return Ok(());
+            return Ok(NotificationPendingArrivalOutcome::Rejected(
+                NotificationPendingArrivalRejection::Continuation(NotificationContinuationRejection::AlreadyComplete),
+            ));
         }
         let key = NotificationPendingArrivalKey::new(
             self.pending_arrival_sequence.fetch_add(1, Ordering::Relaxed),
@@ -512,13 +592,30 @@ impl NotificationDeferredService {
         );
         let remaining_conflicts = self.conflict_limit.get().saturating_sub(cursor.conflicts_spent());
         if remaining_conflicts == 0 {
-            return Ok(());
+            return Ok(NotificationPendingArrivalOutcome::Rejected(
+                NotificationPendingArrivalRejection::Continuation(
+                    NotificationContinuationRejection::ConflictBudgetExhausted,
+                ),
+            ));
         }
-        let pending = NotificationPendingArrival::new(arrival, cursor, remaining_conflicts, self.conflict_limit.get())
-            .map_err(NotificationPendingArrivalError::Continuation)?;
-        self.pending_arrivals
-            .insert(key, pending)
-            .map_err(NotificationPendingArrivalError::Latch)
+        let pending =
+            match NotificationPendingArrival::new(arrival, cursor, remaining_conflicts, self.conflict_limit.get())
+                .map_err(NotificationPendingArrivalOperationalError::Continuation)?
+            {
+                NotificationContinuationOutcome::Continued(pending) => pending,
+                NotificationContinuationOutcome::Rejected(rejection) => {
+                    return Ok(NotificationPendingArrivalOutcome::Rejected(
+                        NotificationPendingArrivalRejection::Continuation(rejection),
+                    ));
+                }
+            };
+        match self.pending_arrivals.insert(key, pending) {
+            Ok(PendingArrivalInsertOutcome::Inserted) => Ok(NotificationPendingArrivalOutcome::Latched),
+            Ok(PendingArrivalInsertOutcome::Rejected(rejection)) => Ok(NotificationPendingArrivalOutcome::Rejected(
+                NotificationPendingArrivalRejection::Latch(rejection),
+            )),
+            Err(error) => Err(NotificationPendingArrivalOperationalError::Latch(error)),
+        }
     }
 
     pub(crate) fn pending_arrival_reservations(&self) -> Vec<NotificationPendingArrivalReservation> {
@@ -530,9 +627,9 @@ impl NotificationDeferredService {
         topic: &CheetahString,
         queue_id: i32,
         logical_offset: i64,
-    ) -> Result<(), PendingArrivalInsertError> {
+    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
         if logical_offset <= 0 || !self.index.has_arrival_target(topic, queue_id) {
-            return Ok(());
+            return Ok(PendingArrivalInsertOutcome::Inserted);
         }
         self.pending_offsets
             .retain_targets(|target| self.index.has_arrival_target(target.topic(), target.queue_id()));
@@ -547,7 +644,10 @@ impl NotificationDeferredService {
             .reserve_batch(self.scan_limit.get())
             .into_iter()
             .filter_map(|reservation| {
-                let permit = self.continuation_admission.reserve(reservation.retained_bytes()).ok()?;
+                let permit = match self.continuation_admission.reserve(reservation.retained_bytes()) {
+                    Ok(NotificationContinuationOutcome::Continued(permit)) => permit,
+                    Ok(NotificationContinuationOutcome::Rejected(_)) | Err(_) => return None,
+                };
                 Some(NotificationPendingOffsetReservation {
                     reservation,
                     _permit: permit,
@@ -995,10 +1095,37 @@ const fn combined_budget(left: usize, right: usize) -> usize {
     }
 }
 
+#[must_use]
+pub(crate) enum NotificationPendingArrivalOutcome {
+    Latched,
+    Rejected(NotificationPendingArrivalRejection),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NotificationPendingArrivalError {
-    Continuation(NotificationContinuationError),
-    Latch(PendingArrivalInsertError),
+pub(crate) enum NotificationPendingArrivalRejection {
+    Continuation(NotificationContinuationRejection),
+    Latch(PendingArrivalInsertRejection),
+}
+
+#[derive(Debug)]
+pub(crate) enum NotificationPendingArrivalOperationalError {
+    Continuation(NotificationContinuationOperationalError),
+    Latch(PendingArrivalInsertOperationalError),
+}
+
+impl fmt::Display for NotificationPendingArrivalOperationalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Notification pending-arrival processing failed")
+    }
+}
+
+impl Error for NotificationPendingArrivalOperationalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Continuation(source) => Some(source),
+            Self::Latch(source) => Some(source),
+        }
+    }
 }
 
 pub(crate) struct NotificationPendingCandidateBatch {
@@ -1044,92 +1171,118 @@ impl NotificationDeferredSweepBatch {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NotificationContinuationError {
-    Complete,
+pub(crate) enum NotificationContinuationRejection {
+    AlreadyComplete,
     ConflictBudgetExhausted,
     CountFull,
     BytesFull,
+}
+
+#[must_use]
+pub(crate) enum NotificationContinuationOutcome<T> {
+    Continued(T),
+    Rejected(NotificationContinuationRejection),
+}
+
+#[derive(Debug)]
+pub(crate) enum NotificationContinuationOperationalError {
     SizeOverflow,
-    Allocation,
+    Allocation(std::collections::TryReserveError),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NotificationDeferredPrepareErrorKind {
-    ServiceClosed,
-    OneWay,
-    EmbeddedOrigin,
-    Header,
-    WallTimeOverflow,
-    InvalidExpiryMargins,
-    RetainedSizeOverflow,
-    Deadline,
-    Index,
-    Admission,
-    Contract,
+impl fmt::Display for NotificationContinuationOperationalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::SizeOverflow => "Notification continuation retained size overflowed",
+            Self::Allocation(_) => "Notification continuation allocation failed",
+        })
+    }
 }
 
-pub(crate) enum NotificationDeferredPrepareError {
-    ServiceClosed,
-    OneWay,
-    EmbeddedOrigin,
-    Header(RocketMQError),
-    WallTimeOverflow,
-    InvalidExpiryMargins,
-    RetainedSizeOverflow,
-    Deadline(NotificationWaitDeadlineError),
-    Index(NotificationIndexError),
-    Admission(DeferredAdmissionAcquireOutcome),
-    Contract(TransportContractViolation),
-}
-
-impl NotificationDeferredPrepareError {
-    #[must_use]
-    pub(crate) const fn kind(&self) -> NotificationDeferredPrepareErrorKind {
+impl Error for NotificationContinuationOperationalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::ServiceClosed => NotificationDeferredPrepareErrorKind::ServiceClosed,
-            Self::OneWay => NotificationDeferredPrepareErrorKind::OneWay,
-            Self::EmbeddedOrigin => NotificationDeferredPrepareErrorKind::EmbeddedOrigin,
-            Self::Header(_) => NotificationDeferredPrepareErrorKind::Header,
-            Self::WallTimeOverflow => NotificationDeferredPrepareErrorKind::WallTimeOverflow,
-            Self::InvalidExpiryMargins => NotificationDeferredPrepareErrorKind::InvalidExpiryMargins,
-            Self::RetainedSizeOverflow => NotificationDeferredPrepareErrorKind::RetainedSizeOverflow,
-            Self::Deadline(_) => NotificationDeferredPrepareErrorKind::Deadline,
-            Self::Index(_) => NotificationDeferredPrepareErrorKind::Index,
-            Self::Admission(_) => NotificationDeferredPrepareErrorKind::Admission,
-            Self::Contract(_) => NotificationDeferredPrepareErrorKind::Contract,
+            Self::Allocation(source) => Some(source),
+            Self::SizeOverflow => None,
         }
     }
 }
 
-impl fmt::Debug for NotificationDeferredPrepareError {
+pub(crate) enum NotificationDeferredPrepareRejection {
+    ServiceClosed,
+    OneWay,
+    EmbeddedOrigin,
+    Deadline(NotificationWaitDeadlineRejection),
+    IndexCapacity(NotificationIndexReserveRejection),
+    Admission(DeferredAdmissionAcquireOutcome),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NotificationDeferredPrepareRejectionKind {
+    ServiceClosed,
+    OneWay,
+    EmbeddedOrigin,
+    Deadline,
+    Index,
+    Admission,
+}
+
+impl NotificationDeferredPrepareRejection {
+    pub(crate) const fn kind(&self) -> NotificationDeferredPrepareRejectionKind {
+        match self {
+            Self::ServiceClosed => NotificationDeferredPrepareRejectionKind::ServiceClosed,
+            Self::OneWay => NotificationDeferredPrepareRejectionKind::OneWay,
+            Self::EmbeddedOrigin => NotificationDeferredPrepareRejectionKind::EmbeddedOrigin,
+            Self::Deadline(_) => NotificationDeferredPrepareRejectionKind::Deadline,
+            Self::IndexCapacity(_) => NotificationDeferredPrepareRejectionKind::Index,
+            Self::Admission(_) => NotificationDeferredPrepareRejectionKind::Admission,
+        }
+    }
+}
+
+#[must_use]
+pub(crate) enum NotificationDeferredPrepareOutcome {
+    Prepared(Box<PreparedNotificationRegistration>),
+    Rejected(NotificationDeferredPrepareRejection),
+}
+
+pub(crate) enum NotificationDeferredPrepareFailure {
+    WallTimeOverflow,
+    InvalidExpiryMargins,
+    RetainedSizeOverflow,
+    Deadline(NotificationWaitDeadlineOperationalError),
+    Header(RocketMQError),
+    Index(NotificationIndexOperationalError),
+    Contract(TransportContractViolation),
+}
+
+impl fmt::Debug for NotificationDeferredPrepareFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("NotificationDeferredPrepareError")
-            .field("kind", &self.kind())
+            .debug_struct("NotificationDeferredPrepareFailure")
             .finish_non_exhaustive()
     }
 }
 
-impl fmt::Display for NotificationDeferredPrepareError {
+impl fmt::Display for NotificationDeferredPrepareFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Notification deferred preparation failed: {:?}", self.kind())
+        formatter.write_str("Notification deferred preparation failed")
     }
 }
 
-impl Error for NotificationDeferredPrepareError {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NotificationDeferredRegisterErrorKind {
-    ServiceClosedBeforeTake,
-    ServiceClosedAfterTake,
-    ProvenanceMismatch,
-    Responder,
-    Expiry,
-    Registry,
-    Contract,
+impl Error for NotificationDeferredPrepareFailure {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Header(source) => Some(source),
+            Self::Index(source) => Some(source),
+            Self::Contract(source) => Some(source),
+            Self::Deadline(source) => Some(source),
+            Self::WallTimeOverflow | Self::InvalidExpiryMargins | Self::RetainedSizeOverflow => None,
+        }
+    }
 }
 
-pub(crate) enum NotificationDeferredRegisterError {
+pub(crate) enum NotificationDeferredRegisterRejection {
     ServiceClosedBeforeTake,
     ServiceClosedAfterTake,
     ProvenanceMismatch,
@@ -1138,13 +1291,50 @@ pub(crate) enum NotificationDeferredRegisterError {
         outcome: DeferredExpiryOutcome,
         parts: DeferredParts,
     },
-    RegistryRejected,
-    RegistryIdentityExhausted,
+    DuplicateRequest,
+    ParentCancelled,
+    SessionClosed,
+    DeadlineExpired,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NotificationDeferredRegisterRejectionKind {
+    ServiceClosedBeforeTake,
+    ServiceClosedAfterTake,
+    ProvenanceMismatch,
+    Responder,
+    Expiry,
+    Registry,
+}
+
+impl NotificationDeferredRegisterRejection {
+    pub(crate) const fn kind(&self) -> NotificationDeferredRegisterRejectionKind {
+        match self {
+            Self::ServiceClosedBeforeTake => NotificationDeferredRegisterRejectionKind::ServiceClosedBeforeTake,
+            Self::ServiceClosedAfterTake => NotificationDeferredRegisterRejectionKind::ServiceClosedAfterTake,
+            Self::ProvenanceMismatch => NotificationDeferredRegisterRejectionKind::ProvenanceMismatch,
+            Self::Responder(_) => NotificationDeferredRegisterRejectionKind::Responder,
+            Self::Expiry { .. } => NotificationDeferredRegisterRejectionKind::Expiry,
+            Self::DuplicateRequest | Self::ParentCancelled | Self::SessionClosed | Self::DeadlineExpired => {
+                NotificationDeferredRegisterRejectionKind::Registry
+            }
+        }
+    }
+}
+
+#[must_use]
+pub(crate) enum NotificationDeferredRegisterOutcome {
+    Registered(Box<DeferredRegistration>),
+    Rejected(Box<NotificationDeferredRegisterRejection>),
+}
+
+pub(crate) enum NotificationDeferredRegisterFailure {
+    IdentityExhausted,
     RegistryContract(TransportContractViolation),
     RegistryOperational(TransportError),
     Contract {
         violation: TransportContractViolation,
-        parts: DeferredParts,
+        parts: Box<DeferredParts>,
     },
 }
 
@@ -1160,56 +1350,27 @@ fn release_deferred_registry_recovery<R, F>(recovery: DeferredRegistryRecovery<R
     }
 }
 
-impl NotificationDeferredRegisterError {
-    #[must_use]
-    pub(crate) const fn kind(&self) -> NotificationDeferredRegisterErrorKind {
-        match self {
-            Self::ServiceClosedBeforeTake => NotificationDeferredRegisterErrorKind::ServiceClosedBeforeTake,
-            Self::ServiceClosedAfterTake => NotificationDeferredRegisterErrorKind::ServiceClosedAfterTake,
-            Self::ProvenanceMismatch => NotificationDeferredRegisterErrorKind::ProvenanceMismatch,
-            Self::Responder(_) => NotificationDeferredRegisterErrorKind::Responder,
-            Self::Expiry { .. } => NotificationDeferredRegisterErrorKind::Expiry,
-            Self::RegistryRejected
-            | Self::RegistryIdentityExhausted
-            | Self::RegistryContract(_)
-            | Self::RegistryOperational(_) => NotificationDeferredRegisterErrorKind::Registry,
-            Self::Contract { .. } => NotificationDeferredRegisterErrorKind::Contract,
-        }
-    }
-}
-
-impl fmt::Debug for NotificationDeferredRegisterError {
+impl fmt::Debug for NotificationDeferredRegisterFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("NotificationDeferredRegisterError")
-            .field("kind", &self.kind())
+            .debug_struct("NotificationDeferredRegisterFailure")
             .finish_non_exhaustive()
     }
 }
 
-impl fmt::Display for NotificationDeferredRegisterError {
+impl fmt::Display for NotificationDeferredRegisterFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "Notification deferred registration failed: {:?}",
-            self.kind()
-        )
+        formatter.write_str("Notification deferred registration failed")
     }
 }
 
-impl Error for NotificationDeferredRegisterError {
+impl Error for NotificationDeferredRegisterFailure {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::RegistryContract(violation) => Some(violation),
             Self::RegistryOperational(error) => Some(error),
             Self::Contract { violation, .. } => Some(violation),
-            Self::ServiceClosedBeforeTake
-            | Self::ServiceClosedAfterTake
-            | Self::ProvenanceMismatch
-            | Self::Responder(_)
-            | Self::Expiry { .. }
-            | Self::RegistryRejected
-            | Self::RegistryIdentityExhausted => None,
+            Self::IdentityExhausted => None,
         }
     }
 }

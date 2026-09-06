@@ -56,14 +56,13 @@ impl RequestProcessor for PerRequestFilterProcessor {
             matched,
             commit_calls: self.commit_calls.clone(),
         });
-        let prepared = self
-            .service
-            .prepare(request, None, Some(filter), NotificationRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let registration = self
-            .service
-            .register(prepared, request)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let prepared = prepared_or_test_error(self.service.prepare(
+            request,
+            None,
+            Some(filter),
+            NotificationRetainedEstimate::default(),
+        ))?;
+        let registration = registration_or_test_error(self.service.register(prepared, request))?;
         let _ = self.registrations.send(());
         Ok(HandlerOutcome::Deferred(registration))
     }
@@ -114,9 +113,13 @@ async fn notification_deferred_miss_prefix_beyond_callback_batch_continuation_cl
     assert_eq!(service.snapshot().index().live(), 2);
     assert_eq!(service.snapshot().admission().waiting_count(), 2);
 
-    let continuation = service
-        .admit_continuation(arrival, cursor)
-        .expect("admit miss-prefix continuation");
+    let continuation = match service.admit_continuation(arrival, cursor) {
+        Ok(NotificationContinuationOutcome::Continued(continuation)) => continuation,
+        Ok(NotificationContinuationOutcome::Rejected(rejection)) => {
+            panic!("admit miss-prefix continuation: {rejection:?}")
+        }
+        Err(error) => panic!("admit miss-prefix continuation: {error:?}"),
+    };
     let service_for_handler = Arc::clone(&service);
     let (resumed_tx, mut resumed_rx) = mpsc::unbounded_channel();
     let handle_claims = Arc::new(move |claims| {

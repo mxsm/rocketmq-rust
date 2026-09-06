@@ -13,31 +13,28 @@
 // limitations under the License.
 
 use super::*;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterErrorKind;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterRejectionKind;
 
 #[derive(Clone)]
 struct ExpiryAttachmentFaultProcessor {
     service: Arc<PopLiteDeferredService>,
-    observed: mpsc::UnboundedSender<PopLiteDeferredRegisterErrorKind>,
+    observed: mpsc::UnboundedSender<PopLiteDeferredRegisterRejectionKind>,
 }
 
 impl RequestProcessor for ExpiryAttachmentFaultProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let prepared = self
-            .service
-            .prepare(request, PopLiteRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let error = self
-            .service
-            .register(prepared, request)
-            .expect_err("the injected post-take expiry attachment must fail closed");
-        let kind = error.kind();
-        let message = error.to_string();
-        drop(error);
+        let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
+        let rejection = match self.service.register(prepared, request) {
+            Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
+            Ok(PopLiteDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                panic!("the injected post-take expiry attachment must fail closed")
+            }
+        };
+        let kind = rejection.kind();
         self.observed
             .send(kind)
             .map_err(|_| RocketMQError::illegal_argument("post-take expiry observer closed"))?;
-        Err(RocketMQError::illegal_argument(message))
+        Err(RocketMQError::illegal_argument("injected post-take expiry rejection"))
     }
 }
 
@@ -73,7 +70,7 @@ async fn pop_lite_deferred_expiry_attach_after_take_cancels_without_handler_or_f
         .expect("send post-take expiry attachment request");
     assert_eq!(
         observed_rx.recv().await.expect("post-take expiry result"),
-        PopLiteDeferredRegisterErrorKind::Expiry
+        PopLiteDeferredRegisterRejectionKind::Expiry
     );
     let terminal = service.resource_snapshot();
     assert_eq!(terminal.admission.waiting_count(), 0);

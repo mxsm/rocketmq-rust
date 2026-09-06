@@ -1,32 +1,32 @@
 error[E0624]: associated function `new` is private
- --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:25
-  |
-4 |       RootServiceContext::new()
-  |                           ^^^ private associated function
-  |
- ::: src/service_context.rs
-  |
-  | /     pub(crate) fn new(
-  | |         name: Arc<str>,
-  | |         runtime: RuntimeHandle,
-  | |         task_group: TaskGroup,
-... |
-  | |         resources: RuntimeResources,
-  | |     ) -> Self {
-  | |_____________- private associated function defined here
+  --> tests/ui/service_context/root_raw_constructor_is_private.rs:18:25
+   |
+18 |       RootServiceContext::new()
+   |                           ^^^ private associated function
+   |
+  ::: src/service_context.rs
+   |
+   | /     pub(crate) fn new(
+   | |         name: Arc<str>,
+   | |         runtime: RuntimeHandle,
+   | |         task_group: TaskGroup,
+...  |
+   | |         resources: RuntimeResources,
+   | |     ) -> Self {
+   | |_____________- private associated function defined here
 
 error[E0061]: this function takes 7 arguments but 0 arguments were supplied
- --> tests/ui/service_context/root_raw_constructor_is_private.rs:4:5
-  |
-4 |     RootServiceContext::new()
-  |     ^^^^^^^^^^^^^^^^^^^^^^^-- multiple arguments are missing
-  |
+  --> tests/ui/service_context/root_raw_constructor_is_private.rs:18:5
+   |
+18 |     RootServiceContext::new()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^-- multiple arguments are missing
+   |
 note: associated function defined here
- --> src/service_context.rs
-  |
-  |     pub(crate) fn new(
-  |                   ^^^
+  --> src/service_context.rs
+   |
+   |     pub(crate) fn new(
+   |                   ^^^
 help: provide the arguments
-  |
-4 |     RootServiceContext::new(/* Arc<str> */, /* rocketmq_runtime::handle::RuntimeHandle */, /* TaskGroup */, /* BlockingLanePolicies */, /* usize */, /* RuntimeDiagnostics */, /* RuntimeResources */)
-  |                             +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+   |
+18 |     RootServiceContext::new(/* Arc<str> */, /* rocketmq_runtime::handle::RuntimeHandle */, /* TaskGroup */, /* BlockingLanePolicies */, /* usize */, /* RuntimeDiagnostics */, /* RuntimeResources */)
+   |                             +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

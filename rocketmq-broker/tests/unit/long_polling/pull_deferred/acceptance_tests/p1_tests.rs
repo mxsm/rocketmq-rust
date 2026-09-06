@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use super::*;
+use crate::long_polling::pull_deferred::service::PullDeferredRegisterRejection;
 
 fn prepared(
     service: &PullDeferredService,
     request: &RemotingRequest,
     timing: PullSuspendTiming,
     retained: PullRetainedEstimate,
-) -> Result<PreparedPullRegistration, super::PullDeferredPrepareError> {
+) -> Result<PullDeferredPrepareOutcome, super::PullDeferredPrepareError> {
     let header = request
         .command()
         .decode_command_custom_header::<PullMessageRequestHeader>()
@@ -53,14 +54,25 @@ impl RequestProcessor for ProvenanceProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let prior = self.state.lock().prepared.take();
         if let Some(prior) = prior {
-            let error = self
-                .service
-                .register(prior, request)
-                .expect_err("prepared Pull proof is bound to its original request/session");
-            assert_eq!(error.kind(), PullDeferredRegisterErrorKind::ProvenanceMismatch);
-            let candidate = error
-                .into_candidate()
-                .expect("pre-take failure returns the complete affine candidate");
+            let rejection = match self.service.register(prior, request) {
+                Ok(PullDeferredRegisterOutcome::Rejected(rejection)) => *rejection,
+                Ok(PullDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                    panic!("prepared Pull proof is bound to its original request/session")
+                }
+            };
+            assert_eq!(rejection.kind(), PullDeferredRegisterRejectionKind::ProvenanceMismatch);
+            let candidate = match rejection.into_candidate() {
+                Ok(candidate) => candidate,
+                Err(PullDeferredRegisterRejection::PreTake { .. }) => {
+                    panic!("pre-take rejection must return its affine candidate")
+                }
+                Err(PullDeferredRegisterRejection::Expiry { .. }) => {
+                    panic!("provenance mismatch cannot become an expiry rejection")
+                }
+                Err(PullDeferredRegisterRejection::RegistryRejected) => {
+                    panic!("provenance mismatch cannot become a registry rejection")
+                }
+            };
             assert_eq!(candidate.request().request_code(), RequestCode::PullMessage);
             assert_eq!(candidate.criteria().physical_topic().as_str(), "TopicA");
             assert_eq!(candidate.criteria().pull_from_offset(), 7);
@@ -74,7 +86,7 @@ impl RequestProcessor for ProvenanceProcessor {
         let header = request
             .command()
             .decode_command_custom_header::<PullMessageRequestHeader>()?;
-        let registration = prepared(
+        let registration = match prepared(
             &self.service,
             request,
             PullSuspendTiming::new(
@@ -84,7 +96,13 @@ impl RequestProcessor for ProvenanceProcessor {
             ),
             PullRetainedEstimate::new(17, 23),
         )
-        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?
+        {
+            PullDeferredPrepareOutcome::Prepared(prepared) => prepared,
+            PullDeferredPrepareOutcome::Rejected(_) => {
+                return Err(RocketMQError::illegal_argument("unexpected Pull preparation rejection"));
+            }
+        };
         self.state.lock().prepared = Some(registration);
         success_reply()
     }
@@ -139,7 +157,7 @@ async fn cross_request_and_session_provenance_fails_before_responder_take() {
 struct PreTakeProbeProcessor {
     service: Arc<PullDeferredService>,
     held: Arc<Mutex<Vec<PreparedPullRegistration>>>,
-    observed: Arc<Mutex<Vec<PullDeferredPrepareErrorKind>>>,
+    observed: Arc<Mutex<Vec<PullDeferredPrepareRejectionKind>>>,
     zero_timeout: bool,
     retained: PullRetainedEstimate,
 }
@@ -160,14 +178,15 @@ impl RequestProcessor for PreTakeProbeProcessor {
             PullSuspendTiming::new(current_millis(), tokio::time::Instant::now(), timeout),
             self.retained,
         ) {
-            Ok(prepared) => {
+            Ok(PullDeferredPrepareOutcome::Prepared(prepared)) => {
                 self.held.lock().push(prepared);
                 success_reply()
             }
-            Err(error) => {
-                self.observed.lock().push(error.kind());
-                Ok(HandlerOutcome::Reply(error.into_fallback()))
+            Ok(PullDeferredPrepareOutcome::Rejected(rejection)) => {
+                self.observed.lock().push(rejection.kind());
+                Ok(HandlerOutcome::Reply(rejection.into_fallback()))
             }
+            Err(error) => Err(RocketMQError::illegal_argument(error.to_string())),
         }
     }
 }
@@ -175,7 +194,7 @@ impl RequestProcessor for PreTakeProbeProcessor {
 async fn exercise_second_pre_take_rejection(
     service: Arc<PullDeferredService>,
     controller: Arc<AdmissionController>,
-    expected: PullDeferredPrepareErrorKind,
+    expected: PullDeferredPrepareRejectionKind,
 ) {
     let held = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::new(Mutex::new(Vec::new()));
@@ -210,18 +229,33 @@ async fn exercise_second_pre_take_rejection(
 async fn index_and_wait_capacity_reject_before_responder_transfer() {
     let index_controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let index_service = service_with_limits(index_controller.as_ref(), 2, 16 * 1024 * 1024, 1, 1);
-    exercise_second_pre_take_rejection(index_service, index_controller, PullDeferredPrepareErrorKind::Index).await;
+    exercise_second_pre_take_rejection(
+        index_service,
+        index_controller,
+        PullDeferredPrepareRejectionKind::IndexCapacity,
+    )
+    .await;
 
     let wait_controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
     let wait_service = service_with_limits(wait_controller.as_ref(), 1, 16 * 1024 * 1024, 2, 2);
-    exercise_second_pre_take_rejection(wait_service, wait_controller, PullDeferredPrepareErrorKind::Admission).await;
+    exercise_second_pre_take_rejection(
+        wait_service,
+        wait_controller,
+        PullDeferredPrepareRejectionKind::AdmissionCapacity,
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn retained_bytes_and_inclusive_zero_deadline_fallback_inline() {
     for (retained_bytes, zero_timeout, expected, opaque) in [
-        (1, false, PullDeferredPrepareErrorKind::Admission, 61),
-        (16 * 1024 * 1024, true, PullDeferredPrepareErrorKind::Deadline, 62),
+        (1, false, PullDeferredPrepareRejectionKind::AdmissionCapacity, 61),
+        (
+            16 * 1024 * 1024,
+            true,
+            PullDeferredPrepareRejectionKind::DeadlineElapsed,
+            62,
+        ),
     ] {
         let controller = Arc::new(AdmissionController::new(AdmissionLimits::default()));
         let service = service_with_limits(controller.as_ref(), 1, retained_bytes, 1, 1);

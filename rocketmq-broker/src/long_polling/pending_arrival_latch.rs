@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::collections::TryReserveError;
+use std::error::Error;
+use std::fmt;
 use std::hash::Hash;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -85,13 +88,21 @@ where
         true
     }
 
-    pub(crate) fn insert(self: &Arc<Self>, key: K, value: V) -> Result<(), PendingArrivalInsertError> {
+    pub(crate) fn insert(
+        self: &Arc<Self>,
+        key: K,
+        value: V,
+    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(PendingArrivalInsertError::Closed);
+            return Ok(PendingArrivalInsertOutcome::Rejected(
+                PendingArrivalInsertRejection::Closed,
+            ));
         }
         let mut state = self.state.lock();
         if state.closed {
-            return Err(PendingArrivalInsertError::Closed);
+            return Ok(PendingArrivalInsertOutcome::Rejected(
+                PendingArrivalInsertRejection::Closed,
+            ));
         }
         if let Some(entry) = state.entries.get_mut(&key) {
             if entry.active {
@@ -109,21 +120,29 @@ where
                 entry.charged_bytes = retained;
                 state.bytes = state.bytes.saturating_sub(previous).saturating_add(retained);
             }
-            return Ok(());
+            return Ok(PendingArrivalInsertOutcome::Inserted);
         }
         if state.entries.len() >= self.limits.max_count {
             state.rejected = state.rejected.saturating_add(1);
-            return Err(PendingArrivalInsertError::CountFull);
+            return Ok(PendingArrivalInsertOutcome::Rejected(
+                PendingArrivalInsertRejection::CountFull,
+            ));
         }
         let retained = value.retained_bytes().max(1);
         let Some(next_bytes) = state.bytes.checked_add(retained) else {
             state.rejected = state.rejected.saturating_add(1);
-            return Err(PendingArrivalInsertError::SizeOverflow);
+            return Err(PendingArrivalInsertOperationalError::SizeOverflow);
         };
         if next_bytes > self.limits.max_bytes {
             state.rejected = state.rejected.saturating_add(1);
-            return Err(PendingArrivalInsertError::BytesFull);
+            return Ok(PendingArrivalInsertOutcome::Rejected(
+                PendingArrivalInsertRejection::BytesFull,
+            ));
         }
+        state
+            .entries
+            .try_reserve(1)
+            .map_err(PendingArrivalInsertOperationalError::Allocation)?;
         state.bytes = next_bytes;
         state.entries.insert(
             key,
@@ -134,7 +153,7 @@ where
                 dirty: false,
             },
         );
-        Ok(())
+        Ok(PendingArrivalInsertOutcome::Inserted)
     }
 
     pub(crate) fn reserve_batch(self: &Arc<Self>, limit: usize) -> Vec<PendingArrivalReservation<K, V>> {
@@ -389,11 +408,48 @@ pub(crate) struct PendingArrivalSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PendingArrivalInsertError {
+pub(crate) enum PendingArrivalInsertRejection {
     Closed,
     CountFull,
     BytesFull,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PendingArrivalInsertOutcome {
+    Inserted,
+    Rejected(PendingArrivalInsertRejection),
+}
+
+pub(crate) enum PendingArrivalInsertOperationalError {
     SizeOverflow,
+    Allocation(TryReserveError),
+}
+
+impl fmt::Debug for PendingArrivalInsertOperationalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::SizeOverflow => "PendingArrivalInsertOperationalError::SizeOverflow",
+            Self::Allocation(_) => "PendingArrivalInsertOperationalError::Allocation",
+        })
+    }
+}
+
+impl fmt::Display for PendingArrivalInsertOperationalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::SizeOverflow => "Pending arrival retained size overflowed",
+            Self::Allocation(_) => "Pending arrival allocation failed",
+        })
+    }
+}
+
+impl Error for PendingArrivalInsertOperationalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(source) => Some(source),
+            Self::SizeOverflow => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -445,38 +501,59 @@ where
         })
     }
 
-    pub(crate) fn merge(&self, key: K, offset: i64) -> Result<(), PendingArrivalInsertError> {
+    pub(crate) fn merge(
+        &self,
+        key: K,
+        offset: i64,
+    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
         self.merge_range(key, offset, offset)
     }
 
-    pub(crate) fn merge_range(&self, key: K, first: i64, last: i64) -> Result<(), PendingArrivalInsertError> {
+    pub(crate) fn merge_range(
+        &self,
+        key: K,
+        first: i64,
+        last: i64,
+    ) -> Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(PendingArrivalInsertError::Closed);
+            return Ok(PendingArrivalInsertOutcome::Rejected(
+                PendingArrivalInsertRejection::Closed,
+            ));
         }
         let mut state = self.state.lock();
         if state.closed {
-            return Err(PendingArrivalInsertError::Closed);
+            return Ok(PendingArrivalInsertOutcome::Rejected(
+                PendingArrivalInsertRejection::Closed,
+            ));
         }
         if let Some(entry) = state.entries.get_mut(&key) {
             entry.range.include_range(first.min(last), first.max(last));
-            return Ok(());
+            return Ok(PendingArrivalInsertOutcome::Inserted);
         }
         if state.entries.len() >= self.max_count {
             state.rejected = state.rejected.saturating_add(1);
-            return Err(PendingArrivalInsertError::CountFull);
+            return Ok(PendingArrivalInsertOutcome::Rejected(
+                PendingArrivalInsertRejection::CountFull,
+            ));
         }
         let retained = key
             .retained_bytes()
             .checked_add(std::mem::size_of::<PendingOffsetRangeEntry>())
-            .ok_or(PendingArrivalInsertError::SizeOverflow)?;
+            .ok_or(PendingArrivalInsertOperationalError::SizeOverflow)?;
         let Some(bytes) = state.bytes.checked_add(retained) else {
             state.rejected = state.rejected.saturating_add(1);
-            return Err(PendingArrivalInsertError::SizeOverflow);
+            return Err(PendingArrivalInsertOperationalError::SizeOverflow);
         };
         if bytes > self.max_bytes {
             state.rejected = state.rejected.saturating_add(1);
-            return Err(PendingArrivalInsertError::BytesFull);
+            return Ok(PendingArrivalInsertOutcome::Rejected(
+                PendingArrivalInsertRejection::BytesFull,
+            ));
         }
+        state
+            .entries
+            .try_reserve(1)
+            .map_err(PendingArrivalInsertOperationalError::Allocation)?;
         state.bytes = bytes;
         state.entries.insert(
             key,
@@ -489,7 +566,7 @@ where
                 active: false,
             },
         );
-        Ok(())
+        Ok(PendingArrivalInsertOutcome::Inserted)
     }
 
     pub(crate) fn reserve_batch(self: &Arc<Self>, limit: usize) -> Vec<PendingOffsetRangeReservation<K>> {
@@ -645,6 +722,16 @@ where
 mod tests {
     use super::*;
 
+    fn expect_inserted(
+        result: Result<PendingArrivalInsertOutcome, PendingArrivalInsertOperationalError>,
+        message: &str,
+    ) {
+        assert_eq!(
+            result.unwrap_or_else(|error| panic!("{message}: {error}")),
+            PendingArrivalInsertOutcome::Inserted
+        );
+    }
+
     #[derive(Clone, Debug, Eq, Hash, PartialEq)]
     struct TestTarget(u8);
 
@@ -657,10 +744,10 @@ mod tests {
     #[test]
     fn offset_range_reservation_replays_only_concurrent_extensions() {
         let latch = PendingOffsetRangeLatch::new(2, 1024);
-        latch.merge_range(TestTarget(1), 10, 12).expect("initial range");
+        expect_inserted(latch.merge_range(TestTarget(1), 10, 12), "initial range");
         let mut reservation = latch.reserve_batch(1).pop().expect("reservation");
 
-        latch.merge_range(TestTarget(1), 8, 15).expect("extend active range");
+        expect_inserted(latch.merge_range(TestTarget(1), 8, 15), "extend active range");
         assert_eq!(
             reservation.finish_or_updated(),
             Some(PendingOffsetRange { first: 8, last: 15 })
@@ -672,7 +759,7 @@ mod tests {
     #[test]
     fn rejected_worker_submission_releases_range_for_next_tick() {
         let latch = PendingOffsetRangeLatch::new(1, 1024);
-        latch.merge(TestTarget(1), 7).expect("pending range");
+        expect_inserted(latch.merge(TestTarget(1), 7), "pending range");
         let reservation = latch.reserve_batch(1).pop().expect("first tick");
         drop(reservation);
 
@@ -684,32 +771,34 @@ mod tests {
         // N=2 live waiters plus C=2 admitted replay workers. Active stale
         // reservations cannot exceed C because each owns a continuation permit.
         let latch = PendingOffsetRangeLatch::new(4, 1024);
-        latch.merge(TestTarget(1), 1).expect("first live target");
-        latch.merge(TestTarget(2), 1).expect("second live target");
+        expect_inserted(latch.merge(TestTarget(1), 1), "first live target");
+        expect_inserted(latch.merge(TestTarget(2), 1), "second live target");
         let active_stale = latch.reserve_batch(2);
         latch.retain_targets(|_| false);
 
-        latch.merge(TestTarget(3), 2).expect("replacement live target");
-        latch.merge(TestTarget(4), 2).expect("second replacement live target");
+        expect_inserted(latch.merge(TestTarget(3), 2), "replacement live target");
+        expect_inserted(latch.merge(TestTarget(4), 2), "second replacement live target");
         assert_eq!(latch.snapshot().count, 4);
-        assert_eq!(
-            latch.merge(TestTarget(5), 2),
-            Err(PendingArrivalInsertError::CountFull),
+        assert!(
+            matches!(
+                latch.merge(TestTarget(5), 2),
+                Ok(PendingArrivalInsertOutcome::Rejected(
+                    PendingArrivalInsertRejection::CountFull
+                ))
+            ),
             "N+C is the hard invariant boundary"
         );
 
         drop(active_stale);
         latch.retain_targets(|target| target.0 >= 3);
-        latch
-            .merge(TestTarget(5), 3)
-            .expect("inactive stale capacity is reclaimed");
+        expect_inserted(latch.merge(TestTarget(5), 3), "inactive stale capacity is reclaimed");
     }
 
     #[test]
     fn sealing_clears_active_and_inactive_ranges() {
         let latch = PendingOffsetRangeLatch::new(2, 1024);
-        latch.merge(TestTarget(1), 1).expect("active target");
-        latch.merge(TestTarget(2), 2).expect("inactive target");
+        expect_inserted(latch.merge(TestTarget(1), 1), "active target");
+        expect_inserted(latch.merge(TestTarget(2), 2), "inactive target");
         let active = latch.reserve_batch(1).pop().expect("active reservation");
 
         latch.seal();
@@ -717,5 +806,18 @@ mod tests {
         assert_eq!(latch.snapshot().bytes, 0);
         drop(active);
         assert!(latch.reserve_batch(2).is_empty());
+    }
+
+    #[test]
+    fn allocation_failure_keeps_the_typed_source() {
+        let source = Vec::<u8>::new()
+            .try_reserve(usize::MAX)
+            .expect_err("unrepresentable allocation must fail");
+        let error = PendingArrivalInsertOperationalError::Allocation(source);
+
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<TryReserveError>())
+            .is_some());
     }
 }
