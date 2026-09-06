@@ -25,8 +25,8 @@ use rocketmq_security_api::AuthorizationDenial;
 
 use super::handler::AuthorizationHandler;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use crate::authorization::provider::AuthorizationError;
-use crate::authorization::provider::AuthorizationResult;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 /// Authorization handler chain.
 ///
@@ -73,10 +73,10 @@ impl AuthorizationHandlerChain {
     /// # Returns
     ///
     /// - `Ok(AuthorizationDecision)` for a final allow or deny
-    /// - `Err(AuthorizationError)` when evaluation cannot produce a decision
-    pub async fn handle(&self, context: &DefaultAuthorizationContext) -> AuthorizationResult<AuthorizationDecision> {
+    /// - `Err(AuthServiceError)` when evaluation cannot produce a decision
+    pub async fn handle(&self, context: &DefaultAuthorizationContext) -> AuthServiceResult<AuthorizationDecision> {
         if self.handlers.is_empty() {
-            return Err(AuthorizationError::NotInitialized(
+            return Err(AuthServiceError::not_initialized(
                 "no authorization handlers configured".to_owned(),
             ));
         }
@@ -92,7 +92,7 @@ impl AuthorizationHandlerChain {
 
         denial.map_or_else(
             || {
-                Err(AuthorizationError::NotInitialized(
+                Err(AuthServiceError::not_initialized(
                     "authorization handler chain did not produce a decision".to_owned(),
                 ))
             },
@@ -141,7 +141,7 @@ mod tests {
         fn handle<'a>(
             &'a self,
             _context: &'a DefaultAuthorizationContext,
-        ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = AuthServiceResult<AuthorizationDecision>> + Send + 'a>> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move { Ok(AuthorizationDecision::Allow) })
         }
@@ -155,7 +155,7 @@ mod tests {
         fn handle<'a>(
             &'a self,
             _context: &'a DefaultAuthorizationContext,
-        ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = AuthServiceResult<AuthorizationDecision>> + Send + 'a>> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move { Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)) })
         }
@@ -169,9 +169,9 @@ mod tests {
         fn handle<'a>(
             &'a self,
             _context: &'a DefaultAuthorizationContext,
-        ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = AuthServiceResult<AuthorizationDecision>> + Send + 'a>> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move { Err(AuthorizationError::InvalidContext("broken context".to_owned())) })
+            Box::pin(async move { Err(AuthServiceError::invalid_context("broken context".to_owned())) })
         }
     }
 
@@ -319,10 +319,8 @@ mod tests {
             }));
         let context = DefaultAuthorizationContext::default();
 
-        assert!(matches!(
-            chain.handle(&context).await,
-            Err(AuthorizationError::InvalidContext(_))
-        ));
+        let error = chain.handle(&context).await.unwrap_err();
+        assert_eq!(error.kind(), crate::AuthFailureKind::InvalidInput);
         assert_eq!(failure_count.load(Ordering::SeqCst), 1);
         assert_eq!(allow_count.load(Ordering::SeqCst), 0);
     }

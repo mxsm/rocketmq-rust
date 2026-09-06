@@ -26,7 +26,7 @@ use std::pin::Pin;
 use rocketmq_security_api::AuthorizationDecision;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use crate::authorization::provider::AuthorizationResult;
+use crate::AuthServiceResult;
 
 /// Authorization handler trait.
 ///
@@ -52,7 +52,7 @@ pub trait AuthorizationHandler: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(AuthorizationDecision)` - A final authorization decision
-    /// * `Err(AuthorizationError)` - The handler could not make a decision
+    /// * `Err(AuthServiceError)` - The handler could not make a decision
     ///
     /// # Example
     ///
@@ -66,7 +66,7 @@ pub trait AuthorizationHandler: Send + Sync {
     ///     fn handle<'a>(
     ///         &'a self,
     ///         context: &'a DefaultAuthorizationContext,
-    ///     ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
+    ///     ) -> Pin<Box<dyn Future<Output = AuthServiceResult<AuthorizationDecision>> + Send + 'a>> {
     ///         Box::pin(async move {
     ///             // Authorization logic here
     ///             Ok(AuthorizationDecision::Allow)
@@ -77,5 +77,5 @@ pub trait AuthorizationHandler: Send + Sync {
     fn handle<'a>(
         &'a self,
         context: &'a DefaultAuthorizationContext,
-    ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = AuthServiceResult<AuthorizationDecision>> + Send + 'a>>;
 }

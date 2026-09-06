@@ -19,9 +19,10 @@ use std::fmt;
 
 use serde::Deserialize;
 use serde::Serialize;
-use thiserror::Error;
 
+use crate::MaintenancePolicyRule;
 use crate::Secret;
+use crate::SecurityContractViolation;
 
 /// Current maintenance policy schema.
 pub const MAINTENANCE_POLICY_SCHEMA_VERSION: u16 = 1;
@@ -115,10 +116,10 @@ impl MaintenancePolicy {
     ///
     /// # Errors
     ///
-    /// Returns [`MaintenancePolicyError`] when the policy could authorize an
+    /// Returns [`SecurityContractViolation`] when the policy could authorize an
     /// operation without authentication, authorization, fencing, or a bounded
     /// resource budget.
-    pub fn validate(&self) -> Result<(), MaintenancePolicyError> {
+    pub fn validate(&self) -> Result<(), SecurityContractViolation> {
         validate_policy(self)
     }
 
@@ -126,9 +127,9 @@ impl MaintenancePolicy {
     ///
     /// # Errors
     ///
-    /// Returns [`MaintenancePolicyError`] for the same fail-closed invariants
+    /// Returns [`SecurityContractViolation`] for the same fail-closed invariants
     /// checked by [`Self::validate`].
-    pub fn into_validated(self) -> Result<ValidatedMaintenancePolicy, MaintenancePolicyError> {
+    pub fn into_validated(self) -> Result<ValidatedMaintenancePolicy, SecurityContractViolation> {
         validate_policy(&self)?;
         Ok(ValidatedMaintenancePolicy(self))
     }
@@ -281,51 +282,50 @@ impl MaintenanceAuthorizer {
     ///
     /// # Errors
     ///
-    /// Returns [`MaintenanceAuthorizationError`] for a missing context, disabled
+    /// Returns [`MaintenanceAuthorizationDenial`] for a missing context, disabled
     /// auth, anonymous or unbound identity, ordinary administrator, absent
     /// capability, invalid deadline, or missing fencing token.
     pub fn authorize(
         &self,
         context: Option<&MaintenanceAuthorizationContext>,
         now_unix_millis: u64,
-    ) -> Result<MaintenanceAuthorizationGrant, MaintenanceAuthorizationError> {
-        let context = context.ok_or(MaintenanceAuthorizationError::MissingAuthorizationContext)?;
+    ) -> Result<MaintenanceAuthorizationGrant, MaintenanceAuthorizationDenial> {
+        let context = context.ok_or(MaintenanceAuthorizationDenial::MissingAuthorizationContext)?;
         if !context.authentication_enabled {
-            return Err(MaintenanceAuthorizationError::AuthenticationDisabled);
+            return Err(MaintenanceAuthorizationDenial::AuthenticationDisabled);
         }
         if !context.authorization_enabled {
-            return Err(MaintenanceAuthorizationError::AuthorizationDisabled);
+            return Err(MaintenanceAuthorizationDenial::AuthorizationDisabled);
         }
         if context.request_class != MaintenanceRequestClass::PrivilegedMaintenance {
-            return Err(MaintenanceAuthorizationError::InvalidRequestClass);
+            return Err(MaintenanceAuthorizationDenial::InvalidRequestClass);
         }
         let principal = context
             .principal
             .as_deref()
             .filter(|principal| !principal.trim().is_empty())
-            .ok_or(MaintenanceAuthorizationError::Anonymous)?;
+            .ok_or(MaintenanceAuthorizationDenial::Anonymous)?;
         let roles = self
             .policy()
             .roles_for(principal)
-            .ok_or_else(|| MaintenanceAuthorizationError::PrincipalUnbound(principal.to_string()))?;
+            .ok_or(MaintenanceAuthorizationDenial::PrincipalUnbound)?;
         if !roles.contains(&MaintenanceRole::ReleaseOperator) {
-            return Err(MaintenanceAuthorizationError::MissingRole {
-                principal: principal.to_string(),
-                role: MaintenanceRole::ReleaseOperator,
-            });
+            return Err(MaintenanceAuthorizationDenial::MissingRole(
+                MaintenanceRole::ReleaseOperator,
+            ));
         }
         if !self
             .policy()
             .role_allows(MaintenanceRole::ReleaseOperator, context.capability)
         {
-            return Err(MaintenanceAuthorizationError::CapabilityDenied(context.capability));
+            return Err(MaintenanceAuthorizationDenial::CapabilityDenied(context.capability));
         }
         if context.deadline_unix_millis <= now_unix_millis {
-            return Err(MaintenanceAuthorizationError::DeadlineExpired);
+            return Err(MaintenanceAuthorizationDenial::DeadlineExpired);
         }
         let lifetime = context.deadline_unix_millis - now_unix_millis;
         if lifetime > self.policy().max_request_lifetime_millis {
-            return Err(MaintenanceAuthorizationError::DeadlineTooFar {
+            return Err(MaintenanceAuthorizationDenial::DeadlineTooFar {
                 requested_millis: lifetime,
                 maximum_millis: self.policy().max_request_lifetime_millis,
             });
@@ -333,7 +333,7 @@ impl MaintenanceAuthorizer {
         let fencing_token = context
             .fencing_token
             .filter(|token| *token != 0)
-            .ok_or(MaintenanceAuthorizationError::MissingFencingToken)?;
+            .ok_or(MaintenanceAuthorizationDenial::MissingFencingToken)?;
 
         Ok(MaintenanceAuthorizationGrant {
             principal: principal.to_string(),
@@ -347,50 +347,30 @@ impl MaintenanceAuthorizer {
     }
 }
 
-/// Semantic maintenance policy validation failure.
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum MaintenancePolicyError {
-    /// A fail-closed policy invariant was not satisfied.
-    #[error("invalid maintenance policy: {0}")]
-    InvalidPolicy(String),
-}
-
 /// Fail-closed maintenance authorization denial.
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum MaintenanceAuthorizationError {
-    #[error("maintenance authorization context is missing")]
+///
+/// Denials are normal outcomes rather than operational errors. Variants retain
+/// only closed, non-sensitive categories and never store the principal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MaintenanceAuthorizationDenial {
     /// Represents the missing authorization context case.
     MissingAuthorizationContext,
-    #[error("maintenance authentication is disabled")]
     /// Represents the authentication disabled case.
     AuthenticationDisabled,
-    #[error("maintenance authorization is disabled")]
     /// Represents the authorization disabled case.
     AuthorizationDisabled,
-    #[error("maintenance request class is not privileged maintenance")]
     /// Represents the invalid request class case.
     InvalidRequestClass,
-    #[error("maintenance caller is anonymous")]
     /// Represents the anonymous case.
     Anonymous,
-    #[error("maintenance principal '{0}' is not bound by policy")]
     /// Represents the principal unbound case.
-    PrincipalUnbound(String),
-    #[error("maintenance principal '{principal}' is missing role {role:?}")]
+    PrincipalUnbound,
     /// Represents the missing role case.
-    MissingRole {
-        /// The principal value.
-        principal: String,
-        /// The role value.
-        role: MaintenanceRole,
-    },
-    #[error("maintenance capability {0:?} is not granted")]
+    MissingRole(MaintenanceRole),
     /// Represents the capability denied case.
     CapabilityDenied(MaintenanceCapability),
-    #[error("maintenance request deadline has expired")]
     /// Represents the deadline expired case.
     DeadlineExpired,
-    #[error("maintenance request lifetime {requested_millis}ms exceeds policy maximum {maximum_millis}ms")]
     /// Represents the deadline too far case.
     DeadlineTooFar {
         /// The requested duration in milliseconds.
@@ -398,80 +378,82 @@ pub enum MaintenanceAuthorizationError {
         /// The maximum duration in milliseconds.
         maximum_millis: u64,
     },
-    #[error("maintenance request is missing a non-zero fencing token")]
     /// Represents the missing fencing token case.
     MissingFencingToken,
 }
 
-fn validate_policy(policy: &MaintenancePolicy) -> Result<(), MaintenancePolicyError> {
+fn validate_policy(policy: &MaintenancePolicy) -> Result<(), SecurityContractViolation> {
     if policy.schema_version != MAINTENANCE_POLICY_SCHEMA_VERSION {
-        return invalid_policy(format!("schema_version must be {MAINTENANCE_POLICY_SCHEMA_VERSION}"));
+        return invalid_policy(MaintenancePolicyRule::SchemaVersion);
     }
     if !is_canonical_identifier(&policy.policy_id) {
-        return invalid_policy("policy_id must be a canonical lowercase identifier");
+        return invalid_policy(MaintenancePolicyRule::PolicyIdentifier);
     }
     if policy.policy_version == 0 {
-        return invalid_policy("policy_version must be greater than zero");
+        return invalid_policy(MaintenancePolicyRule::PolicyVersion);
     }
-    if !policy.require_authentication || !policy.require_authorization {
-        return invalid_policy("maintenance policy must require authentication and authorization");
+    if !policy.require_authentication {
+        return invalid_policy(MaintenancePolicyRule::AuthenticationRequired);
+    }
+    if !policy.require_authorization {
+        return invalid_policy(MaintenancePolicyRule::AuthorizationRequired);
     }
     if !policy.require_fencing_token {
-        return invalid_policy("maintenance policy must require fencing tokens");
+        return invalid_policy(MaintenancePolicyRule::FencingTokenRequired);
     }
     if !(1_000..=86_400_000).contains(&policy.max_request_lifetime_millis) {
-        return invalid_policy("max_request_lifetime_millis must be between 1000 and 86400000");
+        return invalid_policy(MaintenancePolicyRule::RequestLifetime);
     }
     if policy.resource_budget.max_checkpoint_bytes == 0
         || policy.resource_budget.max_store_members == 0
         || policy.resource_budget.max_concurrent_operations == 0
     {
-        return invalid_policy("maintenance resource limits must be greater than zero");
+        return invalid_policy(MaintenancePolicyRule::ResourceLimits);
     }
 
     let mut principals = BTreeSet::new();
     let mut has_release_operator = false;
     for binding in &policy.principal_bindings {
         if !is_canonical_principal(&binding.principal) {
-            return invalid_policy("principal bindings must use non-empty canonical identities");
+            return invalid_policy(MaintenancePolicyRule::PrincipalIdentifier);
         }
         if !principals.insert(binding.principal.as_str()) {
-            return invalid_policy(format!("principal '{}' is bound more than once", binding.principal));
+            return invalid_policy(MaintenancePolicyRule::UniquePrincipalBinding);
         }
         if binding.roles.is_empty() {
-            return invalid_policy(format!("principal '{}' has no maintenance role", binding.principal));
+            return invalid_policy(MaintenancePolicyRule::PrincipalRoleRequired);
         }
         has_release_operator |= binding.roles.contains(&MaintenanceRole::ReleaseOperator);
     }
     if !has_release_operator {
-        return invalid_policy("at least one principal must be bound to release_operator");
+        return invalid_policy(MaintenancePolicyRule::ReleaseOperatorRequired);
     }
 
     let mut granted_roles = BTreeSet::new();
     let mut release_checkpoint_granted = false;
     for grant in &policy.role_grants {
         if !granted_roles.insert(grant.role) {
-            return invalid_policy(format!("role '{:?}' is granted more than once", grant.role));
+            return invalid_policy(MaintenancePolicyRule::UniqueRoleGrant);
         }
         if grant.capabilities.is_empty() {
-            return invalid_policy(format!("role '{:?}' has no capability", grant.role));
+            return invalid_policy(MaintenancePolicyRule::RoleCapabilityRequired);
         }
         if grant.role == MaintenanceRole::Administrator
             && grant.capabilities.contains(&MaintenanceCapability::ReleaseCheckpoint)
         {
-            return invalid_policy("administrator cannot be granted release_checkpoint");
+            return invalid_policy(MaintenancePolicyRule::AdministratorCheckpointForbidden);
         }
         release_checkpoint_granted |= grant.role == MaintenanceRole::ReleaseOperator
             && grant.capabilities.contains(&MaintenanceCapability::ReleaseCheckpoint);
     }
     if !release_checkpoint_granted {
-        return invalid_policy("release_operator must be granted release_checkpoint");
+        return invalid_policy(MaintenancePolicyRule::ReleaseCheckpointRequired);
     }
     Ok(())
 }
 
-fn invalid_policy<T>(reason: impl Into<String>) -> Result<T, MaintenancePolicyError> {
-    Err(MaintenancePolicyError::InvalidPolicy(reason.into()))
+fn invalid_policy<T>(rule: MaintenancePolicyRule) -> Result<T, SecurityContractViolation> {
+    Err(SecurityContractViolation::MaintenancePolicy { rule })
 }
 
 fn is_canonical_identifier(value: &str) -> bool {
@@ -549,19 +531,53 @@ mod tests {
         request.authentication_enabled = false;
         assert_eq!(
             authorizer.authorize(Some(&request), 100_000),
-            Err(MaintenanceAuthorizationError::AuthenticationDisabled)
+            Err(MaintenanceAuthorizationDenial::AuthenticationDisabled)
         );
         request.authentication_enabled = true;
         request.fencing_token = None;
         assert_eq!(
             authorizer.authorize(Some(&request), 100_000),
-            Err(MaintenanceAuthorizationError::MissingFencingToken)
+            Err(MaintenanceAuthorizationDenial::MissingFencingToken)
         );
         request.fencing_token = Some(42);
         request.deadline_unix_millis = 100_000;
         assert_eq!(
             authorizer.authorize(Some(&request), 100_000),
-            Err(MaintenanceAuthorizationError::DeadlineExpired)
+            Err(MaintenanceAuthorizationDenial::DeadlineExpired)
         );
+    }
+
+    #[test]
+    fn policy_and_denial_errors_never_retain_principals() {
+        let sentinel = "principal-secret-sentinel";
+        let mut invalid = policy();
+        invalid.principal_bindings = vec![
+            MaintenancePrincipalBinding {
+                principal: sentinel.to_string(),
+                roles: BTreeSet::from([MaintenanceRole::ReleaseOperator]),
+            },
+            MaintenancePrincipalBinding {
+                principal: sentinel.to_string(),
+                roles: BTreeSet::from([MaintenanceRole::ReleaseOperator]),
+            },
+        ];
+        let error = invalid.validate().expect_err("duplicate principals must fail closed");
+        assert_eq!(
+            error,
+            SecurityContractViolation::MaintenancePolicy {
+                rule: MaintenancePolicyRule::UniquePrincipalBinding,
+            }
+        );
+        assert!(!error.to_string().contains(sentinel));
+        assert!(!format!("{error:?}").contains(sentinel));
+
+        let authorizer = MaintenanceAuthorizer::new(policy().into_validated().expect("valid policy"));
+        let mut request = context();
+        request.principal = Some(sentinel.to_string());
+        let denial = authorizer
+            .authorize(Some(&request), 100_000)
+            .expect_err("unbound principal must be denied");
+        assert_eq!(denial, MaintenanceAuthorizationDenial::PrincipalUnbound);
+        assert!(!format!("{denial:?}").contains(sentinel));
     }
 }

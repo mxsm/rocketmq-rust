@@ -170,13 +170,6 @@ SOURCE_STRINGIFICATION_ALLOWLIST: dict[str, str] = {
     "rocketmq-auth/src/authentication/provider/default_authentication_provider.rs": "default authentication provider maps AuthError into public authentication failure text",
     "rocketmq-auth/src/authentication/provider/local_authentication_metadata_provider.rs": "local authentication metadata provider persists JSON/filesystem details as public storage reasons",
     "rocketmq-auth/src/authentication/strategy.rs": "authentication strategy trait returns local AuthError without a source-bearing variant",
-    "rocketmq-auth/src/authorization/builder/default_authorization_context_builder.rs": "authorization context builder maps parser failures into user-facing invalid-context reasons",
-    "rocketmq-auth/src/authorization/factory.rs": "authorization factory exposes stable auth config errors while provider errors remain string reasons",
-    "rocketmq-auth/src/authorization/manager/metadata_manager.rs": "authorization metadata manager keeps provider failures as public configuration reasons",
-    "rocketmq-auth/src/authorization/manager/metadata_manager_impl.rs": "authorization metadata manager implementation keeps provider failures as public configuration reasons",
-    "rocketmq-auth/src/authorization/metadata_provider/local.rs": "local authorization metadata provider persists JSON/filesystem details as public storage reasons",
-    "rocketmq-auth/src/authorization/provider.rs": "authorization provider converts domain AuthorizationError into RocketMQError at the auth boundary",
-    "rocketmq-auth/src/authorization/strategy/abstract_authorization_strategy.rs": "authorization strategy keeps provider failures as configuration reasons",
     "rocketmq-auth/src/lib.rs": "auth bootstrap helpers expose storage errors through public RocketMQError storage variants",
     "rocketmq-auth/src/migration/alc/plain_permission_manager.rs": "legacy ACL migration keeps parser detail as compatibility text",
     "rocketmq-auth/src/runtime.rs": "auth runtime composes provider failures into public authentication errors",
@@ -1397,7 +1390,7 @@ def authorization_decision_contract_message(relative_path: str, line: str) -> st
     if relative_path.startswith("rocketmq-auth/src/authorization/") and (
         "AuthorizationError::PermissionDenied" in line or "PermissionDenied {" in line
     ):
-        return "permission denial must be an AuthorizationDecision value, not an AuthorizationError"
+        return "permission denial must be an AuthorizationDecision value, not an operational error"
     if relative_path == "rocketmq-auth/src/authorization/provider.rs" and "let message = error.to_string();" in line:
         return "authorization errors must not be stringified before boundary projection"
     if relative_path.startswith("rocketmq-transport/src/dispatch/authorized_dispatcher") and "reason.to_string()" in line:
@@ -1414,7 +1407,7 @@ def check_authorization_decision_contract() -> list[Finding]:
             ") -> LayerEvaluation<AuthorizationDecision>",
         ],
         ROOT / "rocketmq-auth" / "src" / "authorization" / "provider.rs": [
-            ") -> AuthorizationResult<AuthorizationDecision>",
+            ") -> AuthServiceResult<AuthorizationDecision>",
         ],
         ROOT / "rocketmq-transport" / "src" / "dispatch" / "authorized_dispatcher.rs": [
             "AUTH_PERMISSION_DENIED.public_message()",

@@ -35,13 +35,11 @@ impl ControllerRequestProcessor {
         let controller_manager = self.controller_manager()?;
         let config = controller_manager.controller_config();
         if !config.maintenance_enabled {
-            return Err(RocketMQError::authentication_failed(
-                "Controller maintenance API is disabled",
-            ));
+            return Err(maintenance_permission_denied());
         }
         let security = controller_manager
             .security()
-            .ok_or_else(|| RocketMQError::authentication_failed("Controller security adapter is unavailable"))?;
+            .ok_or_else(maintenance_authorizer_unavailable)?;
         let principal = security
             .authenticator()
             .authenticate_maintenance_principal(request, Some(channel_identity))
@@ -54,13 +52,9 @@ impl ControllerRequestProcessor {
             .map_err(|reason| RocketMQError::request_header_error(reason.to_string()))?;
         let authorizer = security
             .maintenance_authorizer()
-            .ok_or_else(|| RocketMQError::authentication_failed("Controller maintenance policy is unavailable"))?;
+            .ok_or_else(maintenance_authorizer_unavailable)?;
         if header.policy_version != authorizer.policy().policy_version {
-            return Err(RocketMQError::authentication_failed(format!(
-                "maintenance policy version {} does not match loaded version {}",
-                header.policy_version,
-                authorizer.policy().policy_version
-            )));
+            return Err(maintenance_permission_denied());
         }
         let grant = authorizer
             .authorize(
@@ -75,7 +69,7 @@ impl ControllerRequestProcessor {
                 }),
                 rocketmq_runtime::common::time_utils::current_millis(),
             )
-            .map_err(|error| RocketMQError::authentication_source("authorize Controller maintenance request", error))?;
+            .map_err(|_denial| maintenance_permission_denied())?;
         Ok((header, grant))
     }
 
@@ -89,7 +83,7 @@ impl ControllerRequestProcessor {
         let policy = controller_manager
             .security()
             .and_then(|security| security.maintenance_authorizer())
-            .ok_or_else(|| RocketMQError::authentication_failed("Controller maintenance policy is unavailable"))?
+            .ok_or_else(maintenance_authorizer_unavailable)?
             .policy();
         let response = MaintenanceCapabilitiesResponse {
             schema_version: 1,
@@ -174,6 +168,23 @@ impl ControllerRequestProcessor {
     }
 }
 
+fn maintenance_permission_denied() -> RocketMQError {
+    RocketMQError::BrokerPermissionDenied {
+        operation: "privileged maintenance".to_owned(),
+    }
+}
+
+fn maintenance_authorizer_unavailable() -> RocketMQError {
+    RocketMQError::Shared(std::sync::Arc::new(
+        rocketmq_error::Error::new(&rocketmq_error::AUTH_OPERATION_FAILED).with_context(
+            rocketmq_error::ErrorContext::new().with_text(
+                rocketmq_error::fields::OPERATION_DIAGNOSTIC,
+                "load-maintenance-authorizer",
+            ),
+        ),
+    ))
+}
+
 fn decode_controller_release_snapshot_manifest(
     request: &RemotingCommand,
     operation: &'static str,
@@ -189,6 +200,25 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
 
     use super::*;
+
+    #[test]
+    fn maintenance_boundary_distinguishes_denial_from_unavailable_authorizer() {
+        assert_eq!(
+            maintenance_permission_denied().descriptor(),
+            &rocketmq_error::AUTH_PERMISSION_DENIED
+        );
+        assert_eq!(
+            maintenance_authorizer_unavailable().descriptor(),
+            &rocketmq_error::AUTH_OPERATION_FAILED
+        );
+        assert_eq!(
+            maintenance_permission_denied().descriptor().projection().remoting(),
+            maintenance_authorizer_unavailable()
+                .descriptor()
+                .projection()
+                .remoting()
+        );
+    }
 
     #[test]
     fn malformed_release_snapshot_manifest_preserves_serde_source() {

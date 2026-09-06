@@ -19,11 +19,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::AuthError;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::SerializationError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RuntimeError;
 use rocketmq_security_api::AuthorizationDecision;
 
 use crate::authentication::provider::LocalAuthenticationMetadataProvider;
@@ -37,121 +33,12 @@ use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use crate::config::AuthConfig;
 use crate::runtime::ProviderRegistry;
+use crate::AuthFailureKind;
 use crate::AuthMetrics;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 use crate::RemotingAuthContext;
-
-/// Result type for authorization operations.
-pub type AuthorizationResult<T> = Result<T, AuthorizationError>;
-
-/// Error type for authorization operations.
-///
-/// This error type covers failures that prevent an authorization decision, including:
-/// - Policy evaluation failures
-/// - Configuration errors
-/// - Internal errors
-#[derive(Debug, thiserror::Error)]
-pub enum AuthorizationError {
-    /// Policy evaluation failed due to an error in the policy engine.
-    #[error("Policy evaluation failed: {0}")]
-    PolicyEvaluationFailed(String),
-
-    /// Required configuration is missing or invalid.
-    #[error("Configuration error: {0}")]
-    ConfigurationError(String),
-
-    /// Subject (user/role) not found in the authorization system.
-    #[error("Subject '{0}' not found")]
-    SubjectNotFound(String),
-
-    /// Resource not found or invalid.
-    #[error("Resource '{0}' not found or invalid")]
-    ResourceNotFound(String),
-
-    /// Authorization provider not initialized properly.
-    #[error("Authorization provider not initialized: {0}")]
-    NotInitialized(String),
-
-    /// Authorization provider runtime failed while processing a request.
-    #[error("Authorization provider operation '{operation}' failed")]
-    ProviderRuntimeFailed {
-        operation: &'static str,
-        #[source]
-        source: Box<RocketMQError>,
-    },
-
-    /// Authorization metadata read failed.
-    #[error("Authorization metadata read failed for '{path}': {reason}")]
-    StorageReadFailed { path: String, reason: String },
-
-    /// Authorization metadata write failed.
-    #[error("Authorization metadata write failed for '{path}': {reason}")]
-    StorageWriteFailed { path: String, reason: String },
-
-    /// Authorization metadata actor or durability protocol failed.
-    #[error("Authorization metadata persistence failed: {0}")]
-    MetadataIo(#[source] RuntimeError),
-
-    /// Authorization metadata lock acquisition failed.
-    #[error("Authorization metadata lock failed for '{0}'")]
-    StorageLockFailed(String),
-
-    /// Authorization metadata serialization or deserialization failed.
-    #[error("Authorization metadata {operation} failed for {format}: {reason}")]
-    SerializationFailed {
-        operation: &'static str,
-        format: &'static str,
-        reason: String,
-    },
-
-    /// Authorization context is invalid or incomplete.
-    #[error("Invalid authorization context: {0}")]
-    InvalidContext(String),
-}
-
-impl From<AuthorizationError> for RocketMQError {
-    fn from(error: AuthorizationError) -> Self {
-        match error {
-            AuthorizationError::SubjectNotFound(subject) => {
-                RocketMQError::illegal_argument(format!("Subject '{subject}' not found"))
-            }
-            AuthorizationError::ResourceNotFound(resource) => {
-                RocketMQError::illegal_argument(format!("Resource '{resource}' not found or invalid"))
-            }
-            AuthorizationError::InvalidContext(reason) => {
-                RocketMQError::illegal_argument(format!("Invalid authorization context: {reason}"))
-            }
-            AuthorizationError::ConfigurationError(reason) => {
-                RocketMQError::auth_config_invalid("auth.authorization", format!("Configuration error: {reason}"))
-            }
-            AuthorizationError::NotInitialized(reason) => RocketMQError::auth_config_invalid(
-                "auth.authorization",
-                format!("Authorization provider not initialized: {reason}"),
-            ),
-            AuthorizationError::PolicyEvaluationFailed(reason) => {
-                RocketMQError::Authentication(AuthError::ContextCreationError(reason))
-            }
-            AuthorizationError::ProviderRuntimeFailed { operation, source } => {
-                RocketMQError::authentication_source(operation, *source)
-            }
-            AuthorizationError::StorageReadFailed { path, reason } => RocketMQError::storage_read_failed(path, reason),
-            AuthorizationError::StorageWriteFailed { path, reason } => {
-                RocketMQError::storage_write_failed(path, reason)
-            }
-            AuthorizationError::MetadataIo(error) => RocketMQError::IO(std::io::Error::other(error)),
-            AuthorizationError::StorageLockFailed(path) => RocketMQError::StorageLockFailed { path },
-            AuthorizationError::SerializationFailed {
-                operation: "encode",
-                format,
-                reason,
-            } => RocketMQError::Serialization(SerializationError::encode_failed(format, reason)),
-            AuthorizationError::SerializationFailed {
-                operation: _,
-                format,
-                reason,
-            } => RocketMQError::deserialization_failed(format, reason),
-        }
-    }
-}
 
 /// Authorization provider trait.
 ///
@@ -166,19 +53,19 @@ impl From<AuthorizationError> for RocketMQError {
 /// - **Async-first**: All methods are async to support asynchronous implementations
 /// - **Context-based**: Authorization decisions are made based on `DefaultAuthorizationContext`
 /// - **Extensible**: Implementations can maintain internal state via `initialize`
-/// - **Error handling**: All failures are expressed through `AuthorizationError`
+/// - **Error handling**: All failures are expressed through `AuthServiceError`
 ///
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::{AuthorizationProvider, AuthorizationResult};
+/// use rocketmq_auth::{AuthorizationProvider, AuthServiceResult};
 /// use rocketmq_auth::DefaultAuthorizationContext;
 /// use rocketmq_auth::AuthConfig;
 ///
 /// struct MyAuthProvider;
 ///
 /// impl AuthorizationProvider for MyAuthProvider {
-///     fn initialize(&mut self, config: AuthConfig) -> AuthorizationResult<()> {
+///     fn initialize(&mut self, config: AuthConfig) -> AuthServiceResult<()> {
 ///         // Initialize provider with configuration
 ///         Ok(())
 ///     }
@@ -186,7 +73,7 @@ impl From<AuthorizationError> for RocketMQError {
 ///     async fn authorize(
 ///         &self,
 ///         context: &DefaultAuthorizationContext,
-///     ) -> AuthorizationResult<AuthorizationDecision> {
+///     ) -> AuthServiceResult<AuthorizationDecision> {
 ///         // Implement authorization logic
 ///         Ok(AuthorizationDecision::Allow)
 ///     }
@@ -206,9 +93,9 @@ pub trait AuthorizationProvider: Send + Sync {
     /// * `config` - Authorization configuration including provider-specific settings
     ///
     /// # Errors
-    /// Returns `AuthorizationError::ConfigurationError` if configuration is invalid
+    /// Returns `AuthFailureKind::InvalidConfiguration` if configuration is invalid
     /// or initialization fails.
-    fn initialize(&mut self, config: AuthConfig) -> AuthorizationResult<()>;
+    fn initialize(&mut self, config: AuthConfig) -> AuthServiceResult<()>;
 
     /// Initialize with both configuration and optional metadata service.
     ///
@@ -222,12 +109,12 @@ pub trait AuthorizationProvider: Send + Sync {
     /// * `metadata_service` - Optional metadata service supplier
     ///
     /// # Errors
-    /// Returns `AuthorizationError::ConfigurationError` if initialization fails.
+    /// Returns `AuthFailureKind::InvalidConfiguration` if initialization fails.
     fn initialize_with_metadata(
         &mut self,
         config: AuthConfig,
         #[allow(unused_variables)] metadata_service: Option<Box<dyn std::any::Any + Send + Sync>>,
-    ) -> AuthorizationResult<()> {
+    ) -> AuthServiceResult<()> {
         // Default implementation ignores metadata_service
         self.initialize(config)
     }
@@ -246,7 +133,7 @@ pub trait AuthorizationProvider: Send + Sync {
     /// # Returns
     /// - `Ok(AuthorizationDecision::Allow)` if authorization succeeds
     /// - `Ok(AuthorizationDecision::Deny(_))` if policy denies the request
-    /// - `Err(AuthorizationError)` if no decision can be made
+    /// - `Err(AuthServiceError)` if no decision can be made
     ///
     /// # Examples
     ///
@@ -262,7 +149,7 @@ pub trait AuthorizationProvider: Send + Sync {
     ///     AuthorizationDecision::Deny(reason) => reject(reason),
     /// }
     /// ```
-    async fn authorize(&self, context: &DefaultAuthorizationContext) -> AuthorizationResult<AuthorizationDecision>;
+    async fn authorize(&self, context: &DefaultAuthorizationContext) -> AuthServiceResult<AuthorizationDecision>;
 
     /// Create authorization contexts from gRPC metadata and request message.
     ///
@@ -278,13 +165,13 @@ pub trait AuthorizationProvider: Send + Sync {
     /// List of authorization contexts to be evaluated. Empty list if no authorization needed.
     ///
     /// # Errors
-    /// Returns `AuthorizationError::InvalidContext` if context cannot be constructed.
+    /// Returns `AuthFailureKind::InvalidInput` if context cannot be constructed.
     #[allow(unused_variables)]
     fn new_contexts_from_grpc_metadata(
         &self,
         metadata: &dyn std::any::Any,
         message: &dyn std::any::Any,
-    ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
+    ) -> AuthServiceResult<Vec<DefaultAuthorizationContext>> {
         // Default implementation returns empty list (no-op)
         Ok(Vec::new())
     }
@@ -302,13 +189,13 @@ pub trait AuthorizationProvider: Send + Sync {
     /// List of authorization contexts to be evaluated.
     ///
     /// # Errors
-    /// Returns `AuthorizationError::InvalidContext` if context cannot be constructed.
+    /// Returns `AuthFailureKind::InvalidInput` if context cannot be constructed.
     #[allow(unused_variables)]
     fn new_contexts_from_remoting_command(
         &self,
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
-    ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
+    ) -> AuthServiceResult<Vec<DefaultAuthorizationContext>> {
         // Default implementation returns empty list (no-op)
         Ok(Vec::new())
     }
@@ -333,12 +220,12 @@ impl Default for NoopAuthorizationProvider {
 
 #[cfg(test)]
 impl AuthorizationProvider for NoopAuthorizationProvider {
-    fn initialize(&mut self, _config: AuthConfig) -> AuthorizationResult<()> {
+    fn initialize(&mut self, _config: AuthConfig) -> AuthServiceResult<()> {
         // No initialization needed
         Ok(())
     }
 
-    async fn authorize(&self, _context: &DefaultAuthorizationContext) -> AuthorizationResult<AuthorizationDecision> {
+    async fn authorize(&self, _context: &DefaultAuthorizationContext) -> AuthServiceResult<AuthorizationDecision> {
         // Always allow
         Ok(AuthorizationDecision::Allow)
     }
@@ -347,7 +234,7 @@ impl AuthorizationProvider for NoopAuthorizationProvider {
         &self,
         _metadata: &dyn std::any::Any,
         _message: &dyn std::any::Any,
-    ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
+    ) -> AuthServiceResult<Vec<DefaultAuthorizationContext>> {
         // Return empty contexts (no authorization needed)
         Ok(Vec::new())
     }
@@ -356,7 +243,7 @@ impl AuthorizationProvider for NoopAuthorizationProvider {
         &self,
         _auth_context: &RemotingAuthContext,
         _command: &RemotingCommand,
-    ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
+    ) -> AuthServiceResult<Vec<DefaultAuthorizationContext>> {
         // Return empty contexts (no authorization needed)
         Ok(Vec::new())
     }
@@ -447,7 +334,7 @@ impl DefaultAuthorizationProvider {
         &mut self,
         config: AuthConfig,
         provider_registry: ProviderRegistry,
-    ) -> AuthorizationResult<()> {
+    ) -> AuthServiceResult<()> {
         self.config = Some(config.clone());
         self.metadata_service = None;
         self.context_builder = Some(DefaultAuthorizationContextBuilder::new(config));
@@ -462,7 +349,7 @@ impl DefaultAuthorizationProvider {
     /// Only closed decision categories and the action count are emitted. Subject,
     /// resource, source address, credentials, and operational error details remain
     /// available to typed diagnostics rather than tracing fields.
-    fn audit_log(&self, context: &DefaultAuthorizationContext, result: &AuthorizationResult<AuthorizationDecision>) {
+    fn audit_log(&self, context: &DefaultAuthorizationContext, result: &AuthServiceResult<AuthorizationDecision>) {
         use tracing::debug;
         use tracing::info;
         use tracing::warn;
@@ -492,7 +379,7 @@ impl Default for DefaultAuthorizationProvider {
 
 #[allow(async_fn_in_trait)]
 impl AuthorizationProvider for DefaultAuthorizationProvider {
-    fn initialize(&mut self, config: AuthConfig) -> AuthorizationResult<()> {
+    fn initialize(&mut self, config: AuthConfig) -> AuthServiceResult<()> {
         self.initialize_with_metadata(config, None)
     }
 
@@ -500,7 +387,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         &mut self,
         config: AuthConfig,
         metadata_service: Option<Box<dyn std::any::Any + Send + Sync>>,
-    ) -> AuthorizationResult<()> {
+    ) -> AuthServiceResult<()> {
         use tracing::debug;
 
         debug!("Initializing DefaultAuthorizationProvider");
@@ -510,10 +397,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
 
         let authentication_metadata_provider =
             LocalAuthenticationMetadataProvider::with_config(&config).map_err(|source| {
-                AuthorizationError::ProviderRuntimeFailed {
-                    operation: "initialize authentication metadata provider",
-                    source: Box::new(source),
-                }
+                AuthServiceError::with_source(AuthOperation::InitializeProvider, AuthFailureKind::Unavailable, source)
             })?;
         self.authentication_metadata_provider = Some(Arc::new(authentication_metadata_provider));
 
@@ -525,7 +409,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         Ok(())
     }
 
-    async fn authorize(&self, context: &DefaultAuthorizationContext) -> AuthorizationResult<AuthorizationDecision> {
+    async fn authorize(&self, context: &DefaultAuthorizationContext) -> AuthServiceResult<AuthorizationDecision> {
         use tracing::debug;
         use tracing::warn;
 
@@ -533,7 +417,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         if context.subject_key().is_none() {
             warn!("Authorization context missing subject");
             self.metrics.record_authorization_result(false);
-            return Err(AuthorizationError::InvalidContext(
+            return Err(AuthServiceError::invalid_context(
                 "Missing subject in authorization context".to_string(),
             ));
         }
@@ -541,7 +425,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         if context.resource().is_none() {
             warn!("Authorization context missing resource");
             self.metrics.record_authorization_result(false);
-            return Err(AuthorizationError::InvalidContext(
+            return Err(AuthServiceError::invalid_context(
                 "Missing resource in authorization context".to_string(),
             ));
         }
@@ -549,7 +433,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         if context.actions().is_empty() {
             warn!("Authorization context has no actions");
             self.metrics.record_authorization_result(false);
-            return Err(AuthorizationError::InvalidContext(
+            return Err(AuthServiceError::invalid_context(
                 "No actions specified in authorization context".to_string(),
             ));
         }
@@ -559,14 +443,16 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
             "authorization evaluation started"
         );
 
-        let authentication_metadata_provider = self.authentication_metadata_provider.as_ref().ok_or_else(|| {
-            AuthorizationError::NotInitialized("Authentication metadata provider is not configured".to_string())
-        })?;
-        let authorization_metadata_provider = self.authorization_metadata_provider.as_ref().ok_or_else(|| {
-            AuthorizationError::NotInitialized("Authorization metadata provider is not configured".to_string())
-        })?;
+        let authentication_metadata_provider = self
+            .authentication_metadata_provider
+            .as_ref()
+            .ok_or_else(|| AuthServiceError::not_initialized("Authentication metadata provider is not configured"))?;
+        let authorization_metadata_provider = self
+            .authorization_metadata_provider
+            .as_ref()
+            .ok_or_else(|| AuthServiceError::not_initialized("Authorization metadata provider is not configured"))?;
 
-        let result: AuthorizationResult<AuthorizationDecision> = async {
+        let result: AuthServiceResult<AuthorizationDecision> = async {
             let user_handler = UserAuthorizationHandler::new(authentication_metadata_provider.clone());
             match user_handler.authorize_subject(context).await? {
                 Some(decision) => Ok(decision),
@@ -588,10 +474,11 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         &self,
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
-    ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
-        let builder = self.context_builder.as_ref().ok_or_else(|| {
-            AuthorizationError::NotInitialized("Authorization context builder is not configured".to_string())
-        })?;
+    ) -> AuthServiceResult<Vec<DefaultAuthorizationContext>> {
+        let builder = self
+            .context_builder
+            .as_ref()
+            .ok_or_else(|| AuthServiceError::not_initialized("Authorization context builder is not configured"))?;
         builder.build_from_remoting(auth_context, command)
     }
 }
@@ -624,96 +511,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_authorization_error_display() {
-        let error = AuthorizationError::InvalidContext("missing subject".to_owned());
-        let msg = format!("{}", error);
-        assert!(msg.contains("missing subject"));
-    }
-
-    #[test]
-    fn test_authorization_error_variants() {
-        // Test different error variants
-        let errors = vec![
-            AuthorizationError::SubjectNotFound("user:alice".to_string()),
-            AuthorizationError::ResourceNotFound("topic:test".to_string()),
-            AuthorizationError::PolicyEvaluationFailed("invalid policy".to_string()),
-            AuthorizationError::ConfigurationError("missing config".to_string()),
-            AuthorizationError::NotInitialized("provider not ready".to_string()),
-            AuthorizationError::ProviderRuntimeFailed {
-                operation: "load authorization metadata",
-                source: Box::new(RocketMQError::illegal_argument("unexpected error")),
-            },
-            AuthorizationError::StorageReadFailed {
-                path: "acls.json".to_string(),
-                reason: "read failed".to_string(),
-            },
-            AuthorizationError::StorageWriteFailed {
-                path: "acls.json".to_string(),
-                reason: "write failed".to_string(),
-            },
-            AuthorizationError::StorageLockFailed("acl cache".to_string()),
-            AuthorizationError::SerializationFailed {
-                operation: "decode",
-                format: "JSON",
-                reason: "invalid ACL snapshot".to_string(),
-            },
-            AuthorizationError::InvalidContext("missing subject".to_string()),
-        ];
-
-        for error in errors {
-            // Ensure all error variants can be formatted
-            let _msg = format!("{}", error);
-            let _debug = format!("{:?}", error);
-        }
-    }
-
-    #[test]
-    fn test_authorization_error_rocketmq_mapping_categories() {
-        let invalid = RocketMQError::from(AuthorizationError::InvalidContext("missing subject".to_string()));
-        assert!(matches!(invalid, RocketMQError::IllegalArgument(_)));
-
-        let config = RocketMQError::from(AuthorizationError::ConfigurationError("missing config".to_string()));
-        assert!(matches!(
-            config,
-            RocketMQError::AuthConfigInvalid {
-                key: "auth.authorization",
-                ..
-            }
-        ));
-
-        let provider_runtime = RocketMQError::from(AuthorizationError::ProviderRuntimeFailed {
-            operation: "load authorization metadata",
-            source: Box::new(RocketMQError::illegal_argument("unexpected error")),
-        });
-        let RocketMQError::AuthenticationSource { operation, source } = provider_runtime else {
-            panic!("provider failure must retain a typed source")
-        };
-        assert_eq!(operation, "load authorization metadata");
-        assert!(source.downcast_ref::<RocketMQError>().is_some());
-
-        let storage = RocketMQError::from(AuthorizationError::StorageWriteFailed {
-            path: "acls.json".to_string(),
-            reason: "permission denied".to_string(),
-        });
-        assert!(matches!(storage, RocketMQError::StorageWriteFailed { .. }));
-
-        let serialization = RocketMQError::from(AuthorizationError::SerializationFailed {
-            operation: "decode",
-            format: "JSON",
-            reason: "invalid ACL snapshot".to_string(),
-        });
-        assert!(matches!(serialization, RocketMQError::Serialization(_)));
-
-        let policy = RocketMQError::from(AuthorizationError::PolicyEvaluationFailed(
-            "policy engine rejected".to_string(),
-        ));
-        assert!(matches!(
-            policy,
-            RocketMQError::Authentication(AuthError::ContextCreationError(_))
-        ));
-    }
-
     #[tokio::test]
     async fn test_default_provider_initialization() {
         let mut provider = DefaultAuthorizationProvider::new();
@@ -731,13 +528,9 @@ mod tests {
         let context = DefaultAuthorizationContext::default();
         let result = provider.authorize(&context).await;
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            AuthorizationError::InvalidContext(msg) => {
-                assert!(msg.contains("subject"));
-            }
-            _ => panic!("Expected InvalidContext error"),
-        }
+        let error = result.unwrap_err();
+        assert_eq!(error.operation(), AuthOperation::BuildContext);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidInput);
     }
 
     #[tokio::test]
@@ -752,13 +545,9 @@ mod tests {
 
         let result = provider.authorize(&context).await;
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            AuthorizationError::InvalidContext(msg) => {
-                assert!(msg.contains("resource"));
-            }
-            _ => panic!("Expected InvalidContext error"),
-        }
+        let error = result.unwrap_err();
+        assert_eq!(error.operation(), AuthOperation::BuildContext);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidInput);
     }
 
     #[tokio::test]
@@ -775,13 +564,9 @@ mod tests {
 
         let result = provider.authorize(&context).await;
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            AuthorizationError::InvalidContext(msg) => {
-                assert!(msg.contains("actions"));
-            }
-            _ => panic!("Expected InvalidContext error"),
-        }
+        let error = result.unwrap_err();
+        assert_eq!(error.operation(), AuthOperation::BuildContext);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidInput);
     }
 
     #[test]

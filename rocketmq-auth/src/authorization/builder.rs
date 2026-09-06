@@ -17,7 +17,7 @@ pub mod default_authorization_context_builder;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use crate::authorization::provider::AuthorizationResult;
+use crate::AuthServiceResult;
 use crate::RemotingAuthContext;
 
 pub trait AuthorizationContextBuilder: Send + Sync {
@@ -25,5 +25,5 @@ pub trait AuthorizationContextBuilder: Send + Sync {
         &self,
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
-    ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>>;
+    ) -> AuthServiceResult<Vec<DefaultAuthorizationContext>>;
 }

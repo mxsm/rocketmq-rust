@@ -14,12 +14,12 @@
 
 //! Adapters from policy evaluation to layered authorization decisions.
 
-use rocketmq_error::CanonicalCondition;
 use rocketmq_security_api::DetailedDecision;
 use rocketmq_security_api::LayerFailureKind;
 
 use crate::authorization::enums::decision::Decision as PolicyDecision;
-use crate::authorization::provider::AuthorizationError;
+use crate::AuthFailureKind;
+use crate::AuthServiceError;
 
 /// Projects an internal policy decision into the detailed authorization contract.
 ///
@@ -39,32 +39,18 @@ pub const fn project_policy_decision(decision: PolicyDecision) -> DetailedDecisi
 /// fixed denial output from `rocketmq-security-api` rather than returning the
 /// source error to a peer.
 #[must_use]
-pub fn project_authorization_error(error: &AuthorizationError) -> LayerFailureKind {
-    match error {
-        AuthorizationError::ConfigurationError(_)
-        | AuthorizationError::NotInitialized(_)
-        | AuthorizationError::StorageReadFailed { .. }
-        | AuthorizationError::StorageLockFailed(_) => LayerFailureKind::Unavailable,
-        AuthorizationError::MetadataIo(error) => match error.condition() {
-            CanonicalCondition::DeadlineExceeded => LayerFailureKind::Timeout,
-            CanonicalCondition::Unavailable => LayerFailureKind::Unavailable,
-            _ => LayerFailureKind::Error,
-        },
-        AuthorizationError::PolicyEvaluationFailed(_)
-        | AuthorizationError::SubjectNotFound(_)
-        | AuthorizationError::ResourceNotFound(_)
-        | AuthorizationError::ProviderRuntimeFailed { .. }
-        | AuthorizationError::StorageWriteFailed { .. }
-        | AuthorizationError::SerializationFailed { .. }
-        | AuthorizationError::InvalidContext(_) => LayerFailureKind::Error,
+pub fn project_authorization_error(error: &AuthServiceError) -> LayerFailureKind {
+    match error.kind() {
+        AuthFailureKind::Timeout => LayerFailureKind::Timeout,
+        AuthFailureKind::InvalidConfiguration | AuthFailureKind::Unavailable => LayerFailureKind::Unavailable,
+        _ => LayerFailureKind::Error,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_runtime::RuntimeError;
-
     use super::*;
+    use crate::AuthOperation;
 
     #[test]
     fn policy_decisions_remain_binary() {
@@ -75,33 +61,42 @@ mod tests {
     #[test]
     fn unavailable_and_operational_errors_never_abstain() {
         assert_eq!(
-            project_authorization_error(&AuthorizationError::NotInitialized("not ready".to_owned())),
+            project_authorization_error(&AuthServiceError::new(
+                AuthOperation::Initialize,
+                AuthFailureKind::Unavailable,
+            )),
             LayerFailureKind::Unavailable
         );
         assert_eq!(
-            project_authorization_error(&AuthorizationError::PolicyEvaluationFailed("failed".to_owned())),
+            project_authorization_error(&AuthServiceError::new(
+                AuthOperation::Authorize,
+                AuthFailureKind::Internal,
+            )),
             LayerFailureKind::Error
         );
     }
 
     #[test]
-    fn metadata_io_errors_keep_timeout_unavailable_and_error_distinct() {
+    fn service_errors_keep_timeout_unavailable_and_error_distinct() {
         assert_eq!(
-            project_authorization_error(&AuthorizationError::MetadataIo(RuntimeError::timed_out(
-                rocketmq_runtime::RuntimeOperation::PersistMetadata
-            ))),
+            project_authorization_error(&AuthServiceError::new(
+                AuthOperation::WriteMetadata,
+                AuthFailureKind::Timeout,
+            )),
             LayerFailureKind::Timeout
         );
         assert_eq!(
-            project_authorization_error(&AuthorizationError::MetadataIo(RuntimeError::context_unavailable(
-                rocketmq_runtime::RuntimeOperation::MetadataIo
-            ))),
+            project_authorization_error(&AuthServiceError::new(
+                AuthOperation::ReadMetadata,
+                AuthFailureKind::Unavailable,
+            )),
             LayerFailureKind::Unavailable
         );
         assert_eq!(
-            project_authorization_error(&AuthorizationError::MetadataIo(RuntimeError::capacity(
-                rocketmq_runtime::RuntimeOperation::MetadataIo,
-            ))),
+            project_authorization_error(&AuthServiceError::new(
+                AuthOperation::Authorize,
+                AuthFailureKind::Internal,
+            )),
             LayerFailureKind::Error
         );
     }

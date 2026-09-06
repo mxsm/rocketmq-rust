@@ -724,7 +724,9 @@ mod cluster_session {
                     request.body().map(AsRef::as_ref),
                     None,
                 ))
-                .map_err(|_| rocketmq_error::RocketMQError::authentication_failed("outbound request signing failed"))?;
+                .map_err(|source| {
+                    rocketmq_error::RocketMQError::authentication_source("outbound request signing", source)
+                })?;
 
             request.ensure_ext_fields_initialized();
             for (key, value) in signature.fields() {
@@ -748,7 +750,6 @@ mod cluster_session {
         use std::sync::Arc;
 
         use super::rpc_hook_from_outbound_signer;
-        use super::CheetahString;
         use super::ClientInstanceHandle;
         use super::OutboundSigner;
         use super::RemotingCommand;
@@ -756,13 +757,15 @@ mod cluster_session {
         use rocketmq_protocol::code::request_code::RequestCode;
         use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
         use rocketmq_security_api::Secret;
+        use rocketmq_security_api::SecurityOperation;
+        use rocketmq_security_api::SecurityProviderError;
+        use rocketmq_security_api::SecurityProviderFailure;
         use rocketmq_security_api::Signature;
-        use rocketmq_security_api::SigningError;
 
         struct FixedSigner;
 
         impl OutboundSigner for FixedSigner {
-            fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
+            fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SecurityProviderError> {
                 assert_eq!(
                     request.fields().get("topic").map(|value| value.as_str()),
                     Some("TopicA")
@@ -777,8 +780,12 @@ mod cluster_session {
         struct FailingSigner;
 
         impl OutboundSigner for FailingSigner {
-            fn sign(&self, _request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
-                Err(SigningError::Failed(CheetahString::from("secret signing diagnostic")))
+            fn sign(&self, _request: SecurityRequestView<'_>) -> Result<Signature, SecurityProviderError> {
+                Err(SecurityProviderError::caused_by(
+                    SecurityProviderFailure::OperationFailed,
+                    SecurityOperation::SignRequest,
+                    std::io::Error::other("secret signing diagnostic"),
+                ))
             }
         }
 
@@ -818,6 +825,11 @@ mod cluster_session {
             let message = error.to_string();
             assert!(message.contains("outbound request signing failed"));
             assert!(!message.contains("secret signing diagnostic"));
+            let signer = std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<SecurityProviderError>())
+                .expect("signer failure must remain typed");
+            let io = std::error::Error::source(signer).expect("I/O cause must remain available");
+            assert!(io.downcast_ref::<std::io::Error>().is_some());
         }
 
         #[tokio::test]

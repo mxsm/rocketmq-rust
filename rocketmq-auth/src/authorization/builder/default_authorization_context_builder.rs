@@ -46,9 +46,9 @@ use crate::authentication::enums::subject_type::SubjectType;
 use crate::authorization::builder::AuthorizationContextBuilder;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::authorization::model::resource::Resource;
-use crate::authorization::provider::AuthorizationError;
-use crate::authorization::provider::AuthorizationResult;
 use crate::config::AuthConfig;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 use crate::RemotingAuthContext;
 
 const ACCESS_KEY: &str = "AccessKey";
@@ -104,26 +104,26 @@ impl DefaultAuthorizationContextBuilder {
             .map(|username| format!("{}:{}", SubjectType::User.name(), username))
     }
 
-    fn source_ip(auth_context: &RemotingAuthContext) -> AuthorizationResult<String> {
+    fn source_ip(auth_context: &RemotingAuthContext) -> AuthServiceResult<String> {
         auth_context
             .validate()
-            .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+            .map_err(AuthServiceError::invalid_context_source)?;
         Ok(auth_context.source_ip().unwrap_or("embedded").to_owned())
     }
 
-    fn require_topic(topic: &str) -> AuthorizationResult<&str> {
+    fn require_topic(topic: &str) -> AuthServiceResult<&str> {
         if TopicValidator::validate_topic(topic).valid() {
             Ok(topic)
         } else {
-            Err(AuthorizationError::InvalidContext(
+            Err(AuthServiceError::invalid_context(
                 "supervised mutation topic is invalid".to_owned(),
             ))
         }
     }
 
-    fn require_group(group: &str) -> AuthorizationResult<&str> {
+    fn require_group(group: &str) -> AuthServiceResult<&str> {
         validate_subscription_group_name(group).map_err(|_| {
-            AuthorizationError::InvalidContext("supervised mutation consumer group is invalid".to_owned())
+            AuthServiceError::invalid_context("supervised mutation consumer group is invalid".to_owned())
         })?;
         Ok(group)
     }
@@ -140,11 +140,11 @@ impl DefaultAuthorizationContextBuilder {
         )
     }
 
-    fn require_body<'a>(command: &'a RemotingCommand, label: &str) -> AuthorizationResult<&'a [u8]> {
+    fn require_body<'a>(command: &'a RemotingCommand, label: &str) -> AuthServiceResult<&'a [u8]> {
         command
             .body()
             .map(AsRef::as_ref)
-            .ok_or_else(|| AuthorizationError::InvalidContext(format!("{label} body is missing")))
+            .ok_or_else(|| AuthServiceError::invalid_context(format!("{label} body is missing")))
     }
 
     fn push_topic_sub_if_not_retry(
@@ -534,10 +534,10 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
         &self,
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
-    ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
+    ) -> AuthServiceResult<Vec<DefaultAuthorizationContext>> {
         auth_context
             .validate()
-            .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+            .map_err(AuthServiceError::invalid_context_source)?;
         let mut contexts = Vec::new();
         let empty_fields = HashMap::new();
         let request_code = RequestCode::from(command.code());
@@ -562,13 +562,13 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::UpdateTopicConfigStateCas => {
                 let header = command
                     .decode_command_custom_header::<GetTopicConfigRequestHeader>()
-                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                    .map_err(AuthServiceError::invalid_context_source)?;
                 let topic = Self::require_topic(header.topic.as_str())?;
                 let body = serde_json::from_slice::<SupervisedTopicConfigCasRequestBody>(Self::require_body(
                     command,
                     "supervised Topic replacement",
                 )?)
-                .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                .map_err(AuthServiceError::invalid_context_source)?;
                 let action = match body.expected_state {
                     ExpectedState::Absent => Action::Create,
                     ExpectedState::Present { .. } => Action::Update,
@@ -584,12 +584,12 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::UpdateSubscriptionGroupConfigStateCas => {
                 let header = command
                     .decode_command_custom_header::<GetSubscriptionGroupConfigRequestHeader>()
-                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                    .map_err(AuthServiceError::invalid_context_source)?;
                 let group = Self::require_group(header.group.as_str())?;
                 let body = serde_json::from_slice::<SupervisedSubscriptionGroupConfigCasRequestBody>(
                     Self::require_body(command, "supervised Subscription Group replacement")?,
                 )
-                .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                .map_err(AuthServiceError::invalid_context_source)?;
                 let action = match body.expected_state {
                     ExpectedState::Absent => Action::Create,
                     ExpectedState::Present { .. } => Action::Update,
@@ -605,7 +605,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::UpdateConsumerOffsetConditional => {
                 let header = command
                     .decode_command_custom_header::<UpdateConsumerOffsetConditionalHeader>()
-                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                    .map_err(AuthServiceError::invalid_context_source)?;
                 let topic = Self::require_topic(header.topic.as_str())?;
                 let group = Self::require_group(header.consumer_group.as_str())?;
                 contexts.push(self.build_context(
@@ -635,7 +635,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
                     command,
                     "request-mode query",
                 )?)
-                .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                .map_err(AuthServiceError::invalid_context_source)?;
                 let topic = Self::require_topic(&body.topic)?;
                 let group = Self::require_group(&body.consumer_group)?;
                 contexts.push(self.build_context(
@@ -658,18 +658,18 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
                     command,
                     "request-mode replacement",
                 )?)
-                .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                .map_err(AuthServiceError::invalid_context_source)?;
                 let topic = Self::require_topic(&body.topic)?;
                 let group = Self::require_group(&body.consumer_group)?;
                 if let ExpectedMessageRequestMode::Present { mode, .. } = &body.expected_state {
                     if !matches!(mode.as_str(), "PULL" | "POP") {
-                        return Err(AuthorizationError::InvalidContext(
+                        return Err(AuthServiceError::invalid_context(
                             "expected request mode is invalid".to_owned(),
                         ));
                     }
                 }
                 if !matches!(body.replacement.mode.as_str(), "PULL" | "POP") {
-                    return Err(AuthorizationError::InvalidContext(
+                    return Err(AuthServiceError::invalid_context(
                         "replacement request mode is invalid".to_owned(),
                     ));
                 }
@@ -819,7 +819,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::HeartBeat => {
                 if let Some(body) = command.body() {
                     let heartbeat = SerdeJsonUtils::from_json_bytes::<HeartbeatData>(body)
-                        .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                        .map_err(AuthServiceError::invalid_context_source)?;
                     for consumer in heartbeat.consumer_data_set {
                         contexts.push(self.build_context(
                             subject_key,
@@ -844,7 +844,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::UnregisterClient => {
                 let header = command
                     .decode_command_custom_header::<UnregisterClientRequestHeader>()
-                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                    .map_err(AuthServiceError::invalid_context_source)?;
                 if let Some(group) = header.consumer_group.as_deref() {
                     contexts.push(self.build_context(
                         subject_key,
@@ -858,7 +858,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::GetConsumerListByGroup => {
                 let header = command
                     .decode_command_custom_header::<GetConsumerListByGroupRequestHeader>()
-                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                    .map_err(AuthServiceError::invalid_context_source)?;
                 contexts.push(self.build_context(
                     subject_key,
                     Resource::of_group(header.consumer_group.to_string()),
@@ -870,7 +870,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::QueryConsumerOffset => {
                 let header = command
                     .decode_command_custom_header::<QueryConsumerOffsetRequestHeader>()
-                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                    .map_err(AuthServiceError::invalid_context_source)?;
                 self.push_topic_sub_if_not_retry(
                     &mut contexts,
                     subject_key,
@@ -890,7 +890,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::UpdateConsumerOffset => {
                 let header = command
                     .decode_command_custom_header::<UpdateConsumerOffsetRequestHeader>()
-                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                    .map_err(AuthServiceError::invalid_context_source)?;
                 self.push_topic_sub_if_not_retry(
                     &mut contexts,
                     subject_key,
@@ -910,7 +910,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::LockBatchMq => {
                 if let Some(body) = command.body() {
                     let body = SerdeJsonUtils::from_json_bytes::<LockBatchRequestBody>(body)
-                        .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                        .map_err(AuthServiceError::invalid_context_source)?;
                     if let Some(group) = body.consumer_group.as_deref() {
                         contexts.push(self.build_context(
                             subject_key,
@@ -935,7 +935,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::UnlockBatchMq => {
                 if let Some(body) = command.body() {
                     let body = serde_json::from_slice::<UnlockBatchRequestBody>(body)
-                        .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                        .map_err(AuthServiceError::invalid_context_source)?;
                     if let Some(group) = body.consumer_group.as_deref() {
                         contexts.push(self.build_context(
                             subject_key,
@@ -960,9 +960,9 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::DeleteTopicInBrokerList => {
                 let body = command
                     .body()
-                    .ok_or_else(|| AuthorizationError::InvalidContext("batch topic delete body is missing".into()))?;
+                    .ok_or_else(|| AuthServiceError::invalid_context("batch topic delete body is missing"))?;
                 let body = SerdeJsonUtils::from_json_bytes::<DeleteTopicListRequestBody>(body)
-                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                    .map_err(AuthServiceError::invalid_context_source)?;
                 let mut seen = HashSet::new();
                 for topic in body.topic_list {
                     if seen.insert(topic.clone()) {
@@ -979,9 +979,9 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
             RequestCode::DeleteSubscriptionGroupList => {
                 let body = command
                     .body()
-                    .ok_or_else(|| AuthorizationError::InvalidContext("batch group delete body is missing".into()))?;
+                    .ok_or_else(|| AuthServiceError::invalid_context("batch group delete body is missing"))?;
                 let body = SerdeJsonUtils::from_json_bytes::<DeleteSubscriptionGroupListRequestBody>(body)
-                    .map_err(|error| AuthorizationError::InvalidContext(error.to_string()))?;
+                    .map_err(AuthServiceError::invalid_context_source)?;
                 let mut seen = HashSet::new();
                 for group in body.group_name_list {
                     if seen.insert(group.clone()) {
@@ -1006,7 +1006,7 @@ impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
         }
 
         if contexts.is_empty() && Self::supervised_request_requires_context(request_code) {
-            return Err(AuthorizationError::InvalidContext(
+            return Err(AuthServiceError::invalid_context(
                 "supervised mutation authorization context is missing".to_owned(),
             ));
         }
@@ -1025,6 +1025,7 @@ mod tests {
 
     use super::*;
     use crate::config::AuthConfig;
+    use crate::AuthFailureKind;
 
     fn command_with_fields(code: RequestCode, fields: &[(&str, &str)]) -> RemotingCommand {
         let ext_fields = fields
@@ -1472,12 +1473,12 @@ mod tests {
         let error = builder
             .build_from_remoting(&RemotingAuthContext::default(), &command)
             .expect_err("missing trusted session metadata must fail closed");
-        assert!(matches!(error, AuthorizationError::InvalidContext(_)));
+        assert_eq!(error.kind(), AuthFailureKind::InvalidInput);
 
         let command_without_ext_fields = RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32());
         let error = builder
             .build_from_remoting(&RemotingAuthContext::default(), &command_without_ext_fields)
             .expect_err("missing trusted metadata must fail closed before the no-context fast path");
-        assert!(matches!(error, AuthorizationError::InvalidContext(_)));
+        assert_eq!(error.kind(), AuthFailureKind::InvalidInput);
     }
 }

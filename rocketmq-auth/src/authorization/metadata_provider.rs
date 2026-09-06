@@ -31,11 +31,8 @@ pub use local::LocalAuthorizationMetadataProvider;
 
 use crate::authentication::model::subject::Subject;
 use crate::authorization::model::acl::Acl;
-use crate::authorization::provider::AuthorizationError;
 use crate::config::AuthConfig;
-
-/// Result type for authorization metadata operations.
-pub type MetadataResult<T> = Result<T, AuthorizationError>;
+use crate::AuthServiceResult;
 
 /// Authorization metadata provider trait.
 ///
@@ -48,7 +45,7 @@ pub type MetadataResult<T> = Result<T, AuthorizationError>;
 /// - **Async-first**: All I/O operations are async to support scalable implementations
 /// - **Flexible storage**: Implementations can use any backend (files, databases, remote services)
 /// - **Query support**: Built-in filtering capabilities for listing ACLs
-/// - **Error handling**: Comprehensive error reporting through `AuthorizationError`
+/// - **Error handling**: Comprehensive error reporting through `AuthServiceError`
 ///
 /// # Thread Safety
 ///
@@ -58,7 +55,7 @@ pub type MetadataResult<T> = Result<T, AuthorizationError>;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_auth::{AuthorizationMetadataProvider, MetadataResult};
+/// use rocketmq_auth::{AuthorizationMetadataProvider, AuthServiceResult};
 /// use rocketmq_auth::Acl;
 /// use rocketmq_auth::Subject;
 /// use rocketmq_auth::AuthConfig;
@@ -72,17 +69,17 @@ pub type MetadataResult<T> = Result<T, AuthorizationError>;
 ///         &mut self,
 ///         config: AuthConfig,
 ///         metadata_service: Option<Box<dyn Any + Send + Sync>>,
-///     ) -> MetadataResult<()> {
+///     ) -> AuthServiceResult<()> {
 ///         // Initialize storage backend
 ///         Ok(())
 ///     }
 ///
-///     async fn create_acl(&self, acl: Acl) -> MetadataResult<()> {
+///     async fn create_acl(&self, acl: Acl) -> AuthServiceResult<()> {
 ///         // Store ACL in backend
 ///         Ok(())
 ///     }
 ///
-///     async fn get_acl<S: Subject>(&self, subject: &S) -> MetadataResult<Option<Acl>> {
+///     async fn get_acl<S: Subject>(&self, subject: &S) -> AuthServiceResult<Option<Acl>> {
 ///         // Retrieve ACL from backend
 ///         Ok(None)
 ///     }
@@ -108,7 +105,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns `AuthorizationError::ConfigurationError` if:
+    /// Returns `AuthFailureKind::InvalidConfiguration` if:
     /// - Configuration parameters are invalid
     /// - Storage backend cannot be initialized
     /// - Required resources are unavailable
@@ -123,7 +120,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
         &mut self,
         config: AuthConfig,
         metadata_service: Option<Box<dyn Any + Send + Sync>>,
-    ) -> MetadataResult<()>;
+    ) -> AuthServiceResult<()>;
 
     /// Shutdown the metadata provider and release resources.
     ///
@@ -147,10 +144,10 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::InvalidContext` if ACL already exists
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::InvalidInput` if ACL already exists
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
-    /// - `AuthorizationError::InvalidContext` if ACL data is malformed
+    /// - `AuthFailureKind::InvalidInput` if ACL data is malformed
     ///
     /// # Examples
     ///
@@ -158,7 +155,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     /// let acl = Acl::of("user:alice", SubjectType::User, policy);
     /// provider.create_acl(acl).await?;
     /// ```
-    async fn create_acl(&self, acl: Acl) -> MetadataResult<()>;
+    async fn create_acl(&self, acl: Acl) -> AuthServiceResult<()>;
 
     /// Delete an ACL for a subject.
     ///
@@ -171,7 +168,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
     ///
     /// # Examples
@@ -180,7 +177,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     /// let user = User::new("alice");
     /// provider.delete_acl(&user).await?;
     /// ```
-    async fn delete_acl<S: Subject + Send + Sync>(&self, subject: &S) -> MetadataResult<()>;
+    async fn delete_acl<S: Subject + Send + Sync>(&self, subject: &S) -> AuthServiceResult<()>;
 
     /// Update an existing ACL.
     ///
@@ -193,10 +190,10 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::SubjectNotFound` if ACL doesn't exist
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::NotFound` if ACL doesn't exist
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
-    /// - `AuthorizationError::InvalidContext` if ACL data is malformed
+    /// - `AuthFailureKind::InvalidInput` if ACL data is malformed
     ///
     /// # Examples
     ///
@@ -205,7 +202,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     /// acl.add_policy(new_policy);
     /// provider.update_acl(acl).await?;
     /// ```
-    async fn update_acl(&self, acl: Acl) -> MetadataResult<()>;
+    async fn update_acl(&self, acl: Acl) -> AuthServiceResult<()>;
 
     /// Get the ACL for a specific subject.
     ///
@@ -223,7 +220,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
     ///
     /// # Examples
@@ -237,7 +234,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     fn get_acl<S: Subject + Send + Sync>(
         &self,
         subject: &S,
-    ) -> impl std::future::Future<Output = MetadataResult<Option<Acl>>> + Send;
+    ) -> impl std::future::Future<Output = AuthServiceResult<Option<Acl>>> + Send;
 
     /// List ACLs with optional filtering.
     ///
@@ -255,7 +252,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
     ///
     /// # Examples
@@ -273,7 +270,11 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     /// // Both filters
     /// let filtered = provider.list_acl(Some("user:alice"), Some("Topic:")).await?;
     /// ```
-    async fn list_acl(&self, subject_filter: Option<&str>, resource_filter: Option<&str>) -> MetadataResult<Vec<Acl>>;
+    async fn list_acl(
+        &self,
+        subject_filter: Option<&str>,
+        resource_filter: Option<&str>,
+    ) -> AuthServiceResult<Vec<Acl>>;
 }
 
 /// No-op authorization metadata provider for testing and disabled scenarios.
@@ -297,7 +298,7 @@ impl AuthorizationMetadataProvider for NoopMetadataProvider {
         &mut self,
         _config: AuthConfig,
         _metadata_service: Option<Box<dyn Any + Send + Sync>>,
-    ) -> MetadataResult<()> {
+    ) -> AuthServiceResult<()> {
         Ok(())
     }
 
@@ -305,19 +306,19 @@ impl AuthorizationMetadataProvider for NoopMetadataProvider {
         // No resources to clean up
     }
 
-    async fn create_acl(&self, _acl: Acl) -> MetadataResult<()> {
+    async fn create_acl(&self, _acl: Acl) -> AuthServiceResult<()> {
         Ok(())
     }
 
-    async fn delete_acl<S: Subject + Send + Sync>(&self, _subject: &S) -> MetadataResult<()> {
+    async fn delete_acl<S: Subject + Send + Sync>(&self, _subject: &S) -> AuthServiceResult<()> {
         Ok(())
     }
 
-    async fn update_acl(&self, _acl: Acl) -> MetadataResult<()> {
+    async fn update_acl(&self, _acl: Acl) -> AuthServiceResult<()> {
         Ok(())
     }
 
-    async fn get_acl<S: Subject + Send + Sync>(&self, _subject: &S) -> MetadataResult<Option<Acl>> {
+    async fn get_acl<S: Subject + Send + Sync>(&self, _subject: &S) -> AuthServiceResult<Option<Acl>> {
         Ok(None)
     }
 
@@ -325,7 +326,7 @@ impl AuthorizationMetadataProvider for NoopMetadataProvider {
         &self,
         _subject_filter: Option<&str>,
         _resource_filter: Option<&str>,
-    ) -> MetadataResult<Vec<Acl>> {
+    ) -> AuthServiceResult<Vec<Acl>> {
         Ok(Vec::new())
     }
 }

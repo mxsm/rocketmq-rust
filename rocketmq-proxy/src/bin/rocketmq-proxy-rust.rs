@@ -41,6 +41,9 @@ use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityContractViolation;
+use rocketmq_security_api::SecurityProviderError;
+use rocketmq_security_api::SecurityProviderFailure;
 use tracing::info;
 
 fn print_release_version_if_requested(component: &str) -> bool {
@@ -159,7 +162,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     .map_err(|error| ProxyError::Transport {
         message: format!("failed to resolve Proxy telemetry configuration: {error}"),
     })?;
-    let security_bootstrap = SecurityBootstrapConfig::from_env().map_err(proxy_security_error)?;
+    let security_bootstrap = SecurityBootstrapConfig::from_env().map_err(proxy_security_contract_error)?;
     let validated_security = validate_proxy_security(
         &security_bootstrap,
         &config,
@@ -312,10 +315,29 @@ async fn finish_proxy_process_shutdown(
     }
 }
 
-fn proxy_security_error(error: rocketmq_security_api::SecurityBootstrapError) -> ProxyError {
-    ProxyError::Transport {
-        message: format!("Proxy security bootstrap failed before listener bind: {error}"),
-    }
+fn proxy_security_contract_error(error: SecurityContractViolation) -> ProxyError {
+    ProxyError::from(RocketMQError::from(rocketmq_auth::AuthServiceError::with_source(
+        rocketmq_auth::AuthOperation::Bootstrap,
+        rocketmq_auth::AuthFailureKind::InvalidConfiguration,
+        error,
+    )))
+}
+
+fn proxy_security_provider_error(error: SecurityProviderError) -> ProxyError {
+    let kind = match error.kind() {
+        SecurityProviderFailure::NotFound
+        | SecurityProviderFailure::Unsupported
+        | SecurityProviderFailure::InvalidData
+        | SecurityProviderFailure::ContractViolation => rocketmq_auth::AuthFailureKind::InvalidConfiguration,
+        SecurityProviderFailure::Conflict => rocketmq_auth::AuthFailureKind::Conflict,
+        SecurityProviderFailure::Unavailable => rocketmq_auth::AuthFailureKind::Unavailable,
+        SecurityProviderFailure::OperationFailed => rocketmq_auth::AuthFailureKind::Internal,
+    };
+    ProxyError::from(RocketMQError::from(rocketmq_auth::AuthServiceError::with_source(
+        rocketmq_auth::AuthOperation::Bootstrap,
+        kind,
+        error,
+    )))
 }
 
 fn validate_proxy_security(
@@ -325,7 +347,7 @@ fn validate_proxy_security(
     probe_bind_addr: Option<std::net::SocketAddr>,
 ) -> ProxyResult<SecurityBootstrapOutcome> {
     if !security_bootstrap.is_enabled() {
-        return security_bootstrap.validate(&[]).map_err(proxy_security_error);
+        return security_bootstrap.validate(&[]).map_err(proxy_security_provider_error);
     }
     let mut listeners = vec![config.grpc.socket_addr()?];
     if config.remoting.enabled {
@@ -337,7 +359,9 @@ fn validate_proxy_security(
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
-    security_bootstrap.validate(&listeners).map_err(proxy_security_error)
+    security_bootstrap
+        .validate(&listeners)
+        .map_err(proxy_security_provider_error)
 }
 
 fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
@@ -671,6 +695,37 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn proxy_security_error_redacts_and_preserves_typed_source() {
+        let provider = rocketmq_security_api::SecurityProviderError::caused_by(
+            rocketmq_security_api::SecurityProviderFailure::Unavailable,
+            rocketmq_security_api::SecurityOperation::ReadSecret,
+            std::io::Error::other("secret\r\n/private/provider/path"),
+        );
+
+        let error = proxy_security_provider_error(provider);
+        assert!(!error.to_string().contains("secret"));
+        assert!(!error.to_string().contains("private/provider/path"));
+        let ProxyError::RocketMQ(source) = error else {
+            panic!("security bootstrap failure must retain a RocketMQ source")
+        };
+        assert_eq!(source.descriptor(), &rocketmq_error::AUTH_OPERATION_FAILED);
+        let RocketMQError::Shared(canonical) = source else {
+            panic!("security bootstrap failure must use the shared canonical carrier")
+        };
+        let auth = std::error::Error::source(canonical.as_ref())
+            .and_then(|source| source.downcast_ref::<rocketmq_auth::AuthServiceError>())
+            .expect("auth facade must remain typed");
+        let provider = std::error::Error::source(auth)
+            .and_then(|source| source.downcast_ref::<rocketmq_security_api::SecurityProviderError>())
+            .expect("provider failure must remain typed");
+        let io = std::error::Error::source(provider).expect("I/O cause must remain available");
+        assert!(io.downcast_ref::<std::io::Error>().is_some());
+
+        let contract = proxy_security_contract_error(SecurityContractViolation::BootstrapProfileRequired);
+        assert_eq!(contract.descriptor(), &rocketmq_error::AUTH_CONFIGURATION_INVALID);
     }
 
     #[test]

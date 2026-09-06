@@ -27,9 +27,10 @@ use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::Secret;
+use rocketmq_security_api::SecurityContractViolation;
+use rocketmq_security_api::SecurityProviderError;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::Signature;
-use rocketmq_security_api::SigningError;
 use rocketmq_transport::api::TransportSecurity;
 
 struct AllowPolicy;
@@ -45,7 +46,7 @@ impl RequestPolicy for AllowPolicy {
 struct TestSigner;
 
 impl OutboundSigner for TestSigner {
-    fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
+    fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SecurityProviderError> {
         assert_eq!(request.body().unwrap(), b"payload");
         Ok(Signature::new(vec![(
             CheetahString::from_static_str("Signature"),
@@ -105,10 +106,13 @@ fn secure_transport_never_downgrades_when_policy_or_signer_is_missing() {
         ),
         Err(LayerFailureKind::Unavailable)
     );
-    assert!(matches!(
-        security.sign(&mut command, None),
-        Err(SigningError::CredentialsUnavailable)
-    ));
+    let error = security
+        .sign(&mut command, None)
+        .expect_err("secure transport without a signer must fail closed");
+    assert!(error
+        .source()
+        .and_then(|source| source.downcast_ref::<SecurityContractViolation>())
+        .is_some_and(|violation| *violation == SecurityContractViolation::SigningProviderRequired));
 }
 
 #[test]

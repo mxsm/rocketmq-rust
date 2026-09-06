@@ -13,11 +13,14 @@
 // limitations under the License.
 
 use std::collections::BTreeSet;
+use std::error::Error;
 use std::fs;
 
+use rocketmq_auth::AuthFailureKind;
+use rocketmq_auth::AuthOperation;
 use rocketmq_auth::MaintenancePolicyReference;
 use rocketmq_security_api::MaintenanceAuthorizationContext;
-use rocketmq_security_api::MaintenanceAuthorizationError;
+use rocketmq_security_api::MaintenanceAuthorizationDenial;
 use rocketmq_security_api::MaintenanceAuthorizer;
 use rocketmq_security_api::MaintenanceCapability;
 use rocketmq_security_api::MaintenancePolicy;
@@ -109,11 +112,11 @@ fn release_checkpoint_fails_closed_for_missing_or_anonymous_context() {
 
     assert_eq!(
         authorizer.authorize(None, 100_000),
-        Err(MaintenanceAuthorizationError::MissingAuthorizationContext)
+        Err(MaintenanceAuthorizationDenial::MissingAuthorizationContext)
     );
     assert_eq!(
         authorizer.authorize(Some(&context(None)), 100_000),
-        Err(MaintenanceAuthorizationError::Anonymous)
+        Err(MaintenanceAuthorizationDenial::Anonymous)
     );
 }
 
@@ -123,24 +126,23 @@ fn release_checkpoint_fails_closed_for_ordinary_admin_and_disabled_auth() {
 
     assert!(matches!(
         authorizer.authorize(Some(&context(Some("ordinary-admin"))), 100_000),
-        Err(MaintenanceAuthorizationError::MissingRole {
-            role: MaintenanceRole::ReleaseOperator,
-            ..
-        })
+        Err(MaintenanceAuthorizationDenial::MissingRole(
+            MaintenanceRole::ReleaseOperator
+        ))
     ));
 
     let mut auth_disabled = context(Some("release-operator"));
     auth_disabled.authentication_enabled = false;
     assert_eq!(
         authorizer.authorize(Some(&auth_disabled), 100_000),
-        Err(MaintenanceAuthorizationError::AuthenticationDisabled)
+        Err(MaintenanceAuthorizationDenial::AuthenticationDisabled)
     );
 
     let mut authorization_disabled = context(Some("release-operator"));
     authorization_disabled.authorization_enabled = false;
     assert_eq!(
         authorizer.authorize(Some(&authorization_disabled), 100_000),
-        Err(MaintenanceAuthorizationError::AuthorizationDisabled)
+        Err(MaintenanceAuthorizationDenial::AuthorizationDisabled)
     );
 }
 
@@ -152,14 +154,14 @@ fn release_checkpoint_rejects_expired_deadline_and_missing_fencing_token() {
     expired.deadline_unix_millis = 100_000;
     assert_eq!(
         authorizer.authorize(Some(&expired), 100_000),
-        Err(MaintenanceAuthorizationError::DeadlineExpired)
+        Err(MaintenanceAuthorizationDenial::DeadlineExpired)
     );
 
     let mut unfenced = context(Some("release-operator"));
     unfenced.fencing_token = Some(0);
     assert_eq!(
         authorizer.authorize(Some(&unfenced), 100_000),
-        Err(MaintenanceAuthorizationError::MissingFencingToken)
+        Err(MaintenanceAuthorizationDenial::MissingFencingToken)
     );
 }
 
@@ -183,4 +185,27 @@ fn release_checkpoint_policy_reference_detects_tampering_and_version_drift() {
         sha256: hex::encode(Sha256::digest(&bytes)),
     };
     assert!(wrong_version.load_from(temp.path()).is_err());
+}
+
+#[test]
+fn maintenance_loader_facade_redacts_diagnostics_and_retains_typed_io_source() {
+    let temp = TempDir::new().expect("create policy directory");
+    let sentinel = "password=secret\r\nprivate-path";
+    let reference = MaintenancePolicyReference {
+        path: temp.path().join(sentinel),
+        version: 1,
+        sha256: "0".repeat(64),
+    };
+
+    let error = reference.load_from(temp.path()).unwrap_err();
+    assert_eq!(error.operation(), AuthOperation::MaintainService);
+    assert_eq!(error.kind(), AuthFailureKind::Unavailable);
+    assert!(error.source_present());
+    assert!(!error.to_string().contains(sentinel));
+    assert!(!format!("{error:?}").contains(sentinel));
+    let load_error = Error::source(&error).expect("private loader source must be retained");
+    assert!(load_error
+        .source()
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some());
 }

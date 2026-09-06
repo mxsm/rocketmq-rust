@@ -27,9 +27,11 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::OutboundSigner;
 use rocketmq_security_api::Secret;
+use rocketmq_security_api::SecurityOperation;
+use rocketmq_security_api::SecurityProviderError;
+use rocketmq_security_api::SecurityProviderFailure;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::Signature;
-use rocketmq_security_api::SigningError;
 use rocketmq_transport::api::RPCHook;
 use serde::Deserialize;
 
@@ -197,7 +199,7 @@ impl RPCHook for AclClientRpcHook {
 }
 
 impl OutboundSigner for AclClientRpcHook {
-    fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
+    fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SecurityProviderError> {
         let mut sorted_fields = request
             .fields()
             .iter()
@@ -221,7 +223,13 @@ impl OutboundSigner for AclClientRpcHook {
             self.secret_key.as_str(),
             self.signature_algorithm,
         )
-        .map_err(|_| SigningError::Failed(CheetahString::from("HMAC signature calculation failed")))?;
+        .map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::OperationFailed,
+                SecurityOperation::SignRequest,
+                source,
+            )
+        })?;
 
         let mut fields = vec![(CheetahString::from(ACCESS_KEY), Secret::new(self.access_key.clone()))];
         if let Some(security_token) = &self.security_token {

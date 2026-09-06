@@ -26,16 +26,16 @@ pub mod stateless_authorization_strategy;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use rocketmq_security_api::AuthorizationDecision;
 
+use crate::AuthServiceResult;
 pub use abstract_authorization_strategy::AbstractAuthorizationStrategy;
 pub use abstract_authorization_strategy::AuthorizationFuture;
 pub use abstract_authorization_strategy::AuthorizationStrategy;
-pub use abstract_authorization_strategy::StrategyResult;
 pub use stateful_authorization_strategy::StatefulAuthorizationStrategy;
 pub use stateless_authorization_strategy::StatelessAuthorizationStrategy;
 
 pub(super) async fn evaluate_base_authorization(
     base: &AbstractAuthorizationStrategy,
     context: &DefaultAuthorizationContext,
-) -> StrategyResult<AuthorizationDecision> {
+) -> AuthServiceResult<AuthorizationDecision> {
     base.do_evaluate(context).await
 }

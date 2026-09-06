@@ -39,7 +39,11 @@ use rocketmq_security_api::SecretVersion;
 use sha2::Digest;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
-use thiserror::Error;
+
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 const MINIMUM_CREDENTIAL_PROOF_BYTES: usize = 32;
 
@@ -52,9 +56,9 @@ impl CredentialId {
     ///
     /// # Errors
     ///
-    /// Returns [`CredentialRotationError::InvalidCredential`] for an empty, hidden, oversized,
-    /// or unsupported identifier.
-    pub fn new(value: impl Into<CheetahString>) -> Result<Self, CredentialRotationError> {
+    /// Returns a redacted authentication-service error for an empty, hidden, oversized, or
+    /// unsupported identifier.
+    pub fn new(value: impl Into<CheetahString>) -> AuthServiceResult<Self> {
         let value = value.into();
         if value.is_empty()
             || value.len() > 128
@@ -63,7 +67,7 @@ impl CredentialId {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
         {
-            return Err(CredentialRotationError::InvalidCredential);
+            return Err(rotation_error(AuthFailureKind::InvalidInput));
         }
         Ok(Self(value))
     }
@@ -136,8 +140,8 @@ impl ValidatedCredential {
     ///
     /// # Errors
     ///
-    /// Returns [`CredentialRotationError::InvalidCredential`] for invalid validity bounds, an
-    /// all-zero certificate fingerprint, or proof material shorter than 32 bytes.
+    /// Returns a redacted authentication-service error for invalid validity bounds, an all-zero
+    /// certificate fingerprint, or proof material shorter than 32 bytes.
     pub fn new(
         id: CredentialId,
         certificate_sha256: [u8; 32],
@@ -145,14 +149,14 @@ impl ValidatedCredential {
         expires_at: SystemTime,
         proof: SecretMaterial,
         provider_version: Option<SecretVersion>,
-    ) -> Result<Self, CredentialRotationError> {
+    ) -> AuthServiceResult<Self> {
         let valid_from_unix_seconds = unix_seconds(valid_from)?;
         let expires_at_unix_seconds = unix_seconds(expires_at)?;
         if valid_from_unix_seconds >= expires_at_unix_seconds
             || certificate_sha256.iter().all(|byte| *byte == 0)
             || proof.len() < MINIMUM_CREDENTIAL_PROOF_BYTES
         {
-            return Err(CredentialRotationError::InvalidCredential);
+            return Err(rotation_error(AuthFailureKind::InvalidInput));
         }
         Ok(Self {
             descriptor: CredentialDescriptor {
@@ -189,13 +193,6 @@ impl fmt::Debug for ValidatedCredential {
     }
 }
 
-/// Opaque parse failure. Certificate, key, and proof details are never included.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum CredentialBundleParseError {
-    #[error("credential bundle is invalid")]
-    InvalidBundle,
-}
-
 /// Parser injected by the owning protocol/TLS adapter.
 pub trait CredentialBundleParser: Send + Sync {
     /// Parses and validates a single atomic provider bundle.
@@ -206,7 +203,7 @@ pub trait CredentialBundleParser: Send + Sync {
         &self,
         material: SecretMaterial,
         provider_version: Option<SecretVersion>,
-    ) -> Result<ValidatedCredential, CredentialBundleParseError>;
+    ) -> AuthServiceResult<ValidatedCredential>;
 }
 
 /// Typed reason required before break-glass can be enabled.
@@ -287,52 +284,9 @@ impl CredentialAuditEvent {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum CredentialAuditSinkError {
-    #[error("credential audit sink is unavailable")]
-    Unavailable,
-}
-
 /// Synchronous audit-first boundary. PR-M11-06 owns asynchronous buffering and shutdown drain.
 pub trait CredentialAuditSink: Send + Sync {
-    fn record(&self, event: &CredentialAuditEvent) -> Result<(), CredentialAuditSinkError>;
-}
-
-/// Redacted rotation failures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum CredentialRotationError {
-    #[error("credential configuration is invalid")]
-    InvalidCredential,
-    #[error("credential is not currently valid")]
-    CredentialExpired,
-    #[error("credential rotation is already in progress")]
-    RotationInProgress,
-    #[error("credential rotation is not in progress")]
-    NoRotationInProgress,
-    #[error("credential overlap window is still active")]
-    OverlapStillActive,
-    #[error("credential has been revoked")]
-    CredentialRevoked,
-    #[error("credential is not accepted")]
-    CredentialNotAccepted,
-    #[error("credential proof is invalid")]
-    InvalidProof,
-    #[error("credential bundle is invalid")]
-    InvalidBundle,
-    #[error("credential provider is unavailable")]
-    ProviderUnavailable,
-    #[error("credential audit is unavailable")]
-    AuditUnavailable,
-    #[error("credential generation is exhausted")]
-    GenerationExhausted,
-    #[error("break-glass credential is not configured")]
-    BreakGlassNotConfigured,
-    #[error("break-glass credential is already enabled")]
-    BreakGlassAlreadyEnabled,
-    #[error("break-glass credential is disabled")]
-    BreakGlassDisabled,
-    #[error("break-glass activation window is invalid")]
-    InvalidBreakGlassWindow,
+    fn record(&self, event: &CredentialAuditEvent) -> AuthServiceResult<()>;
 }
 
 struct RetiringCredential {
@@ -380,16 +334,16 @@ impl CredentialRotationManager {
         maximum_break_glass_duration: Duration,
         now: SystemTime,
         audit: Arc<dyn CredentialAuditSink>,
-    ) -> Result<Self, CredentialRotationError> {
+    ) -> AuthServiceResult<Self> {
         let now = unix_seconds(now)?;
         if !active.is_valid_at(now) || maximum_break_glass_duration.is_zero() {
-            return Err(CredentialRotationError::InvalidCredential);
+            return Err(rotation_error(AuthFailureKind::InvalidInput));
         }
         if break_glass
             .as_ref()
             .is_some_and(|credential| credential.descriptor.id == active.descriptor.id || !credential.is_valid_at(now))
         {
-            return Err(CredentialRotationError::InvalidCredential);
+            return Err(rotation_error(AuthFailureKind::InvalidInput));
         }
         Ok(Self {
             state: ArcSwap::from_pointee(RotationState {
@@ -447,20 +401,32 @@ impl CredentialRotationManager {
         parser: &dyn CredentialBundleParser,
         overlap_until: SystemTime,
         now: SystemTime,
-    ) -> Result<u64, CredentialRotationError> {
+    ) -> AuthServiceResult<u64> {
         let loaded = match provider.read(name) {
             Ok(loaded) => loaded,
-            Err(_) => {
+            Err(source) => {
                 self.audit_rejected_reload()?;
-                return Err(CredentialRotationError::ProviderUnavailable);
+                return Err(AuthServiceError::with_source(
+                    AuthOperation::RotateCredential,
+                    AuthFailureKind::Unavailable,
+                    source,
+                ));
             }
         };
         let provider_version = loaded.version();
         let candidate = match parser.parse(loaded.into_material(), provider_version) {
             Ok(candidate) if candidate.descriptor.provider_version == provider_version => candidate,
-            Ok(_) | Err(_) => {
+            Ok(_) => {
                 self.audit_rejected_reload()?;
-                return Err(CredentialRotationError::InvalidBundle);
+                return Err(rotation_error(AuthFailureKind::InvalidData));
+            }
+            Err(source) => {
+                self.audit_rejected_reload()?;
+                return Err(AuthServiceError::with_source(
+                    AuthOperation::RotateCredential,
+                    AuthFailureKind::InvalidData,
+                    source,
+                ));
             }
         };
         self.start_rotation(candidate, overlap_until, now)
@@ -473,14 +439,14 @@ impl CredentialRotationManager {
         candidate: ValidatedCredential,
         overlap_until: SystemTime,
         now: SystemTime,
-    ) -> Result<u64, CredentialRotationError> {
+    ) -> AuthServiceResult<u64> {
         let _writer = self
             .writer
             .lock()
-            .map_err(|_| CredentialRotationError::InvalidCredential)?;
+            .map_err(|_| rotation_error(AuthFailureKind::Internal))?;
         let state = self.state.load_full();
         if state.retiring.is_some() {
-            return Err(CredentialRotationError::RotationInProgress);
+            return Err(rotation_error(AuthFailureKind::Conflict));
         }
         let now = unix_seconds(now)?;
         let overlap_until = unix_seconds(overlap_until)?;
@@ -495,7 +461,7 @@ impl CredentialRotationManager {
                 .as_ref()
                 .is_some_and(|break_glass| break_glass.credential.descriptor.id == candidate.descriptor.id)
         {
-            return Err(CredentialRotationError::InvalidCredential);
+            return Err(rotation_error(AuthFailureKind::InvalidInput));
         }
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
@@ -520,18 +486,18 @@ impl CredentialRotationManager {
     }
 
     /// Revokes the retiring credential after the overlap window.
-    pub fn finalize_rotation(&self, now: SystemTime) -> Result<u64, CredentialRotationError> {
+    pub fn finalize_rotation(&self, now: SystemTime) -> AuthServiceResult<u64> {
         let _writer = self
             .writer
             .lock()
-            .map_err(|_| CredentialRotationError::InvalidCredential)?;
+            .map_err(|_| rotation_error(AuthFailureKind::Internal))?;
         let state = self.state.load_full();
         let retiring = state
             .retiring
             .as_ref()
-            .ok_or(CredentialRotationError::NoRotationInProgress)?;
+            .ok_or_else(|| rotation_error(AuthFailureKind::Conflict))?;
         if unix_seconds(now)? < retiring.accept_until_unix_seconds {
-            return Err(CredentialRotationError::OverlapStillActive);
+            return Err(rotation_error(AuthFailureKind::Conflict));
         }
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
@@ -555,19 +521,19 @@ impl CredentialRotationManager {
     }
 
     /// Rolls back to the unrevoked last-known-good credential and revokes the failed candidate.
-    pub fn rollback(&self, now: SystemTime) -> Result<u64, CredentialRotationError> {
+    pub fn rollback(&self, now: SystemTime) -> AuthServiceResult<u64> {
         let _writer = self
             .writer
             .lock()
-            .map_err(|_| CredentialRotationError::InvalidCredential)?;
+            .map_err(|_| rotation_error(AuthFailureKind::Internal))?;
         let state = self.state.load_full();
         let retiring = state
             .retiring
             .as_ref()
-            .ok_or(CredentialRotationError::NoRotationInProgress)?;
+            .ok_or_else(|| rotation_error(AuthFailureKind::Conflict))?;
         let now = unix_seconds(now)?;
         if !retiring.credential.is_valid_at(now) || state.revoked.contains(&retiring.credential.descriptor.id) {
-            return Err(CredentialRotationError::CredentialRevoked);
+            return Err(rotation_error(AuthFailureKind::Unauthenticated));
         }
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
@@ -595,18 +561,18 @@ impl CredentialRotationManager {
         reason: BreakGlassReason,
         expires_at: SystemTime,
         now: SystemTime,
-    ) -> Result<u64, CredentialRotationError> {
+    ) -> AuthServiceResult<u64> {
         let _writer = self
             .writer
             .lock()
-            .map_err(|_| CredentialRotationError::InvalidCredential)?;
+            .map_err(|_| rotation_error(AuthFailureKind::Internal))?;
         let state = self.state.load_full();
         let break_glass = state
             .break_glass
             .as_ref()
-            .ok_or(CredentialRotationError::BreakGlassNotConfigured)?;
+            .ok_or_else(|| rotation_error(AuthFailureKind::NotFound))?;
         if break_glass.activation.is_some() {
-            return Err(CredentialRotationError::BreakGlassAlreadyEnabled);
+            return Err(rotation_error(AuthFailureKind::Conflict));
         }
         let now = unix_seconds(now)?;
         let expires_at = unix_seconds(expires_at)?;
@@ -615,7 +581,7 @@ impl CredentialRotationManager {
             || expires_at > maximum
             || expires_at > break_glass.credential.descriptor.expires_at_unix_seconds
         {
-            return Err(CredentialRotationError::InvalidBreakGlassWindow);
+            return Err(rotation_error(AuthFailureKind::InvalidInput));
         }
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
@@ -642,20 +608,20 @@ impl CredentialRotationManager {
         Ok(generation)
     }
 
-    pub fn disable_break_glass(&self) -> Result<u64, CredentialRotationError> {
+    pub fn disable_break_glass(&self) -> AuthServiceResult<u64> {
         let _writer = self
             .writer
             .lock()
-            .map_err(|_| CredentialRotationError::InvalidCredential)?;
+            .map_err(|_| rotation_error(AuthFailureKind::Internal))?;
         let state = self.state.load_full();
         let break_glass = state
             .break_glass
             .as_ref()
-            .ok_or(CredentialRotationError::BreakGlassNotConfigured)?;
+            .ok_or_else(|| rotation_error(AuthFailureKind::NotFound))?;
         let activation = break_glass
             .activation
             .as_ref()
-            .ok_or(CredentialRotationError::BreakGlassDisabled)?;
+            .ok_or_else(|| rotation_error(AuthFailureKind::Conflict))?;
         let generation = next_generation(state.generation)?;
         self.record_audit(CredentialAuditEvent {
             action: CredentialAuditAction::BreakGlassDisabled,
@@ -684,11 +650,11 @@ impl CredentialRotationManager {
         credential_id: &CredentialId,
         proof: SecretMaterial,
         now: SystemTime,
-    ) -> Result<CredentialVerification, CredentialRotationError> {
+    ) -> AuthServiceResult<CredentialVerification> {
         let now = unix_seconds(now)?;
         let state = self.state.load();
         if state.revoked.contains(credential_id) {
-            return Err(CredentialRotationError::CredentialRevoked);
+            return Err(rotation_error(AuthFailureKind::Unauthenticated));
         }
         let (credential, source) = if state.active.descriptor.id == *credential_id {
             (state.active.as_ref(), CredentialVerificationSource::Active)
@@ -704,22 +670,22 @@ impl CredentialRotationManager {
             let activation = break_glass
                 .activation
                 .as_ref()
-                .ok_or(CredentialRotationError::BreakGlassDisabled)?;
+                .ok_or_else(|| rotation_error(AuthFailureKind::Conflict))?;
             if now >= activation.expires_at_unix_seconds {
-                return Err(CredentialRotationError::CredentialExpired);
+                return Err(rotation_error(AuthFailureKind::Expired));
             }
             (
                 break_glass.credential.as_ref(),
                 CredentialVerificationSource::BreakGlass,
             )
         } else {
-            return Err(CredentialRotationError::CredentialNotAccepted);
+            return Err(rotation_error(AuthFailureKind::Unauthenticated));
         };
         if !credential.is_valid_at(now) {
-            return Err(CredentialRotationError::CredentialExpired);
+            return Err(rotation_error(AuthFailureKind::Expired));
         }
         if !credential.verifies(&proof) {
-            return Err(CredentialRotationError::InvalidProof);
+            return Err(rotation_error(AuthFailureKind::Unauthenticated));
         }
         Ok(CredentialVerification {
             credential_id: credential_id.clone(),
@@ -728,7 +694,7 @@ impl CredentialRotationManager {
         })
     }
 
-    fn audit_rejected_reload(&self) -> Result<(), CredentialRotationError> {
+    fn audit_rejected_reload(&self) -> AuthServiceResult<()> {
         let state = self.state.load();
         self.record_audit(CredentialAuditEvent {
             action: CredentialAuditAction::ReloadRejected,
@@ -740,10 +706,10 @@ impl CredentialRotationManager {
         })
     }
 
-    fn record_audit(&self, event: CredentialAuditEvent) -> Result<(), CredentialRotationError> {
-        self.audit
-            .record(&event)
-            .map_err(|_| CredentialRotationError::AuditUnavailable)
+    fn record_audit(&self, event: CredentialAuditEvent) -> AuthServiceResult<()> {
+        self.audit.record(&event).map_err(|source| {
+            AuthServiceError::with_source(AuthOperation::RotateCredential, AuthFailureKind::Internal, source)
+        })
     }
 }
 
@@ -773,14 +739,20 @@ fn clone_break_glass(value: &Option<BreakGlassCredential>) -> Option<BreakGlassC
     })
 }
 
-fn next_generation(current: u64) -> Result<u64, CredentialRotationError> {
+fn next_generation(current: u64) -> AuthServiceResult<u64> {
     current
         .checked_add(1)
-        .ok_or(CredentialRotationError::GenerationExhausted)
+        .ok_or_else(|| rotation_error(AuthFailureKind::Internal))
 }
 
-fn unix_seconds(time: SystemTime) -> Result<u64, CredentialRotationError> {
+fn unix_seconds(time: SystemTime) -> AuthServiceResult<u64> {
     time.duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .map_err(|_| CredentialRotationError::InvalidCredential)
+        .map_err(|source| {
+            AuthServiceError::with_source(AuthOperation::RotateCredential, AuthFailureKind::InvalidInput, source)
+        })
+}
+
+fn rotation_error(kind: AuthFailureKind) -> AuthServiceError {
+    AuthServiceError::new(AuthOperation::RotateCredential, kind)
 }

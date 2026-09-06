@@ -29,14 +29,14 @@ use tracing::debug;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::authorization::factory::AuthorizationFactory;
-use crate::authorization::provider::AuthorizationError;
 use crate::authorization::provider::AuthorizationProvider;
 use crate::authorization::provider::DefaultAuthorizationProvider;
 use crate::config::AuthConfig;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 /// Result type for authorization strategy operations.
-pub type StrategyResult<T> = Result<T, AuthorizationError>;
-pub type AuthorizationFuture<'a> = Pin<Box<dyn Future<Output = StrategyResult<AuthorizationDecision>> + 'a>>;
+pub type AuthorizationFuture<'a> = Pin<Box<dyn Future<Output = AuthServiceResult<AuthorizationDecision>> + 'a>>;
 
 /// Trait defining the core authorization strategy behavior.
 ///
@@ -52,7 +52,7 @@ pub trait AuthorizationStrategy: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(AuthorizationDecision)` if evaluation reaches an allow or deny
-    /// * `Err(AuthorizationError)` if evaluation cannot make a decision
+    /// * `Err(AuthServiceError)` if evaluation cannot make a decision
     ///
     /// # Examples
     ///
@@ -128,7 +128,10 @@ impl AbstractAuthorizationStrategy {
     /// let config = AuthConfig::default();
     /// let strategy = AbstractAuthorizationStrategy::new(config, None)?;
     /// ```
-    pub fn new(auth_config: AuthConfig, _metadata_service: Option<Box<dyn Any + Send + Sync>>) -> StrategyResult<Self> {
+    pub fn new(
+        auth_config: AuthConfig,
+        _metadata_service: Option<Box<dyn Any + Send + Sync>>,
+    ) -> AuthServiceResult<Self> {
         // Parse and build whitelist from configuration
         let mut authorization_whitelist = HashSet::new();
         let whitelist_str = auth_config.authorization_whitelist.as_str();
@@ -148,12 +151,7 @@ impl AbstractAuthorizationStrategy {
             authorization_whitelist.len()
         );
 
-        let authorization_provider = Some(AuthorizationFactory::get_provider(&auth_config).map_err(|source| {
-            AuthorizationError::ProviderRuntimeFailed {
-                operation: "initialize authorization provider",
-                source: Box::new(source),
-            }
-        })?);
+        let authorization_provider = Some(AuthorizationFactory::get_provider(&auth_config)?);
 
         Ok(Self {
             auth_config,
@@ -177,7 +175,7 @@ impl AbstractAuthorizationStrategy {
     /// # Returns
     ///
     /// * `Ok(AuthorizationDecision)` when evaluation reaches a final decision
-    /// * `Err(AuthorizationError)` when evaluation fails operationally
+    /// * `Err(AuthServiceError)` when evaluation fails operationally
     ///
     /// # Errors
     ///
@@ -197,7 +195,7 @@ impl AbstractAuthorizationStrategy {
     ///     AuthorizationDecision::Deny(reason) => reject(reason),
     /// }
     /// ```
-    pub async fn do_evaluate(&self, context: &DefaultAuthorizationContext) -> StrategyResult<AuthorizationDecision> {
+    pub async fn do_evaluate(&self, context: &DefaultAuthorizationContext) -> AuthServiceResult<AuthorizationDecision> {
         // Check if authorization is enabled
         if !self.auth_config.authorization_enabled {
             debug!("Authorization disabled in configuration, allowing access");
@@ -218,7 +216,7 @@ impl AbstractAuthorizationStrategy {
         );
 
         let provider = self.authorization_provider.as_ref().ok_or_else(|| {
-            AuthorizationError::NotInitialized("authorization strategy does not have a concrete provider".to_owned())
+            AuthServiceError::not_initialized("authorization strategy does not have a concrete provider".to_owned())
         })?;
         provider.authorize(context).await
     }
@@ -345,6 +343,19 @@ mod tests {
         let strategy = AbstractAuthorizationStrategy::new(config, None).unwrap();
 
         assert!(strategy.has_authorization_provider());
+    }
+
+    #[test]
+    fn provider_initialization_preserves_factory_error_classification() {
+        let mut config = create_test_config(true, "");
+        config.authorization_provider = CheetahString::from("unsupported-provider");
+
+        let Err(error) = AbstractAuthorizationStrategy::new(config, None) else {
+            panic!("an unsupported provider must fail initialization");
+        };
+        assert_eq!(error.operation(), crate::AuthOperation::Initialize);
+        assert_eq!(error.kind(), crate::AuthFailureKind::Unsupported);
+        assert!(!error.source_present());
     }
 
     #[tokio::test]

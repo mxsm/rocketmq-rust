@@ -44,11 +44,18 @@ use rocketmq_security_api::SecretName;
 use rocketmq_security_api::SecretPersistence;
 use rocketmq_security_api::SecretProvider;
 use rocketmq_security_api::SecretProviderCapabilities;
-use rocketmq_security_api::SecretProviderError;
 use rocketmq_security_api::SecretProviderId;
 use rocketmq_security_api::SecretVersion;
 use rocketmq_security_api::SecretVersioning;
+use rocketmq_security_api::SecurityOperation;
+use rocketmq_security_api::SecurityProviderError;
+use rocketmq_security_api::SecurityProviderFailure;
 use rocketmq_security_api::VersionedSecret;
+
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 #[cfg(any(unix, test))]
 const ENVELOPE_MAGIC: &[u8; 8] = b"RMQSEC01";
@@ -81,16 +88,15 @@ impl EncryptedFileSecretProvider {
     /// # Errors
     ///
     /// Returns a redacted provider error for invalid keys, permissions, paths, or unsupported ACLs.
-    pub fn new(
-        id: SecretProviderId,
-        root: impl Into<PathBuf>,
-        key: SecretMaterial,
-    ) -> Result<Self, SecretProviderError> {
+    pub fn new(id: SecretProviderId, root: impl Into<PathBuf>, key: SecretMaterial) -> AuthServiceResult<Self> {
         if key.len() != 32 {
-            return Err(SecretProviderError::InvalidMaterial);
+            return Err(AuthServiceError::new(
+                AuthOperation::LoadSecret,
+                AuthFailureKind::InvalidInput,
+            ));
         }
         let root = root.into();
-        prepare_root(&root)?;
+        prepare_root(&root).map_err(auth_provider_error)?;
         Ok(Self {
             id,
             #[cfg(unix)]
@@ -103,11 +109,21 @@ impl EncryptedFileSecretProvider {
     }
 
     #[cfg(unix)]
-    fn read_version(&self, name: &SecretName, version: SecretVersion) -> Result<VersionedSecret, SecretProviderError> {
+    fn read_version(
+        &self,
+        name: &SecretName,
+        version: SecretVersion,
+    ) -> Result<VersionedSecret, SecurityProviderError> {
         let path = version_path(&self.root.join(name.as_str()), version);
         let envelope = read_restricted_file(&path)?;
         let plaintext = decrypt_envelope(&self.key, name, version, &envelope)?;
-        let material = SecretMaterial::new(plaintext).map_err(|_| SecretProviderError::InvalidEnvelope)?;
+        let material = SecretMaterial::new(plaintext).map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::ReadSecret,
+                source,
+            )
+        })?;
         Ok(VersionedSecret::new(material, Some(version)))
     }
 
@@ -117,9 +133,12 @@ impl EncryptedFileSecretProvider {
         name: &SecretName,
         material: &SecretMaterial,
         expected_version: Option<SecretVersion>,
-    ) -> Result<SecretVersion, SecretProviderError> {
+    ) -> Result<SecretVersion, SecurityProviderError> {
         if material.len() > MAX_SECRET_LENGTH {
-            return Err(SecretProviderError::InvalidMaterial);
+            return Err(provider_error(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::WriteSecret,
+            ));
         }
         let directory = self.root.join(name.as_str());
         prepare_secret_directory(&directory)?;
@@ -130,9 +149,14 @@ impl EncryptedFileSecretProvider {
                 current
                     .get()
                     .checked_add(1)
-                    .ok_or(SecretProviderError::VersionConflict)?,
+                    .ok_or_else(|| provider_error(SecurityProviderFailure::Conflict, SecurityOperation::WriteSecret))?,
             ),
-            _ => return Err(SecretProviderError::VersionConflict),
+            _ => {
+                return Err(provider_error(
+                    SecurityProviderFailure::Conflict,
+                    SecurityOperation::WriteSecret,
+                ));
+            }
         };
         let envelope = encrypt_envelope(&self.key, name, next, material.expose_secret())?;
         publish_version(&directory, next, &envelope)?;
@@ -163,17 +187,21 @@ impl SecretProvider for EncryptedFileSecretProvider {
         )
     }
 
-    fn read(&self, name: &SecretName) -> Result<VersionedSecret, SecretProviderError> {
+    fn read(&self, name: &SecretName) -> Result<VersionedSecret, SecurityProviderError> {
         #[cfg(windows)]
         {
             let _ = name;
-            Err(SecretProviderError::UnsupportedPlatform)
+            Err(provider_error(
+                SecurityProviderFailure::Unsupported,
+                SecurityOperation::ReadSecret,
+            ))
         }
         #[cfg(unix)]
         {
             let directory = self.root.join(name.as_str());
             check_restricted_directory(&directory)?;
-            let version = latest_version(&directory)?.ok_or(SecretProviderError::NotFound)?;
+            let version = latest_version(&directory)?
+                .ok_or_else(|| provider_error(SecurityProviderFailure::NotFound, SecurityOperation::ReadSecret))?;
             self.read_version(name, version)
         }
     }
@@ -183,39 +211,54 @@ impl SecretProvider for EncryptedFileSecretProvider {
         name: &SecretName,
         material: SecretMaterial,
         expected_version: Option<SecretVersion>,
-    ) -> Result<SecretVersion, SecretProviderError> {
+    ) -> Result<SecretVersion, SecurityProviderError> {
         #[cfg(windows)]
         {
             let _ = (name, material, expected_version);
-            Err(SecretProviderError::UnsupportedPlatform)
+            Err(provider_error(
+                SecurityProviderFailure::Unsupported,
+                SecurityOperation::WriteSecret,
+            ))
         }
         #[cfg(unix)]
         {
-            let _guard = self.write_lock.lock().map_err(|_| SecretProviderError::Unavailable)?;
+            let _guard = self
+                .write_lock
+                .lock()
+                .map_err(|_| provider_error(SecurityProviderFailure::Unavailable, SecurityOperation::WriteSecret))?;
             self.write_version(name, &material, expected_version)
         }
     }
 }
 
 #[cfg(windows)]
-fn prepare_root(_root: &Path) -> Result<(), SecretProviderError> {
-    Err(SecretProviderError::UnsupportedPlatform)
+fn prepare_root(_root: &Path) -> Result<(), SecurityProviderError> {
+    Err(provider_error(
+        SecurityProviderFailure::Unsupported,
+        SecurityOperation::InspectSecret,
+    ))
 }
 
 #[cfg(unix)]
-fn prepare_root(root: &Path) -> Result<(), SecretProviderError> {
+fn prepare_root(root: &Path) -> Result<(), SecurityProviderError> {
     use std::os::unix::fs::DirBuilderExt;
 
     if !root.exists() {
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true).mode(0o700);
-        builder.create(root).map_err(|_| SecretProviderError::Unavailable)?;
+        builder.create(root).map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::Unavailable,
+                SecurityOperation::InspectSecret,
+                source,
+            )
+        })?;
     }
     check_restricted_directory(root)
 }
 
 #[cfg(unix)]
-fn prepare_secret_directory(directory: &Path) -> Result<(), SecretProviderError> {
+fn prepare_secret_directory(directory: &Path) -> Result<(), SecurityProviderError> {
     use std::os::unix::fs::DirBuilderExt;
 
     if !directory.exists() {
@@ -224,54 +267,109 @@ fn prepare_secret_directory(directory: &Path) -> Result<(), SecretProviderError>
         match builder.create(directory) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(_) => return Err(SecretProviderError::Unavailable),
+            Err(source) => {
+                return Err(SecurityProviderError::caused_by(
+                    SecurityProviderFailure::Unavailable,
+                    SecurityOperation::WriteSecret,
+                    source,
+                ));
+            }
         }
     }
     check_restricted_directory(directory)
 }
 
 #[cfg(unix)]
-fn check_restricted_directory(path: &Path) -> Result<(), SecretProviderError> {
+fn check_restricted_directory(path: &Path) -> Result<(), SecurityProviderError> {
     use std::os::unix::fs::PermissionsExt;
 
-    let metadata = fs::symlink_metadata(path).map_err(|_| SecretProviderError::NotFound)?;
+    let metadata = fs::symlink_metadata(path).map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::NotFound,
+            SecurityOperation::InspectSecret,
+            source,
+        )
+    })?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(SecretProviderError::InsecurePermissions);
+        return Err(SecurityProviderError::contract(
+            SecurityOperation::InspectSecret,
+            SecurityContractViolation::SecretStoragePermissionsInsecure,
+        ));
     }
     if metadata.permissions().mode() & 0o077 != 0 {
-        return Err(SecretProviderError::InsecurePermissions);
+        return Err(SecurityProviderError::contract(
+            SecurityOperation::InspectSecret,
+            SecurityContractViolation::SecretStoragePermissionsInsecure,
+        ));
     }
     Ok(())
 }
 
 #[cfg(unix)]
-fn latest_version(directory: &Path) -> Result<Option<SecretVersion>, SecretProviderError> {
-    let entries = fs::read_dir(directory).map_err(|_| SecretProviderError::NotFound)?;
+fn latest_version(directory: &Path) -> Result<Option<SecretVersion>, SecurityProviderError> {
+    let entries = fs::read_dir(directory).map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::NotFound,
+            SecurityOperation::InspectSecret,
+            source,
+        )
+    })?;
     let mut latest = None;
     for entry in entries {
-        let entry = entry.map_err(|_| SecretProviderError::Unavailable)?;
+        let entry = entry.map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::Unavailable,
+                SecurityOperation::InspectSecret,
+                source,
+            )
+        })?;
         let file_name = entry.file_name();
         let Some(file_name) = file_name.to_str() else {
-            return Err(SecretProviderError::InvalidEnvelope);
+            return Err(provider_error(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::InspectSecret,
+            ));
         };
         let Some(raw_version) = file_name.strip_suffix(".secret") else {
             if file_name.ends_with(".tmp") {
                 continue;
             }
-            return Err(SecretProviderError::InvalidEnvelope);
+            return Err(provider_error(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::InspectSecret,
+            ));
         };
         if raw_version.len() != 20 || !raw_version.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(SecretProviderError::InvalidEnvelope);
+            return Err(provider_error(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::InspectSecret,
+            ));
         }
-        let version = raw_version
-            .parse::<u64>()
-            .map_err(|_| SecretProviderError::InvalidEnvelope)?;
+        let version = raw_version.parse::<u64>().map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::InspectSecret,
+                source,
+            )
+        })?;
         if version == 0 {
-            return Err(SecretProviderError::InvalidEnvelope);
+            return Err(provider_error(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::InspectSecret,
+            ));
         }
-        let metadata = entry.metadata().map_err(|_| SecretProviderError::Unavailable)?;
+        let metadata = entry.metadata().map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::Unavailable,
+                SecurityOperation::InspectSecret,
+                source,
+            )
+        })?;
         if !metadata.is_file() {
-            return Err(SecretProviderError::InvalidEnvelope);
+            return Err(provider_error(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::InspectSecret,
+            ));
         }
         let version = SecretVersion::new(version);
         latest = Some(latest.map_or(version, |current: SecretVersion| current.max(version)));
@@ -285,29 +383,61 @@ fn version_path(directory: &Path, version: SecretVersion) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn read_restricted_file(path: &Path) -> Result<Vec<u8>, SecretProviderError> {
+fn read_restricted_file(path: &Path) -> Result<Vec<u8>, SecurityProviderError> {
     use std::os::unix::fs::PermissionsExt;
 
-    let link_metadata = fs::symlink_metadata(path).map_err(|_| SecretProviderError::NotFound)?;
+    let link_metadata = fs::symlink_metadata(path).map_err(|source| {
+        SecurityProviderError::caused_by(SecurityProviderFailure::NotFound, SecurityOperation::ReadSecret, source)
+    })?;
     if link_metadata.file_type().is_symlink() {
-        return Err(SecretProviderError::InsecurePermissions);
+        return Err(SecurityProviderError::contract(
+            SecurityOperation::ReadSecret,
+            SecurityContractViolation::SecretStoragePermissionsInsecure,
+        ));
     }
-    let mut file = File::open(path).map_err(|_| SecretProviderError::Unavailable)?;
-    let metadata = file.metadata().map_err(|_| SecretProviderError::Unavailable)?;
+    let mut file = File::open(path).map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::Unavailable,
+            SecurityOperation::ReadSecret,
+            source,
+        )
+    })?;
+    let metadata = file.metadata().map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::Unavailable,
+            SecurityOperation::ReadSecret,
+            source,
+        )
+    })?;
     if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
-        return Err(SecretProviderError::InsecurePermissions);
+        return Err(SecurityProviderError::contract(
+            SecurityOperation::ReadSecret,
+            SecurityContractViolation::SecretStoragePermissionsInsecure,
+        ));
     }
     let maximum = ENVELOPE_PREFIX_LENGTH + MAX_SECRET_LENGTH + AUTH_TAG_LENGTH;
     if metadata.len() > maximum as u64 {
-        return Err(SecretProviderError::InvalidEnvelope);
+        return Err(provider_error(
+            SecurityProviderFailure::InvalidData,
+            SecurityOperation::ReadSecret,
+        ));
     }
     let mut envelope = Vec::with_capacity(metadata.len() as usize);
     (&mut file)
         .take(maximum as u64 + 1)
         .read_to_end(&mut envelope)
-        .map_err(|_| SecretProviderError::Unavailable)?;
+        .map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::Unavailable,
+                SecurityOperation::ReadSecret,
+                source,
+            )
+        })?;
     if envelope.len() > maximum {
-        return Err(SecretProviderError::InvalidEnvelope);
+        return Err(provider_error(
+            SecurityProviderFailure::InvalidData,
+            SecurityOperation::ReadSecret,
+        ));
     }
     Ok(envelope)
 }
@@ -328,8 +458,14 @@ fn encrypt_envelope(
     name: &SecretName,
     version: SecretVersion,
     plaintext: &[u8],
-) -> Result<Vec<u8>, SecretProviderError> {
-    let cipher = Aes256Gcm::new_from_slice(key.expose_secret()).map_err(|_| SecretProviderError::InvalidMaterial)?;
+) -> Result<Vec<u8>, SecurityProviderError> {
+    let cipher = Aes256Gcm::new_from_slice(key.expose_secret()).map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::InvalidData,
+            SecurityOperation::EncryptSecret,
+            source,
+        )
+    })?;
     let nonce = Nonce::<Aes256Gcm>::generate();
     let aad = associated_data(name, version);
     let ciphertext = cipher
@@ -340,7 +476,13 @@ fn encrypt_envelope(
                 aad: &aad,
             },
         )
-        .map_err(|_| SecretProviderError::Unavailable)?;
+        .map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::OperationFailed,
+                SecurityOperation::EncryptSecret,
+                source,
+            )
+        })?;
     let mut envelope = Vec::with_capacity(ENVELOPE_PREFIX_LENGTH + ciphertext.len());
     envelope.extend_from_slice(ENVELOPE_MAGIC);
     envelope.extend_from_slice(&nonce);
@@ -355,26 +497,38 @@ fn decrypt_envelope(
     name: &SecretName,
     version: SecretVersion,
     envelope: &[u8],
-) -> Result<Vec<u8>, SecretProviderError> {
+) -> Result<Vec<u8>, SecurityProviderError> {
     if envelope.len() < ENVELOPE_PREFIX_LENGTH + AUTH_TAG_LENGTH || &envelope[..ENVELOPE_MAGIC.len()] != ENVELOPE_MAGIC
     {
-        return Err(SecretProviderError::InvalidEnvelope);
+        return Err(provider_error(
+            SecurityProviderFailure::InvalidData,
+            SecurityOperation::DecryptSecret,
+        ));
     }
     let nonce_start = ENVELOPE_MAGIC.len();
     let nonce_end = nonce_start + NONCE_LENGTH;
     let length_end = nonce_end + LENGTH_FIELD;
     let nonce = Nonce::<Aes256Gcm>::try_from(&envelope[nonce_start..nonce_end])
-        .map_err(|_| SecretProviderError::InvalidEnvelope)?;
+        .map_err(|_| provider_error(SecurityProviderFailure::InvalidData, SecurityOperation::DecryptSecret))?;
     let encoded_length = u64::from_be_bytes(
         envelope[nonce_end..length_end]
             .try_into()
-            .map_err(|_| SecretProviderError::InvalidEnvelope)?,
+            .map_err(|_| provider_error(SecurityProviderFailure::InvalidData, SecurityOperation::DecryptSecret))?,
     );
     let ciphertext = &envelope[length_end..];
     if encoded_length != ciphertext.len() as u64 || ciphertext.len() > MAX_SECRET_LENGTH + AUTH_TAG_LENGTH {
-        return Err(SecretProviderError::InvalidEnvelope);
+        return Err(provider_error(
+            SecurityProviderFailure::InvalidData,
+            SecurityOperation::DecryptSecret,
+        ));
     }
-    let cipher = Aes256Gcm::new_from_slice(key.expose_secret()).map_err(|_| SecretProviderError::InvalidMaterial)?;
+    let cipher = Aes256Gcm::new_from_slice(key.expose_secret()).map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::InvalidData,
+            SecurityOperation::DecryptSecret,
+            source,
+        )
+    })?;
     let aad = associated_data(name, version);
     cipher
         .decrypt(
@@ -384,11 +538,17 @@ fn decrypt_envelope(
                 aad: &aad,
             },
         )
-        .map_err(|_| SecretProviderError::InvalidEnvelope)
+        .map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::DecryptSecret,
+                source,
+            )
+        })
 }
 
 #[cfg(unix)]
-fn publish_version(directory: &Path, version: SecretVersion, envelope: &[u8]) -> Result<(), SecretProviderError> {
+fn publish_version(directory: &Path, version: SecretVersion, envelope: &[u8]) -> Result<(), SecurityProviderError> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::fs::PermissionsExt;
 
@@ -402,19 +562,49 @@ fn publish_version(directory: &Path, version: SecretVersion, envelope: &[u8]) ->
     let final_path = version_path(directory, version);
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true).mode(0o600);
-    let mut file = options
-        .open(&temporary_path)
-        .map_err(|_| SecretProviderError::Unavailable)?;
+    let mut file = options.open(&temporary_path).map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::Unavailable,
+            SecurityOperation::WriteSecret,
+            source,
+        )
+    })?;
     let write_result = (|| {
-        file.write_all(envelope).map_err(|_| SecretProviderError::Unavailable)?;
-        file.sync_all().map_err(|_| SecretProviderError::Unavailable)?;
+        file.write_all(envelope).map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::Unavailable,
+                SecurityOperation::WriteSecret,
+                source,
+            )
+        })?;
+        file.sync_all().map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::Unavailable,
+                SecurityOperation::SynchronizeSecret,
+                source,
+            )
+        })?;
         file.set_permissions(fs::Permissions::from_mode(0o400))
-            .map_err(|_| SecretProviderError::Unavailable)?;
-        fs::hard_link(&temporary_path, &final_path).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                SecretProviderError::VersionConflict
+            .map_err(|source| {
+                SecurityProviderError::caused_by(
+                    SecurityProviderFailure::Unavailable,
+                    SecurityOperation::WriteSecret,
+                    source,
+                )
+            })?;
+        fs::hard_link(&temporary_path, &final_path).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::AlreadyExists {
+                SecurityProviderError::caused_by(
+                    SecurityProviderFailure::Conflict,
+                    SecurityOperation::WriteSecret,
+                    source,
+                )
             } else {
-                SecretProviderError::Unavailable
+                SecurityProviderError::caused_by(
+                    SecurityProviderFailure::Unavailable,
+                    SecurityOperation::WriteSecret,
+                    source,
+                )
             }
         })?;
         sync_directory(directory)
@@ -425,14 +615,39 @@ fn publish_version(directory: &Path, version: SecretVersion, envelope: &[u8]) ->
 }
 
 #[cfg(unix)]
-fn sync_directory(directory: &Path) -> Result<(), SecretProviderError> {
+fn sync_directory(directory: &Path) -> Result<(), SecurityProviderError> {
     File::open(directory)
         .and_then(|file| file.sync_all())
-        .map_err(|_| SecretProviderError::Unavailable)
+        .map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::Unavailable,
+                SecurityOperation::SynchronizeSecret,
+                source,
+            )
+        })
+}
+
+fn provider_error(kind: SecurityProviderFailure, operation: SecurityOperation) -> SecurityProviderError {
+    SecurityProviderError::new(kind, operation)
+}
+
+fn auth_provider_error(source: SecurityProviderError) -> AuthServiceError {
+    let kind = match source.kind() {
+        SecurityProviderFailure::NotFound => AuthFailureKind::NotFound,
+        SecurityProviderFailure::Conflict => AuthFailureKind::Conflict,
+        SecurityProviderFailure::Unsupported => AuthFailureKind::Unsupported,
+        SecurityProviderFailure::InvalidData => AuthFailureKind::InvalidData,
+        SecurityProviderFailure::ContractViolation => AuthFailureKind::InvalidConfiguration,
+        SecurityProviderFailure::Unavailable => AuthFailureKind::Unavailable,
+        SecurityProviderFailure::OperationFailed => AuthFailureKind::Internal,
+    };
+    AuthServiceError::with_source(AuthOperation::LoadSecret, kind, source)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
 
     fn material(bytes: &[u8]) -> SecretMaterial {
@@ -453,13 +668,45 @@ mod tests {
 
         envelope[ENVELOPE_PREFIX_LENGTH] ^= 1;
         assert_eq!(
-            decrypt_envelope(&key, &name, version, &envelope).unwrap_err(),
-            SecretProviderError::InvalidEnvelope
+            decrypt_envelope(&key, &name, version, &envelope).unwrap_err().kind(),
+            SecurityProviderFailure::InvalidData
         );
         let other_name = SecretName::new("other-key").unwrap();
         assert_eq!(
-            decrypt_envelope(&key, &other_name, version, &envelope).unwrap_err(),
-            SecretProviderError::InvalidEnvelope
+            decrypt_envelope(&key, &other_name, version, &envelope)
+                .unwrap_err()
+                .kind(),
+            SecurityProviderFailure::InvalidData
         );
+    }
+
+    #[test]
+    fn cipher_failures_retain_typed_sources_without_rendering_them() {
+        let name = SecretName::new("broker-admin-key").unwrap();
+        let version = SecretVersion::new(7);
+        let invalid_key = material(&[9; 31]);
+        let key_error = encrypt_envelope(&invalid_key, &name, version, b"secret")
+            .expect_err("an invalid AES-256 key length must fail");
+        assert_eq!(key_error.kind(), SecurityProviderFailure::InvalidData);
+        assert_eq!(key_error.operation(), SecurityOperation::EncryptSecret);
+        assert!(Error::source(&key_error)
+            .and_then(|source| source.downcast_ref::<aes_gcm::aead::common::InvalidLength>())
+            .is_some());
+
+        let key = material(&[9; 32]);
+        let mut envelope = encrypt_envelope(&key, &name, version, b"secret").unwrap();
+        envelope[ENVELOPE_PREFIX_LENGTH] ^= 1;
+        let decrypt_error = decrypt_envelope(&key, &name, version, &envelope)
+            .expect_err("modified ciphertext must fail authentication");
+        assert_eq!(decrypt_error.kind(), SecurityProviderFailure::InvalidData);
+        assert_eq!(decrypt_error.operation(), SecurityOperation::DecryptSecret);
+        assert!(Error::source(&decrypt_error)
+            .and_then(|source| source.downcast_ref::<aes_gcm::Error>())
+            .is_some());
+
+        for error in [&key_error, &decrypt_error] {
+            assert!(!error.to_string().contains("InvalidLength"));
+            assert!(!format!("{error:?}").contains("aead::Error"));
+        }
     }
 }

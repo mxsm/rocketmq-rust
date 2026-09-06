@@ -16,6 +16,7 @@
 
 //! Runtime-neutral security contracts.
 
+mod error;
 /// Layered ingress and detailed authorization contracts.
 pub mod layered_authorization;
 pub mod maintenance;
@@ -36,12 +37,11 @@ pub use layered_authorization::LayerEvaluation;
 pub use layered_authorization::LayerFailureKind;
 pub use layered_authorization::LayerRequirement;
 pub use maintenance::MaintenanceAuthorizationContext;
-pub use maintenance::MaintenanceAuthorizationError;
+pub use maintenance::MaintenanceAuthorizationDenial;
 pub use maintenance::MaintenanceAuthorizationGrant;
 pub use maintenance::MaintenanceAuthorizer;
 pub use maintenance::MaintenanceCapability;
 pub use maintenance::MaintenancePolicy;
-pub use maintenance::MaintenancePolicyError;
 pub use maintenance::MaintenancePrincipalBinding;
 pub use maintenance::MaintenanceRequestClass;
 pub use maintenance::MaintenanceResourceBudget;
@@ -52,15 +52,19 @@ pub use maintenance::MAINTENANCE_POLICY_SCHEMA_VERSION;
 pub use resource_pattern::ResourcePattern;
 pub use resource_type::ResourceType;
 
+pub use error::MaintenancePolicyRule;
+pub use error::SecurityContractViolation;
+pub use error::SecurityIdentifierRule;
+pub use error::SecurityOperation;
+pub use error::SecurityProviderError;
+pub use error::SecurityProviderFailure;
+
 pub use secret_provider::SecretAccess;
-pub use secret_provider::SecretIdentifierError;
 pub use secret_provider::SecretMaterial;
-pub use secret_provider::SecretMaterialError;
 pub use secret_provider::SecretName;
 pub use secret_provider::SecretPersistence;
 pub use secret_provider::SecretProvider;
 pub use secret_provider::SecretProviderCapabilities;
-pub use secret_provider::SecretProviderError;
 pub use secret_provider::SecretProviderId;
 pub use secret_provider::SecretVersion;
 pub use secret_provider::SecretVersioning;
@@ -74,14 +78,12 @@ pub use secure_deployment::DeploymentSecurityFailure;
 pub use secure_deployment::DeploymentSecurityReport;
 pub use secure_deployment::SecurityBootstrap;
 pub use secure_deployment::SecurityBootstrapConfig;
-pub use secure_deployment::SecurityBootstrapError;
 pub use secure_deployment::SecurityBootstrapMaterial;
 pub use secure_deployment::SecurityBootstrapOutcome;
 pub use secure_deployment::SecurityBootstrapProfile;
 pub use secure_deployment::SecurityMigrationStatus;
 pub use secure_deployment::SecurityProfileResolution;
 pub use secure_deployment::SecurityProfileSelection;
-pub use secure_deployment::SecurityProfileSelectionError;
 pub use secure_deployment::ValidatedSecurityBootstrap;
 pub use secure_deployment::MOUNTED_FILES_SECRET_PROVIDER;
 pub use secure_deployment::SECURITY_ADMIN_IDENTITY_ENV;
@@ -95,7 +97,6 @@ pub use secure_deployment::SECURITY_TRUST_ANCHOR_ENV;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
-use std::io;
 use std::io::Read;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -103,7 +104,6 @@ use std::str::FromStr;
 use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
-use thiserror::Error;
 
 /// Read-only peer metadata made available to security policies.
 #[derive(Clone, PartialEq, Eq)]
@@ -488,17 +488,6 @@ pub fn evaluate_request(policy: &dyn RequestPolicy, context: &RequestContext<'_>
     })
 }
 
-/// Error returned by an outbound signing adapter.
-#[derive(Debug, Error)]
-pub enum SigningError {
-    #[error("signing credentials are unavailable")]
-    /// Represents the credentials unavailable case.
-    CredentialsUnavailable,
-    #[error("request signing failed: {0}")]
-    /// Represents the failed case.
-    Failed(CheetahString),
-}
-
 /// Redacted signature fields produced by an outbound signer.
 pub struct Signature {
     fields: Vec<(CheetahString, Secret<CheetahString>)>,
@@ -526,8 +515,13 @@ impl fmt::Debug for Signature {
 
 /// Contract implemented by transport-specific outbound signers in `rocketmq-auth`.
 pub trait OutboundSigner: Send + Sync {
-    /// Returns the sign.
-    fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SigningError>;
+    /// Signs an outbound security request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted [`SecurityProviderError`] when the signing provider
+    /// cannot produce a signature safely.
+    fn sign(&self, request: SecurityRequestView<'_>) -> Result<Signature, SecurityProviderError>;
 }
 
 /// Sensitive value whose debug representation is always redacted.
@@ -568,14 +562,14 @@ pub enum DeploymentProfile {
 }
 
 impl FromStr for DeploymentProfile {
-    type Err = ();
+    type Err = SecurityContractViolation;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.to_ascii_lowercase().as_str() {
             "development" => Ok(Self::Development),
             "compatibility" => Ok(Self::Compatibility),
             "secure" => Ok(Self::Secure),
-            _ => Err(()),
+            _ => Err(SecurityContractViolation::UnknownSecurityProfile),
         }
     }
 }
@@ -771,32 +765,41 @@ impl SecretFilePermissions {
     }
 }
 
-/// Errors produced while opening and reading a secret file through one handle.
-#[derive(Debug, Error)]
-pub enum SecretFileError {
-    #[error("failed to open secret file: {0}")]
-    /// Represents the open case.
-    Open(#[source] io::Error),
-    #[error("failed to inspect secret file permissions: {0}")]
-    /// Represents the metadata case.
-    Metadata(#[source] io::Error),
-    #[error("secret file permissions allow group or other access")]
-    /// Represents the insecure permissions case.
-    InsecurePermissions,
-    #[error("failed to read secret file: {0}")]
-    /// Represents the read case.
-    Read(#[source] io::Error),
-}
-
 /// Opens, permission-checks and reads a secret using the same file handle.
-pub fn read_secret_file(path: &Path) -> Result<Secret<Vec<u8>>, SecretFileError> {
-    let mut file = File::open(path).map_err(SecretFileError::Open)?;
-    let metadata = file.metadata().map_err(SecretFileError::Metadata)?;
+///
+/// # Errors
+///
+/// Returns a redacted [`SecurityProviderError`] while retaining safe typed I/O
+/// sources. Insecure permissions are retained as a closed contract source.
+pub fn read_secret_file(path: &Path) -> Result<Secret<Vec<u8>>, SecurityProviderError> {
+    let mut file = File::open(path).map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::Unavailable,
+            SecurityOperation::ReadSecret,
+            source,
+        )
+    })?;
+    let metadata = file.metadata().map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::OperationFailed,
+            SecurityOperation::InspectSecret,
+            source,
+        )
+    })?;
     if !platform_secret_file_permissions(&metadata).is_owner_only() {
-        return Err(SecretFileError::InsecurePermissions);
+        return Err(SecurityProviderError::contract(
+            SecurityOperation::InspectSecret,
+            SecurityContractViolation::SecretStoragePermissionsInsecure,
+        ));
     }
     let mut value = Vec::new();
-    file.read_to_end(&mut value).map_err(SecretFileError::Read)?;
+    file.read_to_end(&mut value).map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::OperationFailed,
+            SecurityOperation::ReadSecret,
+            source,
+        )
+    })?;
     Ok(Secret::new(value))
 }
 

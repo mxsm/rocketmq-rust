@@ -352,6 +352,7 @@ impl PendingRequestTable {
         self.register_for_owner_with_bytes(&self.inner.default_owner, opaque, deadline, retained_bytes, sender)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn register_for_owner(
         &self,
         owner: &PendingRequestOwner,

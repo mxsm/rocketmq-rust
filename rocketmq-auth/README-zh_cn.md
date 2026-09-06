@@ -68,17 +68,10 @@ use rocketmq_security_api::{Principal, Resource};
 use rocketmq_auth::{AuthorizationRequest, PolicyDecision, PolicyResource};
 ```
 
-冻结的 1.x 名称 `Decision`、`Resource` 和 `RequestContext` 继续以相同类型提供，以保持源码兼容性。
-`SecurityPrincipal` 和 `SecurityResource` 是已弃用的 1.x 再导出；请迁移到
-`rocketmq-security-api::{Principal, Resource}`。12 个已弃用的维护再导出
-（`MaintenanceAuthorizationContext`、`MaintenanceAuthorizationError`、`MaintenanceAuthorizationGrant`、
-`MaintenanceAuthorizer`、`MaintenanceCapability`、`MaintenancePolicy`、`MaintenancePrincipalBinding`、
-`MaintenanceRequestClass`、`MaintenanceResourceBudget`、`MaintenanceRole`、`MaintenanceRoleGrant` 和
-`MAINTENANCE_POLICY_SCHEMA_VERSION`）同样继续可用，直到使用方迁移到 `rocketmq-security-api`。
-
-任何移除仅计划在未来 2.0 源码兼容性边界中进行，且仍须通过兼容性、迁移和发布门禁。本准备性变更不授予删除批准，
-也不宣布或批准 2.0 发布。它不会改变 `AuthorizationHandlerChain` 的首个成功语义，也不会改变白名单/profile 行为、
-wire 或 Serde 表示、默认值、错误行为或 fail-closed 行为。
+维护契约现在直接从 `rocketmq-security-api` 导入；`rocketmq-auth` 不再保留这些契约的兼容再导出。
+`MaintenanceAuthorizationDenial` 表示普通拒绝决策，`SecurityContractViolation`、
+`SecurityProviderError` 和 `AuthServiceError` 分别承载确定性契约错误和运行失败。
+该直接替换不会改变 RocketMQ remoting 数字响应码。
 
 ## 快速开始
 

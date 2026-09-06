@@ -23,9 +23,11 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::SystemTime;
 
-use thiserror::Error;
-
 use crate::DeploymentProfile;
+use crate::SecurityContractViolation;
+use crate::SecurityOperation;
+use crate::SecurityProviderError;
+use crate::SecurityProviderFailure;
 
 /// The security profile env constant.
 pub const SECURITY_PROFILE_ENV: &str = "ROCKETMQ_SECURITY_PROFILE";
@@ -64,13 +66,13 @@ impl SecurityBootstrapProfile {
 }
 
 impl FromStr for SecurityBootstrapProfile {
-    type Err = SecurityBootstrapError;
+    type Err = SecurityContractViolation;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
             "development-insecure-loopback" => Ok(Self::DevelopmentInsecureLoopback),
             "secure-enforced" => Ok(Self::SecureEnforced),
-            _ => Err(SecurityBootstrapError::UnknownProfile),
+            _ => Err(SecurityContractViolation::UnknownSecurityProfile),
         }
     }
 }
@@ -106,11 +108,11 @@ impl SecurityBootstrap {
     ///
     /// # Errors
     ///
-    /// Returns [`SecurityBootstrapError`] when an enabled profile is incomplete or unsafe.
+    /// Returns [`SecurityProviderError`] when an enabled profile is incomplete, unsafe, or unavailable.
     pub fn validate(
         &self,
         listener_addresses: &[SocketAddr],
-    ) -> Result<SecurityBootstrapOutcome, SecurityBootstrapError> {
+    ) -> Result<SecurityBootstrapOutcome, SecurityProviderError> {
         match self {
             Self::Disabled => Ok(SecurityBootstrapOutcome::Disabled),
             Self::Enabled(config) => config
@@ -132,7 +134,7 @@ struct SecurityBootstrapEnvironment {
 }
 
 impl SecurityBootstrapEnvironment {
-    fn from_env() -> Result<Self, SecurityBootstrapError> {
+    fn from_env() -> Result<Self, SecurityContractViolation> {
         Ok(Self {
             profile: optional_env(SECURITY_PROFILE_ENV)?,
             trust_anchor: optional_path_env(SECURITY_TRUST_ANCHOR_ENV)?,
@@ -144,7 +146,7 @@ impl SecurityBootstrapEnvironment {
         })
     }
 
-    fn resolve(self) -> Result<SecurityBootstrap, SecurityBootstrapError> {
+    fn resolve(self) -> Result<SecurityBootstrap, SecurityContractViolation> {
         let Self {
             profile,
             trust_anchor,
@@ -162,13 +164,11 @@ impl SecurityBootstrapEnvironment {
                 || admin_identity.is_some()
                 || request_policy.is_some()
             {
-                return Err(SecurityBootstrapError::MissingProfile);
+                return Err(SecurityContractViolation::BootstrapProfileRequired);
             }
             return Ok(SecurityBootstrap::Disabled);
         };
-        let profile = profile
-            .parse::<SecurityBootstrapProfile>()
-            .map_err(|_| SecurityBootstrapError::UnknownProfile)?;
+        let profile = profile.parse::<SecurityBootstrapProfile>()?;
         Ok(SecurityBootstrap::Enabled(SecurityBootstrapConfig {
             profile,
             trust_anchor,
@@ -218,7 +218,7 @@ impl SecurityBootstrapConfig {
     ///
     /// Returns a typed error when fields are configured without a profile, the profile is
     /// unknown, or any configured environment field is non-UTF-8.
-    pub fn from_env() -> Result<SecurityBootstrap, SecurityBootstrapError> {
+    pub fn from_env() -> Result<SecurityBootstrap, SecurityContractViolation> {
         SecurityBootstrapEnvironment::from_env()?.resolve()
     }
 
@@ -262,11 +262,14 @@ impl SecurityBootstrapConfig {
     pub fn validate(
         &self,
         listener_addresses: &[SocketAddr],
-    ) -> Result<ValidatedSecurityBootstrap, SecurityBootstrapError> {
+    ) -> Result<ValidatedSecurityBootstrap, SecurityProviderError> {
         match self.profile {
             SecurityBootstrapProfile::DevelopmentInsecureLoopback => {
                 if listener_addresses.iter().any(|address| !address.ip().is_loopback()) {
-                    return Err(SecurityBootstrapError::DevelopmentListenerNotLoopback);
+                    return Err(SecurityProviderError::contract(
+                        SecurityOperation::Validate,
+                        SecurityContractViolation::DevelopmentListenerNotLoopback,
+                    ));
                 }
             }
             SecurityBootstrapProfile::SecureEnforced => {
@@ -284,9 +287,13 @@ impl SecurityBootstrapConfig {
                     .as_deref()
                     .map(str::trim)
                     .filter(|provider| !provider.is_empty())
-                    .ok_or(SecurityBootstrapError::MissingSecretProvider)?;
+                    .ok_or(SecurityContractViolation::SecretProviderRequired)
+                    .map_err(|violation| SecurityProviderError::contract(SecurityOperation::Validate, violation))?;
                 if provider != MOUNTED_FILES_SECRET_PROVIDER {
-                    return Err(SecurityBootstrapError::UnsupportedSecretProvider);
+                    return Err(SecurityProviderError::contract(
+                        SecurityOperation::Validate,
+                        SecurityContractViolation::SecretProviderUnsupported,
+                    ));
                 }
                 inspect_bootstrap_file(self.admin_identity.as_deref(), SecurityBootstrapMaterial::AdminIdentity)?;
                 inspect_bootstrap_file(self.request_policy.as_deref(), SecurityBootstrapMaterial::RequestPolicy)?;
@@ -304,11 +311,13 @@ impl SecurityBootstrapConfig {
 ///
 /// # Errors
 ///
-/// Returns [`SecurityBootstrapError`] for every incomplete, unsupported, or unsafe profile.
+/// Returns [`SecurityProviderError`] for every incomplete, unsupported, unsafe, or unavailable profile.
 pub fn validate_security_bootstrap_from_env(
     listener_addresses: &[SocketAddr],
-) -> Result<SecurityBootstrapOutcome, SecurityBootstrapError> {
-    SecurityBootstrapConfig::from_env()?.validate(listener_addresses)
+) -> Result<SecurityBootstrapOutcome, SecurityProviderError> {
+    SecurityBootstrapConfig::from_env()
+        .map_err(SecurityProviderError::from)?
+        .validate(listener_addresses)
 }
 
 /// Result of resolving and, when enabled, validating process security bootstrap.
@@ -366,52 +375,17 @@ impl fmt::Display for SecurityBootstrapMaterial {
     }
 }
 
-/// Typed, value-free startup failures returned before listener bind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum SecurityBootstrapError {
-    #[error("security bootstrap profile is required when bootstrap fields are configured")]
-    /// Represents the missing profile case.
-    MissingProfile,
-    #[error("security bootstrap profile is unknown")]
-    /// Represents the unknown profile case.
-    UnknownProfile,
-    #[error("security bootstrap environment field is not valid UTF-8")]
-    /// Represents the invalid environment encoding case.
-    InvalidEnvironmentEncoding,
-    #[error("secure bootstrap is missing {0}")]
-    /// Represents the missing material case.
-    MissingMaterial(SecurityBootstrapMaterial),
-    #[error("secure bootstrap {0} is unavailable")]
-    /// Represents the material unavailable case.
-    MaterialUnavailable(SecurityBootstrapMaterial),
-    #[error("secure bootstrap {0} is not a regular file")]
-    /// Represents the material not regular file case.
-    MaterialNotRegularFile(SecurityBootstrapMaterial),
-    #[error("secure bootstrap {0} is empty")]
-    /// Represents the material empty case.
-    MaterialEmpty(SecurityBootstrapMaterial),
-    #[error("secure bootstrap secret provider is required")]
-    /// Represents the missing secret provider case.
-    MissingSecretProvider,
-    #[error("secure bootstrap secret provider is unsupported")]
-    /// Represents the unsupported secret provider case.
-    UnsupportedSecretProvider,
-    #[error("development-insecure profile requires every listener to use a loopback address")]
-    /// Represents the development listener not loopback case.
-    DevelopmentListenerNotLoopback,
-}
-
-fn optional_path_env(name: &'static str) -> Result<Option<PathBuf>, SecurityBootstrapError> {
+fn optional_path_env(name: &'static str) -> Result<Option<PathBuf>, SecurityContractViolation> {
     optional_env(name).map(|value| value.map(PathBuf::from))
 }
 
-fn optional_env(name: &'static str) -> Result<Option<String>, SecurityBootstrapError> {
+fn optional_env(name: &'static str) -> Result<Option<String>, SecurityContractViolation> {
     let Some(value) = env::var_os(name) else {
         return Ok(None);
     };
     let value = value
         .into_string()
-        .map_err(|_| SecurityBootstrapError::InvalidEnvironmentEncoding)?;
+        .map_err(|_| SecurityContractViolation::BootstrapEnvironmentEncoding)?;
     let value = value.trim();
     Ok((!value.is_empty()).then(|| value.to_string()))
 }
@@ -419,23 +393,48 @@ fn optional_env(name: &'static str) -> Result<Option<String>, SecurityBootstrapE
 fn inspect_bootstrap_file(
     path: Option<&Path>,
     material: SecurityBootstrapMaterial,
-) -> Result<(), SecurityBootstrapError> {
-    let path = path.ok_or(SecurityBootstrapError::MissingMaterial(material))?;
-    let metadata = path
-        .metadata()
-        .map_err(|_| SecurityBootstrapError::MaterialUnavailable(material))?;
+) -> Result<(), SecurityProviderError> {
+    let path = path
+        .ok_or(SecurityContractViolation::BootstrapMaterialRequired { material })
+        .map_err(|violation| SecurityProviderError::contract(SecurityOperation::Validate, violation))?;
+    let metadata = path.metadata().map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::Unavailable,
+            SecurityOperation::InspectBootstrapMaterial,
+            source,
+        )
+    })?;
     if !metadata.is_file() {
-        return Err(SecurityBootstrapError::MaterialNotRegularFile(material));
+        return Err(SecurityProviderError::contract(
+            SecurityOperation::InspectBootstrapMaterial,
+            SecurityContractViolation::BootstrapMaterialNotRegularFile { material },
+        ));
     }
-    let file = File::open(path).map_err(|_| SecurityBootstrapError::MaterialUnavailable(material))?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| SecurityBootstrapError::MaterialUnavailable(material))?;
+    let file = File::open(path).map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::Unavailable,
+            SecurityOperation::InspectBootstrapMaterial,
+            source,
+        )
+    })?;
+    let metadata = file.metadata().map_err(|source| {
+        SecurityProviderError::caused_by(
+            SecurityProviderFailure::OperationFailed,
+            SecurityOperation::InspectBootstrapMaterial,
+            source,
+        )
+    })?;
     if !metadata.is_file() {
-        return Err(SecurityBootstrapError::MaterialNotRegularFile(material));
+        return Err(SecurityProviderError::contract(
+            SecurityOperation::InspectBootstrapMaterial,
+            SecurityContractViolation::BootstrapMaterialNotRegularFile { material },
+        ));
     }
     if metadata.len() == 0 {
-        return Err(SecurityBootstrapError::MaterialEmpty(material));
+        return Err(SecurityProviderError::contract(
+            SecurityOperation::InspectBootstrapMaterial,
+            SecurityContractViolation::BootstrapMaterialEmpty { material },
+        ));
     }
     Ok(())
 }
@@ -502,30 +501,20 @@ impl SecurityProfileResolution {
     }
 }
 
-/// Invalid configured profile. Unknown values never downgrade to compatibility.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum SecurityProfileSelectionError {
-    #[error("configured security profile is unknown")]
-    /// Represents the unknown profile case.
-    UnknownProfile,
-}
-
 /// Resolves a profile without silently changing an identified existing deployment.
 ///
 /// # Errors
 ///
-/// Returns [`SecurityProfileSelectionError::UnknownProfile`] for every non-empty unknown value.
+/// Returns [`SecurityContractViolation::UnknownSecurityProfile`] for every non-empty unknown value.
 pub fn resolve_security_profile(
     selection: SecurityProfileSelection<'_>,
-) -> Result<SecurityProfileResolution, SecurityProfileSelectionError> {
+) -> Result<SecurityProfileResolution, SecurityContractViolation> {
     let configured = selection
         .configured_profile
         .map(str::trim)
         .filter(|profile| !profile.is_empty());
     let profile = match configured {
-        Some(profile) => {
-            DeploymentProfile::from_str(profile).map_err(|()| SecurityProfileSelectionError::UnknownProfile)?
-        }
+        Some(profile) => DeploymentProfile::from_str(profile)?,
         None if selection.origin == DeploymentOrigin::New => DeploymentProfile::Secure,
         None => DeploymentProfile::Compatibility,
     };
@@ -683,11 +672,11 @@ impl DeploymentSecurityReport {
 ///
 /// # Errors
 ///
-/// Returns [`SecurityProfileSelectionError::UnknownProfile`] instead of choosing a fallback.
+/// Returns [`SecurityContractViolation::UnknownSecurityProfile`] instead of choosing a fallback.
 pub fn validate_deployment_security(
     view: DeploymentSecurityConfigView<'_>,
     now: SystemTime,
-) -> Result<DeploymentSecurityReport, SecurityProfileSelectionError> {
+) -> Result<DeploymentSecurityReport, SecurityContractViolation> {
     let resolution = resolve_security_profile(view.profile)?;
     let mut failures = Vec::new();
     if resolution.profile == DeploymentProfile::Secure {
@@ -750,6 +739,13 @@ mod tests {
 
     use super::*;
 
+    fn contract_source(error: &SecurityProviderError) -> SecurityContractViolation {
+        *error
+            .source()
+            .and_then(|source| source.downcast_ref::<SecurityContractViolation>())
+            .expect("provider error should retain its contract source")
+    }
+
     #[test]
     fn security_bootstrap_environment_without_profile_or_fields_is_disabled() {
         let security_bootstrap = SecurityBootstrapEnvironment::default()
@@ -793,7 +789,7 @@ mod tests {
                 environment
                     .resolve()
                     .expect_err("security fields without a profile must fail"),
-                SecurityBootstrapError::MissingProfile
+                SecurityContractViolation::BootstrapProfileRequired
             );
         }
     }
@@ -826,11 +822,14 @@ mod tests {
         let SecurityBootstrap::Enabled(secure) = secure else {
             panic!("secure profile must enable security bootstrap");
         };
+        let error = secure
+            .validate(&[])
+            .expect_err("secure profile without material must fail closed");
         assert_eq!(
-            secure
-                .validate(&[])
-                .expect_err("secure profile without material must fail closed"),
-            SecurityBootstrapError::MissingMaterial(SecurityBootstrapMaterial::TrustAnchor)
+            contract_source(&error),
+            SecurityContractViolation::BootstrapMaterialRequired {
+                material: SecurityBootstrapMaterial::TrustAnchor,
+            }
         );
 
         assert_eq!(
@@ -840,7 +839,7 @@ mod tests {
             }
             .resolve()
             .expect_err("unknown profile must fail closed"),
-            SecurityBootstrapError::UnknownProfile
+            SecurityContractViolation::UnknownSecurityProfile
         );
     }
 
@@ -863,7 +862,7 @@ mod tests {
         let selection = SecurityProfileSelection::new(DeploymentOrigin::Existing).with_configured_profile("unknown");
         assert_eq!(
             resolve_security_profile(selection).unwrap_err(),
-            SecurityProfileSelectionError::UnknownProfile
+            SecurityContractViolation::UnknownSecurityProfile
         );
     }
 

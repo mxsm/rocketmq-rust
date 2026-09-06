@@ -27,9 +27,9 @@ use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_proxy_core::ConsumerFilterExpression;
 use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ReceiveTarget;
+use rocketmq_security_api::SecurityProviderError;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::Signature;
-use rocketmq_security_api::SigningError;
 use tokio::sync::oneshot;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -42,7 +42,7 @@ type SendScript = Arc<Mutex<VecDeque<Result<Option<SendResult>, RocketMQError>>>
 struct EmptySigner;
 
 impl OutboundSigner for EmptySigner {
-    fn sign(&self, _request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
+    fn sign(&self, _request: SecurityRequestView<'_>) -> Result<Signature, SecurityProviderError> {
         Ok(Signature::new(Vec::new()))
     }
 }

@@ -37,9 +37,9 @@ use rocketmq_security_api::OutboundSigner;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_security_api::Secret;
+use rocketmq_security_api::SecurityProviderError;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::Signature;
-use rocketmq_security_api::SigningError;
 use rocketmq_transport::api::AdmissionClass;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
@@ -135,7 +135,7 @@ impl RequestPolicy for AllowAuthenticated {
 struct MarkerSigner;
 
 impl OutboundSigner for MarkerSigner {
-    fn sign(&self, _request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
+    fn sign(&self, _request: SecurityRequestView<'_>) -> Result<Signature, SecurityProviderError> {
         Ok(Signature::new(vec![(
             CheetahString::from_static_str("TransportSignature"),
             Secret::new(CheetahString::from_static_str("signed")),
