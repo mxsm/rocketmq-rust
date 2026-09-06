@@ -57,6 +57,12 @@ Successful Tool calls return a `rocketmq-mcp.v2` envelope with `request_id`, clu
 Resource-backed Tool calls return a ResourceLink only when the selected target has one canonical, safely representable Resource URI. A target accepted by the existing Tool contract but not representable as a Resource keeps the Tool's normal success/error and data semantics; only the ResourceLink is omitted, while genuinely sensitive target values remain sanitized. Tool and Resource requests share the application-level `QueryFacade`, bounded TTL cache, and singleflight coordination, so an identical query can be replayed without starting a second admin session while its entry is fresh. Each verified request selects one of two closed query visibility classes: read-only HTTP principals and local read-only stdio profiles use `standard`, while principals or local profiles with diagnosis or planning access use `sensitive`. Requests share query state within a class, but ordinary cache entries, snapshots, singleflight work, and continuation cursors never cross classes.
 Both surfaces pass through the same authorization, audit, redaction, row-bound, byte-bound, and stable-error pipeline. Arrays are bounded to 1,000 rows, structured output to 1 MiB, and truncation is reported with `partial = true` and the stable `output_rows_truncated` warning.
 
+## Public API And Error Boundary
+
+Embedders use `McpResult<T>` for MCP startup and transport operations. `McpError` is the single opaque operational-error facade: `McpApp::bootstrap`, `McpApp::bootstrap_validated`, `app::init_tracing`, and the stdio and Streamable HTTP `serve`, `serve_with_lifecycle`, and `build_router` entry points all return `McpResult`. There are no alternate or compatibility error-return APIs.
+
+Transport clients receive fixed, redacted public errors rather than implementation causes. HTTP authentication and authorization rejections use their fixed protocol responses, while operational HTTP failures use a safe fixed error response. For stdio, stdout contains MCP JSON-RPC protocol frames only; diagnostics and implementation causes are never written there.
+
 ## Build
 
 `rocketmq-mcp` is a standalone Cargo package. Unless a command says otherwise, run the commands below from the

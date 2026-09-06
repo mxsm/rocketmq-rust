@@ -17,6 +17,20 @@ use std::sync::atomic::AtomicU64;
 
 use super::*;
 
+#[test]
+fn file_sink_retains_io_causes_without_exposing_paths() {
+    use std::error::Error;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().to_path_buf();
+    for error in [
+        write_file_record(path.clone(), b"record").unwrap_err(),
+        flush_audit_file(path.clone()).unwrap_err(),
+    ] {
+        assert!(error.source().unwrap().is::<std::io::Error>());
+        assert!(!format!("{error} {error:?}").contains(path.to_str().unwrap()));
+    }
+}
+
 struct TestSinkState {
     attempts: Mutex<Vec<String>>,
     started: Notify,
@@ -44,7 +58,7 @@ struct TestAuditSink {
 }
 
 impl AuditSink for TestAuditSink {
-    async fn write(&mut self, record: &AuditRecord, _encoded: &[u8]) -> Result<(), ()> {
+    async fn write(&mut self, record: &AuditRecord, _encoded: &[u8]) -> crate::McpResult<()> {
         self.state
             .attempts
             .lock()
@@ -52,7 +66,7 @@ impl AuditSink for TestAuditSink {
             .push(record.request_id.clone());
         self.state.started.notify_one();
         if self.state.stall_first.swap(false, Ordering::AcqRel) {
-            let permit = self.state.release.acquire().await.map_err(|_| ())?;
+            let permit = self.state.release.acquire().await.map_err(McpError::from_source)?;
             drop(permit);
         }
         if self
@@ -63,14 +77,14 @@ impl AuditSink for TestAuditSink {
             })
             .is_ok()
         {
-            return Err(());
+            return Err(McpError::from_source(std::io::Error::other("audit test sink failed")));
         }
         Ok(())
     }
 
-    async fn flush(&mut self) -> Result<(), ()> {
+    async fn flush(&mut self) -> crate::McpResult<()> {
         if self.state.fail_flush.load(Ordering::Acquire) {
-            Err(())
+            Err(McpError::from_source(std::io::Error::other("audit test sink failed")))
         } else {
             Ok(())
         }
@@ -95,7 +109,7 @@ async fn memory_records_are_versioned_redacted_bounded_and_oversized_records_are
     let error = records[0].error.as_deref().expect("sanitized error");
     assert!(!error.contains("secret"));
     assert!(!error.contains('\n'));
-    assert!(error.contains('\u{fffd}'));
+    assert_eq!(error, "MCP request failed");
 
     config.max_record_bytes = 64;
     log.record(&config, sample_record("request-2", None));

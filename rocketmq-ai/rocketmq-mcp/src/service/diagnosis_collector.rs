@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolRejection;
 use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
@@ -27,17 +28,17 @@ use crate::model::diagnosis::EvidenceStatus;
 use crate::tools::broker_tools::DescribeBrokerOutput;
 use crate::tools::consumer_tools::QueryConsumerLagOutput;
 use crate::tools::diagnosis_tools::DiagnoseConsumerLagArgs;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::topic_tools::DescribeTopicOutput;
 use crate::tools::topic_tools::QueryTopicRouteOutput;
 
 pub(crate) const CONSUMER_LAG_EVIDENCE_VERSION_V2: &str = "rocketmq-mcp.evidence.consumer-lag.v2";
 
 pub(crate) struct ConsumerLagEvidence {
-    pub lag: Result<QueryConsumerLagOutput, ToolExecutionError>,
-    pub topic: Result<DescribeTopicOutput, ToolExecutionError>,
-    pub route: Result<QueryTopicRouteOutput, ToolExecutionError>,
-    pub broker: Option<Result<DescribeBrokerOutput, ToolExecutionError>>,
+    pub lag: Result<QueryConsumerLagOutput, ToolFailure>,
+    pub topic: Result<DescribeTopicOutput, ToolFailure>,
+    pub route: Result<QueryTopicRouteOutput, ToolFailure>,
+    pub broker: Option<Result<DescribeBrokerOutput, ToolFailure>>,
 }
 
 impl ConsumerLagEvidence {
@@ -102,7 +103,7 @@ fn item<T>(
     source_tool: &str,
     kind: EvidenceKind,
     query_hash: &str,
-    result: &Result<T, ToolExecutionError>,
+    result: &Result<T, ToolFailure>,
 ) -> EvidenceItem
 where
     T: Serialize,
@@ -147,11 +148,11 @@ where
     }
 }
 
-fn error_status(error: &ToolExecutionError) -> EvidenceStatus {
+fn error_status(error: &ToolFailure) -> EvidenceStatus {
     match error {
-        ToolExecutionError::TimedOut { .. } => EvidenceStatus::Timeout,
-        ToolExecutionError::PermissionDenied(_) => EvidenceStatus::Unauthorized,
-        ToolExecutionError::InvalidArguments(_) => EvidenceStatus::Invalid,
+        ToolFailure::Rejected(ToolRejection::TimedOut { .. }) => EvidenceStatus::Timeout,
+        ToolFailure::Rejected(ToolRejection::PermissionDenied) => EvidenceStatus::Unauthorized,
+        ToolFailure::Rejected(ToolRejection::InvalidArguments { .. }) => EvidenceStatus::Invalid,
         _ => EvidenceStatus::Unavailable,
     }
 }
@@ -183,9 +184,15 @@ mod tests {
             consumer_group: "order-service".to_string(),
         };
         let evidence = ConsumerLagEvidence {
-            lag: Err(ToolExecutionError::backend("nameserver unavailable")),
-            topic: Err(ToolExecutionError::backend("topic route unavailable")),
-            route: Err(ToolExecutionError::TimedOut { timeout_ms: 5_000 }),
+            lag: Err(ToolFailure::Operational(
+                crate::tools::executor::ToolExecutionError::Backend(None),
+            )),
+            topic: Err(ToolFailure::Operational(
+                crate::tools::executor::ToolExecutionError::Backend(None),
+            )),
+            route: Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut {
+                timeout_ms: 5_000,
+            })),
             broker: None,
         };
 

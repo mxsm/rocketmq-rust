@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolRejection;
 use serde_json::Map;
 use serde_json::Value;
 
 use crate::model::contract::MAX_SOURCE_FAILURES;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 
 const MAX_STRUCTURED_OUTPUT_BYTES: usize = 1024 * 1024;
 const MAX_STRUCTURED_OUTPUT_ROWS: usize = 1_000;
@@ -36,11 +37,11 @@ impl Default for OutputPolicy {
     }
 }
 
-pub(crate) fn apply(value: Value) -> Result<Value, ToolExecutionError> {
+pub(crate) fn apply(value: Value) -> Result<Value, ToolFailure> {
     apply_with_policy(value, OutputPolicy::default())
 }
 
-pub(crate) fn apply_with_policy(mut value: Value, policy: OutputPolicy) -> Result<Value, ToolExecutionError> {
+pub(crate) fn apply_with_policy(mut value: Value, policy: OutputPolicy) -> Result<Value, ToolFailure> {
     let source_failures_overflow = value
         .get("source_failures")
         .and_then(Value::as_array)
@@ -57,12 +58,12 @@ pub(crate) fn apply_with_policy(mut value: Value, policy: OutputPolicy) -> Resul
     if truncated {
         mark_partial(&mut value);
     }
-    let size = serde_json::to_vec(&value).map_err(ToolExecutionError::internal)?.len();
+    let size = serde_json::to_vec(&value).map_err(ToolFailure::internal)?.len();
     if size > policy.max_bytes {
-        return Err(ToolExecutionError::OutputTooLarge {
+        return Err(ToolFailure::Rejected(ToolRejection::OutputTooLarge {
             actual_bytes: size,
             max_bytes: policy.max_bytes,
-        });
+        }));
     }
     Ok(value)
 }

@@ -114,34 +114,27 @@ impl From<&rocketmq_observability::ObservabilityOverrides> for ObservabilityDebu
 }
 
 impl McpConfig {
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, McpError> {
+    pub fn load(path: impl AsRef<Path>) -> crate::error::McpResult<Self> {
         let requested_path = path.as_ref();
-        let path = requested_path.canonicalize().map_err(|error| {
-            McpError::InvalidConfig(format!(
-                "MCP configuration `{}` cannot be resolved: {error}",
-                requested_path.display()
-            ))
-        })?;
+        let path = requested_path.canonicalize().map_err(McpError::from_source)?;
         let config = config::Config::builder()
             .add_source(config::File::from(path.as_path()))
             .build()
-            .map_err(|_| McpError::InvalidConfig("MCP configuration file could not be parsed".to_string()))?;
-        let mut config = config
-            .try_deserialize::<Self>()
-            .map_err(redacted_deserialization_error)?;
+            .map_err(McpError::from)?;
+        let mut config = config.try_deserialize::<Self>().map_err(McpError::from)?;
         config.resolve_paths(&path)?;
         config.validate()?;
         Ok(config)
     }
 
-    pub fn load_with_overrides(args: &Args) -> Result<Self, McpError> {
+    pub fn load_with_overrides(args: &Args) -> crate::error::McpResult<Self> {
         let mut config = Self::load(&args.config)?;
         config.apply_overrides(args)?;
         config.validate()?;
         Ok(config)
     }
 
-    pub fn apply_overrides(&mut self, args: &Args) -> Result<(), McpError> {
+    pub fn apply_overrides(&mut self, args: &Args) -> crate::error::McpResult<()> {
         self.server.transport = args.transport;
 
         if let Some(bind) = trimmed_override("bind", args.bind.as_deref())? {
@@ -150,7 +143,7 @@ impl McpConfig {
 
         if let Some(endpoint) = trimmed_override("endpoint", args.endpoint.as_deref())? {
             if !endpoint.starts_with('/') {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "server.http.endpoint must start with '/'".to_string(),
                 ));
             }
@@ -160,7 +153,7 @@ impl McpConfig {
         Ok(())
     }
 
-    pub fn validate(&self) -> Result<(), McpError> {
+    pub fn validate(&self) -> crate::error::McpResult<()> {
         validate_non_empty("server.name", &self.server.name)?;
         validate_non_empty("server.version", &self.server.version)?;
         validate_non_empty("server.http.bind", &self.server.http.bind)?;
@@ -169,16 +162,16 @@ impl McpConfig {
             legacy_config: self.server.log_level.as_deref(),
             ..rocketmq_observability::LogFilterInputs::default()
         })
-        .map_err(|error| McpError::InvalidConfig(error.to_string()))?;
+        .map_err(McpError::from_source)?;
 
         if !self.server.http.endpoint.starts_with('/') {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "server.http.endpoint must start with '/'".to_string(),
             ));
         }
 
         if self.clusters.is_empty() {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "at least one cluster must be configured".to_string(),
             ));
         }
@@ -189,7 +182,7 @@ impl McpConfig {
         for cluster in &self.clusters {
             validate_non_empty("clusters.name", &cluster.name)?;
             if !normalized_cluster_names.insert(cluster.name.trim().to_ascii_lowercase()) {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "cluster names must be unique after normalization".to_string(),
                 ));
             }
@@ -203,19 +196,19 @@ impl McpConfig {
             if nameserver_endpoints.len()
                 > rocketmq_admin_core::core::infrastructure_observation::MAX_NAMESERVER_TARGETS
             {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "clusters.namesrv_addr must contain at most 16 configured NameServers".to_string(),
                 ));
             }
             let mut unique_nameservers = BTreeSet::new();
             for endpoint in nameserver_endpoints {
                 let Some(endpoint) = rocketmq_admin_core::core::broker::canonical_remoting_endpoint(endpoint) else {
-                    return Err(McpError::InvalidConfig(
+                    return Err(McpError::invalid_config(
                         "clusters.namesrv_addr must contain unique bounded remoting host:port values".to_string(),
                     ));
                 };
                 if !unique_nameservers.insert(endpoint.clone()) || !infrastructure_endpoint_owners.insert(endpoint) {
-                    return Err(McpError::InvalidConfig(
+                    return Err(McpError::invalid_config(
                         "Controller and NameServer endpoints must have one global logical owner".to_string(),
                     ));
                 }
@@ -224,7 +217,7 @@ impl McpConfig {
                 validate_non_empty("clusters.rocketmq_cluster_name", rocketmq_cluster_name)?;
             }
             if cluster.tenant.as_deref().is_some_and(|tenant| tenant.trim().is_empty()) {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "clusters.tenant must not be empty when configured".to_string(),
                 ));
             }
@@ -239,12 +232,12 @@ impl McpConfig {
             for proxy in &cluster.proxies {
                 validate_logical_alias("clusters.proxies.name", &proxy.name)?;
                 if !rocketmq_admin_core::core::broker::is_valid_remoting_endpoint(&proxy.endpoint) {
-                    return Err(McpError::InvalidConfig(
+                    return Err(McpError::invalid_config(
                         "clusters.proxies.endpoint must be a single bounded remoting host:port".to_string(),
                     ));
                 }
                 if !proxy_names.insert(proxy.name.as_str()) {
-                    return Err(McpError::InvalidConfig(format!(
+                    return Err(McpError::invalid_config(format!(
                         "clusters `{}` contains duplicate Proxy alias `{}`",
                         cluster.name, proxy.name
                     )));
@@ -252,7 +245,7 @@ impl McpConfig {
             }
             if cluster.controllers.len() > rocketmq_admin_core::core::infrastructure_observation::MAX_CONTROLLER_TARGETS
             {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "clusters.controllers must contain at most 32 configured Controllers".to_string(),
                 ));
             }
@@ -263,19 +256,19 @@ impl McpConfig {
                 let Some(endpoint) =
                     rocketmq_admin_core::core::broker::canonical_remoting_endpoint(&controller.endpoint)
                 else {
-                    return Err(McpError::InvalidConfig(
+                    return Err(McpError::invalid_config(
                         "clusters.controllers.endpoint must be a single bounded remoting host:port".to_string(),
                     ));
                 };
                 if !controller_names.insert(controller.name.as_str()) || !controller_endpoints.insert(endpoint.clone())
                 {
-                    return Err(McpError::InvalidConfig(format!(
+                    return Err(McpError::invalid_config(format!(
                         "clusters `{}` contains duplicate Controller configuration",
                         cluster.name
                     )));
                 }
                 if !infrastructure_endpoint_owners.insert(endpoint) {
-                    return Err(McpError::InvalidConfig(
+                    return Err(McpError::invalid_config(
                         "Controller and NameServer endpoints must have one global logical owner".to_string(),
                     ));
                 }
@@ -283,30 +276,30 @@ impl McpConfig {
         }
 
         if default_count > 1 {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "only one cluster can be marked as default".to_string(),
             ));
         }
 
         if matches!(self.server.transport, TransportKind::StreamableHttp) && !cfg!(feature = "streamable-http") {
-            return Err(McpError::UnsupportedTransport(
+            return Err(McpError::unsupported_transport(
                 "streamable-http transport requires the streamable-http feature".to_string(),
             ));
         }
 
         validate_security_profile(&self.security.profile)?;
         if self.security.rate_limit_per_minute == 0 {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "security.rate_limit_per_minute must be greater than zero".to_string(),
             ));
         }
         if self.security.max_concurrent_requests_per_cluster == 0 {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "security.max_concurrent_requests_per_cluster must be greater than zero".to_string(),
             ));
         }
         if self.security.permissions_file.trim().is_empty() {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "security.permissions_file must not be empty".to_string(),
             ));
         }
@@ -316,22 +309,22 @@ impl McpConfig {
             validate_non_empty("audit.path", &self.audit.path)?;
         }
         if self.audit.queue_capacity == 0 {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "audit.queue_capacity must be greater than zero".to_string(),
             ));
         }
         if self.audit.max_record_bytes == 0 {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "audit.max_record_bytes must be greater than zero".to_string(),
             ));
         }
         if self.audit.queue_max_bytes < self.audit.max_record_bytes {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "audit.queue_max_bytes must be at least audit.max_record_bytes".to_string(),
             ));
         }
         if self.audit.queue_max_bytes > u32::MAX as usize {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "audit.queue_max_bytes must not exceed u32::MAX".to_string(),
             ));
         }
@@ -342,17 +335,17 @@ impl McpConfig {
         }
 
         if self.cache.enabled && self.cache.max_entries == 0 {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "cache.max_entries must be greater than zero when cache is enabled".to_string(),
             ));
         }
         if self.cache.cursor_snapshot_ttl_ms == 0 || self.cache.cursor_snapshot_ttl_ms > 5 * 60 * 1_000 {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "cache.cursor_snapshot_ttl_ms must be between 1 and 300000".to_string(),
             ));
         }
         if !(1..=10_000).contains(&self.cache.cursor_snapshot_max_entries) {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "cache.cursor_snapshot_max_entries must be between 1 and 10000".to_string(),
             ));
         }
@@ -361,7 +354,7 @@ impl McpConfig {
             &self.diagnosis.consumer_lag_policy_profile,
         )?;
         if self.diagnosis.consumer_lag_threshold < 0 {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "diagnosis.consumer_lag_threshold must not be negative".to_string(),
             ));
         }
@@ -369,17 +362,12 @@ impl McpConfig {
         Ok(())
     }
 
-    fn resolve_paths(&mut self, config_path: &Path) -> Result<(), McpError> {
+    fn resolve_paths(&mut self, config_path: &Path) -> crate::error::McpResult<()> {
         let config_dir = config_path
             .parent()
-            .ok_or_else(|| McpError::InvalidConfig("MCP configuration has no parent directory".to_string()))?;
+            .ok_or_else(|| McpError::invalid_config("MCP configuration has no parent directory".to_string()))?;
         let resolved = resolve_config_relative(config_dir, &self.security.permissions_file);
-        let canonical = resolved.canonicalize().map_err(|error| {
-            McpError::InvalidConfig(format!(
-                "security.permissions_file `{}` cannot be resolved: {error}",
-                resolved.display()
-            ))
-        })?;
+        let canonical = resolved.canonicalize().map_err(McpError::from_source)?;
         self.security.permissions_file = canonical.to_string_lossy().into_owned();
 
         self.server.http.tls.cert_path = resolve_config_relative(config_dir, &self.server.http.tls.cert_path)
@@ -391,12 +379,7 @@ impl McpConfig {
         if let Some(jwks_ca_path) = self.server.http.auth.jwks_ca_path.as_deref() {
             validate_non_empty("server.http.auth.jwks_ca_path", jwks_ca_path)?;
             let resolved = resolve_config_relative(config_dir, jwks_ca_path);
-            let canonical = resolved.canonicalize().map_err(|error| {
-                McpError::InvalidConfig(format!(
-                    "server.http.auth.jwks_ca_path `{}` cannot be resolved: {error}",
-                    resolved.display()
-                ))
-            })?;
+            let canonical = resolved.canonicalize().map_err(McpError::from_source)?;
             validate_jwks_ca_file(&canonical)?;
             self.server.http.auth.jwks_ca_path = Some(canonical.to_string_lossy().into_owned());
         }
@@ -411,41 +394,6 @@ impl McpConfig {
             }
         }
         Ok(())
-    }
-}
-
-fn redacted_deserialization_error(error: config::ConfigError) -> McpError {
-    fn redacted_key(key: &str) -> &str {
-        for protected_path in ["observability.otlp.headers", "observability.resourceAttributes"] {
-            if key == protected_path
-                || key
-                    .strip_prefix(protected_path)
-                    .is_some_and(|suffix| suffix.starts_with('.'))
-            {
-                return protected_path;
-            }
-        }
-        key
-    }
-
-    fn type_context<'a>(
-        error: &'a config::ConfigError,
-        inherited_key: Option<&'a str>,
-    ) -> Option<(Option<&'a str>, &'static str)> {
-        match error {
-            config::ConfigError::Type { expected, key, .. } => Some((key.as_deref().or(inherited_key), *expected)),
-            config::ConfigError::At { error, key, .. } => type_context(error, key.as_deref().or(inherited_key)),
-            _ => None,
-        }
-    }
-
-    match type_context(&error, None) {
-        Some((Some(key), expected)) => {
-            let key = redacted_key(key);
-            McpError::InvalidConfig(format!("MCP configuration value for `{key}` must be {expected}"))
-        }
-        Some((None, expected)) => McpError::InvalidConfig(format!("MCP configuration value must be {expected}")),
-        None => McpError::InvalidConfig("MCP configuration could not be deserialized".to_string()),
     }
 }
 
@@ -480,7 +428,7 @@ impl FromStr for TransportKind {
         match value.trim().to_ascii_lowercase().as_str() {
             "stdio" => Ok(Self::Stdio),
             "http" | "streamable-http" => Ok(Self::StreamableHttp),
-            other => Err(McpError::UnsupportedTransport(other.to_string())),
+            other => Err(McpError::unsupported_transport(other.to_string())),
         }
     }
 }
@@ -529,16 +477,16 @@ pub struct HttpConfig {
 }
 
 impl HttpConfig {
-    fn validate_streamable_http(&self) -> Result<(), McpError> {
+    fn validate_streamable_http(&self) -> crate::error::McpResult<()> {
         let bind = self
             .bind
             .parse::<std::net::SocketAddr>()
-            .map_err(|_| McpError::InvalidConfig("server.http.bind must be a socket address".to_string()))?;
+            .map_err(|_| McpError::invalid_config("server.http.bind must be a socket address".to_string()))?;
         let public_base_url = url::Url::parse(&self.public_base_url).map_err(|_| {
-            McpError::InvalidConfig("server.http.public_base_url must be an absolute HTTPS URL".to_string())
+            McpError::invalid_config("server.http.public_base_url must be an absolute HTTPS URL".to_string())
         })?;
         if public_base_url.scheme() != "https" || public_base_url.cannot_be_a_base() {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "server.http.public_base_url must be an absolute HTTPS URL".to_string(),
             ));
         }
@@ -548,13 +496,13 @@ impl HttpConfig {
             || !public_base_url.username().is_empty()
             || public_base_url.password().is_some()
         {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "server.http.public_base_url must contain only an HTTPS origin".to_string(),
             ));
         }
         self.tls.validate()?;
         if self.auth.mode == HttpAuthMode::DevelopmentToken && !bind.ip().is_loopback() {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "development-token authentication is restricted to loopback HTTP listeners".to_string(),
             ));
         }
@@ -571,7 +519,7 @@ pub struct HttpTlsConfig {
 }
 
 impl HttpTlsConfig {
-    fn validate(&self) -> Result<(), McpError> {
+    fn validate(&self) -> crate::error::McpResult<()> {
         validate_non_empty("server.http.tls.cert_path", &self.cert_path)?;
         validate_non_empty("server.http.tls.key_path", &self.key_path)
     }
@@ -601,14 +549,14 @@ pub struct HttpAuthConfig {
 }
 
 impl HttpAuthConfig {
-    fn validate(&self) -> Result<(), McpError> {
+    fn validate(&self) -> crate::error::McpResult<()> {
         validate_non_empty("server.http.auth.development_token_env", &self.development_token_env)?;
         if self
             .development_tenant
             .as_deref()
             .is_some_and(|tenant| tenant.trim().is_empty())
         {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "server.http.auth.development_tenant must not be empty when configured".to_string(),
             ));
         }
@@ -617,17 +565,17 @@ impl HttpAuthConfig {
             &self.protected_resource_metadata_path,
         )?;
         if !self.protected_resource_metadata_path.starts_with('/') {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "server.http.auth.protected_resource_metadata_path must start with '/'".to_string(),
             ));
         }
         if self.required_scopes.iter().any(|scope| scope.trim().is_empty()) {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "server.http.auth.required_scopes must not contain empty values".to_string(),
             ));
         }
         if self.jwks_ca_path.is_some() && self.mode != HttpAuthMode::OAuthJwt {
-            return Err(McpError::InvalidConfig(
+            return Err(McpError::invalid_config(
                 "server.http.auth.jwks_ca_path is only valid for OAuth JWT over HTTPS".to_string(),
             ));
         }
@@ -635,12 +583,12 @@ impl HttpAuthConfig {
             validate_non_empty("server.http.auth.issuer", &self.issuer)?;
             validate_non_empty("server.http.auth.audience", &self.audience)?;
             if self.required_scopes.is_empty() {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "server.http.auth.required_scopes must not be empty for OAuth".to_string(),
                 ));
             }
             let issuer = url::Url::parse(&self.issuer).map_err(|_| {
-                McpError::InvalidConfig("server.http.auth.issuer must be an absolute HTTPS URL".to_string())
+                McpError::invalid_config("server.http.auth.issuer must be an absolute HTTPS URL".to_string())
             })?;
             if issuer.scheme() != "https"
                 || issuer.cannot_be_a_base()
@@ -649,17 +597,17 @@ impl HttpAuthConfig {
                 || issuer.password().is_some()
                 || issuer.fragment().is_some()
             {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "server.http.auth.issuer must be an absolute HTTPS URL".to_string(),
                 ));
             }
             if self.jwt_algorithm != JwtAlgorithm::Rs256 {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "server.http.auth.jwt_algorithm must be rs256 for OAuth".to_string(),
                 ));
             }
             let jwks_url = url::Url::parse(&self.jwks_url).map_err(|_| {
-                McpError::InvalidConfig("server.http.auth.jwks_url must be an absolute HTTPS URL".to_string())
+                McpError::invalid_config("server.http.auth.jwks_url must be an absolute HTTPS URL".to_string())
             })?;
             if jwks_url.scheme() != "https"
                 || jwks_url.cannot_be_a_base()
@@ -668,7 +616,7 @@ impl HttpAuthConfig {
                 || jwks_url.password().is_some()
                 || jwks_url.fragment().is_some()
             {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "server.http.auth.jwks_url must be an absolute HTTPS URL".to_string(),
                 ));
             }
@@ -677,12 +625,12 @@ impl HttpAuthConfig {
                 validate_jwks_ca_file(Path::new(jwks_ca_path))?;
             }
             if self.jwks_refresh_seconds == 0 {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "server.http.auth.jwks_refresh_seconds must be greater than zero".to_string(),
                 ));
             }
             if self.jwks_max_stale_seconds < self.jwks_refresh_seconds {
-                return Err(McpError::InvalidConfig(
+                return Err(McpError::invalid_config(
                     "server.http.auth.jwks_max_stale_seconds must be at least jwks_refresh_seconds".to_string(),
                 ));
             }
@@ -745,7 +693,7 @@ impl ClusterConfig {
         self.rocketmq_cluster_name.as_deref().unwrap_or(&self.name)
     }
 
-    pub(crate) fn resolve_admin_credentials(&self) -> Result<Option<AdminCredentials>, McpError> {
+    pub(crate) fn resolve_admin_credentials(&self) -> crate::error::McpResult<Option<AdminCredentials>> {
         self.credentials
             .as_ref()
             .map(|reference| reference.resolve(&self.name))
@@ -841,7 +789,7 @@ impl std::fmt::Debug for ClusterCredentialReference {
 }
 
 impl ClusterCredentialReference {
-    fn validate_reference(&self, cluster: &str) -> Result<(), McpError> {
+    fn validate_reference(&self, cluster: &str) -> crate::error::McpResult<()> {
         let has_file = self.file.is_some();
         let has_environment =
             self.access_key_env.is_some() || self.secret_key_env.is_some() || self.security_token_env.is_some();
@@ -872,7 +820,7 @@ impl ClusterCredentialReference {
         Ok(())
     }
 
-    fn resolve_paths(&mut self, config_dir: &Path, cluster: &str) -> Result<(), McpError> {
+    fn resolve_paths(&mut self, config_dir: &Path, cluster: &str) -> crate::error::McpResult<()> {
         let Some(file) = self.file.as_deref() else {
             return Ok(());
         };
@@ -880,14 +828,12 @@ impl ClusterCredentialReference {
             return Err(cluster_credentials_error(cluster, "file reference must not be empty"));
         }
         let resolved = resolve_config_relative(config_dir, file);
-        let canonical = resolved
-            .canonicalize()
-            .map_err(|_| cluster_credentials_error(cluster, "credential file reference cannot be resolved"))?;
+        let canonical = resolved.canonicalize().map_err(McpError::from_source)?;
         self.file = Some(canonical.to_string_lossy().into_owned());
         Ok(())
     }
 
-    fn resolve(&self, cluster: &str) -> Result<AdminCredentials, McpError> {
+    fn resolve(&self, cluster: &str) -> crate::error::McpResult<AdminCredentials> {
         self.validate_reference(cluster)?;
         let (access_key, secret_key, security_token) = if let Some(file) = self.file.as_deref() {
             resolve_credential_file(cluster, Path::new(file))?
@@ -922,19 +868,16 @@ struct ClusterCredentialFile {
     security_token: Option<String>,
 }
 
-fn resolve_credential_file(cluster: &str, path: &Path) -> Result<(String, String, Option<String>), McpError> {
-    let metadata =
-        std::fs::metadata(path).map_err(|_| cluster_credentials_error(cluster, "credential file is unavailable"))?;
+fn resolve_credential_file(cluster: &str, path: &Path) -> crate::error::McpResult<(String, String, Option<String>)> {
+    let metadata = std::fs::metadata(path).map_err(McpError::from_source)?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_CLUSTER_CREDENTIAL_BYTES as u64 {
         return Err(cluster_credentials_error(
             cluster,
             "credential file must be a non-empty regular file no larger than 64 KiB",
         ));
     }
-    let bytes =
-        std::fs::read(path).map_err(|_| cluster_credentials_error(cluster, "credential file is unavailable"))?;
-    let credentials: ClusterCredentialFile = serde_yaml::from_slice(&bytes)
-        .map_err(|_| cluster_credentials_error(cluster, "credential file must be valid bounded YAML"))?;
+    let bytes = std::fs::read(path).map_err(McpError::from_source)?;
+    let credentials: ClusterCredentialFile = serde_yaml::from_slice(&bytes).map_err(McpError::from_source)?;
     Ok((
         credentials.access_key,
         credentials.secret_key,
@@ -942,11 +885,11 @@ fn resolve_credential_file(cluster: &str, path: &Path) -> Result<(String, String
     ))
 }
 
-fn read_credential_env(cluster: &str, name: &str) -> Result<String, McpError> {
-    std::env::var(name).map_err(|_| cluster_credentials_error(cluster, "credential environment value is unavailable"))
+fn read_credential_env(_cluster: &str, name: &str) -> crate::error::McpResult<String> {
+    std::env::var(name).map_err(McpError::from_source)
 }
 
-fn validate_credential_env_name(cluster: &str, field: &str, name: &str) -> Result<(), McpError> {
+fn validate_credential_env_name(cluster: &str, field: &str, name: &str) -> crate::error::McpResult<()> {
     if name.trim().is_empty() || name.contains('=') || name.contains('\0') {
         return Err(cluster_credentials_error(
             cluster,
@@ -957,7 +900,7 @@ fn validate_credential_env_name(cluster: &str, field: &str, name: &str) -> Resul
 }
 
 fn cluster_credentials_error(cluster: &str, reason: impl std::fmt::Display) -> McpError {
-    McpError::InvalidConfig(format!("clusters `{cluster}` credentials: {reason}"))
+    McpError::invalid_config(format!("clusters `{cluster}` credentials: {reason}"))
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -1027,14 +970,14 @@ impl Default for DiagnosisConfig {
     }
 }
 
-fn validate_non_empty(field: &str, value: &str) -> Result<(), McpError> {
+fn validate_non_empty(field: &str, value: &str) -> crate::error::McpResult<()> {
     if value.trim().is_empty() {
-        return Err(McpError::InvalidConfig(format!("{field} must not be empty")));
+        return Err(McpError::invalid_config(format!("{field} must not be empty")));
     }
     Ok(())
 }
 
-fn validate_logical_alias(field: &str, value: &str) -> Result<(), McpError> {
+fn validate_logical_alias(field: &str, value: &str) -> crate::error::McpResult<()> {
     if value != value.trim()
         || value.is_empty()
         || value.len() > 100
@@ -1046,7 +989,7 @@ fn validate_logical_alias(field: &str, value: &str) -> Result<(), McpError> {
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
     {
-        Err(McpError::InvalidConfig(format!(
+        Err(McpError::invalid_config(format!(
             "{field} must be a logical identifier of at most 100 bytes"
         )))
     } else {
@@ -1054,21 +997,14 @@ fn validate_logical_alias(field: &str, value: &str) -> Result<(), McpError> {
     }
 }
 
-fn validate_jwks_ca_file(path: &Path) -> Result<(), McpError> {
-    let bytes = std::fs::read(path).map_err(|error| {
-        McpError::InvalidConfig(format!(
-            "server.http.auth.jwks_ca_path `{}` is not a readable file: {error}",
-            path.display()
-        ))
-    })?;
+fn validate_jwks_ca_file(path: &Path) -> crate::error::McpResult<()> {
+    let bytes = std::fs::read(path).map_err(McpError::from_source)?;
     if bytes.is_empty() || bytes.len() > MAX_JWKS_CA_BYTES {
-        return Err(McpError::InvalidConfig(
+        return Err(McpError::invalid_config(
             "server.http.auth.jwks_ca_path must contain a bounded PEM CA bundle".to_string(),
         ));
     }
-    let pem = std::str::from_utf8(&bytes).map_err(|_| {
-        McpError::InvalidConfig("server.http.auth.jwks_ca_path must contain UTF-8 PEM certificates".to_string())
-    })?;
+    let pem = std::str::from_utf8(&bytes).map_err(McpError::from_source)?;
     let certificate_count = pem.matches("-----BEGIN CERTIFICATE-----").count();
     let contains_other_pem_section = pem.lines().map(str::trim).any(|line| {
         (line.starts_with("-----BEGIN ") && line != "-----BEGIN CERTIFICATE-----")
@@ -1078,32 +1014,32 @@ fn validate_jwks_ca_file(path: &Path) -> Result<(), McpError> {
         || certificate_count != pem.matches("-----END CERTIFICATE-----").count()
         || contains_other_pem_section
     {
-        return Err(McpError::InvalidConfig(
+        return Err(McpError::invalid_config(
             "server.http.auth.jwks_ca_path must contain only PEM certificates".to_string(),
         ));
     }
     Ok(())
 }
 
-fn validate_security_profile(profile: &str) -> Result<(), McpError> {
+fn validate_security_profile(profile: &str) -> crate::error::McpResult<()> {
     match profile.trim().to_ascii_lowercase().as_str() {
         "read_only" | "readonly" | "read-only" | "diagnose" | "diagnostic" | "operator" => Ok(()),
-        other => Err(McpError::InvalidConfig(format!(
+        other => Err(McpError::invalid_config(format!(
             "unsupported security.profile `{other}`"
         ))),
     }
 }
 
-fn validate_audit_sink(sink: &str) -> Result<(), McpError> {
+fn validate_audit_sink(sink: &str) -> crate::error::McpResult<()> {
     match sink.trim().to_ascii_lowercase().as_str() {
         "memory" | "file" | "tracing" => Ok(()),
-        other => Err(McpError::InvalidConfig(format!("unsupported audit.sink `{other}`"))),
+        other => Err(McpError::invalid_config(format!("unsupported audit.sink `{other}`"))),
     }
 }
 
-fn trimmed_override(field: &str, value: Option<&str>) -> Result<Option<String>, McpError> {
+fn trimmed_override(field: &str, value: Option<&str>) -> crate::error::McpResult<Option<String>> {
     match value.map(str::trim) {
-        Some("") => Err(McpError::InvalidConfig(format!("{field} must not be empty"))),
+        Some("") => Err(McpError::invalid_config(format!("{field} must not be empty"))),
         Some(value) => Ok(Some(value.to_string())),
         None => Ok(None),
     }
@@ -1111,7 +1047,25 @@ fn trimmed_override(field: &str, value: Option<&str>) -> Result<Option<String>, 
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
+
+    const CONFIGURATION_ERROR: &str = "MCP configuration is invalid";
+    const OPERATIONAL_ERROR: &str = "MCP operation failed";
+
+    fn assert_fixed_error(error: &McpError, expected: &str) {
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(format!("{error:?}"), format!("McpError(\"{expected}\")"));
+    }
+
+    fn assert_configuration_error(error: &McpError) {
+        assert_fixed_error(error, CONFIGURATION_ERROR);
+    }
+
+    fn assert_operational_error(error: &McpError) {
+        assert_fixed_error(error, OPERATIONAL_ERROR);
+    }
 
     #[test]
     fn transport_accepts_documented_values() {
@@ -1179,34 +1133,22 @@ mod tests {
                 endpoint: "internal-b:8081".to_string(),
             },
         ];
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("duplicate Proxy alias"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.clusters[0].proxies[1].name = "proxy-b".to_string();
         config.clusters[0].proxies[1].endpoint.clear();
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("clusters.proxies.endpoint"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.clusters[0].proxies[1].endpoint = "https://internal-b:8081/path".to_string();
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("clusters.proxies.endpoint"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.clusters[0].proxies[1].endpoint = "internal-b:8081".to_string();
         config.clusters[0].proxies[1].name = " proxy-b ".to_string();
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("clusters.proxies.name"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.clusters[0].proxies[1].name = "proxy-b".to_string();
         config.clusters[0].proxies[1].endpoint = "internal-b:8081".to_string();
@@ -1242,8 +1184,7 @@ mod tests {
 
         config.clusters[0].proxies[0].name = "127.0.0.1:8081".to_string();
         let error = config.validate().unwrap_err();
-        assert!(!error.to_string().contains(ENDPOINT_SENTINEL));
-        assert!(!format!("{error:?}").contains(ENDPOINT_SENTINEL));
+        assert_configuration_error(&error);
     }
 
     #[test]
@@ -1268,7 +1209,8 @@ mod tests {
                 endpoint: format!("controller-{index}.internal:9878"),
             })
             .collect();
-        assert!(config.validate().unwrap_err().to_string().contains("at most 32"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.clusters[0].controllers = vec![
             ControllerAlias {
@@ -1280,11 +1222,8 @@ mod tests {
                 endpoint: "controller-b.internal:9878".to_string(),
             },
         ];
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("duplicate Controller"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.clusters[0].controllers.clear();
         config.clusters[0].namesrv_addr = (0..16)
@@ -1293,7 +1232,8 @@ mod tests {
             .join(";");
         config.validate().unwrap();
         config.clusters[0].namesrv_addr.push_str(";nameserver-16.internal:9876");
-        assert!(config.validate().unwrap_err().to_string().contains("at most 16"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
     }
 
     #[test]
@@ -1336,13 +1276,13 @@ mod tests {
         duplicate_cluster.clusters[0].name = "Local-Dev".to_string();
         duplicate_cluster.clusters[1].name = " local-dev ".to_string();
         let error = duplicate_cluster.validate().unwrap_err();
-        assert!(error.to_string().contains("unique after normalization"));
+        assert_configuration_error(&error);
     }
 
     fn assert_redacted_ownership_error(config: McpConfig, endpoint: &str) {
         let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
         let rendered = format!("{error:?} {error}");
-        assert!(rendered.contains("one global logical owner"));
         assert!(!rendered.to_ascii_lowercase().contains(&endpoint.to_ascii_lowercase()));
     }
 
@@ -1446,25 +1386,18 @@ headers = {{ authorization = "{HEADER_SENTINEL}" }}
             ),
         ];
 
-        let mut saw_typed_key_context = false;
         for (observability_root, invalid_override) in invalid_overrides {
             let (_temp, config_path) = write_example_config_with(&observability_root, &invalid_override);
             let error = McpConfig::load(&config_path).expect_err("invalid observability types must be rejected");
-            let display = error.to_string();
-            let debug = format!("{error:?}");
-
-            saw_typed_key_context |= display.contains("observability") && display.contains("must be");
-            for output in [&display, &debug] {
+            assert_configuration_error(&error);
+            assert!(error.source().is_some_and(|source| source.is::<config::ConfigError>()));
+            for output in [error.to_string(), format!("{error:?}")] {
                 assert!(!output.contains(ENDPOINT_SENTINEL));
                 assert!(!output.contains(HEADER_SENTINEL));
                 assert!(!output.contains(RESOURCE_SENTINEL));
                 assert!(!output.contains(INVALID_TYPE_SENTINEL));
             }
         }
-        assert!(
-            saw_typed_key_context,
-            "typed errors should retain their non-sensitive key context"
-        );
     }
 
     #[test]
@@ -1482,26 +1415,21 @@ headers = {{ authorization = "{HEADER_SENTINEL}" }}
 headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
 "#
                 ),
-                "observability.otlp.headers",
                 HEADER_KEY_SENTINEL,
             ),
             (
                 format!(r#"resourceAttributes = {{ "{RESOURCE_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}"#),
                 String::new(),
-                "observability.resourceAttributes",
                 RESOURCE_KEY_SENTINEL,
             ),
         ];
 
-        for (observability_root, nested_override, expected_path, key_sentinel) in cases {
+        for (observability_root, nested_override, key_sentinel) in cases {
             let (_temp, config_path) = write_example_config_with(&observability_root, &nested_override);
             let error = McpConfig::load(&config_path).expect_err("non-string observability map values must fail");
-            let display = error.to_string();
-            let debug = format!("{error:?}");
-
-            assert!(display.contains(expected_path));
-            assert!(display.contains("must be"));
-            for output in [&display, &debug] {
+            assert_configuration_error(&error);
+            assert!(error.source().is_some_and(|source| source.is::<config::ConfigError>()));
+            for output in [error.to_string(), format!("{error:?}")] {
                 assert!(!output.contains(key_sentinel));
                 assert!(!output.contains(INVALID_VALUE_SENTINEL));
             }
@@ -1558,7 +1486,10 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
 
         config.server.log_level = Some("debug".to_string());
         let error = config.validate().unwrap_err();
-        assert!(error.to_string().contains("conflicts"));
+        assert_operational_error(&error);
+        assert!(error
+            .source()
+            .is_some_and(|source| source.is::<rocketmq_observability::ObservabilityError>()));
 
         config.logging.filter = None;
         config
@@ -1584,7 +1515,7 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.clusters.clear();
         let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("at least one cluster"));
+        assert_configuration_error(&err);
     }
 
     #[test]
@@ -1633,11 +1564,8 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         assert!(!debug.contains("PRIVATE_READER_ACCESS_REFERENCE"));
         assert!(!debug.contains("PRIVATE_READER_SECRET_REFERENCE"));
         assert!(!debug.contains("private-reader-reference.yml"));
-        let error = reference.validate_reference("local-dev").unwrap_err().to_string();
-        assert!(error.contains("exactly one source"));
-        assert!(!error.contains("PRIVATE_READER_ACCESS_REFERENCE"));
-        assert!(!error.contains("PRIVATE_READER_SECRET_REFERENCE"));
-        assert!(!error.contains("private-reader-reference.yml"));
+        let error = reference.validate_reference("local-dev").unwrap_err();
+        assert_configuration_error(&error);
 
         let missing_path = std::path::Path::new("private").join("credential").join("reference.yml");
         let missing = ClusterCredentialReference {
@@ -1646,10 +1574,33 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
             security_token_env: None,
             file: Some(missing_path.to_string_lossy().into_owned()),
         };
-        let error = missing.resolve("local-dev").unwrap_err().to_string();
-        assert!(error.contains("credential file is unavailable"));
-        assert!(!error.contains("reference.yml"));
-        assert!(!error.contains("private"));
+        let error = missing.resolve("local-dev").unwrap_err();
+        assert_operational_error(&error);
+        assert!(error.source().is_some_and(|source| source.is::<std::io::Error>()));
+    }
+
+    #[test]
+    fn credential_yaml_and_environment_failures_retain_typed_sources_without_public_details() {
+        const CLUSTER_SENTINEL: &str = "private-cluster-sentinel";
+        const YAML_SENTINEL: &str = "private-yaml-secret-sentinel";
+        const ENV_SENTINEL: &str = "ROCKETMQ_MCP_PRIVATE_ENV_SENTINEL_DO_NOT_SET";
+        let temp = tempfile::tempdir().unwrap();
+        let credential_path = temp.path().join("private-credentials.yml");
+        std::fs::write(&credential_path, format!("access_key: [{YAML_SENTINEL}")).unwrap();
+
+        let error = resolve_credential_file(CLUSTER_SENTINEL, &credential_path).unwrap_err();
+        assert_operational_error(&error);
+        assert!(error.source().is_some_and(|source| source.is::<serde_yaml::Error>()));
+
+        let error = read_credential_env(CLUSTER_SENTINEL, ENV_SENTINEL).unwrap_err();
+        assert_operational_error(&error);
+        assert!(error.source().is_some_and(|source| source.is::<std::env::VarError>()));
+
+        for output in [error.to_string(), format!("{error:?}")] {
+            assert!(!output.contains(CLUSTER_SENTINEL));
+            assert!(!output.contains(YAML_SENTINEL));
+            assert!(!output.contains(ENV_SENTINEL));
+        }
     }
 
     #[test]
@@ -1694,7 +1645,7 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
 
         let err = config.apply_overrides(&args).unwrap_err();
 
-        assert!(err.to_string().contains("endpoint must start"));
+        assert_configuration_error(&err);
     }
 
     #[test]
@@ -1704,7 +1655,7 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
 
         let error = config.validate().unwrap_err();
 
-        assert!(error.to_string().contains("cache.max_entries"));
+        assert_configuration_error(&error);
     }
 
     #[test]
@@ -1729,42 +1680,31 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.cache.enabled = false;
         config.cache.cursor_snapshot_ttl_ms = 0;
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("cursor_snapshot_ttl_ms"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.cache.cursor_snapshot_max_entries = 0;
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("cursor_snapshot_max_entries"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
     }
 
     #[test]
     fn audit_capacity_requires_one_bounded_record_and_u32_byte_accounting() {
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.audit.max_record_bytes = 0;
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("audit.max_record_bytes"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.audit.queue_max_bytes = config.audit.max_record_bytes - 1;
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("at least audit.max_record_bytes"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.audit.queue_max_bytes = u32::MAX as usize + 1;
-        assert!(config.validate().unwrap_err().to_string().contains("u32::MAX"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
     }
 
     #[cfg(feature = "streamable-http")]
@@ -1773,19 +1713,18 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.server.transport = TransportKind::StreamableHttp;
         config.server.http.public_base_url = "http://mcp.example.test".to_string();
-        assert!(config.validate().unwrap_err().to_string().contains("absolute HTTPS"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.server.http.public_base_url = "https://mcp.example.test".to_string();
         config.server.http.tls.cert_path.clear();
-        assert!(config.validate().unwrap_err().to_string().contains("tls.cert_path"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.server.http.tls.cert_path = "server-cert.pem".to_string();
         config.server.http.bind = "0.0.0.0:8089".to_string();
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("restricted to loopback"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
     }
 
     #[test]
@@ -1796,11 +1735,13 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         config.server.http.auth.audience = "rocketmq-mcp".to_string();
         config.server.http.auth.jwt_algorithm = JwtAlgorithm::Hs256;
         config.server.http.auth.jwt_key_env = "LEGACY_STATIC_KEY".to_string();
-        assert!(config.validate().unwrap_err().to_string().contains("must be rs256"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.server.http.auth.jwt_algorithm = JwtAlgorithm::Rs256;
         config.server.http.auth.jwks_url = "http://issuer.example.test/jwks".to_string();
-        assert!(config.validate().unwrap_err().to_string().contains("absolute HTTPS"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
     }
 
     #[test]
@@ -1809,29 +1750,21 @@ headers = {{ "{HEADER_KEY_SENTINEL}" = ["{INVALID_VALUE_SENTINEL}"] }}
         let ca_path = temp_dir.path().join("issuer-ca.pem");
         let mut config = McpConfig::load(example_config_path()).unwrap();
         config.server.http.auth.jwks_ca_path = Some(ca_path.to_string_lossy().into_owned());
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("only valid for OAuth JWT"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         config.server.http.auth.mode = HttpAuthMode::OAuthJwt;
         config.server.http.auth.issuer = "https://issuer.example.test".to_string();
         config.server.http.auth.audience = "rocketmq-mcp".to_string();
         config.server.http.auth.jwt_algorithm = JwtAlgorithm::Rs256;
         config.server.http.auth.jwks_url = "https://issuer.example.test/jwks".to_string();
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("not a readable file"));
+        let error = config.validate().unwrap_err();
+        assert_operational_error(&error);
+        assert!(error.source().is_some_and(|source| source.is::<std::io::Error>()));
 
         std::fs::write(&ca_path, b"not a certificate").unwrap();
-        assert!(config
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("only PEM certificates"));
+        let error = config.validate().unwrap_err();
+        assert_configuration_error(&error);
 
         let rcgen::CertifiedKey { cert, .. } =
             rcgen::generate_simple_self_signed(vec!["issuer.example.test".to_string()]).unwrap();

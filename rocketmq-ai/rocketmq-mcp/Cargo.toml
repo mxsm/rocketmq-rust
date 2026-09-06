@@ -62,7 +62,6 @@ rocketmq-runtime      = { version = "1.0.0", path = "../../rocketmq-runtime" }
 rocketmq-security-api = { version = "1.0.0", path = "../../rocketmq-security-api" }
 rocketmq-transport    = { version = "1.0.0", path = "../../rocketmq-transport", default-features = false, features = ["tls"], optional = true }
 
-anyhow             = "1.0.102"
 arc-swap           = { version = "1.9", optional = true }
 axum               = { version = "0.8", optional = true }
 chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }

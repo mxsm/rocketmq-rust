@@ -22,7 +22,6 @@ use crate::config::McpConfig;
 use crate::guard::RiskLevel;
 use crate::model::identifier;
 use crate::prompts::template::PromptTemplate;
-use crate::prompts::template::PromptTemplateError;
 use crate::tools::catalog::ToolId;
 
 const PROMPT_SOURCES: &[&str] = &[
@@ -33,7 +32,7 @@ const PROMPT_SOURCES: &[&str] = &[
     include_str!("../../prompts/analyze_consumer_connections.md"),
 ];
 
-pub fn list_prompts() -> Result<ListPromptsResult, PromptRegistryError> {
+pub fn list_prompts() -> crate::McpResult<ListPromptsResult> {
     Ok(ListPromptsResult::with_all_items(
         prompt_templates()?.into_iter().map(to_prompt).collect(),
     ))
@@ -42,7 +41,7 @@ pub fn list_prompts() -> Result<ListPromptsResult, PromptRegistryError> {
 pub fn list_prompts_for(
     config: &McpConfig,
     mut allows_tool: impl FnMut(ToolId, &str) -> bool,
-) -> Result<ListPromptsResult, PromptRegistryError> {
+) -> crate::McpResult<ListPromptsResult> {
     let prompts = prompt_templates()?
         .into_iter()
         .filter(|template| {
@@ -61,13 +60,13 @@ pub fn list_prompts_for(
     Ok(ListPromptsResult::with_all_items(prompts))
 }
 
-pub fn get_template(name: &str) -> Result<Option<PromptTemplate>, PromptRegistryError> {
+pub fn get_template(name: &str) -> crate::McpResult<Option<PromptTemplate>> {
     Ok(prompt_templates()?
         .into_iter()
         .find(|template| template.front_matter.name == name))
 }
 
-pub fn prompt_templates() -> Result<Vec<PromptTemplate>, PromptRegistryError> {
+pub fn prompt_templates() -> crate::McpResult<Vec<PromptTemplate>> {
     let templates = PROMPT_SOURCES
         .iter()
         .map(|source| PromptTemplate::parse(source))
@@ -79,7 +78,7 @@ pub fn prompt_templates() -> Result<Vec<PromptTemplate>, PromptRegistryError> {
 pub fn required_tools(
     template: &PromptTemplate,
     present_arguments: &BTreeSet<String>,
-) -> Result<Vec<ToolId>, PromptRegistryError> {
+) -> crate::McpResult<Vec<ToolId>> {
     let mut names = template.front_matter.required_tools.clone();
     names.extend(
         template
@@ -93,12 +92,12 @@ pub fn required_tools(
         .into_iter()
         .map(|name| {
             ToolId::resolve(&name)
-                .ok_or_else(|| PromptRegistryError::Invalid(format!("prompt references unknown Tool `{name}`")))
+                .ok_or_else(|| crate::McpError::invalid_config(format!("prompt references unknown Tool `{name}`")))
         })
         .collect()
 }
 
-fn validate_registry(templates: &[PromptTemplate]) -> Result<(), PromptRegistryError> {
+fn validate_registry(templates: &[PromptTemplate]) -> crate::McpResult<()> {
     let mut prompt_names = BTreeSet::new();
     for template in templates {
         let front = &template.front_matter;
@@ -107,7 +106,7 @@ fn validate_registry(templates: &[PromptTemplate]) -> Result<(), PromptRegistryE
             || front.description.trim().is_empty()
             || !prompt_names.insert(front.name.clone())
         {
-            return Err(PromptRegistryError::Invalid(
+            return Err(crate::McpError::invalid_config(
                 "prompt names, titles, and descriptions must be unique and non-empty".to_string(),
             ));
         }
@@ -115,7 +114,7 @@ fn validate_registry(templates: &[PromptTemplate]) -> Result<(), PromptRegistryE
         let mut argument_names = BTreeSet::new();
         for argument in &front.arguments {
             if argument.name.trim().is_empty() || !argument_names.insert(argument.name.clone()) {
-                return Err(PromptRegistryError::Invalid(format!(
+                return Err(crate::McpError::invalid_config(format!(
                     "prompt `{}` has duplicate or blank arguments",
                     front.name
                 )));
@@ -126,7 +125,7 @@ fn validate_registry(templates: &[PromptTemplate]) -> Result<(), PromptRegistryE
         if placeholders.iter().any(|name| !argument_names.contains(name))
             || argument_names.iter().any(|name| !placeholders.contains(name))
         {
-            return Err(PromptRegistryError::Invalid(format!(
+            return Err(crate::McpError::invalid_config(format!(
                 "prompt `{}` placeholders do not match its argument registry",
                 front.name
             )));
@@ -144,7 +143,7 @@ fn validate_registry(templates: &[PromptTemplate]) -> Result<(), PromptRegistryE
                     .find(|argument| argument.name == requirement.argument)
                     .is_some_and(|argument| argument.required)
             {
-                return Err(PromptRegistryError::Invalid(format!(
+                return Err(crate::McpError::invalid_config(format!(
                     "prompt `{}` has an invalid conditional Tool argument",
                     front.name
                 )));
@@ -155,28 +154,24 @@ fn validate_registry(templates: &[PromptTemplate]) -> Result<(), PromptRegistryE
     Ok(())
 }
 
-fn validate_required_tool(
-    prompt_name: &str,
-    tool_name: &str,
-    seen: &mut BTreeSet<String>,
-) -> Result<(), PromptRegistryError> {
+fn validate_required_tool(prompt_name: &str, tool_name: &str, seen: &mut BTreeSet<String>) -> crate::McpResult<()> {
     let tool = ToolId::resolve(tool_name).ok_or_else(|| {
-        PromptRegistryError::Invalid(format!("prompt `{prompt_name}` references unknown Tool `{tool_name}`"))
+        crate::McpError::invalid_config(format!("prompt `{prompt_name}` references unknown Tool `{tool_name}`"))
     })?;
     if !seen.insert(tool_name.to_string()) {
-        return Err(PromptRegistryError::Invalid(format!(
+        return Err(crate::McpError::invalid_config(format!(
             "prompt `{prompt_name}` has duplicate required Tools"
         )));
     }
     if !matches!(tool.descriptor().risk_level, RiskLevel::ReadOnly | RiskLevel::Diagnose) {
-        return Err(PromptRegistryError::Invalid(format!(
+        return Err(crate::McpError::invalid_config(format!(
             "prompt `{prompt_name}` references a non-query Tool"
         )));
     }
     Ok(())
 }
 
-fn placeholders(body: &str) -> Result<BTreeSet<String>, PromptRegistryError> {
+fn placeholders(body: &str) -> crate::McpResult<BTreeSet<String>> {
     let mut placeholders = BTreeSet::new();
     let mut remainder = body;
     loop {
@@ -184,14 +179,14 @@ fn placeholders(body: &str) -> Result<BTreeSet<String>, PromptRegistryError> {
         let close = remainder.find("}}");
         let (Some(open), Some(close)) = (open, close) else {
             if open.is_some() || close.is_some() {
-                return Err(PromptRegistryError::Invalid(
+                return Err(crate::McpError::invalid_config(
                     "prompt contains an unmatched placeholder delimiter".to_string(),
                 ));
             }
             break;
         };
         if close < open {
-            return Err(PromptRegistryError::Invalid(
+            return Err(crate::McpError::invalid_config(
                 "prompt contains an unmatched placeholder delimiter".to_string(),
             ));
         }
@@ -199,7 +194,7 @@ fn placeholders(body: &str) -> Result<BTreeSet<String>, PromptRegistryError> {
         let close = close - open - 2;
         let name = &after_open[..close];
         if name.trim() != name || name.is_empty() || name.contains(['{', '}']) {
-            return Err(PromptRegistryError::Invalid(
+            return Err(crate::McpError::invalid_config(
                 "prompt contains an invalid placeholder".to_string(),
             ));
         }
@@ -229,15 +224,6 @@ fn to_prompt(template: PromptTemplate) -> Prompt {
         Some(arguments),
     )
     .with_title(template.front_matter.title)
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum PromptRegistryError {
-    #[error(transparent)]
-    Template(#[from] PromptTemplateError),
-
-    #[error("invalid prompt registry: {0}")]
-    Invalid(String),
 }
 
 #[cfg(test)]

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolRejection;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -27,7 +29,8 @@ use crate::adapter::admin_session::ResolvedCluster;
 use crate::adapter::admin_session::SessionConnections;
 use crate::adapter::admin_session::SessionConsumerLag;
 use crate::adapter::admin_session::SessionTopicRoute;
-use crate::adapter::identifier_alias::IdentifierAliasError;
+use crate::adapter::identifier_alias::IdentifierAliasFailure;
+use crate::adapter::identifier_alias::IdentifierAliasRejection;
 use crate::adapter::identifier_alias::IdentifierAliaser;
 use crate::config::McpConfig;
 use crate::guard::context::VisibilityClass;
@@ -79,7 +82,7 @@ use crate::tools::consumer_tools::ListConsumerGroupsOutput;
 use crate::tools::consumer_tools::QueryConsumerLagArgs;
 use crate::tools::consumer_tools::QueryConsumerLagOutput;
 use crate::tools::diagnosis_tools::DiagnoseConsumerLagArgs;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::message_tools::MessageMetadataArgs;
 use crate::tools::message_tools::MessageMetadataOutput;
 use crate::tools::proxy_tools::ProxyDrainStateArgs;
@@ -113,7 +116,7 @@ impl Default for WorkflowControl {
     }
 }
 
-type WorkflowFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ToolExecutionError>> + Send + 'a>>;
+type WorkflowFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ToolFailure>> + Send + 'a>>;
 
 #[derive(Debug, Clone)]
 struct ConnectionSnapshot {
@@ -141,58 +144,50 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
     fn cluster_overview(
         &self,
         args: ClusterOverviewArgs,
-    ) -> impl Future<Output = Result<QueryResult<ClusterOverviewOutput>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryResult<ClusterOverviewOutput>, ToolFailure>> + Send;
 
     fn list_topics(
         &self,
         args: ListTopicsArgs,
-    ) -> impl Future<Output = Result<QueryResult<ListTopicsOutput>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryResult<ListTopicsOutput>, ToolFailure>> + Send;
 
     fn describe_topic(
         &self,
         args: DescribeTopicArgs,
-    ) -> impl Future<Output = Result<QueryResult<DescribeTopicOutput>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryResult<DescribeTopicOutput>, ToolFailure>> + Send;
 
     fn query_topic_route(
         &self,
         args: QueryTopicRouteArgs,
-    ) -> impl Future<Output = Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryResult<QueryTopicRouteOutput>, ToolFailure>> + Send;
 
     fn topic_stats(
         &self,
         _args: crate::tools::topic_tools::GetTopicStatsArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolExecutionError>> + Send
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolFailure>> + Send
     {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Topic statistics are unavailable".to_string(),
-            ))
-        }
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn topic_config(
         &self,
         _args: crate::tools::config_tools::GetTopicConfigArgs,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError>> + Send
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure>> + Send
     {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Topic configuration is unavailable".to_string(),
-            ))
-        }
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn list_consumer_groups(
         &self,
         args: ListConsumerGroupsArgs,
-    ) -> impl Future<Output = Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure>> + Send;
 
     fn describe_consumer_group(
         &self,
         cluster: String,
         group: String,
-    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolExecutionError>>
-           + Send {
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolFailure>> + Send
+    {
         async move {
             let result = self
                 .list_consumer_groups(ListConsumerGroupsArgs {
@@ -211,11 +206,7 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
                 .iter()
                 .find(|summary| summary.group == group)
                 .cloned()
-                .ok_or_else(|| {
-                    ToolExecutionError::InvalidArguments(format!(
-                        "consumer group not found in cluster {cluster}: {group}"
-                    ))
-                })?;
+                .ok_or_else(|| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
             Ok(QueryResult::from_payload(
                 QueryPayload::new(summary, result.partial, result.warnings, result.source_failures),
                 result.observed_at,
@@ -228,187 +219,123 @@ pub(crate) trait ReadOnlyQuery: Clone + Send + Sync + 'static {
     fn query_consumer_lag(
         &self,
         args: QueryConsumerLagArgs,
-    ) -> impl Future<Output = Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryResult<QueryConsumerLagOutput>, ToolFailure>> + Send;
 
     fn consumer_group_details(
         &self,
         _args: crate::tools::consumer_tools::GetConsumerGroupDetailsArgs,
     ) -> impl Future<
-        Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolExecutionError>,
+        Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolFailure>,
     > + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "consumer group details are unavailable".to_string(),
-            ))
-        }
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn consumer_progress(
         &self,
         _args: crate::tools::consumer_tools::GetConsumerProgressArgs,
-    ) -> impl Future<
-        Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolExecutionError>,
-    > + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "consumer progress is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn describe_broker(
         &self,
         args: DescribeBrokerArgs,
-    ) -> impl Future<Output = Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryResult<DescribeBrokerOutput>, ToolFailure>> + Send;
 
     fn broker_diagnostics(
         &self,
         _args: BrokerDiagnosticsArgs,
-    ) -> impl Future<Output = Result<QueryResult<BrokerDiagnosticsOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "exact Broker diagnostics are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<BrokerDiagnosticsOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn broker_config_summary(
         &self,
         _args: BrokerConfigSummaryArgs,
-    ) -> impl Future<Output = Result<QueryResult<BrokerConfigSummaryOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "exact Broker configuration is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<BrokerConfigSummaryOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn broker_log_filter_state(
         &self,
         _args: BrokerLogFilterStateArgs,
-    ) -> impl Future<Output = Result<QueryResult<BrokerLogFilterStateOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "exact Broker log-filter state is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<BrokerLogFilterStateOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn proxy_drain_state(
         &self,
         _args: ProxyDrainStateArgs,
-    ) -> impl Future<Output = Result<QueryResult<ProxyDrainStateOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Proxy drain state is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<ProxyDrainStateOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn list_consumer_connections(
         &self,
         _args: ListConsumerConnectionsArgs,
-    ) -> impl Future<Output = Result<QueryResult<ListConsumerConnectionsOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "consumer connection observations are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<ListConsumerConnectionsOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn list_producer_connections(
         &self,
         _args: ListProducerConnectionsArgs,
-    ) -> impl Future<Output = Result<QueryResult<ListProducerConnectionsOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "producer connection observations are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<ListProducerConnectionsOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn message_metadata(
         &self,
         _args: MessageMetadataArgs,
-    ) -> impl Future<Output = Result<QueryResult<MessageMetadataOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "message metadata is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<MessageMetadataOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn topic_config_state(
         &self,
         _args: TopicConfigStateArgs,
-    ) -> impl Future<Output = Result<QueryResult<TopicConfigStateOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Topic configuration state is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<TopicConfigStateOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn consumer_group_config_state(
         &self,
         _args: ConsumerGroupConfigStateArgs,
-    ) -> impl Future<Output = Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Consumer Group configuration state is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn ha_status(
         &self,
         _args: crate::tools::infrastructure_tools::GetHaStatusArgs,
-    ) -> impl Future<
-        Output = Result<QueryResult<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolExecutionError>,
-    > + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "HA observations are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryResult<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn controller_metadata(
         &self,
         _args: crate::tools::infrastructure_tools::GetControllerMetadataArgs,
     ) -> impl Future<
-        Output = Result<
-            QueryResult<crate::tools::infrastructure_tools::GetControllerMetadataOutput>,
-            ToolExecutionError,
-        >,
+        Output = Result<QueryResult<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure>,
     > + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Controller metadata is unavailable".to_string(),
-            ))
-        }
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn nameserver_config_summary(
         &self,
         _args: crate::tools::infrastructure_tools::GetNameserverConfigSummaryArgs,
     ) -> impl Future<
-        Output = Result<
-            QueryResult<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>,
-            ToolExecutionError,
-        >,
+        Output = Result<QueryResult<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure>,
     > + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "NameServer configuration is unavailable".to_string(),
-            ))
-        }
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn diagnose_consumer_lag(
         &self,
         args: DiagnoseConsumerLagArgs,
-    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryResult<DiagnosisReport>, ToolFailure>> + Send;
 }
 
 #[derive(Clone)]
@@ -483,7 +410,7 @@ where
     pub(crate) async fn cluster_overview(
         &self,
         args: ClusterOverviewArgs,
-    ) -> Result<QueryResult<ClusterOverviewOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ClusterOverviewOutput>, ToolFailure> {
         let cluster = self.resolve_cluster(Some(&args.cluster))?;
         let key = self.cache_key("cluster_overview", &cluster.name, "");
         let ttl = Duration::from_millis(self.config.cache.cluster_overview_ttl_ms);
@@ -492,7 +419,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     let page = PageRequest::default();
                     let topic_snapshot = self.topic_inventory_snapshot(cluster.clone(), None, &page).await?;
@@ -521,10 +448,7 @@ where
             .await
     }
 
-    pub(crate) async fn list_topics(
-        &self,
-        args: ListTopicsArgs,
-    ) -> Result<QueryResult<ListTopicsOutput>, ToolExecutionError> {
+    pub(crate) async fn list_topics(&self, args: ListTopicsArgs) -> Result<QueryResult<ListTopicsOutput>, ToolFailure> {
         let cluster = self.resolve_cluster(args.cluster.as_deref())?;
         let snapshot = self
             .topic_inventory_snapshot(cluster.clone(), args.filter.as_deref(), &args.page)
@@ -555,7 +479,7 @@ where
     pub(crate) async fn describe_topic(
         &self,
         mut args: DescribeTopicArgs,
-    ) -> Result<QueryResult<DescribeTopicOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<DescribeTopicOutput>, ToolFailure> {
         args.topic = normalized_identifier("topic", &args.topic)?;
         let cluster = self.resolve_cluster(Some(&args.cluster))?;
         let snapshot = self
@@ -571,7 +495,7 @@ where
     pub(crate) async fn query_topic_route(
         &self,
         mut args: QueryTopicRouteArgs,
-    ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolFailure> {
         args.topic = normalized_identifier("topic", &args.topic)?;
         let cluster = self.resolve_cluster(Some(&args.cluster))?;
         let snapshot = self
@@ -587,7 +511,7 @@ where
     pub(crate) async fn list_consumer_groups(
         &self,
         args: ListConsumerGroupsArgs,
-    ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure> {
         let cluster = self.resolve_cluster(args.cluster.as_deref())?;
         let snapshot = self
             .consumer_group_inventory_snapshot(cluster.clone(), args.filter.as_deref(), false, &args.page)
@@ -628,7 +552,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 move || async move {
                     self.run_workflow(cluster.clone(), move |session, cluster| {
                         Box::pin(async move {
@@ -671,7 +595,7 @@ where
     pub(crate) async fn query_consumer_lag(
         &self,
         mut args: QueryConsumerLagArgs,
-    ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolFailure> {
         args.topic = normalized_identifier("topic", &args.topic)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
         let cluster = self.resolve_cluster(Some(&args.cluster))?;
@@ -695,7 +619,7 @@ where
         &self,
         cluster_name: String,
         group: String,
-    ) -> Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolExecutionError> {
+    ) -> Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolFailure> {
         let group = normalized_identifier("consumer_group", &group)?;
         let cluster = self.resolve_cluster(Some(&cluster_name))?;
         let page = PageRequest {
@@ -706,10 +630,9 @@ where
             .consumer_group_inventory_snapshot(cluster.clone(), Some(&group), true, &page)
             .await?;
         if snapshot.payload.data.is_empty() {
-            return Err(ToolExecutionError::InvalidArguments(format!(
-                "consumer group not found in cluster {}: {group}",
-                cluster.name
-            )));
+            return Err(ToolFailure::Rejected(
+                crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
+            ));
         }
         let selected = snapshot.payload.data.clone();
         let key = self.cache_key(
@@ -725,7 +648,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move {
@@ -737,9 +660,7 @@ where
                                 .into_iter()
                                 .find(|summary| summary.group == group)
                                 .ok_or_else(|| {
-                                    ToolExecutionError::Backend(
-                                        "selected consumer group enrichment was unavailable".to_string(),
-                                    )
+                                    ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None))
                                 })?;
                             Ok(completeness.wrap(summary))
                         })
@@ -764,7 +685,7 @@ where
     pub(crate) async fn describe_broker(
         &self,
         mut args: DescribeBrokerArgs,
-    ) -> Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<DescribeBrokerOutput>, ToolFailure> {
         args.broker_name = normalized_identifier("broker_name", &args.broker_name)?;
         let cluster = self.resolve_cluster(Some(&args.cluster))?;
         let key = self.cache_key(
@@ -778,7 +699,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(describe_broker_in_session(session, cluster, args.broker_name))
@@ -792,7 +713,7 @@ where
     pub(crate) async fn broker_diagnostics(
         &self,
         mut args: BrokerDiagnosticsArgs,
-    ) -> Result<QueryResult<BrokerDiagnosticsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<BrokerDiagnosticsOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.broker_name = normalized_logical_identifier("broker_name", &args.broker_name)?;
         let cluster = self.resolve_required_cluster(&args.cluster)?;
@@ -807,7 +728,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move { session.broker_diagnostics(&args.broker_name).await })
@@ -821,7 +742,7 @@ where
     pub(crate) async fn broker_config_summary(
         &self,
         mut args: BrokerConfigSummaryArgs,
-    ) -> Result<QueryResult<BrokerConfigSummaryOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<BrokerConfigSummaryOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.broker_name = normalized_logical_identifier("broker_name", &args.broker_name)?;
         let cluster = self.resolve_required_cluster(&args.cluster)?;
@@ -836,7 +757,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move { session.broker_config_summary(&args.broker_name).await })
@@ -850,7 +771,7 @@ where
     pub(crate) async fn broker_log_filter_state(
         &self,
         mut args: BrokerLogFilterStateArgs,
-    ) -> Result<QueryResult<BrokerLogFilterStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<BrokerLogFilterStateOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.broker_name = normalized_logical_identifier("broker_name", &args.broker_name)?;
         args.logger = normalized_broker_logger(&args.logger)?;
@@ -866,7 +787,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move { session.broker_log_filter_state(&args.broker_name, &args.logger).await })
@@ -880,7 +801,7 @@ where
     pub(crate) async fn proxy_drain_state(
         &self,
         mut args: ProxyDrainStateArgs,
-    ) -> Result<QueryResult<ProxyDrainStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ProxyDrainStateOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.proxy_name = normalized_logical_identifier("proxy_name", &args.proxy_name)?;
         let cluster = self.resolve_required_cluster(&args.cluster)?;
@@ -898,7 +819,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move { session.proxy_drain_state(&args.proxy_name, &proxy_endpoint).await })
@@ -912,7 +833,7 @@ where
     pub(crate) async fn list_consumer_connections(
         &self,
         mut args: ListConsumerConnectionsArgs,
-    ) -> Result<QueryResult<ListConsumerConnectionsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ListConsumerConnectionsOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
         let cluster = self.resolve_required_cluster(&args.cluster)?;
@@ -944,7 +865,7 @@ where
     pub(crate) async fn list_producer_connections(
         &self,
         mut args: ListProducerConnectionsArgs,
-    ) -> Result<QueryResult<ListProducerConnectionsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ListProducerConnectionsOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.topic = normalized_identifier("topic", &args.topic)?;
         args.producer_group = normalized_identifier("producer_group", &args.producer_group)?;
@@ -980,7 +901,7 @@ where
     pub(crate) async fn message_metadata(
         &self,
         mut args: MessageMetadataArgs,
-    ) -> Result<QueryResult<MessageMetadataOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<MessageMetadataOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.message_id = normalized_identifier("message_id", &args.message_id)?;
         let cluster = self.resolve_required_cluster(&args.cluster)?;
@@ -993,7 +914,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
@@ -1031,7 +952,7 @@ where
     pub(crate) async fn topic_config_state(
         &self,
         mut args: TopicConfigStateArgs,
-    ) -> Result<QueryResult<TopicConfigStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<TopicConfigStateOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.topic = normalized_identifier("topic", &args.topic)?;
         args.broker_names = normalized_broker_names(args.broker_names)?;
@@ -1047,7 +968,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move { session.topic_config_state(&args.topic, &args.broker_names).await })
@@ -1061,7 +982,7 @@ where
     pub(crate) async fn consumer_group_config_state(
         &self,
         mut args: ConsumerGroupConfigStateArgs,
-    ) -> Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.group = normalized_identifier("group", &args.group)?;
         args.broker_names = normalized_broker_names(args.broker_names)?;
@@ -1077,7 +998,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move {
@@ -1095,7 +1016,7 @@ where
     pub(crate) async fn diagnose_consumer_lag(
         &self,
         mut args: DiagnoseConsumerLagArgs,
-    ) -> Result<QueryResult<DiagnosisReport>, ToolExecutionError> {
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
         args.topic = normalized_identifier("topic", &args.topic)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
         let cluster = self.resolve_cluster(Some(&args.cluster))?;
@@ -1111,7 +1032,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
                 move || async {
                     self.run_workflow(cluster, move |session, cluster| {
                         Box::pin(async move {
@@ -1149,8 +1070,8 @@ where
                                         &error,
                                     ));
                                     (
-                                        Err(ToolExecutionError::Backend(
-                                            "topic route source is unavailable".to_string(),
+                                        Err(ToolFailure::Operational(
+                                            crate::tools::executor::ToolExecutionError::Backend(None),
                                         )),
                                         Err(error),
                                     )
@@ -1204,7 +1125,7 @@ where
         cluster: ResolvedCluster,
         filter: Option<&str>,
         page: &PageRequest,
-    ) -> Result<SnapshotView<Vec<String>>, ToolExecutionError> {
+    ) -> Result<SnapshotView<Vec<String>>, ToolFailure> {
         let filter = normalized_filter(filter).unwrap_or_default();
         let request = SnapshotRequest::try_new(
             SnapshotKind::TopicInventory,
@@ -1242,7 +1163,7 @@ where
         filter: Option<&str>,
         exact: bool,
         page: &PageRequest,
-    ) -> Result<SnapshotView<Vec<String>>, ToolExecutionError> {
+    ) -> Result<SnapshotView<Vec<String>>, ToolFailure> {
         let filter = if exact {
             filter.map(str::trim).unwrap_or_default().to_string()
         } else {
@@ -1297,7 +1218,7 @@ where
         cluster: ResolvedCluster,
         topic: String,
         page: &PageRequest,
-    ) -> Result<SnapshotView<SessionTopicRoute>, ToolExecutionError> {
+    ) -> Result<SnapshotView<SessionTopicRoute>, ToolFailure> {
         let request = SnapshotRequest::try_new(
             SnapshotKind::TopicRoute,
             cluster.name.clone(),
@@ -1328,7 +1249,7 @@ where
         topic: String,
         consumer_group: String,
         page: &PageRequest,
-    ) -> Result<SnapshotView<SessionConsumerLag>, ToolExecutionError> {
+    ) -> Result<SnapshotView<SessionConsumerLag>, ToolFailure> {
         let request = SnapshotRequest::try_new(
             SnapshotKind::ConsumerLag,
             cluster.name.clone(),
@@ -1360,7 +1281,7 @@ where
         selector: String,
         page: PageRequest,
         operation: O,
-    ) -> Result<SnapshotView<ConnectionSnapshot>, ToolExecutionError>
+    ) -> Result<SnapshotView<ConnectionSnapshot>, ToolFailure>
     where
         O: for<'a> FnOnce(&'a mut F::Session) -> WorkflowFuture<'a, QueryPayload<SessionConnections>>,
     {
@@ -1403,32 +1324,32 @@ where
             .then(|| Duration::from_millis(ttl_ms))
     }
 
-    async fn run_workflow<T, O>(&self, cluster: ResolvedCluster, operation: O) -> Result<T, ToolExecutionError>
+    async fn run_workflow<T, O>(&self, cluster: ResolvedCluster, operation: O) -> Result<T, ToolFailure>
     where
         T: Send,
         O: for<'a> FnOnce(&'a mut F::Session, &'a ResolvedCluster) -> WorkflowFuture<'a, T>,
     {
         let deadline = tokio::time::Instant::now() + self.control.timeout;
         let mut session = tokio::select! {
-            _ = self.control.cancellation.cancelled() => return Err(ToolExecutionError::Cancelled),
+            _ = self.control.cancellation.cancelled() => return Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)),
             result = tokio::time::timeout_at(deadline, self.factory.start(cluster.clone())) => match result {
                 Ok(result) => result?,
                 Err(_) => {
-                    return Err(ToolExecutionError::TimedOut {
+                    return Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut{
                         timeout_ms: self.control.timeout.as_millis().try_into().unwrap_or(u64::MAX),
-                    });
+                    }));
                 }
             },
         };
         let result = {
             let operation = operation(&mut session, &cluster);
             tokio::select! {
-                _ = self.control.cancellation.cancelled() => Err(ToolExecutionError::Cancelled),
+                _ = self.control.cancellation.cancelled() => Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)),
                 result = tokio::time::timeout_at(deadline, operation) => match result {
                     Ok(result) => result,
-                    Err(_) => Err(ToolExecutionError::TimedOut {
+                    Err(_) => Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut{
                         timeout_ms: self.control.timeout.as_millis().try_into().unwrap_or(u64::MAX),
-                    }),
+                    })),
                 },
             }
         };
@@ -1440,7 +1361,7 @@ where
         }
     }
 
-    fn resolve_cluster(&self, cluster: Option<&str>) -> Result<ResolvedCluster, ToolExecutionError> {
+    fn resolve_cluster(&self, cluster: Option<&str>) -> Result<ResolvedCluster, ToolFailure> {
         let cluster = cluster.map(str::trim).filter(|cluster| !cluster.is_empty());
         let config = match cluster {
             Some(name) => self
@@ -1448,7 +1369,9 @@ where
                 .clusters
                 .iter()
                 .find(|candidate| candidate.name == name)
-                .ok_or_else(|| ToolExecutionError::InvalidArguments(format!("unknown cluster: {name}")))?,
+                .ok_or_else(|| {
+                    ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
+                })?,
             None => self
                 .config
                 .clusters
@@ -1456,9 +1379,7 @@ where
                 .find(|candidate| candidate.default.unwrap_or(false))
                 .or_else(|| (self.config.clusters.len() == 1).then(|| &self.config.clusters[0]))
                 .ok_or_else(|| {
-                    ToolExecutionError::InvalidArguments(
-                        "cluster is required because no unique default cluster is configured".to_string(),
-                    )
+                    ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
                 })?,
         };
 
@@ -1466,9 +1387,9 @@ where
             name: config.name.clone(),
             rocketmq_cluster_name: config.physical_cluster_name().to_string(),
             namesrv_addr: config.namesrv_addr.clone(),
-            credentials: config
-                .resolve_admin_credentials()
-                .map_err(|error| ToolExecutionError::Backend(error.to_string()))?,
+            credentials: config.resolve_admin_credentials().map_err(|error| {
+                ToolFailure::Operational(ToolExecutionError::Backend(Some(std::sync::Arc::new(error))))
+            })?,
             controller_targets: config
                 .controllers
                 .iter()
@@ -1482,27 +1403,23 @@ where
         })
     }
 
-    fn resolve_required_cluster(&self, cluster: &str) -> Result<ResolvedCluster, ToolExecutionError> {
+    fn resolve_required_cluster(&self, cluster: &str) -> Result<ResolvedCluster, ToolFailure> {
         if cluster.trim().is_empty() {
-            return Err(ToolExecutionError::InvalidArguments(
-                "cluster must not be empty".to_string(),
+            return Err(ToolFailure::Rejected(
+                crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
             ));
         }
         self.resolve_cluster(Some(cluster))
     }
 
-    fn resolve_proxy_endpoint<'a>(
-        &'a self,
-        cluster_name: &str,
-        proxy_name: &str,
-    ) -> Result<&'a str, ToolExecutionError> {
+    fn resolve_proxy_endpoint<'a>(&'a self, cluster_name: &str, proxy_name: &str) -> Result<&'a str, ToolFailure> {
         self.config
             .clusters
             .iter()
             .find(|cluster| cluster.name == cluster_name)
             .and_then(|cluster| cluster.proxy_endpoint(proxy_name))
             .ok_or_else(|| {
-                ToolExecutionError::InvalidArguments(format!("proxy not found in cluster {cluster_name}: {proxy_name}"))
+                ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
             })
     }
 
@@ -1531,46 +1448,43 @@ where
     async fn cluster_overview(
         &self,
         args: ClusterOverviewArgs,
-    ) -> Result<QueryResult<ClusterOverviewOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ClusterOverviewOutput>, ToolFailure> {
         QueryFacade::cluster_overview(self, args).await
     }
 
-    async fn list_topics(&self, args: ListTopicsArgs) -> Result<QueryResult<ListTopicsOutput>, ToolExecutionError> {
+    async fn list_topics(&self, args: ListTopicsArgs) -> Result<QueryResult<ListTopicsOutput>, ToolFailure> {
         QueryFacade::list_topics(self, args).await
     }
 
-    async fn describe_topic(
-        &self,
-        args: DescribeTopicArgs,
-    ) -> Result<QueryResult<DescribeTopicOutput>, ToolExecutionError> {
+    async fn describe_topic(&self, args: DescribeTopicArgs) -> Result<QueryResult<DescribeTopicOutput>, ToolFailure> {
         QueryFacade::describe_topic(self, args).await
     }
 
     async fn query_topic_route(
         &self,
         args: QueryTopicRouteArgs,
-    ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolFailure> {
         QueryFacade::query_topic_route(self, args).await
     }
 
     async fn topic_stats(
         &self,
         args: crate::tools::topic_tools::GetTopicStatsArgs,
-    ) -> Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolFailure> {
         QueryFacade::topic_stats(self, args).await
     }
 
     async fn topic_config(
         &self,
         args: crate::tools::config_tools::GetTopicConfigArgs,
-    ) -> Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure> {
         QueryFacade::topic_config(self, args).await
     }
 
     async fn list_consumer_groups(
         &self,
         args: ListConsumerGroupsArgs,
-    ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure> {
         QueryFacade::list_consumer_groups(self, args).await
     }
 
@@ -1578,127 +1492,126 @@ where
         &self,
         cluster: String,
         group: String,
-    ) -> Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolExecutionError> {
+    ) -> Result<QueryResult<crate::tools::consumer_tools::ConsumerGroupSummary>, ToolFailure> {
         QueryFacade::describe_consumer_group(self, cluster, group).await
     }
 
     async fn query_consumer_lag(
         &self,
         args: QueryConsumerLagArgs,
-    ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolFailure> {
         QueryFacade::query_consumer_lag(self, args).await
     }
 
     async fn consumer_group_details(
         &self,
         args: crate::tools::consumer_tools::GetConsumerGroupDetailsArgs,
-    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerGroupDetailsOutput>, ToolFailure> {
         QueryFacade::consumer_group_details(self, args).await
     }
 
     async fn consumer_progress(
         &self,
         args: crate::tools::consumer_tools::GetConsumerProgressArgs,
-    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolFailure> {
         QueryFacade::consumer_progress(self, args).await
     }
 
     async fn describe_broker(
         &self,
         args: DescribeBrokerArgs,
-    ) -> Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<DescribeBrokerOutput>, ToolFailure> {
         QueryFacade::describe_broker(self, args).await
     }
 
     async fn broker_diagnostics(
         &self,
         args: BrokerDiagnosticsArgs,
-    ) -> Result<QueryResult<BrokerDiagnosticsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<BrokerDiagnosticsOutput>, ToolFailure> {
         QueryFacade::broker_diagnostics(self, args).await
     }
 
     async fn broker_config_summary(
         &self,
         args: BrokerConfigSummaryArgs,
-    ) -> Result<QueryResult<BrokerConfigSummaryOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<BrokerConfigSummaryOutput>, ToolFailure> {
         QueryFacade::broker_config_summary(self, args).await
     }
 
     async fn broker_log_filter_state(
         &self,
         args: BrokerLogFilterStateArgs,
-    ) -> Result<QueryResult<BrokerLogFilterStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<BrokerLogFilterStateOutput>, ToolFailure> {
         QueryFacade::broker_log_filter_state(self, args).await
     }
 
     async fn proxy_drain_state(
         &self,
         args: ProxyDrainStateArgs,
-    ) -> Result<QueryResult<ProxyDrainStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ProxyDrainStateOutput>, ToolFailure> {
         QueryFacade::proxy_drain_state(self, args).await
     }
 
     async fn list_consumer_connections(
         &self,
         args: ListConsumerConnectionsArgs,
-    ) -> Result<QueryResult<ListConsumerConnectionsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ListConsumerConnectionsOutput>, ToolFailure> {
         QueryFacade::list_consumer_connections(self, args).await
     }
 
     async fn list_producer_connections(
         &self,
         args: ListProducerConnectionsArgs,
-    ) -> Result<QueryResult<ListProducerConnectionsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ListProducerConnectionsOutput>, ToolFailure> {
         QueryFacade::list_producer_connections(self, args).await
     }
 
     async fn message_metadata(
         &self,
         args: MessageMetadataArgs,
-    ) -> Result<QueryResult<MessageMetadataOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<MessageMetadataOutput>, ToolFailure> {
         QueryFacade::message_metadata(self, args).await
     }
 
     async fn topic_config_state(
         &self,
         args: TopicConfigStateArgs,
-    ) -> Result<QueryResult<TopicConfigStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<TopicConfigStateOutput>, ToolFailure> {
         QueryFacade::topic_config_state(self, args).await
     }
 
     async fn consumer_group_config_state(
         &self,
         args: ConsumerGroupConfigStateArgs,
-    ) -> Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<ConsumerGroupConfigStateOutput>, ToolFailure> {
         QueryFacade::consumer_group_config_state(self, args).await
     }
 
     async fn ha_status(
         &self,
         args: crate::tools::infrastructure_tools::GetHaStatusArgs,
-    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure> {
         QueryFacade::ha_status(self, args).await
     }
 
     async fn controller_metadata(
         &self,
         args: crate::tools::infrastructure_tools::GetControllerMetadataArgs,
-    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure> {
         QueryFacade::controller_metadata(self, args).await
     }
 
     async fn nameserver_config_summary(
         &self,
         args: crate::tools::infrastructure_tools::GetNameserverConfigSummaryArgs,
-    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolExecutionError>
-    {
+    ) -> Result<QueryResult<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure> {
         QueryFacade::nameserver_config_summary(self, args).await
     }
 
     async fn diagnose_consumer_lag(
         &self,
         args: DiagnoseConsumerLagArgs,
-    ) -> Result<QueryResult<DiagnosisReport>, ToolExecutionError> {
+    ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
         QueryFacade::diagnose_consumer_lag(self, args).await
     }
 }
@@ -1718,7 +1631,7 @@ fn consumer_lag_output_from_snapshot(
     cluster: &ResolvedCluster,
     topic: String,
     consumer_group: String,
-) -> Result<QueryConsumerLagOutput, ToolExecutionError> {
+) -> Result<QueryConsumerLagOutput, ToolFailure> {
     let lag = &snapshot.payload.data;
     let max_queue_lag = lag.queues.iter().map(|queue| queue.lag).max().unwrap_or_default();
     let page = store.page(snapshot, &lag.queues)?;
@@ -1741,7 +1654,7 @@ fn topic_route_output_from_snapshot(
     snapshot: &SnapshotView<SessionTopicRoute>,
     cluster: &ResolvedCluster,
     topic: &str,
-) -> Result<QueryTopicRouteOutput, ToolExecutionError> {
+) -> Result<QueryTopicRouteOutput, ToolFailure> {
     let route = &snapshot.payload.data;
     let read_queue_count = route.queues.iter().map(|queue| queue.read_queue_nums).sum();
     let write_queue_count = route.queues.iter().map(|queue| queue.write_queue_nums).sum();
@@ -1764,10 +1677,11 @@ fn consumer_lag_output(
     consumer_group: String,
     page_request: &PageRequest,
     lag: SessionConsumerLag,
-) -> Result<QueryConsumerLagOutput, ToolExecutionError> {
+) -> Result<QueryConsumerLagOutput, ToolFailure> {
     let max_queue_lag = lag.queues.iter().map(|queue| queue.lag).max().unwrap_or_default();
-    let page =
-        paginate(lag.queues, page_request).map_err(|error| ToolExecutionError::InvalidArguments(error.to_string()))?;
+    let page = paginate(lag.queues, page_request).map_err(|_| {
+        ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
+    })?;
     Ok(QueryConsumerLagOutput {
         cluster: cluster.name.clone(),
         namesrv_addr: cluster.namesrv_addr.clone(),
@@ -1787,11 +1701,12 @@ fn topic_route_output(
     topic: &str,
     route: SessionTopicRoute,
     page_request: &PageRequest,
-) -> Result<QueryTopicRouteOutput, ToolExecutionError> {
+) -> Result<QueryTopicRouteOutput, ToolFailure> {
     let read_queue_count = route.queues.iter().map(|queue| queue.read_queue_nums).sum();
     let write_queue_count = route.queues.iter().map(|queue| queue.write_queue_nums).sum();
-    let page = paginate(route.queues, page_request)
-        .map_err(|error| ToolExecutionError::InvalidArguments(error.to_string()))?;
+    let page = paginate(route.queues, page_request).map_err(|_| {
+        ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None })
+    })?;
     Ok(QueryTopicRouteOutput {
         cluster: cluster.name.clone(),
         namesrv_addr: cluster.namesrv_addr.clone(),
@@ -1829,7 +1744,7 @@ async fn describe_broker_in_session<S>(
     session: &mut S,
     cluster: &ResolvedCluster,
     broker_name: String,
-) -> Result<QueryPayload<DescribeBrokerOutput>, ToolExecutionError>
+) -> Result<QueryPayload<DescribeBrokerOutput>, ToolFailure>
 where
     S: AdminSession,
 {
@@ -1843,16 +1758,15 @@ where
     if brokers.is_empty() {
         match session.probe_broker_runtime_target(&broker_name).await? {
             BrokerRuntimeTargetStatus::Available | BrokerRuntimeTargetStatus::SourceUnavailable => {
-                return Err(ToolExecutionError::Backend(
-                    "selected broker source is unavailable".to_string(),
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
                 ));
             }
             BrokerRuntimeTargetStatus::NotFound => {}
         }
-        return Err(ToolExecutionError::InvalidArguments(format!(
-            "broker not found in cluster {}: {broker_name}",
-            cluster.name
-        )));
+        return Err(ToolFailure::Rejected(
+            crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
+        ));
     }
     Ok(completeness.wrap(DescribeBrokerOutput {
         cluster: cluster.name.clone(),
@@ -1863,19 +1777,35 @@ where
     }))
 }
 
-fn completeness_for_error(source: QuerySource, logical_target: &str, error: &ToolExecutionError) -> QueryCompleteness {
+fn completeness_for_error(source: QuerySource, logical_target: &str, error: &ToolFailure) -> QueryCompleteness {
     let (code, retryable) = match error {
-        ToolExecutionError::TimedOut { .. } => (SourceFailureCode::Timeout, true),
-        ToolExecutionError::RateLimited(_) => (SourceFailureCode::RateLimited, true),
-        ToolExecutionError::PermissionDenied(_)
-        | ToolExecutionError::UnauthorizedScope(_)
-        | ToolExecutionError::TenantMismatch(_)
-        | ToolExecutionError::ClusterNotAllowed(_) => (SourceFailureCode::PermissionDenied, false),
-        ToolExecutionError::InvalidArguments(_) => (SourceFailureCode::NotFound, false),
-        ToolExecutionError::Backend(_) | ToolExecutionError::Cancelled => (SourceFailureCode::SourceUnavailable, true),
-        ToolExecutionError::OutputTooLarge { .. }
-        | ToolExecutionError::ChangePlanningDisabled(_)
-        | ToolExecutionError::Internal(_) => (SourceFailureCode::InvalidResponse, false),
+        ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut { .. }) => {
+            (SourceFailureCode::Timeout, true)
+        }
+        ToolFailure::Rejected(crate::tools::executor::ToolRejection::RateLimited) => {
+            (SourceFailureCode::RateLimited, true)
+        }
+        ToolFailure::Rejected(crate::tools::executor::ToolRejection::PermissionDenied)
+        | ToolFailure::Rejected(crate::tools::executor::ToolRejection::UnauthorizedScope)
+        | ToolFailure::Rejected(crate::tools::executor::ToolRejection::TenantMismatch)
+        | ToolFailure::Rejected(crate::tools::executor::ToolRejection::ClusterNotAllowed) => {
+            (SourceFailureCode::PermissionDenied, false)
+        }
+        ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. }) => {
+            (SourceFailureCode::NotFound, false)
+        }
+        ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+        | ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled) => {
+            (SourceFailureCode::SourceUnavailable, true)
+        }
+        ToolFailure::Rejected(crate::tools::executor::ToolRejection::OutputTooLarge { .. })
+        | ToolFailure::Rejected(ToolRejection::AliasInputBoundExceeded)
+        | ToolFailure::Rejected(ToolRejection::AliasCapacityExceeded)
+        | ToolFailure::Rejected(ToolRejection::AliasCollisionExhausted)
+        | ToolFailure::Rejected(crate::tools::executor::ToolRejection::ChangePlanningDisabled)
+        | ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Internal(_)) => {
+            (SourceFailureCode::InvalidResponse, false)
+        }
     };
     QueryCompleteness {
         partial: true,
@@ -1907,23 +1837,23 @@ fn sorted_unique_topic_names(mut topics: Vec<String>) -> Vec<String> {
     topics
 }
 
-fn normalized_identifier(field: &str, value: &str) -> Result<String, ToolExecutionError> {
+fn normalized_identifier(_field: &str, value: &str) -> Result<String, ToolFailure> {
     const MAX_IDENTIFIER_BYTES: usize = 255;
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolExecutionError::InvalidArguments(format!(
-            "{field} must not be empty"
-        )));
+        return Err(ToolFailure::Rejected(
+            crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
+        ));
     }
     if value.len() > MAX_IDENTIFIER_BYTES {
-        return Err(ToolExecutionError::InvalidArguments(format!(
-            "{field} must not exceed {MAX_IDENTIFIER_BYTES} bytes"
-        )));
+        return Err(ToolFailure::Rejected(
+            crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
+        ));
     }
     Ok(value.to_string())
 }
 
-fn normalized_logical_identifier(field: &str, value: &str) -> Result<String, ToolExecutionError> {
+fn normalized_logical_identifier(_field: &str, value: &str) -> Result<String, ToolFailure> {
     let value = value.trim();
     if value.is_empty()
         || value.len() > 100
@@ -1935,20 +1865,20 @@ fn normalized_logical_identifier(field: &str, value: &str) -> Result<String, Too
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
     {
-        Err(ToolExecutionError::InvalidArguments(format!(
-            "{field} must be a logical identifier of at most 100 bytes"
-        )))
+        Err(ToolFailure::Rejected(
+            crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
+        ))
     } else {
         Ok(value.to_string())
     }
 }
 
-fn normalized_broker_names(mut broker_names: Vec<String>) -> Result<Vec<String>, ToolExecutionError> {
+fn normalized_broker_names(mut broker_names: Vec<String>) -> Result<Vec<String>, ToolFailure> {
     const MAX_BROKER_NAMES: usize = 64;
     if broker_names.is_empty() || broker_names.len() > MAX_BROKER_NAMES {
-        return Err(ToolExecutionError::InvalidArguments(format!(
-            "broker_names must contain between 1 and {MAX_BROKER_NAMES} logical Brokers"
-        )));
+        return Err(ToolFailure::Rejected(
+            crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
+        ));
     }
     broker_names = broker_names
         .into_iter()
@@ -1962,7 +1892,7 @@ fn normalized_broker_names(mut broker_names: Vec<String>) -> Result<Vec<String>,
 fn project_connections(
     observations: QueryPayload<SessionConnections>,
     aliases: &IdentifierAliaser,
-) -> Result<QueryPayload<ConnectionSnapshot>, ToolExecutionError> {
+) -> Result<QueryPayload<ConnectionSnapshot>, ToolFailure> {
     let mut completeness = observations.completeness();
     if observations.data.truncated {
         completeness.partial = true;
@@ -1984,7 +1914,7 @@ fn project_connections(
                 last_update_at: row.last_update_timestamp.and_then(observed_at_from_millis),
             })
         })
-        .collect::<Result<Vec<_>, ToolExecutionError>>()?;
+        .collect::<Result<Vec<_>, ToolFailure>>()?;
     rows.sort_by(|left, right| {
         left.broker_name
             .cmp(&right.broker_name)
@@ -2000,11 +1930,20 @@ fn project_connections(
     }))
 }
 
-fn alias_error(error: IdentifierAliasError) -> ToolExecutionError {
-    ToolExecutionError::Internal(error.to_string())
+fn alias_error(error: IdentifierAliasFailure) -> ToolFailure {
+    match error {
+        IdentifierAliasFailure::Rejected(rejection) => ToolFailure::Rejected(match rejection {
+            IdentifierAliasRejection::InputBoundExceeded => ToolRejection::AliasInputBoundExceeded,
+            IdentifierAliasRejection::CapacityExceeded => ToolRejection::AliasCapacityExceeded,
+            IdentifierAliasRejection::CollisionExhausted => ToolRejection::AliasCollisionExhausted,
+        }),
+        IdentifierAliasFailure::Operational(error) => {
+            ToolFailure::Operational(ToolExecutionError::Internal(Some(std::sync::Arc::new(error))))
+        }
+    }
 }
 
-fn normalized_broker_logger(logger: &str) -> Result<String, ToolExecutionError> {
+fn normalized_broker_logger(logger: &str) -> Result<String, ToolFailure> {
     if logger != logger.trim()
         || logger.is_empty()
         || logger.len() > 128
@@ -2012,8 +1951,8 @@ fn normalized_broker_logger(logger: &str) -> Result<String, ToolExecutionError> 
             .strip_prefix("rocketmq_broker::")
             .is_some_and(valid_rust_module_path)
     {
-        Err(ToolExecutionError::InvalidArguments(
-            "logger must be an allowlisted rocketmq_broker:: target of at most 128 bytes".to_string(),
+        Err(ToolFailure::Rejected(
+            crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
         ))
     } else {
         Ok(logger.to_string())
@@ -2033,6 +1972,28 @@ fn valid_rust_module_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn alias_bounds_are_distinct_closed_tool_rejections() {
+        use super::*;
+        for (rejection, code) in [
+            (
+                IdentifierAliasRejection::InputBoundExceeded,
+                "identifier_input_bound_exceeded",
+            ),
+            (
+                IdentifierAliasRejection::CapacityExceeded,
+                "identifier_capacity_exceeded",
+            ),
+            (
+                IdentifierAliasRejection::CollisionExhausted,
+                "identifier_collision_exhausted",
+            ),
+        ] {
+            let failure = alias_error(IdentifierAliasFailure::Rejected(rejection));
+            assert!(matches!(failure, ToolFailure::Rejected(_)));
+            assert_eq!(failure.code(), code);
+        }
+    }
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -2130,7 +2091,7 @@ mod tests {
     where
         T: Send + 'static,
         Call: FnOnce(QueryFacade<FakeSessionFactory>) -> CallFuture,
-        CallFuture: Future<Output = Result<T, ToolExecutionError>> + Send + 'static,
+        CallFuture: Future<Output = Result<T, ToolFailure>> + Send + 'static,
         Count: Fn(&LifecycleCounters) -> usize,
     {
         let factory = FakeSessionFactory {
@@ -2153,7 +2114,10 @@ mod tests {
         }
         assert_eq!(count(&counters), 1);
         cancellation.cancel();
-        assert!(matches!(task.await.unwrap(), Err(ToolExecutionError::Cancelled)));
+        assert!(matches!(
+            task.await.unwrap(),
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled))
+        ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
     }
@@ -2184,7 +2148,7 @@ mod tests {
     impl AdminSessionFactory for FakeSessionFactory {
         type Session = FakeSession;
 
-        async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError> {
+        async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure> {
             self.counters.starts.fetch_add(1, Ordering::SeqCst);
             Ok(FakeSession {
                 cluster,
@@ -2235,7 +2199,7 @@ mod tests {
     }
 
     impl AdminSession for FakeSession {
-        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
+        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             self.counters.broker_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_broker_query {
                 std::future::pending::<()>().await;
@@ -2275,7 +2239,7 @@ mod tests {
             })
         }
 
-        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolFailure> {
             self.counters.topic_inventory_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_topic_inventory {
                 std::future::pending::<()>().await;
@@ -2284,12 +2248,14 @@ mod tests {
                 gate.wait_if_armed().await;
             }
             if self.fail_topic_inventory {
-                return Err(ToolExecutionError::backend("topic query failed"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             Ok(vec!["payments".to_string(), "orders".to_string(), "orders".to_string()])
         }
 
-        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
+        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolFailure> {
             self.counters.route_queries.fetch_add(1, Ordering::SeqCst);
             if self.yield_snapshot_queries {
                 tokio::task::yield_now().await;
@@ -2305,7 +2271,7 @@ mod tests {
             })
         }
 
-        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
             self.counters.consumer_group_queries.fetch_add(1, Ordering::SeqCst);
             let groups = vec![consumer_group("order-service")];
             Ok(if self.partial_sources {
@@ -2315,7 +2281,7 @@ mod tests {
             })
         }
 
-        async fn consumer_group_inventory(&mut self) -> Result<QueryPayload<Vec<String>>, ToolExecutionError> {
+        async fn consumer_group_inventory(&mut self) -> Result<QueryPayload<Vec<String>>, ToolFailure> {
             let query_index = self
                 .counters
                 .consumer_group_inventory_queries
@@ -2344,7 +2310,7 @@ mod tests {
         async fn consumer_groups_exact(
             &mut self,
             groups: &[String],
-        ) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+        ) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
             self.counters
                 .consumer_group_enrichment_queries
                 .fetch_add(1, Ordering::SeqCst);
@@ -2355,7 +2321,9 @@ mod tests {
                 tokio::task::yield_now().await;
             }
             if self.fail_group_enrichment {
-                return Err(ToolExecutionError::backend("all group enrichment sources failed"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             let groups = groups.iter().map(|group| consumer_group(group)).collect::<Vec<_>>();
             Ok(if self.partial_sources {
@@ -2369,7 +2337,7 @@ mod tests {
             &mut self,
             _topic: &str,
             _consumer_group: &str,
-        ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConsumerLag>, ToolFailure> {
             self.counters.consumer_lag_queries.fetch_add(1, Ordering::SeqCst);
             if self.yield_snapshot_queries {
                 tokio::task::yield_now().await;
@@ -2401,7 +2369,7 @@ mod tests {
         async fn probe_broker_runtime_target(
             &mut self,
             _broker_name: &str,
-        ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
+        ) -> Result<BrokerRuntimeTargetStatus, ToolFailure> {
             self.counters.runtime_probes.fetch_add(1, Ordering::SeqCst);
             if self.failed_selected_broker || self.overflow_failed_selected_broker {
                 Ok(BrokerRuntimeTargetStatus::SourceUnavailable)
@@ -2415,13 +2383,15 @@ mod tests {
         async fn broker_diagnostics(
             &mut self,
             broker_name: &str,
-        ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolFailure> {
             self.counters.broker_diagnostics_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_broker_query {
                 std::future::pending::<()>().await;
             }
             if self.fail_exact_read {
-                return Err(ToolExecutionError::backend("exact read failed"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             let output = BrokerDiagnosticsOutput {
                 cluster: self.cluster.name.clone(),
@@ -2441,10 +2411,12 @@ mod tests {
         async fn broker_config_summary(
             &mut self,
             broker_name: &str,
-        ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolFailure> {
             self.counters.broker_config_queries.fetch_add(1, Ordering::SeqCst);
             if self.fail_exact_read {
-                return Err(ToolExecutionError::backend("exact read failed"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             let output = BrokerConfigSummaryOutput {
                 cluster: self.cluster.name.clone(),
@@ -2462,10 +2434,12 @@ mod tests {
             &mut self,
             broker_name: &str,
             logger: &str,
-        ) -> Result<QueryPayload<BrokerLogFilterStateOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<BrokerLogFilterStateOutput>, ToolFailure> {
             self.counters.broker_log_filter_queries.fetch_add(1, Ordering::SeqCst);
             if self.fail_exact_read {
-                return Err(ToolExecutionError::backend("exact read failed"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             let output = BrokerLogFilterStateOutput {
                 cluster: self.cluster.name.clone(),
@@ -2484,10 +2458,12 @@ mod tests {
             &mut self,
             proxy_name: &str,
             proxy_endpoint: &str,
-        ) -> Result<QueryPayload<ProxyDrainStateOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<ProxyDrainStateOutput>, ToolFailure> {
             self.counters.proxy_drain_queries.fetch_add(1, Ordering::SeqCst);
             if self.fail_exact_read {
-                return Err(ToolExecutionError::backend("exact read failed"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             let expected_endpoint = if self.cluster.name == "secondary" {
                 "proxy-secondary.internal:8081"
@@ -2524,13 +2500,15 @@ mod tests {
         async fn consumer_connections(
             &mut self,
             _consumer_group: &str,
-        ) -> Result<QueryPayload<SessionConnections>, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConnections>, ToolFailure> {
             self.counters.consumer_connection_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_broker_query {
                 std::future::pending::<()>().await;
             }
             if self.fail_exact_read {
-                return Err(ToolExecutionError::backend("raw-client-secret backend failure"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             let result = SessionConnections {
                 rows: connection_rows(),
@@ -2548,13 +2526,15 @@ mod tests {
             &mut self,
             _topic: &str,
             _producer_group: &str,
-        ) -> Result<QueryPayload<SessionConnections>, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConnections>, ToolFailure> {
             self.counters.producer_connection_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_broker_query {
                 std::future::pending::<()>().await;
             }
             if self.fail_exact_read {
-                return Err(ToolExecutionError::backend("raw-producer-secret backend failure"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             let result = SessionConnections {
                 rows: connection_rows(),
@@ -2568,13 +2548,15 @@ mod tests {
             })
         }
 
-        async fn message_metadata(&mut self, _message_id: &str) -> Result<SessionMessageMetadata, ToolExecutionError> {
+        async fn message_metadata(&mut self, _message_id: &str) -> Result<SessionMessageMetadata, ToolFailure> {
             self.counters.message_metadata_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_broker_query {
                 std::future::pending::<()>().await;
             }
             if self.fail_exact_read {
-                return Err(ToolExecutionError::backend("raw-message-secret backend failure"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             Ok(SessionMessageMetadata {
                 message_id: "RAW-OFFSET-MESSAGE-ID".to_string(),
@@ -2596,13 +2578,15 @@ mod tests {
             &mut self,
             topic: &str,
             _broker_names: &[String],
-        ) -> Result<QueryPayload<TopicConfigStateOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<TopicConfigStateOutput>, ToolFailure> {
             self.counters.topic_config_state_queries.fetch_add(1, Ordering::SeqCst);
             if self.hang_broker_query {
                 std::future::pending::<()>().await;
             }
             if self.fail_exact_read {
-                return Err(ToolExecutionError::backend("raw-address backend failure"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             let output = TopicConfigStateOutput {
                 cluster: self.cluster.name.clone(),
@@ -2626,7 +2610,7 @@ mod tests {
             &mut self,
             group: &str,
             _broker_names: &[String],
-        ) -> Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolFailure> {
             self.counters
                 .consumer_group_config_state_queries
                 .fetch_add(1, Ordering::SeqCst);
@@ -2634,7 +2618,9 @@ mod tests {
                 std::future::pending::<()>().await;
             }
             if self.fail_exact_read {
-                return Err(ToolExecutionError::backend("raw-address backend failure"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             let output = ConsumerGroupConfigStateOutput {
                 cluster: self.cluster.name.clone(),
@@ -2662,7 +2648,7 @@ mod tests {
             })
         }
 
-        async fn shutdown(self) -> Result<(), ToolExecutionError> {
+        async fn shutdown(self) -> Result<(), ToolFailure> {
             self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -2830,7 +2816,12 @@ mod tests {
                     },
                 })
                 .await;
-            assert!(matches!(result, Err(ToolExecutionError::InvalidArguments(_))));
+            assert!(matches!(
+                result,
+                Err(ToolFailure::Rejected(
+                    crate::tools::executor::ToolRejection::InvalidArguments { .. }
+                ))
+            ));
         }
         let sensitive = facade.with_visibility_class(VisibilityClass::Sensitive);
         let cross_visibility = sensitive
@@ -2844,7 +2835,12 @@ mod tests {
                 },
             })
             .await;
-        assert!(matches!(cross_visibility, Err(ToolExecutionError::InvalidArguments(_))));
+        assert!(matches!(
+            cross_visibility,
+            Err(ToolFailure::Rejected(
+                crate::tools::executor::ToolRejection::InvalidArguments { .. }
+            ))
+        ));
         assert_eq!(counters.producer_connection_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
     }
@@ -2955,9 +2951,12 @@ mod tests {
                 .await
                 .map(|_| ()),
         ];
-        assert!(failures
-            .iter()
-            .all(|result| matches!(result, Err(ToolExecutionError::Backend(_)))));
+        assert!(failures.iter().all(|result| matches!(
+            result,
+            Err(ToolFailure::Operational(
+                crate::tools::executor::ToolExecutionError::Backend(_)
+            ))
+        )));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 5);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 5);
     }
@@ -3016,9 +3015,12 @@ mod tests {
                 .await
                 .map(|_| ()),
         ];
-        assert!(failures
-            .iter()
-            .all(|result| matches!(result, Err(ToolExecutionError::TimedOut { timeout_ms: 10 }))));
+        assert!(failures.iter().all(|result| matches!(
+            result,
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut {
+                timeout_ms: 10
+            }))
+        )));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 5);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 5);
     }
@@ -3294,7 +3296,10 @@ mod tests {
         wait_for_atomic_count(&counters.broker_diagnostics_queries, 1).await;
         cancellation.cancel();
 
-        assert!(matches!(task.await.unwrap(), Err(ToolExecutionError::Cancelled)));
+        assert!(matches!(
+            task.await.unwrap(),
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled))
+        ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
     }
@@ -3315,7 +3320,12 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(result, Err(ToolExecutionError::TimedOut { timeout_ms: 10 })));
+        assert!(matches!(
+            result,
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut {
+                timeout_ms: 10
+            }))
+        ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
     }
@@ -3336,7 +3346,9 @@ mod tests {
                     broker_name: "broker-a".to_string(),
                 })
                 .await,
-            Err(ToolExecutionError::Backend(_))
+            Err(ToolFailure::Operational(
+                crate::tools::executor::ToolExecutionError::Backend(_)
+            ))
         ));
         assert!(matches!(
             facade
@@ -3345,7 +3357,9 @@ mod tests {
                     broker_name: "broker-a".to_string(),
                 })
                 .await,
-            Err(ToolExecutionError::Backend(_))
+            Err(ToolFailure::Operational(
+                crate::tools::executor::ToolExecutionError::Backend(_)
+            ))
         ));
         assert!(matches!(
             facade
@@ -3355,7 +3369,9 @@ mod tests {
                     logger: "rocketmq_broker::processor".to_string(),
                 })
                 .await,
-            Err(ToolExecutionError::Backend(_))
+            Err(ToolFailure::Operational(
+                crate::tools::executor::ToolExecutionError::Backend(_)
+            ))
         ));
         assert!(matches!(
             facade
@@ -3364,7 +3380,9 @@ mod tests {
                     proxy_name: "proxy-local".to_string(),
                 })
                 .await,
-            Err(ToolExecutionError::Backend(_))
+            Err(ToolFailure::Operational(
+                crate::tools::executor::ToolExecutionError::Backend(_)
+            ))
         ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 4);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 4);
@@ -3383,7 +3401,9 @@ mod tests {
                     broker_name: "broker-a".to_string(),
                 })
                 .await,
-            Err(ToolExecutionError::InvalidArguments(_))
+            Err(ToolFailure::Rejected(
+                crate::tools::executor::ToolRejection::InvalidArguments { .. }
+            ))
         ));
         assert!(matches!(
             facade
@@ -3392,7 +3412,9 @@ mod tests {
                     broker_name: "broker-a".to_string(),
                 })
                 .await,
-            Err(ToolExecutionError::InvalidArguments(_))
+            Err(ToolFailure::Rejected(
+                crate::tools::executor::ToolRejection::InvalidArguments { .. }
+            ))
         ));
         assert!(matches!(
             facade
@@ -3402,7 +3424,9 @@ mod tests {
                     logger: "rocketmq_broker::processor target".to_string(),
                 })
                 .await,
-            Err(ToolExecutionError::InvalidArguments(_))
+            Err(ToolFailure::Rejected(
+                crate::tools::executor::ToolRejection::InvalidArguments { .. }
+            ))
         ));
         assert!(matches!(
             facade
@@ -3411,7 +3435,9 @@ mod tests {
                     proxy_name: "proxy-local".to_string(),
                 })
                 .await,
-            Err(ToolExecutionError::InvalidArguments(_))
+            Err(ToolFailure::Rejected(
+                crate::tools::executor::ToolRejection::InvalidArguments { .. }
+            ))
         ));
         let endpoint_cluster = "10.0.0.8:9876";
         let error = facade
@@ -3421,7 +3447,10 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(matches!(error, ToolExecutionError::InvalidArguments(_)));
+        assert!(matches!(
+            error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+        ));
         assert!(!error.to_string().contains(endpoint_cluster));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 0);
     }
@@ -3457,7 +3486,10 @@ mod tests {
 
         assert_eq!(local.data.cluster, "local-dev");
         assert_eq!(secondary.data.cluster, "secondary");
-        assert!(matches!(missing, ToolExecutionError::InvalidArguments(_)));
+        assert!(matches!(
+            missing,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+        ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), starts);
         assert_eq!(counters.proxy_endpoint_mismatches.load(Ordering::SeqCst), 0);
     }
@@ -3566,7 +3598,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, ToolExecutionError::Backend(_)));
+        assert!(matches!(
+            error,
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+        ));
         assert!(!error.to_string().contains("not found"));
     }
 
@@ -3608,7 +3643,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(matches!(tool_error, ToolExecutionError::Backend(_)));
+        assert!(matches!(
+            tool_error,
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+        ));
         assert!(!tool_error.to_string().contains("not found"));
 
         let resource_error =
@@ -3726,7 +3764,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, ToolExecutionError::TimedOut { .. }));
+        assert!(matches!(
+            error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut { .. })
+        ));
         let starts = counters.starts.load(Ordering::SeqCst);
         assert!(starts > 0);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), starts);
@@ -3754,7 +3795,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, ToolExecutionError::Cancelled));
+        assert!(matches!(
+            error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)
+        ));
         let starts = counters.starts.load(Ordering::SeqCst);
         assert!(starts > 0);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), starts);
@@ -3778,7 +3822,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, ToolExecutionError::Backend(_)));
+        assert!(matches!(
+            error,
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+        ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
         assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
@@ -3956,10 +4003,16 @@ mod tests {
             .unwrap()
             .unwrap_err();
 
-        assert!(matches!(waiter_error, ToolExecutionError::Cancelled));
+        assert!(matches!(
+            waiter_error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)
+        ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
         leader_cancellation.cancel();
-        assert!(matches!(leader.await.unwrap(), Err(ToolExecutionError::Cancelled)));
+        assert!(matches!(
+            leader.await.unwrap(),
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled))
+        ));
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
     }
 
@@ -4093,8 +4146,14 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, ToolExecutionError::InvalidArguments(_)));
-        assert!(error.to_string().contains("requested query context"));
+        assert!(matches!(
+            error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+        ));
+        assert!(matches!(
+            error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+        ));
         assert_eq!(counters.topic_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 1);
     }
@@ -4267,7 +4326,10 @@ mod tests {
             .list_consumer_groups(ListConsumerGroupsArgs::default())
             .await
             .unwrap_err();
-        assert!(matches!(error, ToolExecutionError::Backend(_)));
+        assert!(matches!(
+            error,
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+        ));
         assert_eq!(counters.consumer_group_inventory_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.consumer_group_enrichment_queries.load(Ordering::SeqCst), 1);
         assert_eq!(counters.starts.load(Ordering::SeqCst), 2);
@@ -4584,7 +4646,10 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("context"));
+        assert!(matches!(
+            error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+        ));
         assert_eq!(counters.starts.load(Ordering::SeqCst), starts);
     }
 

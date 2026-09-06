@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolRejection;
 use std::any::Any;
 use std::collections::hash_map::RandomState;
 use std::collections::BTreeMap;
@@ -47,7 +48,7 @@ use crate::model::contract::MAX_PAGE_LIMIT;
 use crate::model::contract::SCHEMA_VERSION;
 use crate::tools::consumer_tools::ConsumerProgressQueueRow;
 use crate::tools::consumer_tools::QueueLag;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::topic_tools::TopicRouteBroker;
 use crate::tools::topic_tools::TopicRouteQueue;
 use crate::tools::topic_tools::TopicStatsQueueRow;
@@ -525,7 +526,7 @@ impl SnapshotRequest {
         normalized_filter: impl Into<String>,
         page: &PageRequest,
         visibility: impl Into<String>,
-    ) -> Result<Self, SnapshotError> {
+    ) -> Result<Self, SnapshotRejection> {
         Self::try_new_with_selection(
             kind,
             cluster,
@@ -543,10 +544,10 @@ impl SnapshotRequest {
         selection_mode: SnapshotSelectionMode,
         page: &PageRequest,
         visibility: impl Into<String>,
-    ) -> Result<Self, SnapshotError> {
+    ) -> Result<Self, SnapshotRejection> {
         let page_limit = page.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
         if !(1..=MAX_PAGE_LIMIT).contains(&page_limit) {
-            return Err(SnapshotError::InvalidLimit);
+            return Err(SnapshotRejection::InvalidLimit);
         }
         let cluster = cluster.into();
         let normalized_filter = normalized_filter.into();
@@ -557,7 +558,7 @@ impl SnapshotRequest {
             || visibility.trim().is_empty()
             || visibility.len() > MAX_VISIBILITY_BYTES
         {
-            return Err(SnapshotError::ContextTooLarge);
+            return Err(SnapshotRejection::ContextTooLarge);
         }
         Ok(Self {
             kind,
@@ -591,35 +592,42 @@ impl SnapshotWeight {
     }
 }
 
-#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SnapshotError {
-    #[error("limit must be between 1 and {MAX_PAGE_LIMIT}")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SnapshotRejection {
     InvalidLimit,
-    #[error("snapshot query context is blank or exceeds its bounded size")]
     ContextTooLarge,
-    #[error("cursor is invalid or has been tampered with")]
     InvalidCursor,
-    #[error("cursor snapshot has expired")]
     Expired,
-    #[error("cursor snapshot was evicted")]
     Evicted,
-    #[error("cursor snapshot was invalidated")]
     Invalidated,
-    #[error("cursor does not match the requested query context")]
     ContextMismatch,
-    #[error("cursor does not match the requested page contract")]
     PageContractMismatch,
-    #[error("snapshot exceeds the bounded entry budget")]
     EntryBudgetExceeded,
-    #[error("snapshot exceeds the bounded row budget")]
     RowBudgetExceeded,
-    #[error("snapshot exceeds the bounded byte budget")]
     ByteBudgetExceeded,
 }
 
-impl From<SnapshotError> for ToolExecutionError {
-    fn from(error: SnapshotError) -> Self {
-        ToolExecutionError::InvalidArguments(error.to_string())
+impl std::fmt::Display for SnapshotRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidLimit => write!(f, "limit must be between 1 and {MAX_PAGE_LIMIT}"),
+            Self::ContextTooLarge => write!(f, "snapshot query context is blank or exceeds its bounded size"),
+            Self::InvalidCursor => write!(f, "cursor is invalid or has been tampered with"),
+            Self::Expired => write!(f, "cursor snapshot has expired"),
+            Self::Evicted => write!(f, "cursor snapshot was evicted"),
+            Self::Invalidated => write!(f, "cursor snapshot was invalidated"),
+            Self::ContextMismatch => write!(f, "cursor does not match the requested query context"),
+            Self::PageContractMismatch => write!(f, "cursor does not match the requested page contract"),
+            Self::EntryBudgetExceeded => write!(f, "snapshot exceeds the bounded entry budget"),
+            Self::RowBudgetExceeded => write!(f, "snapshot exceeds the bounded row budget"),
+            Self::ByteBudgetExceeded => write!(f, "snapshot exceeds the bounded byte budget"),
+        }
+    }
+}
+
+impl From<SnapshotRejection> for ToolFailure {
+    fn from(_error: SnapshotRejection) -> Self {
+        ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None })
     }
 }
 
@@ -699,7 +707,7 @@ struct FlightCell {
 enum FlightOutcome {
     Loading,
     Success(Arc<str>),
-    Failure(SharedFlightFailure),
+    Failure(ToolFailure),
 }
 
 struct FlightTicket {
@@ -723,73 +731,6 @@ enum BeginFlight<T> {
     Cached(SnapshotView<T>),
     Leader(FlightTicket),
     Waiter(FlightTicket),
-}
-
-#[derive(Clone, Copy)]
-enum SharedFlightFailure {
-    InvalidArguments,
-    Backend,
-    PermissionDenied,
-    UnauthorizedScope,
-    TenantMismatch,
-    ClusterNotAllowed,
-    RateLimited,
-    ChangePlanningDisabled,
-    Internal,
-    OutputTooLarge { actual_bytes: usize, max_bytes: usize },
-    TimedOut { timeout_ms: u64 },
-    Cancelled,
-}
-
-impl SharedFlightFailure {
-    fn from_error(error: &ToolExecutionError) -> Self {
-        match error {
-            ToolExecutionError::InvalidArguments(_) => Self::InvalidArguments,
-            ToolExecutionError::Backend(_) => Self::Backend,
-            ToolExecutionError::PermissionDenied(_) => Self::PermissionDenied,
-            ToolExecutionError::UnauthorizedScope(_) => Self::UnauthorizedScope,
-            ToolExecutionError::TenantMismatch(_) => Self::TenantMismatch,
-            ToolExecutionError::ClusterNotAllowed(_) => Self::ClusterNotAllowed,
-            ToolExecutionError::RateLimited(_) => Self::RateLimited,
-            ToolExecutionError::ChangePlanningDisabled(_) => Self::ChangePlanningDisabled,
-            ToolExecutionError::Internal(_) => Self::Internal,
-            ToolExecutionError::OutputTooLarge {
-                actual_bytes,
-                max_bytes,
-            } => Self::OutputTooLarge {
-                actual_bytes: *actual_bytes,
-                max_bytes: *max_bytes,
-            },
-            ToolExecutionError::TimedOut { timeout_ms } => Self::TimedOut {
-                timeout_ms: *timeout_ms,
-            },
-            ToolExecutionError::Cancelled => Self::Cancelled,
-        }
-    }
-
-    fn into_error(self) -> ToolExecutionError {
-        const MESSAGE: &str = "coalesced upstream load failed";
-        match self {
-            Self::InvalidArguments => ToolExecutionError::InvalidArguments(MESSAGE.to_string()),
-            Self::Backend => ToolExecutionError::Backend(MESSAGE.to_string()),
-            Self::PermissionDenied => ToolExecutionError::PermissionDenied(MESSAGE.to_string()),
-            Self::UnauthorizedScope => ToolExecutionError::UnauthorizedScope(MESSAGE.to_string()),
-            Self::TenantMismatch => ToolExecutionError::TenantMismatch(MESSAGE.to_string()),
-            Self::ClusterNotAllowed => ToolExecutionError::ClusterNotAllowed(MESSAGE.to_string()),
-            Self::RateLimited => ToolExecutionError::RateLimited(MESSAGE.to_string()),
-            Self::ChangePlanningDisabled => ToolExecutionError::ChangePlanningDisabled(MESSAGE.to_string()),
-            Self::Internal => ToolExecutionError::Internal(MESSAGE.to_string()),
-            Self::OutputTooLarge {
-                actual_bytes,
-                max_bytes,
-            } => ToolExecutionError::OutputTooLarge {
-                actual_bytes,
-                max_bytes,
-            },
-            Self::TimedOut { timeout_ms } => ToolExecutionError::TimedOut { timeout_ms },
-            Self::Cancelled => ToolExecutionError::Cancelled,
-        }
-    }
 }
 
 struct SnapshotEntry {
@@ -860,11 +801,11 @@ impl SnapshotStore {
         weight: impl FnOnce(&T) -> SnapshotWeight,
         cancellation: &CancellationToken,
         load: Load,
-    ) -> Result<SnapshotView<T>, ToolExecutionError>
+    ) -> Result<SnapshotView<T>, ToolFailure>
     where
         T: Clone + RetainedSize + Send + Sync + 'static,
         Load: FnOnce() -> LoadFuture,
-        LoadFuture: Future<Output = Result<QueryPayload<T>, ToolExecutionError>>,
+        LoadFuture: Future<Output = Result<QueryPayload<T>, ToolFailure>>,
     {
         if let Some(cursor) = cursor {
             return self.resolve_cursor(&request, cursor).map_err(Into::into);
@@ -872,7 +813,7 @@ impl SnapshotStore {
 
         let cursor_ttl = cursor_ttl.min(self.inner.limits.max_lifetime);
         if cursor_ttl.is_zero() {
-            return Err(SnapshotError::Expired.into());
+            return Err(SnapshotRejection::Expired.into());
         }
         let response_cache_ttl = response_cache_ttl
             .filter(|ttl| !ttl.is_zero())
@@ -896,30 +837,30 @@ impl SnapshotStore {
         };
 
         if cancellation.is_cancelled() {
-            return Err(ToolExecutionError::Cancelled);
+            return Err(ToolFailure::Rejected(ToolRejection::Cancelled));
         }
 
         let payload = match load().await {
             Ok(payload) => payload,
             Err(error) => {
                 if let Some(ticket) = ticket.as_ref() {
-                    self.finish_failure(ticket, SharedFlightFailure::from_error(&error));
+                    self.finish_failure(ticket, error.clone());
                 }
                 return Err(error);
             }
         };
         let snapshot_weight = weight(&payload.data);
         let budget_error = if snapshot_weight.entries > self.inner.limits.max_entries {
-            Some(SnapshotError::EntryBudgetExceeded)
+            Some(SnapshotRejection::EntryBudgetExceeded)
         } else if snapshot_weight.rows > self.inner.limits.max_rows {
-            Some(SnapshotError::RowBudgetExceeded)
+            Some(SnapshotRejection::RowBudgetExceeded)
         } else {
             None
         };
         if let Some(error) = budget_error {
-            let tool_error: ToolExecutionError = error.into();
+            let tool_error: ToolFailure = error.into();
             if let Some(ticket) = ticket.as_ref() {
-                self.finish_failure(ticket, SharedFlightFailure::from_error(&tool_error));
+                self.finish_failure(ticket, tool_error.clone());
             }
             return Err(tool_error);
         }
@@ -930,9 +871,9 @@ impl SnapshotStore {
             || bytes > self.inner.limits.max_scope_bytes
             || bytes > self.inner.limits.max_total_bytes
         {
-            let error: ToolExecutionError = SnapshotError::ByteBudgetExceeded.into();
+            let error: ToolFailure = SnapshotRejection::ByteBudgetExceeded.into();
             if let Some(ticket) = ticket.as_ref() {
-                self.finish_failure(ticket, SharedFlightFailure::from_error(&error));
+                self.finish_failure(ticket, error.clone());
             }
             return Err(error);
         }
@@ -986,10 +927,10 @@ impl SnapshotStore {
         &self,
         view: &SnapshotView<impl Clone>,
         items: &[T],
-    ) -> Result<Page<T>, SnapshotError> {
+    ) -> Result<Page<T>, SnapshotRejection> {
         let total_count = items.len();
         if view.position > total_count {
-            return Err(SnapshotError::InvalidCursor);
+            return Err(SnapshotRejection::InvalidCursor);
         }
         let end = view
             .position
@@ -1031,7 +972,10 @@ impl SnapshotStore {
             .filter_map(|record| match record.phase {
                 FlightPhase::Completed { .. } => {
                     if matches!(record.outcome, FlightOutcome::Success(_)) {
-                        record.outcome = FlightOutcome::Failure(SharedFlightFailure::InvalidArguments);
+                        record.outcome =
+                            FlightOutcome::Failure(ToolFailure::Rejected(ToolRejection::InvalidArguments {
+                                _source: None,
+                            }));
                     }
                     Some(record.cell.clone())
                 }
@@ -1095,7 +1039,7 @@ impl SnapshotStore {
         })
     }
 
-    fn resolve_cursor<T>(&self, request: &SnapshotRequest, cursor: &str) -> Result<SnapshotView<T>, SnapshotError>
+    fn resolve_cursor<T>(&self, request: &SnapshotRequest, cursor: &str) -> Result<SnapshotView<T>, SnapshotRejection>
     where
         T: Clone + Send + Sync + 'static,
     {
@@ -1107,10 +1051,10 @@ impl SnapshotStore {
             return self.view_from_entry(request, &claims, entry);
         }
         Err(match state.tombstones.get(claims.id.as_str()) {
-            Some(TombstoneReason::Expired) => SnapshotError::Expired,
-            Some(TombstoneReason::Evicted) => SnapshotError::Evicted,
-            Some(TombstoneReason::Invalidated) => SnapshotError::Invalidated,
-            None => SnapshotError::InvalidCursor,
+            Some(TombstoneReason::Expired) => SnapshotRejection::Expired,
+            Some(TombstoneReason::Evicted) => SnapshotRejection::Evicted,
+            Some(TombstoneReason::Invalidated) => SnapshotRejection::Invalidated,
+            None => SnapshotRejection::InvalidCursor,
         })
     }
 
@@ -1119,18 +1063,18 @@ impl SnapshotStore {
         request: &SnapshotRequest,
         claims: &CursorClaims,
         entry: &SnapshotEntry,
-    ) -> Result<SnapshotView<T>, SnapshotError>
+    ) -> Result<SnapshotView<T>, SnapshotRejection>
     where
         T: Clone + Send + Sync + 'static,
     {
         if claims.generation != entry.key.generation {
-            return Err(SnapshotError::InvalidCursor);
+            return Err(SnapshotRejection::InvalidCursor);
         }
         validate_request(request, &entry.key.request)?;
         let payload = entry
             .value
             .downcast_ref::<QueryPayload<T>>()
-            .ok_or(SnapshotError::ContextMismatch)?
+            .ok_or(SnapshotRejection::ContextMismatch)?
             .clone();
         let freshness_ms = Instant::now()
             .saturating_duration_since(entry.inserted_at)
@@ -1165,10 +1109,10 @@ impl SnapshotStore {
         response_cache_ttl: Option<Duration>,
         bytes: usize,
         generation: u64,
-    ) -> Result<(), SnapshotError> {
+    ) -> Result<(), SnapshotRejection> {
         let mut store = self.lock_state();
         if self.inner.generation.load(Ordering::Acquire) != generation {
-            return Err(SnapshotError::Invalidated);
+            return Err(SnapshotRejection::Invalidated);
         }
         let StoreState { snapshots, flights } = &mut *store;
         purge_expired(snapshots, self.tombstone_capacity());
@@ -1196,14 +1140,14 @@ impl SnapshotStore {
         if scope_entry_count(snapshots, scope).saturating_add(flight_scope_count(flights, scope))
             >= self.inner.per_scope_capacity
         {
-            return Err(SnapshotError::EntryBudgetExceeded);
+            return Err(SnapshotRejection::EntryBudgetExceeded);
         }
         if scope_bytes(snapshots, scope)
             .saturating_add(flight_scope_bytes(flights, scope))
             .saturating_add(bytes)
             > self.inner.limits.max_scope_bytes
         {
-            return Err(SnapshotError::ByteBudgetExceeded);
+            return Err(SnapshotRejection::ByteBudgetExceeded);
         }
         while snapshots.entries.len().saturating_add(flights.records.len()) >= self.inner.capacity
             || snapshots
@@ -1233,7 +1177,7 @@ impl SnapshotStore {
             self.inner.limits.max_total_bytes,
         );
         if snapshots.entries.len().saturating_add(flights.records.len()) >= self.inner.capacity {
-            return Err(SnapshotError::EntryBudgetExceeded);
+            return Err(SnapshotRejection::EntryBudgetExceeded);
         }
         if snapshots
             .total_bytes
@@ -1241,7 +1185,7 @@ impl SnapshotStore {
             .saturating_add(bytes)
             > self.inner.limits.max_total_bytes
         {
-            return Err(SnapshotError::ByteBudgetExceeded);
+            return Err(SnapshotRejection::ByteBudgetExceeded);
         }
         snapshots.insertion_order.push_back(id.clone());
         snapshots.total_bytes = snapshots.total_bytes.saturating_add(bytes);
@@ -1261,13 +1205,13 @@ impl SnapshotStore {
         Ok(())
     }
 
-    fn begin_flight<T>(&self, key: &SnapshotKey) -> Result<BeginFlight<T>, SnapshotError>
+    fn begin_flight<T>(&self, key: &SnapshotKey) -> Result<BeginFlight<T>, SnapshotRejection>
     where
         T: Clone + Send + Sync + 'static,
     {
         let mut store = self.lock_state();
         if self.inner.generation.load(Ordering::Acquire) != key.generation {
-            return Err(SnapshotError::Invalidated);
+            return Err(SnapshotRejection::Invalidated);
         }
         let StoreState { snapshots, flights } = &mut *store;
         purge_expired(snapshots, self.tombstone_capacity());
@@ -1291,7 +1235,7 @@ impl SnapshotStore {
 
         let bytes = retained_flight_bytes(key);
         if bytes > self.inner.limits.max_scope_bytes || bytes > self.inner.limits.max_total_bytes {
-            return Err(SnapshotError::ByteBudgetExceeded);
+            return Err(SnapshotRejection::ByteBudgetExceeded);
         }
         let scope = key.request.scope();
         // Every flight record owns an active loading or completed cohort and is
@@ -1348,7 +1292,7 @@ impl SnapshotStore {
             || flights.records.len() >= self.inner.capacity
             || snapshots.entries.len().saturating_add(flights.records.len()) >= self.inner.capacity
         {
-            return Err(SnapshotError::EntryBudgetExceeded);
+            return Err(SnapshotRejection::EntryBudgetExceeded);
         }
         if scope_bytes(snapshots, scope)
             .saturating_add(flight_scope_bytes(flights, scope))
@@ -1360,7 +1304,7 @@ impl SnapshotStore {
                 .saturating_add(bytes)
                 > self.inner.limits.max_total_bytes
         {
-            return Err(SnapshotError::ByteBudgetExceeded);
+            return Err(SnapshotRejection::ByteBudgetExceeded);
         }
 
         let id = self.inner.flight_sequence.fetch_add(1, Ordering::Relaxed);
@@ -1401,17 +1345,17 @@ impl SnapshotStore {
         cursor_ttl: Duration,
         response_cache_ttl: Option<Duration>,
         entry_bytes: usize,
-    ) -> Result<(), SnapshotError> {
+    ) -> Result<(), SnapshotRejection> {
         let mut store = self.lock_state();
         let StoreState { snapshots, flights } = &mut *store;
         let Some(record) = flights.records.get(&ticket.id) else {
-            return Err(SnapshotError::Invalidated);
+            return Err(SnapshotRejection::Invalidated);
         };
         let FlightPhase::Loading { participants } = record.phase else {
-            return Err(SnapshotError::Invalidated);
+            return Err(SnapshotRejection::Invalidated);
         };
         if !ticket.leader || !Arc::ptr_eq(&ticket.cell, &record.cell) {
-            return Err(SnapshotError::Invalidated);
+            return Err(SnapshotRejection::Invalidated);
         }
         let key = record.key.clone();
         let old_bytes = record.bytes;
@@ -1419,11 +1363,11 @@ impl SnapshotStore {
         let terminal_bytes = keeps_terminal_flight.then(|| retained_terminal_flight_bytes(&key, &id));
         let incoming_bytes = entry_bytes.saturating_add(terminal_bytes.unwrap_or(0));
         let error = if self.inner.generation.load(Ordering::Acquire) != key.generation {
-            Some(SnapshotError::Invalidated)
+            Some(SnapshotRejection::Invalidated)
         } else if incoming_bytes > self.inner.limits.max_scope_bytes
             || incoming_bytes > self.inner.limits.max_total_bytes
         {
-            Some(SnapshotError::ByteBudgetExceeded)
+            Some(SnapshotRejection::ByteBudgetExceeded)
         } else {
             purge_expired(snapshots, self.tombstone_capacity());
             let scope = key.request.scope();
@@ -1497,7 +1441,7 @@ impl SnapshotStore {
                     .saturating_add(usize::from(keeps_terminal_flight))
                     > self.inner.capacity
             {
-                Some(SnapshotError::EntryBudgetExceeded)
+                Some(SnapshotRejection::EntryBudgetExceeded)
             } else if scope_bytes(snapshots, scope)
                 .saturating_add(flight_scope_bytes(flights, scope))
                 .saturating_sub(old_bytes)
@@ -1510,13 +1454,13 @@ impl SnapshotStore {
                     .saturating_add(incoming_bytes)
                     > self.inner.limits.max_total_bytes
             {
-                Some(SnapshotError::ByteBudgetExceeded)
+                Some(SnapshotRejection::ByteBudgetExceeded)
             } else {
                 None
             }
         };
         if let Some(error) = error {
-            let shared = SharedFlightFailure::from_error(&ToolExecutionError::from(error));
+            let shared = ToolFailure::from(error);
             let notify = transition_failure(flights, ticket.id, shared);
             drop(store);
             if let Some(cell) = notify {
@@ -1529,7 +1473,10 @@ impl SnapshotStore {
         }
         let mut notify = None;
         if let Some(terminal_bytes) = terminal_bytes {
-            let record = flights.records.get_mut(&ticket.id).ok_or(SnapshotError::Invalidated)?;
+            let record = flights
+                .records
+                .get_mut(&ticket.id)
+                .ok_or(SnapshotRejection::Invalidated)?;
             record.bytes = terminal_bytes;
             record.phase = FlightPhase::Completed {
                 remaining: participants,
@@ -1565,7 +1512,7 @@ impl SnapshotStore {
         Ok(())
     }
 
-    fn finish_failure(&self, ticket: &FlightTicket, error: SharedFlightFailure) {
+    fn finish_failure(&self, ticket: &FlightTicket, error: ToolFailure) {
         let mut store = self.lock_state();
         let notify = transition_failure(&mut store.flights, ticket.id, error);
         drop(store);
@@ -1575,11 +1522,11 @@ impl SnapshotStore {
     }
 
     #[cfg(test)]
-    async fn flight_lock(&self, key: &SnapshotKey) -> Result<(FlightTicket, bool), SnapshotError> {
+    async fn flight_lock(&self, key: &SnapshotKey) -> Result<(FlightTicket, bool), SnapshotRejection> {
         match self.begin_flight::<Vec<u8>>(key)? {
             BeginFlight::Leader(ticket) => Ok((ticket, false)),
             BeginFlight::Waiter(ticket) => Ok((ticket, true)),
-            BeginFlight::Cached(_) => Err(SnapshotError::Invalidated),
+            BeginFlight::Cached(_) => Err(SnapshotRejection::Invalidated),
         }
     }
 
@@ -1611,38 +1558,40 @@ impl SnapshotStore {
         format!("{CURSOR_PREFIX}{}.{}", hex_encode(claims.as_bytes()), tag)
     }
 
-    fn decode_cursor(&self, cursor: &str) -> Result<CursorClaims, SnapshotError> {
+    fn decode_cursor(&self, cursor: &str) -> Result<CursorClaims, SnapshotRejection> {
         if cursor.len() > MAX_CURSOR_BYTES {
-            return Err(SnapshotError::InvalidCursor);
+            return Err(SnapshotRejection::InvalidCursor);
         }
-        let encoded = cursor.strip_prefix(CURSOR_PREFIX).ok_or(SnapshotError::InvalidCursor)?;
-        let (claims_hex, tag) = encoded.split_once('.').ok_or(SnapshotError::InvalidCursor)?;
-        let claims_bytes = hex_decode(claims_hex).ok_or(SnapshotError::InvalidCursor)?;
-        let claims = std::str::from_utf8(&claims_bytes).map_err(|_| SnapshotError::InvalidCursor)?;
+        let encoded = cursor
+            .strip_prefix(CURSOR_PREFIX)
+            .ok_or(SnapshotRejection::InvalidCursor)?;
+        let (claims_hex, tag) = encoded.split_once('.').ok_or(SnapshotRejection::InvalidCursor)?;
+        let claims_bytes = hex_decode(claims_hex).ok_or(SnapshotRejection::InvalidCursor)?;
+        let claims = std::str::from_utf8(&claims_bytes).map_err(|_| SnapshotRejection::InvalidCursor)?;
         let supplied_tag = hex_decode(tag)
             .filter(|tag| tag.len() == 16)
-            .ok_or(SnapshotError::InvalidCursor)?;
+            .ok_or(SnapshotRejection::InvalidCursor)?;
         let expected = self.authentication_tag(0x72, &[claims.as_bytes()]);
         if !constant_time_eq(&supplied_tag, &expected) {
-            return Err(SnapshotError::InvalidCursor);
+            return Err(SnapshotRejection::InvalidCursor);
         }
         let mut fields = claims.split(':');
         let id = fields
             .next()
             .filter(|id| id.len() == 32)
-            .ok_or(SnapshotError::InvalidCursor)?;
+            .ok_or(SnapshotRejection::InvalidCursor)?;
         let position = fields
             .next()
-            .ok_or(SnapshotError::InvalidCursor)?
+            .ok_or(SnapshotRejection::InvalidCursor)?
             .parse()
-            .map_err(|_| SnapshotError::InvalidCursor)?;
+            .map_err(|_| SnapshotRejection::InvalidCursor)?;
         let generation = fields
             .next()
-            .ok_or(SnapshotError::InvalidCursor)?
+            .ok_or(SnapshotRejection::InvalidCursor)?
             .parse()
-            .map_err(|_| SnapshotError::InvalidCursor)?;
+            .map_err(|_| SnapshotRejection::InvalidCursor)?;
         if fields.next().is_some() || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(SnapshotError::InvalidCursor);
+            return Err(SnapshotRejection::InvalidCursor);
         }
         Ok(CursorClaims {
             id: id.to_string(),
@@ -1666,11 +1615,7 @@ impl SnapshotStore {
 }
 
 impl FlightTicket {
-    async fn wait<T>(
-        &self,
-        key: &SnapshotKey,
-        cancellation: &CancellationToken,
-    ) -> Result<SnapshotView<T>, ToolExecutionError>
+    async fn wait<T>(&self, key: &SnapshotKey, cancellation: &CancellationToken) -> Result<SnapshotView<T>, ToolFailure>
     where
         T: Clone + Send + Sync + 'static,
     {
@@ -1681,23 +1626,24 @@ impl FlightTicket {
             let outcome = {
                 let store = self.inner.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 let Some(record) = store.flights.records.get(&self.id) else {
-                    return Err(ToolExecutionError::Cancelled);
+                    return Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled));
                 };
                 if !Arc::ptr_eq(&self.cell, &record.cell) {
-                    return Err(ToolExecutionError::Cancelled);
+                    return Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled));
                 }
                 match &record.outcome {
                     FlightOutcome::Loading => None,
-                    FlightOutcome::Failure(error) => Some(Err(error.into_error())),
+                    FlightOutcome::Failure(error) => Some(Err(error.clone())),
                     FlightOutcome::Success(id) => {
-                        let entry =
-                            store.snapshots.entries.get(id).ok_or_else(|| {
-                                ToolExecutionError::internal("pinned coalesced snapshot is unavailable")
-                            })?;
+                        let entry = store.snapshots.entries.get(id).ok_or_else(|| {
+                            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Internal(None))
+                        })?;
                         let payload = entry
                             .value
                             .downcast_ref::<QueryPayload<T>>()
-                            .ok_or_else(|| ToolExecutionError::internal("coalesced snapshot type mismatch"))?
+                            .ok_or_else(|| {
+                                ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Internal(None))
+                            })?
                             .clone();
                         let freshness_ms = Instant::now()
                             .saturating_duration_since(entry.inserted_at)
@@ -1723,7 +1669,7 @@ impl FlightTicket {
             }
             tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => return Err(ToolExecutionError::Cancelled),
+                _ = cancellation.cancelled() => return Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)),
                 _ = &mut notified => {}
             }
         }
@@ -1744,7 +1690,11 @@ impl Drop for FlightTicket {
         let mut notify = None;
         let loading = matches!(record.phase, FlightPhase::Loading { .. });
         if loading && self.leader {
-            notify = transition_failure(flights, self.id, SharedFlightFailure::Cancelled);
+            notify = transition_failure(
+                flights,
+                self.id,
+                ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled),
+            );
         }
         let remove = if let Some(record) = flights.records.get_mut(&self.id) {
             match &mut record.phase {
@@ -1778,9 +1728,9 @@ struct CursorClaims {
     generation: u64,
 }
 
-fn validate_request(request: &SnapshotRequest, retained: &SnapshotRequest) -> Result<(), SnapshotError> {
+fn validate_request(request: &SnapshotRequest, retained: &SnapshotRequest) -> Result<(), SnapshotRejection> {
     if request.page_limit != retained.page_limit {
-        return Err(SnapshotError::PageContractMismatch);
+        return Err(SnapshotRejection::PageContractMismatch);
     }
     if request.kind != retained.kind
         || request.cluster != retained.cluster
@@ -1789,7 +1739,7 @@ fn validate_request(request: &SnapshotRequest, retained: &SnapshotRequest) -> Re
         || request.schema_version != retained.schema_version
         || request.visibility != retained.visibility
     {
-        return Err(SnapshotError::ContextMismatch);
+        return Err(SnapshotRejection::ContextMismatch);
     }
     Ok(())
 }
@@ -1823,7 +1773,7 @@ fn flight_scope_bytes(state: &FlightState, scope: (&str, &str)) -> usize {
         .fold(0usize, |total, record| total.saturating_add(record.bytes))
 }
 
-fn transition_failure(state: &mut FlightState, id: u64, error: SharedFlightFailure) -> Option<Arc<FlightCell>> {
+fn transition_failure(state: &mut FlightState, id: u64, error: ToolFailure) -> Option<Arc<FlightCell>> {
     let record = state.records.get_mut(&id)?;
     let FlightPhase::Loading { participants } = record.phase else {
         return None;
@@ -2051,6 +2001,18 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn coalesced_backend_failure_preserves_the_typed_source() {
+        use std::error::Error;
+        let error = super::ToolFailure::backend(std::io::Error::other("private-backend-sentinel"));
+        let shared = error.clone();
+        let replayed = shared.clone();
+        assert!(!format!("{replayed:?} {replayed}").contains("private-backend-sentinel"));
+        let ToolFailure::Operational(operational) = replayed else {
+            panic!("expected an operational backend failure");
+        };
+        assert!(operational.source().unwrap().source().unwrap().is::<std::io::Error>());
+    }
     use std::future::pending;
     use std::sync::atomic::AtomicUsize;
 
@@ -2126,7 +2088,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string()
-            .contains("tampered"));
+            .contains("invalid arguments"));
 
         let claims = store.decode_cursor(&cursor).unwrap();
         let forged_claims = format!("{}:{}:{}", claims.id, claims.position + 1, claims.generation);
@@ -2136,19 +2098,22 @@ mod tests {
             hex_encode(forged_claims.as_bytes()),
             original_tag
         );
-        assert_eq!(store.decode_cursor(&forged), Err(SnapshotError::InvalidCursor));
+        assert_eq!(store.decode_cursor(&forged), Err(SnapshotRejection::InvalidCursor));
 
         let (encoded_claims, _) = cursor.rsplit_once('.').unwrap();
         assert_eq!(
             store.decode_cursor(&format!("{encoded_claims}.not-hex")),
-            Err(SnapshotError::InvalidCursor)
+            Err(SnapshotRejection::InvalidCursor)
         );
 
         let other_store = SnapshotStore::new(8);
-        assert_eq!(other_store.decode_cursor(&cursor), Err(SnapshotError::InvalidCursor));
+        assert_eq!(
+            other_store.decode_cursor(&cursor),
+            Err(SnapshotRejection::InvalidCursor)
+        );
         assert_eq!(
             store.decode_cursor(&"x".repeat(MAX_CURSOR_BYTES + 1)),
-            Err(SnapshotError::InvalidCursor)
+            Err(SnapshotRejection::InvalidCursor)
         );
         assert!(store
             .get_or_load(
@@ -2163,7 +2128,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string()
-            .contains("context"));
+            .contains("invalid arguments"));
 
         assert!(store
             .get_or_load(
@@ -2178,7 +2143,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string()
-            .contains("context"));
+            .contains("invalid arguments"));
 
         assert!(store
             .get_or_load(
@@ -2193,7 +2158,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string()
-            .contains("page contract"));
+            .contains("invalid arguments"));
 
         let mut visibility_mismatch = request(SnapshotKind::TopicInventory, "a", 2);
         visibility_mismatch.visibility = "sensitive".to_string();
@@ -2210,7 +2175,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string()
-            .contains("context"));
+            .contains("invalid arguments"));
     }
 
     #[tokio::test]
@@ -2249,7 +2214,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("expired"));
+        assert!(error.to_string().contains("invalid arguments"));
 
         let view = store
             .get_or_load(
@@ -2277,7 +2242,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("invalidated"));
+        assert!(error.to_string().contains("invalid arguments"));
     }
 
     #[tokio::test]
@@ -2321,7 +2286,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("evicted"));
+        assert!(error.to_string().contains("invalid arguments"));
     }
 
     #[tokio::test]
@@ -2340,7 +2305,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(entry_error.to_string().contains("entry budget"));
+        assert!(entry_error.to_string().contains("invalid arguments"));
 
         let row_error = store
             .get_or_load(
@@ -2354,7 +2319,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(row_error.to_string().contains("row budget"));
+        assert!(row_error.to_string().contains("invalid arguments"));
 
         let byte_error = store
             .get_or_load(
@@ -2368,7 +2333,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(byte_error.to_string().contains("byte budget"));
+        assert!(byte_error.to_string().contains("invalid arguments"));
 
         let metadata_store = SnapshotStore::with_limits(
             8,
@@ -2401,7 +2366,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(metadata_error.to_string().contains("byte budget"));
+        assert!(metadata_error.to_string().contains("invalid arguments"));
     }
 
     #[tokio::test]
@@ -2426,7 +2391,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(error.to_string().contains("byte budget"));
+        assert!(error.to_string().contains("invalid arguments"));
     }
 
     #[tokio::test]
@@ -2452,7 +2417,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(error.to_string().contains("byte budget"));
+        assert!(error.to_string().contains("invalid arguments"));
     }
 
     #[test]
@@ -2469,7 +2434,7 @@ mod tests {
                 &page,
                 "standard",
             ),
-            Err(SnapshotError::ContextTooLarge)
+            Err(SnapshotRejection::ContextTooLarge)
         );
         assert_eq!(
             SnapshotRequest::try_new(
@@ -2479,7 +2444,7 @@ mod tests {
                 &page,
                 "standard",
             ),
-            Err(SnapshotError::ContextTooLarge)
+            Err(SnapshotRejection::ContextTooLarge)
         );
         assert_eq!(
             SnapshotRequest::try_new(
@@ -2489,7 +2454,7 @@ mod tests {
                 &page,
                 "v".repeat(MAX_VISIBILITY_BYTES + 1),
             ),
-            Err(SnapshotError::ContextTooLarge)
+            Err(SnapshotRejection::ContextTooLarge)
         );
     }
 
@@ -2551,7 +2516,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string()
-            .contains("evicted"));
+            .contains("invalid arguments"));
 
         let too_large_for_scope = SnapshotStore::with_limits(
             16,
@@ -2574,7 +2539,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string()
-            .contains("byte budget"));
+            .contains("invalid arguments"));
 
         let global_store = SnapshotStore::with_limits(
             16,
@@ -2623,7 +2588,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string()
-            .contains("evicted"));
+            .contains("invalid arguments"));
     }
 
     #[tokio::test]
@@ -2701,7 +2666,9 @@ mod tests {
                         || async move {
                             calls.fetch_add(1, Ordering::SeqCst);
                             release_loader.notified().await;
-                            Err(ToolExecutionError::backend("shared failure"))
+                            Err(ToolFailure::Operational(
+                                crate::tools::executor::ToolExecutionError::Backend(None),
+                            ))
                         },
                     )
                     .await
@@ -2719,7 +2686,7 @@ mod tests {
         assert_eq!(store.metrics().coalesced_waiters, 7);
         release_loader.notify_one();
         for task in tasks {
-            assert!(task.await.unwrap().contains("backend error"));
+            assert!(task.await.unwrap().contains("RocketMQ source is unavailable"));
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         let state = store.lock_state();
@@ -2745,7 +2712,7 @@ mod tests {
         };
         assert_eq!(
             scope_store.flight_lock(&same_scope_key).await.unwrap_err(),
-            SnapshotError::EntryBudgetExceeded
+            SnapshotRejection::EntryBudgetExceeded
         );
 
         drop(first);
@@ -2761,7 +2728,7 @@ mod tests {
         };
         assert_eq!(
             global_store.flight_lock(&other_scope_key).await.unwrap_err(),
-            SnapshotError::EntryBudgetExceeded
+            SnapshotRejection::EntryBudgetExceeded
         );
         drop(active);
         global_store.prune_flights().await;
@@ -2784,7 +2751,7 @@ mod tests {
         );
         assert_eq!(
             total_store.flight_lock(&key).await.unwrap_err(),
-            SnapshotError::ByteBudgetExceeded
+            SnapshotRejection::ByteBudgetExceeded
         );
         {
             let store = total_store.lock_state();
@@ -2803,7 +2770,7 @@ mod tests {
         );
         assert_eq!(
             scope_store.flight_lock(&key).await.unwrap_err(),
-            SnapshotError::ByteBudgetExceeded
+            SnapshotRejection::ByteBudgetExceeded
         );
         let store = scope_store.lock_state();
         let flights = &store.flights;
@@ -2858,7 +2825,10 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(error, ToolExecutionError::Cancelled));
+        assert!(matches!(
+            error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)
+        ));
 
         let state = store.lock_state();
         let flights = &state.flights;
@@ -3052,11 +3022,15 @@ mod tests {
                 Some(Duration::from_secs(1)),
                 |items: &Vec<u8>| SnapshotWeight::inventory(items.len()),
                 &cancellation,
-                || async { Err(ToolExecutionError::backend("load failed")) },
+                || async {
+                    Err(ToolFailure::Operational(
+                        crate::tools::executor::ToolExecutionError::Backend(None),
+                    ))
+                },
             )
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("load failed"));
+        assert!(error.to_string().contains("RocketMQ source is unavailable"));
         let state = store.lock_state();
         assert!(state.flights.records.is_empty());
         assert_eq!(state.flights.total_bytes, 0);
@@ -3143,7 +3117,10 @@ mod tests {
         let (leader, _) = store.flight_lock(&key).await.unwrap();
         let (old_waiter, coalesced) = store.flight_lock(&key).await.unwrap();
         assert!(coalesced);
-        store.finish_failure(&leader, SharedFlightFailure::Backend);
+        store.finish_failure(
+            &leader,
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None)),
+        );
         let old_cohort = leader.id;
         drop(leader);
 
@@ -3172,7 +3149,10 @@ mod tests {
             .wait::<Vec<u8>>(&key, &CancellationToken::new())
             .await
             .unwrap_err();
-        assert!(matches!(old_error, ToolExecutionError::Backend(_)));
+        assert!(matches!(
+            old_error,
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(_))
+        ));
         drop(old_waiter);
         assert!(store.lock_state().flights.records.is_empty());
     }
@@ -3190,11 +3170,14 @@ mod tests {
         let global = SnapshotStore::new(1);
         let (leader, _) = global.flight_lock(&key).await.unwrap();
         let (waiter, _) = global.flight_lock(&key).await.unwrap();
-        global.finish_failure(&leader, SharedFlightFailure::Backend);
+        global.finish_failure(
+            &leader,
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None)),
+        );
         drop(leader);
         assert_eq!(
             global.flight_lock(&other_scope).await.unwrap_err(),
-            SnapshotError::EntryBudgetExceeded
+            SnapshotRejection::EntryBudgetExceeded
         );
         drop(waiter);
 
@@ -3205,11 +3188,14 @@ mod tests {
         };
         let (leader, _) = scope.flight_lock(&key).await.unwrap();
         let (waiter, _) = scope.flight_lock(&key).await.unwrap();
-        scope.finish_failure(&leader, SharedFlightFailure::Backend);
+        scope.finish_failure(
+            &leader,
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None)),
+        );
         drop(leader);
         assert_eq!(
             scope.flight_lock(&same_scope).await.unwrap_err(),
-            SnapshotError::EntryBudgetExceeded
+            SnapshotRejection::EntryBudgetExceeded
         );
         drop(waiter);
 
@@ -3225,11 +3211,14 @@ mod tests {
         );
         let (leader, _) = bytes.flight_lock(&key).await.unwrap();
         let (waiter, _) = bytes.flight_lock(&key).await.unwrap();
-        bytes.finish_failure(&leader, SharedFlightFailure::Backend);
+        bytes.finish_failure(
+            &leader,
+            ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Backend(None)),
+        );
         drop(leader);
         assert_eq!(
             bytes.flight_lock(&other_scope).await.unwrap_err(),
-            SnapshotError::ByteBudgetExceeded
+            SnapshotRejection::ByteBudgetExceeded
         );
         drop(waiter);
         let state = bytes.lock_state();
@@ -3254,7 +3243,7 @@ mod tests {
                     &CancellationToken::new(),
                     || async move {
                         task_entered.notify_one();
-                        pending::<Result<QueryPayload<Vec<u8>>, ToolExecutionError>>().await
+                        pending::<Result<QueryPayload<Vec<u8>>, ToolFailure>>().await
                     },
                 )
                 .await
@@ -3286,7 +3275,7 @@ mod tests {
                     &CancellationToken::new(),
                     || async move {
                         leader_entered.notify_one();
-                        pending::<Result<QueryPayload<Vec<u8>>, ToolExecutionError>>().await
+                        pending::<Result<QueryPayload<Vec<u8>>, ToolFailure>>().await
                     },
                 )
                 .await
@@ -3320,7 +3309,10 @@ mod tests {
             .expect("waiter must be woken")
             .unwrap()
             .unwrap_err();
-        assert!(matches!(waiter_error, ToolExecutionError::Cancelled));
+        assert!(matches!(
+            waiter_error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled)
+        ));
         let state = store.lock_state();
         assert!(state.flights.records.is_empty());
         assert_eq!(state.flights.records.capacity(), 0);
@@ -3375,7 +3367,10 @@ mod tests {
             .wait::<Vec<u8>>(&key, &CancellationToken::new())
             .await
             .unwrap_err();
-        assert!(matches!(waiter_error, ToolExecutionError::InvalidArguments(_)));
+        assert!(matches!(
+            waiter_error,
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
+        ));
         drop(waiter);
         let cursor_error = store
             .get_or_load(
@@ -3389,7 +3384,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(cursor_error.to_string().contains("invalidated"));
+        assert!(cursor_error.to_string().contains("invalid arguments"));
         assert!(store.lock_state().flights.records.is_empty());
     }
 
@@ -3405,7 +3400,7 @@ mod tests {
         store.clear().await;
         assert_eq!(
             store.flight_lock(&stale_key).await.unwrap_err(),
-            SnapshotError::Invalidated
+            SnapshotRejection::Invalidated
         );
 
         let current = store
@@ -3439,7 +3434,7 @@ mod tests {
                     stale_bytes,
                 )
                 .unwrap_err(),
-            SnapshotError::Invalidated
+            SnapshotRejection::Invalidated
         );
         drop(stale_leader);
         assert!(matches!(
@@ -3447,7 +3442,7 @@ mod tests {
                 .wait::<Vec<u8>>(&stale_key, &CancellationToken::new())
                 .await
                 .unwrap_err(),
-            ToolExecutionError::InvalidArguments(_)
+            ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { .. })
         ));
         drop(stale_waiter);
         let state = store.lock_state();

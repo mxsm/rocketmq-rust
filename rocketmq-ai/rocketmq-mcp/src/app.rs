@@ -23,10 +23,6 @@ use crate::guard::Guard;
 use rocketmq_admin_core::read_client_adapter::ClientRuntime;
 use rocketmq_admin_core::read_client_adapter::ClientRuntimeConfig;
 
-static LEGACY_TELEMETRY_GUARD: std::sync::OnceLock<
-    std::sync::Mutex<Option<rocketmq_observability::TelemetryRuntimeGuard>>,
-> = std::sync::OnceLock::new();
-
 #[derive(Debug, Clone)]
 pub struct McpShutdownReport {
     pub audit: AuditDrainReport,
@@ -133,9 +129,8 @@ impl McpApp {
         config: McpConfig,
         service_context: rocketmq_runtime::ChildServiceContext,
         telemetry_handle: rocketmq_observability::TelemetryHandle,
-    ) -> Result<Self, crate::error::McpError> {
-        let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)
-            .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
+    ) -> crate::error::McpResult<Self> {
+        let guard = Guard::new(config.security.clone(), config.audit.clone(), &config.clusters)?;
         let metrics = rocketmq_observability::metrics::mcp::McpMetricsRecorder::from_handle(&telemetry_handle);
         let client_runtime = ClientRuntime::try_new(
             service_context.component("rocketmq-mcp-client"),
@@ -144,8 +139,7 @@ impl McpApp {
         )
         .map_err(|error| crate::error::McpError::infrastructure("initialize MCP client runtime", error))?;
         let query = Arc::new(QueryFacade::new(config.clone(), client_runtime.clone()));
-        let resources = crate::resources::registry::ResourceRegistry::new()
-            .map_err(|error| crate::error::McpError::infrastructure("initialize resource registry", error))?;
+        let resources = crate::resources::registry::ResourceRegistry::new()?;
         Ok(Self {
             config,
             guard,
@@ -175,16 +169,16 @@ impl McpApp {
     ///
     /// Returns a typed MCP error when telemetry, guards, adapters, or background
     /// services cannot be initialized.
-    pub async fn bootstrap_typed(
+    pub async fn bootstrap(
         config: McpConfig,
         process_telemetry: rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
         security_bootstrap: rocketmq_security_api::SecurityBootstrapOutcome,
         service_context: rocketmq_runtime::ChildServiceContext,
-    ) -> Result<Self, crate::error::McpError> {
+    ) -> crate::error::McpResult<Self> {
         let telemetry_resolution = resolve_mcp_telemetry(&config)?;
         ensure_process_telemetry_matches(&process_telemetry, &telemetry_resolution.process)?;
         let handoff = prepare_mcp_bootstrap_from_validated_outcome(config, telemetry_resolution, security_bootstrap)?;
-        Self::bootstrap_validated_typed(handoff, service_context).await
+        Self::bootstrap_validated(handoff, service_context).await
     }
 
     /// Initializes MCP from an opaque handoff created only after shared
@@ -194,17 +188,17 @@ impl McpApp {
     ///
     /// Returns a typed MCP error when telemetry, guards, adapters, or
     /// background services cannot be initialized.
-    pub async fn bootstrap_validated_typed(
+    pub async fn bootstrap_validated(
         handoff: ValidatedMcpBootstrap,
         service_context: rocketmq_runtime::ChildServiceContext,
-    ) -> Result<Self, crate::error::McpError> {
+    ) -> crate::error::McpResult<Self> {
         let ValidatedMcpBootstrap {
             config,
             telemetry_resolution,
             security_outcome: _,
         } = handoff;
         let rocketmq_observability::TelemetryResolution { bootstrap, process, .. } = telemetry_resolution;
-        let telemetry = init_resolved_tracing_typed(&config, bootstrap, &process, &service_context).await?;
+        let telemetry = init_resolved_tracing(&config, bootstrap, &process, &service_context).await?;
         rocketmq_observability::metrics::runtime::record_lifecycle(
             rocketmq_runtime::RuntimeComponent::Mcp,
             rocketmq_observability::metrics::runtime::RuntimeLifecycleState::Starting,
@@ -239,23 +233,6 @@ impl McpApp {
         Ok(app)
     }
 
-    #[deprecated(since = "1.0.0", note = "use McpApp::bootstrap_typed")]
-    pub async fn bootstrap(
-        config: McpConfig,
-        process_telemetry: rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
-        validated_security: rocketmq_security_api::ValidatedSecurityBootstrap,
-        service_context: rocketmq_runtime::ChildServiceContext,
-    ) -> anyhow::Result<Self> {
-        Self::bootstrap_typed(
-            config,
-            process_telemetry,
-            rocketmq_security_api::SecurityBootstrapOutcome::Validated(validated_security),
-            service_context,
-        )
-        .await
-        .map_err(anyhow::Error::new)
-    }
-
     pub fn config(&self) -> &McpConfig {
         &self.config
     }
@@ -282,21 +259,19 @@ impl McpApp {
     ///
     /// Returns an invalid-configuration error when the runtime context is unavailable or the
     /// lifecycle health boundary cannot be started.
-    pub async fn start_lifecycle(
-        &self,
-        lifecycle: &rocketmq_runtime::ServiceLifecycle,
-    ) -> Result<(), crate::error::McpError> {
+    pub async fn start_lifecycle(&self, lifecycle: &rocketmq_runtime::ServiceLifecycle) -> crate::error::McpResult<()> {
         let service_context = self.service_context.component("rocketmq-mcp-lifecycle");
-        lifecycle.start(&service_context).await.map_err(|error| {
-            crate::error::McpError::InvalidConfig(format!("failed to start MCP lifecycle boundary: {error}"))
-        })
+        lifecycle
+            .start(&service_context)
+            .await
+            .map_err(crate::McpError::from_source)
     }
 
     #[cfg(feature = "streamable-http")]
     pub(crate) fn service_context(
         &self,
         name: &'static str,
-    ) -> Result<rocketmq_runtime::ChildServiceContext, crate::error::McpError> {
+    ) -> crate::error::McpResult<rocketmq_runtime::ChildServiceContext> {
         Ok(self.service_context.component(name))
     }
 
@@ -412,32 +387,29 @@ impl McpApp {
         }
     }
 
-    fn start_background_services(&self) -> Result<(), crate::error::McpError> {
+    fn start_background_services(&self) -> crate::error::McpResult<()> {
         let audit_service = self.service_context.component("rocketmq-mcp-audit");
-        self.guard
-            .audit_log()
-            .start(&self.config.audit, &audit_service)
-            .map_err(|error| crate::error::McpError::InvalidConfig(error.to_string()))?;
+        self.guard.audit_log().start(&self.config.audit, &audit_service)?;
         Ok(())
     }
 }
 
-pub async fn init_tracing_typed(
+pub async fn init_tracing(
     config: &McpConfig,
     process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
     service_context: &rocketmq_runtime::ChildServiceContext,
-) -> Result<rocketmq_observability::TelemetryRuntimeGuard, crate::error::McpError> {
+) -> crate::error::McpResult<rocketmq_observability::TelemetryRuntimeGuard> {
     let rocketmq_observability::TelemetryResolution { bootstrap, process, .. } = resolve_mcp_telemetry(config)?;
     ensure_process_telemetry_matches(process_telemetry, &process)?;
-    init_resolved_tracing_typed(config, bootstrap, &process, service_context).await
+    init_resolved_tracing(config, bootstrap, &process, service_context).await
 }
 
-async fn init_resolved_tracing_typed(
+async fn init_resolved_tracing(
     config: &McpConfig,
     bootstrap: rocketmq_observability::TelemetryBootstrapConfig,
     process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
     service_context: &rocketmq_runtime::ChildServiceContext,
-) -> Result<rocketmq_observability::TelemetryRuntimeGuard, crate::error::McpError> {
+) -> crate::error::McpResult<rocketmq_observability::TelemetryRuntimeGuard> {
     let environment_filter = rocketmq_observability::read_rust_log()
         .map_err(|source| crate::error::McpError::infrastructure("read MCP RUST_LOG", source))?;
     let resolved_filter = rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
@@ -459,19 +431,17 @@ async fn init_resolved_tracing_typed(
             .shutdown_with_service_context(service_context, std::time::Duration::from_secs(10))
             .await
             .into_result()
-            .err()
-            .map(|error| error.to_string());
+            .err();
         return Err(match cleanup_error {
-            Some(cleanup_error) => crate::error::McpError::InvalidConfig(format!(
-                "{registration_error}; MCP telemetry cleanup after release identity failure also failed: \
-                 {cleanup_error}"
-            )),
+            Some(cleanup_error) => crate::McpError::from_source(TelemetryRollbackError {
+                primary: registration_error,
+                _cleanup: cleanup_error,
+            }),
             None => registration_error,
         });
     }
     tracing::info!(
         service = "rocketmq-mcp",
-        effective_filter = resolved_filter.filter(),
         filter_source = %resolved_filter.source(),
         subscriber_installed = guard.subscriber_install_status().installed,
         reload_enabled = bootstrap.logging.reload.enabled,
@@ -481,6 +451,20 @@ async fn init_resolved_tracing_typed(
         tracing::warn!("server.log_level is deprecated; use logging.filter instead");
     }
     Ok(guard)
+}
+
+#[derive(thiserror::Error)]
+#[error("MCP telemetry initialization and cleanup failed")]
+struct TelemetryRollbackError {
+    #[source]
+    primary: crate::McpError,
+    _cleanup: rocketmq_observability::ObservabilityError,
+}
+
+impl std::fmt::Debug for TelemetryRollbackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 fn build_mcp_telemetry_bootstrap_config(config: &McpConfig) -> rocketmq_observability::TelemetryBootstrapConfig {
@@ -503,9 +487,9 @@ fn mcp_telemetry_environment_spec() -> rocketmq_observability::TelemetryEnvironm
 fn ensure_process_telemetry_matches(
     supplied: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
     resolved: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
-) -> Result<(), crate::error::McpError> {
+) -> crate::error::McpResult<()> {
     if supplied != resolved {
-        return Err(crate::error::McpError::InvalidConfig(
+        return Err(crate::error::McpError::invalid_config(
             "MCP process telemetry input must match the unified telemetry resolution".to_string(),
         ));
     }
@@ -515,7 +499,7 @@ fn ensure_process_telemetry_matches(
 fn validate_mcp_telemetry_resolution(
     config: &McpConfig,
     resolution: &rocketmq_observability::TelemetryResolution,
-) -> Result<(), crate::error::McpError> {
+) -> crate::error::McpResult<()> {
     let observability = &resolution.bootstrap.observability;
     if observability.service_name != "rocketmq-mcp"
         || observability.service_namespace != "rocketmq"
@@ -531,7 +515,7 @@ fn validate_mcp_telemetry_resolution(
         || observability.enabled
             != (observability.metrics.enabled || observability.traces.enabled || observability.logs.enabled)
     {
-        return Err(crate::error::McpError::InvalidConfig(
+        return Err(crate::error::McpError::invalid_config(
             "resolved MCP telemetry identity must match the service-owned identity".to_string(),
         ));
     }
@@ -540,7 +524,7 @@ fn validate_mcp_telemetry_resolution(
         .then(|| resolution.process.prometheus_listener_addr())
         .flatten();
     if resolution.prometheus_listener_addr != expected_listener {
-        return Err(crate::error::McpError::InvalidConfig(
+        return Err(crate::error::McpError::invalid_config(
             "resolved MCP telemetry listener must match the validated process configuration".to_string(),
         ));
     }
@@ -558,7 +542,7 @@ pub fn prepare_mcp_bootstrap(
     config: McpConfig,
     security_bootstrap: &rocketmq_security_api::SecurityBootstrap,
     probe_bind_addr: Option<std::net::SocketAddr>,
-) -> Result<ValidatedMcpBootstrap, crate::error::McpError> {
+) -> crate::error::McpResult<ValidatedMcpBootstrap> {
     let telemetry_resolution = resolve_mcp_telemetry(&config)?;
     prepare_mcp_bootstrap_from_resolution(config, security_bootstrap, probe_bind_addr, telemetry_resolution)
 }
@@ -568,7 +552,7 @@ fn prepare_mcp_bootstrap_from_resolution(
     security_bootstrap: &rocketmq_security_api::SecurityBootstrap,
     probe_bind_addr: Option<std::net::SocketAddr>,
     telemetry_resolution: rocketmq_observability::TelemetryResolution,
-) -> Result<ValidatedMcpBootstrap, crate::error::McpError> {
+) -> crate::error::McpResult<ValidatedMcpBootstrap> {
     validate_mcp_telemetry_resolution(&config, &telemetry_resolution)?;
     let security_outcome = validate_mcp_security(
         security_bootstrap,
@@ -588,7 +572,7 @@ fn prepare_mcp_bootstrap_from_validated_outcome(
     config: McpConfig,
     telemetry_resolution: rocketmq_observability::TelemetryResolution,
     security_outcome: rocketmq_security_api::SecurityBootstrapOutcome,
-) -> Result<ValidatedMcpBootstrap, crate::error::McpError> {
+) -> crate::error::McpResult<ValidatedMcpBootstrap> {
     validate_mcp_telemetry_resolution(&config, &telemetry_resolution)?;
     Ok(ValidatedMcpBootstrap {
         config,
@@ -609,19 +593,17 @@ pub fn validate_mcp_security(
     http_bind: &str,
     prometheus_bind_addr: Option<std::net::SocketAddr>,
     probe_bind_addr: Option<std::net::SocketAddr>,
-) -> Result<rocketmq_security_api::SecurityBootstrapOutcome, crate::error::McpError> {
+) -> crate::error::McpResult<rocketmq_security_api::SecurityBootstrapOutcome> {
     if !security_bootstrap.is_enabled() {
-        return security_bootstrap.validate(&[]).map_err(|error| {
-            crate::error::McpError::InvalidConfig(format!(
-                "MCP security bootstrap failed before listener bind: {error}"
-            ))
-        });
+        return security_bootstrap.validate(&[]).map_err(crate::McpError::from_source);
     }
     let mut listeners = Vec::with_capacity(3);
     if transport == TransportKind::StreamableHttp {
-        listeners.push(http_bind.parse::<std::net::SocketAddr>().map_err(|_| {
-            crate::error::McpError::InvalidConfig("server.http.bind must be a socket address".to_string())
-        })?);
+        listeners.push(
+            http_bind
+                .parse::<std::net::SocketAddr>()
+                .map_err(crate::McpError::from_source)?,
+        );
     }
     if let Some(prometheus_bind_addr) = prometheus_bind_addr {
         listeners.push(prometheus_bind_addr);
@@ -629,9 +611,9 @@ pub fn validate_mcp_security(
     if let Some(probe_bind_addr) = probe_bind_addr {
         listeners.push(probe_bind_addr);
     }
-    security_bootstrap.validate(&listeners).map_err(|error| {
-        crate::error::McpError::InvalidConfig(format!("MCP security bootstrap failed before listener bind: {error}"))
-    })
+    security_bootstrap
+        .validate(&listeners)
+        .map_err(crate::McpError::from_source)
 }
 
 /// Resolves MCP telemetry from service defaults, file overrides, and present
@@ -643,21 +625,21 @@ pub fn validate_mcp_security(
 /// value or the merged telemetry configuration is invalid.
 pub fn resolve_mcp_telemetry(
     config: &McpConfig,
-) -> Result<rocketmq_observability::TelemetryResolution, crate::error::McpError> {
+) -> crate::error::McpResult<rocketmq_observability::TelemetryResolution> {
     rocketmq_observability::resolve_telemetry_from_env(
         "rocketmq-mcp",
         build_mcp_telemetry_bootstrap_config(config),
         &config.observability,
         mcp_telemetry_environment_spec(),
     )
-    .map_err(|error| crate::error::McpError::InvalidConfig(format!("invalid MCP telemetry configuration: {error}")))
+    .map_err(crate::McpError::from_source)
 }
 
 #[cfg(test)]
 fn resolve_mcp_telemetry_values(
     config: &McpConfig,
     environment: &rocketmq_observability::TelemetryEnvironmentValues,
-) -> Result<rocketmq_observability::TelemetryResolution, crate::error::McpError> {
+) -> crate::error::McpResult<rocketmq_observability::TelemetryResolution> {
     rocketmq_observability::resolve_telemetry_values(
         "rocketmq-mcp",
         build_mcp_telemetry_bootstrap_config(config),
@@ -665,7 +647,7 @@ fn resolve_mcp_telemetry_values(
         environment,
         mcp_telemetry_environment_spec(),
     )
-    .map_err(|error| crate::error::McpError::InvalidConfig(format!("invalid MCP telemetry configuration: {error}")))
+    .map_err(crate::McpError::from_source)
 }
 
 #[cfg(test)]
@@ -674,7 +656,7 @@ fn prepare_mcp_bootstrap_values(
     security_bootstrap: &rocketmq_security_api::SecurityBootstrap,
     probe_bind_addr: Option<std::net::SocketAddr>,
     environment: &rocketmq_observability::TelemetryEnvironmentValues,
-) -> Result<ValidatedMcpBootstrap, crate::error::McpError> {
+) -> crate::error::McpResult<ValidatedMcpBootstrap> {
     let telemetry_resolution = resolve_mcp_telemetry_values(&config, environment)?;
     prepare_mcp_bootstrap_from_resolution(config, security_bootstrap, probe_bind_addr, telemetry_resolution)
 }
@@ -682,7 +664,7 @@ fn prepare_mcp_bootstrap_values(
 fn register_mcp_release_identity(
     telemetry_guard: &rocketmq_observability::TelemetryRuntimeGuard,
     process_telemetry: &rocketmq_observability::metrics::release_identity::ProcessTelemetryConfig,
-) -> Result<(), crate::error::McpError> {
+) -> crate::error::McpResult<()> {
     if !process_telemetry.metrics_enabled() {
         return Ok(());
     }
@@ -696,7 +678,7 @@ fn register_mcp_release_identity(
                 crate::error::McpError::infrastructure("register MCP release identity before readiness", source)
             })?;
         if !telemetry.release_identity_registered() {
-            return Err(crate::error::McpError::InvalidConfig(
+            return Err(crate::error::McpError::invalid_config(
                 "MCP release identity was not registered before readiness".to_string(),
             ));
         }
@@ -706,38 +688,42 @@ fn register_mcp_release_identity(
     #[cfg(not(feature = "observability"))]
     {
         let _ = telemetry_guard;
-        Err(crate::error::McpError::InvalidConfig(
+        Err(crate::error::McpError::invalid_config(
             "MCP metrics require the `observability` Cargo feature".to_string(),
         ))
     }
 }
 
-#[deprecated(since = "1.0.0", note = "use init_tracing_typed")]
-pub fn init_tracing(config: &McpConfig) -> anyhow::Result<()> {
-    let environment_filter = rocketmq_observability::read_rust_log()?;
-    let resolved_filter =
-        rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
-            environment: environment_filter.as_deref(),
-            config: config.logging.filter.as_deref(),
-            legacy_config: config.server.log_level.as_deref(),
-            ..rocketmq_observability::LogFilterInputs::default()
-        })?;
-    let rocketmq_observability::TelemetryResolution {
-        bootstrap,
-        process: process_telemetry,
-        ..
-    } = resolve_mcp_telemetry(config).map_err(anyhow::Error::new)?;
-    let guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter)?;
-    register_mcp_release_identity(&guard, &process_telemetry).map_err(anyhow::Error::new)?;
-    *LEGACY_TELEMETRY_GUARD
-        .get_or_init(|| std::sync::Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(guard);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn telemetry_rollback_retains_primary_and_cleanup_causes() {
+        use std::error::Error;
+        let error = crate::McpError::from_source(super::TelemetryRollbackError {
+            primary: crate::McpError::from_source(std::io::Error::other("primary-private-sentinel")),
+            _cleanup: rocketmq_observability::ObservabilityError::MetricsShutdown(
+                "cleanup-private-sentinel".to_string(),
+            ),
+        });
+        let composite = error
+            .source()
+            .unwrap()
+            .downcast_ref::<super::TelemetryRollbackError>()
+            .unwrap();
+        assert!(composite.source().unwrap().source().unwrap().is::<std::io::Error>());
+        assert!(matches!(
+            composite._cleanup,
+            rocketmq_observability::ObservabilityError::MetricsShutdown(_)
+        ));
+        for projection in [
+            error.to_string(),
+            format!("{error:?}"),
+            composite.to_string(),
+            format!("{composite:?}"),
+        ] {
+            assert!(!projection.contains("private-sentinel"));
+        }
+    }
     use super::prepare_mcp_bootstrap_from_resolution;
     use super::prepare_mcp_bootstrap_values;
     use super::resolve_mcp_telemetry_values;
@@ -838,7 +824,7 @@ mod tests {
             .expect_err("unsupported protocol should fail")
             .to_string();
 
-        assert!(error.contains("OTEL_EXPORTER_OTLP_PROTOCOL"));
+        assert_eq!(error, "MCP operation failed");
         assert!(!error.contains("secret-endpoint-sentinel"));
         assert!(!error.contains("secret-protocol-sentinel"));
     }
@@ -865,7 +851,7 @@ mod tests {
             let error = resolve_mcp_telemetry_values(&config, &invalid_environment)
                 .expect_err("invalid MCP trace sample ratio should fail")
                 .to_string();
-            assert!(error.contains("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO"));
+            assert_eq!(error, "MCP operation failed");
             assert!(!error.contains(invalid_value));
         }
 
@@ -877,11 +863,7 @@ mod tests {
             let error = resolve_mcp_telemetry_values(&config, &invalid_environment)
                 .expect_err("empty or non-numeric MCP trace sample ratio should fail")
                 .to_string();
-            assert_eq!(
-                error,
-                "invalid configuration: invalid MCP telemetry configuration: invalid observability config: \
-                 ROCKETMQ_MCP_TRACE_SAMPLE_RATIO must be a floating-point number"
-            );
+            assert_eq!(error, "MCP operation failed");
         }
     }
 
@@ -907,7 +889,7 @@ mod tests {
             .expect_err("non-UTF-8 MCP trace sample ratio should fail")
             .to_string();
 
-        assert!(error.contains("ROCKETMQ_MCP_TRACE_SAMPLE_RATIO"));
+        assert_eq!(error, "MCP operation failed");
     }
 
     #[test]
@@ -988,7 +970,7 @@ mod tests {
         .expect_err("public file listener must prevent validated handoff construction")
         .to_string();
 
-        assert!(error.contains("loopback"));
+        assert_eq!(error, "MCP operation failed");
         assert!(!error.contains("0.0.0.0"));
         assert!(!error.contains("5557"));
     }

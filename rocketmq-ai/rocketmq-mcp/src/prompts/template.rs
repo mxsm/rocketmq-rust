@@ -62,30 +62,18 @@ pub struct PromptConditionalTool {
     pub tool: String,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum PromptTemplateError {
-    #[error("prompt template must start with YAML front matter")]
-    MissingFrontMatter,
-
-    #[error("prompt template front matter is not terminated")]
-    UnterminatedFrontMatter,
-
-    #[error("invalid prompt template front matter: {0}")]
-    InvalidFrontMatter(#[from] serde_yaml::Error),
-}
-
 impl PromptTemplate {
-    pub fn parse(source: &str) -> Result<Self, PromptTemplateError> {
+    pub fn parse(source: &str) -> crate::McpResult<Self> {
         let source = source.strip_prefix('\u{feff}').unwrap_or(source);
         let source = source.replace("\r\n", "\n").replace('\r', "\n");
         let source = source
             .strip_prefix("---\n")
-            .ok_or(PromptTemplateError::MissingFrontMatter)?;
+            .ok_or_else(|| crate::McpError::invalid_config("missing prompt front matter".to_string()))?;
         let (front_matter, body) = source
             .split_once("\n---\n")
-            .ok_or(PromptTemplateError::UnterminatedFrontMatter)?;
+            .ok_or_else(|| crate::McpError::invalid_config("unterminated prompt front matter".to_string()))?;
         Ok(Self {
-            front_matter: serde_yaml::from_str(front_matter)?,
+            front_matter: serde_yaml::from_str(front_matter).map_err(crate::McpError::from_source)?,
             body: body.to_string(),
         })
     }

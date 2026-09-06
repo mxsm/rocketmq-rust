@@ -38,7 +38,7 @@ use crate::tools::broker_tools::DescribeBrokerArgs;
 use crate::tools::consumer_tools::QueryConsumerLagArgs;
 use crate::tools::consumer_tools::QueryConsumerLagOutput;
 use crate::tools::diagnosis_tools::DiagnoseConsumerLagArgs;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 #[cfg(test)]
 use crate::tools::topic_tools::DescribeTopicArgs;
 #[cfg(test)]
@@ -54,7 +54,7 @@ pub(crate) const CONSUMER_LAG_RULES_VERSION: &str = "rocketmq-mcp.rules.consumer
 pub(crate) async fn diagnose_consumer_lag<A>(
     adapter: &A,
     args: DiagnoseConsumerLagArgs,
-) -> Result<DiagnosisReport, ToolExecutionError>
+) -> Result<DiagnosisReport, ToolFailure>
 where
     A: ReadOnlyQuery,
 {
@@ -108,10 +108,10 @@ where
 #[cfg(test)]
 pub(crate) fn build_consumer_lag_report<Topic, Route, Broker>(
     args: DiagnoseConsumerLagArgs,
-    lag_result: Result<QueryConsumerLagOutput, ToolExecutionError>,
-    topic_result: Result<Topic, ToolExecutionError>,
-    route_result: Result<Route, ToolExecutionError>,
-    broker_result: Option<Result<Broker, ToolExecutionError>>,
+    lag_result: Result<QueryConsumerLagOutput, ToolFailure>,
+    topic_result: Result<Topic, ToolFailure>,
+    route_result: Result<Route, ToolFailure>,
+    broker_result: Option<Result<Broker, ToolFailure>>,
 ) -> DiagnosisReport
 where
     Topic: Serialize,
@@ -131,10 +131,10 @@ where
 pub(crate) fn build_consumer_lag_report_with_threshold<Topic, Route, Broker>(
     args: DiagnoseConsumerLagArgs,
     threshold: i64,
-    lag_result: Result<QueryConsumerLagOutput, ToolExecutionError>,
-    topic_result: Result<Topic, ToolExecutionError>,
-    route_result: Result<Route, ToolExecutionError>,
-    broker_result: Option<Result<Broker, ToolExecutionError>>,
+    lag_result: Result<QueryConsumerLagOutput, ToolFailure>,
+    topic_result: Result<Topic, ToolFailure>,
+    route_result: Result<Route, ToolFailure>,
+    broker_result: Option<Result<Broker, ToolFailure>>,
 ) -> DiagnosisReport
 where
     Topic: Serialize,
@@ -445,7 +445,7 @@ fn follow_up_metrics() -> Vec<MetricWatchItem> {
     ]
 }
 
-fn evidence_from_result<T>(id: &str, source_tool: &str, result: &Result<T, ToolExecutionError>) -> Evidence
+fn evidence_from_result<T>(id: &str, source_tool: &str, result: &Result<T, ToolFailure>) -> Evidence
 where
     T: Serialize,
 {
@@ -514,21 +514,18 @@ mod tests {
         async fn cluster_overview(
             &self,
             _args: ClusterOverviewArgs,
-        ) -> Result<QueryResult<ClusterOverviewOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<ClusterOverviewOutput>, ToolFailure> {
             unimplemented!("not needed by this test")
         }
 
-        async fn list_topics(
-            &self,
-            _args: ListTopicsArgs,
-        ) -> Result<QueryResult<ListTopicsOutput>, ToolExecutionError> {
+        async fn list_topics(&self, _args: ListTopicsArgs) -> Result<QueryResult<ListTopicsOutput>, ToolFailure> {
             unimplemented!("not needed by this test")
         }
 
         async fn describe_topic(
             &self,
             args: DescribeTopicArgs,
-        ) -> Result<QueryResult<DescribeTopicOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<DescribeTopicOutput>, ToolFailure> {
             Ok(QueryResult::bypass(DescribeTopicOutput {
                 cluster: args.cluster,
                 namesrv_addr: "127.0.0.1:9876".to_string(),
@@ -551,7 +548,7 @@ mod tests {
         async fn query_topic_route(
             &self,
             args: QueryTopicRouteArgs,
-        ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolFailure> {
             Ok(QueryResult::bypass(QueryTopicRouteOutput {
                 cluster: args.cluster,
                 namesrv_addr: "127.0.0.1:9876".to_string(),
@@ -573,16 +570,18 @@ mod tests {
         async fn list_consumer_groups(
             &self,
             _args: ListConsumerGroupsArgs,
-        ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure> {
             unimplemented!("not needed by this test")
         }
 
         async fn query_consumer_lag(
             &self,
             args: QueryConsumerLagArgs,
-        ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolFailure> {
             if self.missing_lag {
-                return Err(ToolExecutionError::backend("lag evidence unavailable"));
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                ));
             }
             Ok(QueryResult::bypass(QueryConsumerLagOutput {
                 cluster: args.cluster,
@@ -630,7 +629,7 @@ mod tests {
         async fn describe_broker(
             &self,
             args: DescribeBrokerArgs,
-        ) -> Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<DescribeBrokerOutput>, ToolFailure> {
             Ok(QueryResult::bypass(DescribeBrokerOutput {
                 cluster: args.cluster,
                 namesrv_addr: "127.0.0.1:9876".to_string(),
@@ -643,7 +642,7 @@ mod tests {
         async fn diagnose_consumer_lag(
             &self,
             _args: DiagnoseConsumerLagArgs,
-        ) -> Result<QueryResult<DiagnosisReport>, ToolExecutionError> {
+        ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
             unimplemented!("the rule tests invoke the test-only composition helper")
         }
     }

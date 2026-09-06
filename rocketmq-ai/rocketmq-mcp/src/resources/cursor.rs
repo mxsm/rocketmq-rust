@@ -48,20 +48,38 @@ struct CursorClaims {
     generation: u64,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum DiscoveryCursorError {
-    #[error("operating system random source is unavailable")]
-    Random(#[source] std::io::Error),
-    #[error("discovery cursor is invalid")]
+pub(crate) enum DiscoveryCursorFailure {
     Invalid,
+    Operational(crate::McpError),
+}
+
+impl From<crate::McpError> for DiscoveryCursorFailure {
+    fn from(error: crate::McpError) -> Self {
+        Self::Operational(error)
+    }
+}
+
+impl std::fmt::Display for DiscoveryCursorFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid => f.write_str("discovery cursor is invalid"),
+            Self::Operational(error) => std::fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+impl std::fmt::Debug for DiscoveryCursorFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 impl DiscoveryCursorCodec {
-    pub(crate) fn new() -> Result<Self, DiscoveryCursorError> {
+    pub(crate) fn new() -> crate::McpResult<Self> {
         let mut material = [0u8; KEY_BYTES + std::mem::size_of::<u64>()];
-        fill_random(&mut material).map_err(DiscoveryCursorError::Random)?;
+        fill_random(&mut material).map_err(crate::McpError::from_source)?;
         let (key, generation) = material.split_at(KEY_BYTES);
-        let generation = u64::from_be_bytes(generation.try_into().map_err(|_| DiscoveryCursorError::Invalid)?);
+        let generation = u64::from_be_bytes(generation.try_into().map_err(crate::McpError::from_source)?);
         Ok(Self::from_material(key, generation))
     }
 
@@ -77,15 +95,15 @@ impl DiscoveryCursorCodec {
         surface: DiscoverySurface,
         offset: usize,
         canonical_auth_claims: &[u8],
-    ) -> Result<String, DiscoveryCursorError> {
+    ) -> crate::McpResult<String> {
         let claims = CursorClaims {
             version: FORMAT_VERSION,
             surface,
-            offset: u64::try_from(offset).map_err(|_| DiscoveryCursorError::Invalid)?,
+            offset: u64::try_from(offset).map_err(crate::McpError::from_source)?,
             generation: self.generation,
         };
         let key = self.principal_key(canonical_auth_claims)?;
-        let token = jsonwebtoken::encode(&token_header(), &claims, &key).map_err(|_| DiscoveryCursorError::Invalid)?;
+        let token = jsonwebtoken::encode(&token_header(), &claims, &key).map_err(crate::McpError::from_source)?;
         Ok(format!("{TOKEN_PREFIX}{token}"))
     }
 
@@ -94,13 +112,15 @@ impl DiscoveryCursorCodec {
         surface: DiscoverySurface,
         token: &str,
         canonical_auth_claims: &[u8],
-    ) -> Result<usize, DiscoveryCursorError> {
+    ) -> Result<usize, DiscoveryCursorFailure> {
         if token.len() > MAX_TOKEN_BYTES {
-            return Err(DiscoveryCursorError::Invalid);
+            return Err(DiscoveryCursorFailure::Invalid);
         }
-        let token = token.strip_prefix(TOKEN_PREFIX).ok_or(DiscoveryCursorError::Invalid)?;
+        let token = token
+            .strip_prefix(TOKEN_PREFIX)
+            .ok_or(DiscoveryCursorFailure::Invalid)?;
         if token.matches('.').count() != 2 {
-            return Err(DiscoveryCursorError::Invalid);
+            return Err(DiscoveryCursorFailure::Invalid);
         }
         let key = self.principal_verification_key(canonical_auth_claims)?;
         let mut validation = Validation::new(Algorithm::HS256);
@@ -109,35 +129,35 @@ impl DiscoveryCursorCodec {
         validation.validate_nbf = false;
         validation.validate_aud = false;
         let decoded = jsonwebtoken::decode::<CursorClaims>(token, &key, &validation)
-            .map_err(|_| DiscoveryCursorError::Invalid)?;
+            .map_err(|_| DiscoveryCursorFailure::Invalid)?;
         if decoded.header.typ.as_deref() != Some(TOKEN_TYPE)
             || decoded.claims.version != FORMAT_VERSION
             || decoded.claims.surface != surface
             || decoded.claims.generation != self.generation
         {
-            return Err(DiscoveryCursorError::Invalid);
+            return Err(DiscoveryCursorFailure::Invalid);
         }
         let canonical = jsonwebtoken::encode(
             &token_header(),
             &decoded.claims,
             &self.principal_key(canonical_auth_claims)?,
         )
-        .map_err(|_| DiscoveryCursorError::Invalid)?;
+        .map_err(crate::McpError::from_source)?;
         if canonical != token {
-            return Err(DiscoveryCursorError::Invalid);
+            return Err(DiscoveryCursorFailure::Invalid);
         }
-        usize::try_from(decoded.claims.offset).map_err(|_| DiscoveryCursorError::Invalid)
+        usize::try_from(decoded.claims.offset).map_err(|_| DiscoveryCursorFailure::Invalid)
     }
 
-    fn principal_key(&self, canonical_auth_claims: &[u8]) -> Result<EncodingKey, DiscoveryCursorError> {
+    fn principal_key(&self, canonical_auth_claims: &[u8]) -> crate::McpResult<EncodingKey> {
         let derived = jsonwebtoken::crypto::sign(canonical_auth_claims, &self.signing_key, Algorithm::HS256)
-            .map_err(|_| DiscoveryCursorError::Invalid)?;
+            .map_err(crate::McpError::from_source)?;
         Ok(EncodingKey::from_secret(derived.as_bytes()))
     }
 
-    fn principal_verification_key(&self, canonical_auth_claims: &[u8]) -> Result<DecodingKey, DiscoveryCursorError> {
+    fn principal_verification_key(&self, canonical_auth_claims: &[u8]) -> crate::McpResult<DecodingKey> {
         let derived = jsonwebtoken::crypto::sign(canonical_auth_claims, &self.signing_key, Algorithm::HS256)
-            .map_err(|_| DiscoveryCursorError::Invalid)?;
+            .map_err(crate::McpError::from_source)?;
         Ok(DecodingKey::from_secret(derived.as_bytes()))
     }
 }
@@ -195,6 +215,32 @@ fn fill_random(_output: &mut [u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_server_signing_failures_preserve_operational_sources() {
+        use std::error::Error;
+        let healthy = codec(7);
+        let token = healthy.seal(DiscoverySurface::Resources, 1, b"principal").unwrap();
+        assert!(matches!(
+            healthy.open(DiscoverySurface::Resources, "malformed-private-token", b"principal"),
+            Err(DiscoveryCursorFailure::Invalid)
+        ));
+        let broken = DiscoveryCursorCodec {
+            signing_key: EncodingKey::from_rsa_der(b"private-key-sentinel"),
+            generation: 7,
+        };
+        let seal_error = broken.seal(DiscoverySurface::Resources, 1, b"principal").unwrap_err();
+        let Err(DiscoveryCursorFailure::Operational(open_error)) =
+            broken.open(DiscoverySurface::Resources, &token, b"principal")
+        else {
+            panic!("server key failure must not reject the client cursor");
+        };
+        for error in [seal_error, open_error] {
+            assert!(error.source().unwrap().is::<jsonwebtoken::errors::Error>());
+            assert_eq!(error.to_string(), "MCP operation failed");
+            assert!(!format!("{error:?}").contains("private-key-sentinel"));
+        }
+    }
 
     fn codec(generation: u64) -> DiscoveryCursorCodec {
         DiscoveryCursorCodec::from_material(&[0x5a; KEY_BYTES], generation)

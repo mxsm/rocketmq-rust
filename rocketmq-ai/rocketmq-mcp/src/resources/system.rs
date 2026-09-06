@@ -35,7 +35,7 @@ pub fn read_result(uri: &str, kind: &str, value: impl Serialize) -> Result<ReadR
             Some(serde_json::json!({
                 "code": "system_resource_encoding_failed",
                 "retryable": false,
-                "reason": error.to_string(),
+                "reason": crate::McpError::from_source(error).to_string(),
             })),
         )
     })?;

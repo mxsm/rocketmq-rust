@@ -38,8 +38,8 @@ use rocketmq_observability::metrics::mcp::McpAuditFailureKind;
 
 use crate::config::AuditConfig;
 use crate::guard::sanitizer::sanitize_text;
-use crate::guard::GuardError;
 use crate::guard::RiskLevel;
+use crate::McpError;
 
 pub const AUDIT_SCHEMA_VERSION: u16 = 1;
 
@@ -48,7 +48,6 @@ const MAX_REQUEST_ID_BYTES: usize = 128;
 const MAX_IDENTITY_BYTES: usize = 256;
 const MAX_TOOL_BYTES: usize = 256;
 const MAX_ARGUMENTS_HASH_BYTES: usize = 128;
-const MAX_ERROR_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -258,7 +257,7 @@ impl AuditLog {
         &self,
         config: &AuditConfig,
         service_context: &rocketmq_runtime::ChildServiceContext,
-    ) -> Result<(), GuardError> {
+    ) -> crate::McpResult<()> {
         let sink = match config.sink.as_str() {
             "file" => ConfiguredAuditSink::File(FileAuditSink {
                 path: PathBuf::from(&config.path),
@@ -267,7 +266,7 @@ impl AuditLog {
             "tracing" => ConfiguredAuditSink::Tracing(TracingAuditSink),
             "memory" => ConfiguredAuditSink::Memory(MemoryAuditSink),
             _ => {
-                return Err(GuardError::InvalidArgument("unsupported audit sink".to_string()));
+                return Err(McpError::invalid_config("invalid audit configuration".to_string()));
             }
         };
         self.start_with_sink(config, service_context, sink)
@@ -431,7 +430,7 @@ impl AuditLog {
         config: &AuditConfig,
         service_context: &rocketmq_runtime::ChildServiceContext,
         sink: S,
-    ) -> Result<(), GuardError>
+    ) -> crate::McpResult<()>
     where
         S: AuditSink,
     {
@@ -439,7 +438,7 @@ impl AuditLog {
         let mut lifecycle = self
             .lifecycle
             .lock()
-            .map_err(|_| GuardError::InvalidArgument("audit queue state is unavailable".to_string()))?;
+            .map_err(|_| McpError::invalid_config("invalid audit configuration".to_string()))?;
         if !matches!(*lifecycle, AuditLifecycle::Unstarted) {
             return Ok(());
         }
@@ -463,7 +462,7 @@ impl AuditLog {
             .spawn_service("rocketmq-mcp-audit-writer", async move {
                 run_audit_writer(receiver, sink, counters, records, writer_completion).await;
             })
-            .map_err(|error| GuardError::InvalidArgument(format!("failed to start audit writer: {error}")))?;
+            .map_err(McpError::from_source)?;
         *lifecycle = AuditLifecycle::Running {
             sender: Some(sender),
             byte_budget,
@@ -555,8 +554,8 @@ struct AuditEnvelope {
 }
 
 trait AuditSink: Send + 'static {
-    fn write(&mut self, record: &AuditRecord, encoded: &[u8]) -> impl Future<Output = Result<(), ()>> + Send;
-    fn flush(&mut self) -> impl Future<Output = Result<(), ()>> + Send;
+    fn write(&mut self, record: &AuditRecord, encoded: &[u8]) -> impl Future<Output = crate::McpResult<()>> + Send;
+    fn flush(&mut self) -> impl Future<Output = crate::McpResult<()>> + Send;
 }
 
 enum ConfiguredAuditSink {
@@ -566,7 +565,7 @@ enum ConfiguredAuditSink {
 }
 
 impl AuditSink for ConfiguredAuditSink {
-    async fn write(&mut self, record: &AuditRecord, encoded: &[u8]) -> Result<(), ()> {
+    async fn write(&mut self, record: &AuditRecord, encoded: &[u8]) -> crate::McpResult<()> {
         match self {
             Self::File(sink) => sink.write(record, encoded).await,
             Self::Tracing(sink) => sink.write(record, encoded).await,
@@ -574,7 +573,7 @@ impl AuditSink for ConfiguredAuditSink {
         }
     }
 
-    async fn flush(&mut self) -> Result<(), ()> {
+    async fn flush(&mut self) -> crate::McpResult<()> {
         match self {
             Self::File(sink) => sink.flush().await,
             Self::Tracing(sink) => sink.flush().await,
@@ -589,7 +588,7 @@ struct FileAuditSink {
 }
 
 impl AuditSink for FileAuditSink {
-    async fn write(&mut self, _record: &AuditRecord, encoded: &[u8]) -> Result<(), ()> {
+    async fn write(&mut self, _record: &AuditRecord, encoded: &[u8]) -> crate::McpResult<()> {
         let path = self.path.clone();
         let encoded = encoded.to_vec();
         self.blocking
@@ -597,22 +596,22 @@ impl AuditSink for FileAuditSink {
                 write_file_record(path, &encoded)
             })
             .await
-            .map_err(|_| ())?
+            .map_err(McpError::from_source)?
     }
 
-    async fn flush(&mut self) -> Result<(), ()> {
+    async fn flush(&mut self) -> crate::McpResult<()> {
         let path = self.path.clone();
         self.blocking
             .spawn_io("rocketmq-mcp-audit-file-flush", move || flush_audit_file(path))
             .await
-            .map_err(|_| ())?
+            .map_err(McpError::from_source)?
     }
 }
 
 struct TracingAuditSink;
 
 impl AuditSink for TracingAuditSink {
-    async fn write(&mut self, record: &AuditRecord, _encoded: &[u8]) -> Result<(), ()> {
+    async fn write(&mut self, record: &AuditRecord, _encoded: &[u8]) -> crate::McpResult<()> {
         tracing::info!(
             schema_version = record.schema_version,
             request_id = %record.request_id,
@@ -628,7 +627,7 @@ impl AuditSink for TracingAuditSink {
         Ok(())
     }
 
-    async fn flush(&mut self) -> Result<(), ()> {
+    async fn flush(&mut self) -> crate::McpResult<()> {
         Ok(())
     }
 }
@@ -636,11 +635,11 @@ impl AuditSink for TracingAuditSink {
 struct MemoryAuditSink;
 
 impl AuditSink for MemoryAuditSink {
-    async fn write(&mut self, _record: &AuditRecord, _encoded: &[u8]) -> Result<(), ()> {
+    async fn write(&mut self, _record: &AuditRecord, _encoded: &[u8]) -> crate::McpResult<()> {
         Ok(())
     }
 
-    async fn flush(&mut self) -> Result<(), ()> {
+    async fn flush(&mut self) -> crate::McpResult<()> {
         Ok(())
     }
 }
@@ -685,25 +684,25 @@ fn push_record(records: &Mutex<VecDeque<AuditRecord>>, record: AuditRecord) {
     records.push_back(record);
 }
 
-fn write_file_record(path: PathBuf, encoded: &[u8]) -> Result<(), ()> {
+fn write_file_record(path: PathBuf, encoded: &[u8]) -> crate::McpResult<()> {
     if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(|_| ())?;
+        std::fs::create_dir_all(parent).map_err(McpError::from_source)?;
     }
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
-        .map_err(|_| ())?;
-    file.write_all(encoded).map_err(|_| ())
+        .map_err(McpError::from_source)?;
+    file.write_all(encoded).map_err(McpError::from_source)
 }
 
-fn flush_audit_file(path: PathBuf) -> Result<(), ()> {
+fn flush_audit_file(path: PathBuf) -> crate::McpResult<()> {
     let file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
-        .map_err(|_| ())?;
-    file.sync_all().map_err(|_| ())
+        .map_err(McpError::from_source)?;
+    file.sync_all().map_err(McpError::from_source)
 }
 
 fn sanitize_record(mut record: AuditRecord) -> AuditRecord {
@@ -720,10 +719,7 @@ fn sanitize_record(mut record: AuditRecord) -> AuditRecord {
         .map(|value| sanitize_field(value, MAX_IDENTITY_BYTES));
     record.tool = sanitize_field(&record.tool, MAX_TOOL_BYTES);
     record.arguments_hash = sanitize_field(&record.arguments_hash, MAX_ARGUMENTS_HASH_BYTES);
-    record.error = record
-        .error
-        .as_deref()
-        .map(|value| sanitize_field(value, MAX_ERROR_BYTES));
+    record.error = record.error.map(|_| "MCP request failed".to_string());
     record
 }
 
@@ -746,21 +742,15 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
     &value[..end]
 }
 
-fn validate_queue_config(config: &AuditConfig) -> Result<(), GuardError> {
+fn validate_queue_config(config: &AuditConfig) -> crate::McpResult<()> {
     if config.queue_capacity == 0 {
-        return Err(GuardError::InvalidArgument(
-            "audit queue capacity must be greater than zero".to_string(),
-        ));
+        return Err(McpError::invalid_config("invalid audit configuration".to_string()));
     }
     if config.max_record_bytes == 0 || config.queue_max_bytes < config.max_record_bytes {
-        return Err(GuardError::InvalidArgument(
-            "audit byte capacity must cover one non-empty record".to_string(),
-        ));
+        return Err(McpError::invalid_config("invalid audit configuration".to_string()));
     }
     if config.queue_max_bytes > u32::MAX as usize {
-        return Err(GuardError::InvalidArgument(
-            "audit byte capacity exceeds the supported maximum".to_string(),
-        ));
+        return Err(McpError::invalid_config("invalid audit configuration".to_string()));
     }
     Ok(())
 }

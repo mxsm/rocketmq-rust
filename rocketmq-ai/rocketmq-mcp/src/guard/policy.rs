@@ -19,7 +19,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::guard::context::Principal;
-use crate::guard::GuardError;
+use crate::guard::GuardRejection;
 use crate::guard::RiskLevel;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,16 +46,11 @@ pub struct PolicyEngine {
 }
 
 impl PolicyEngine {
-    pub fn load(path: &Path) -> Result<Self, GuardError> {
-        let config = config::Config::builder()
-            .add_source(config::File::from(path))
-            .build()
-            .map_err(|error| GuardError::InvalidArgument(format!("failed to load permissions: {error}")))?;
-        let permissions = config
-            .try_deserialize::<PermissionConfig>()
-            .map_err(|error| GuardError::InvalidArgument(format!("invalid permissions configuration: {error}")))?;
+    pub fn load(path: &Path) -> crate::McpResult<Self> {
+        let config = config::Config::builder().add_source(config::File::from(path)).build()?;
+        let permissions = config.try_deserialize::<PermissionConfig>()?;
         if permissions.roles.is_empty() {
-            return Err(GuardError::InvalidArgument(
+            return Err(crate::McpError::invalid_config(
                 "permissions configuration must define at least one role".to_string(),
             ));
         }
@@ -70,17 +65,17 @@ impl PolicyEngine {
         tool_name: &str,
         cluster: Option<&str>,
         risk_level: RiskLevel,
-    ) -> Result<(), GuardError> {
+    ) -> Result<(), GuardRejection> {
         self.require_scope(principal, risk_level)?;
         self.authorize(principal, tool_name, cluster)
     }
 
-    pub fn authorize_resource(&self, principal: &Principal, cluster: &str) -> Result<(), GuardError> {
+    pub fn authorize_resource(&self, principal: &Principal, cluster: &str) -> Result<(), GuardRejection> {
         self.require_scope(principal, RiskLevel::ReadOnly)?;
         self.authorize(principal, "resource:read", Some(cluster))
     }
 
-    pub fn authorize_system_resource(&self, principal: &Principal) -> Result<(), GuardError> {
+    pub fn authorize_system_resource(&self, principal: &Principal) -> Result<(), GuardRejection> {
         self.require_scope(principal, RiskLevel::Diagnose)?;
         if principal
             .roles
@@ -89,10 +84,7 @@ impl PolicyEngine {
         {
             Ok(())
         } else {
-            Err(GuardError::PermissionDenied(format!(
-                "principal `{}` has no valid diagnostic role",
-                principal.id
-            )))
+            Err(GuardRejection::PermissionDenied)
         }
     }
 
@@ -112,9 +104,8 @@ impl PolicyEngine {
         self.authorize_system_resource(principal).is_ok()
     }
 
-    fn authorize(&self, principal: &Principal, operation: &str, cluster: Option<&str>) -> Result<(), GuardError> {
+    fn authorize(&self, principal: &Principal, operation: &str, cluster: Option<&str>) -> Result<(), GuardRejection> {
         let mut allowed = false;
-        let mut denied = false;
         let mut allowed_clusters = BTreeSet::new();
         for role in &principal.roles {
             let mut visited = BTreeSet::new();
@@ -125,7 +116,6 @@ impl PolicyEngine {
                 let explicitly_allowed = matches_pattern(&role.allow_tools, operation)
                     || (operation == "resource:read"
                         && matches_pattern(&role.allow_tools, "rocketmq_get_cluster_overview"));
-                denied |= matches_pattern(&role.deny_tools, operation) && !explicitly_allowed;
                 if explicitly_allowed {
                     allowed = true;
                 }
@@ -134,11 +124,7 @@ impl PolicyEngine {
         }
 
         if !allowed {
-            let reason = if denied { " is denied" } else { " is not authorized" };
-            return Err(GuardError::PermissionDenied(format!(
-                "principal `{}`{reason} for `{operation}`",
-                principal.id,
-            )));
+            return Err(GuardRejection::PermissionDenied);
         }
         if let Some(cluster) = cluster {
             if !matches_cluster(&allowed_clusters, cluster)
@@ -147,16 +133,13 @@ impl PolicyEngine {
                     .as_ref()
                     .is_some_and(|clusters| !matches_cluster(clusters, cluster))
             {
-                return Err(GuardError::ClusterNotAllowed(format!(
-                    "principal `{}` is not authorized for cluster `{cluster}`",
-                    principal.id
-                )));
+                return Err(GuardRejection::ClusterNotAllowed);
             }
         }
         Ok(())
     }
 
-    fn require_scope(&self, principal: &Principal, risk_level: RiskLevel) -> Result<(), GuardError> {
+    fn require_scope(&self, principal: &Principal, risk_level: RiskLevel) -> Result<(), GuardRejection> {
         let required_scope = match risk_level {
             RiskLevel::ReadOnly => "rocketmq:read",
             RiskLevel::Diagnose => "rocketmq:diagnose",
@@ -166,22 +149,14 @@ impl PolicyEngine {
         if principal.scopes.contains(required_scope) {
             return Ok(());
         }
-        Err(GuardError::UnauthorizedScope(format!(
-            "principal `{}` lacks required scope `{required_scope}`",
-            principal.id
-        )))
+        Err(GuardRejection::UnauthorizedScope)
     }
 
-    fn collect_role(&self, role_name: &str, visited: &mut BTreeSet<String>) -> Result<Vec<String>, GuardError> {
+    fn collect_role(&self, role_name: &str, visited: &mut BTreeSet<String>) -> Result<Vec<String>, GuardRejection> {
         if !visited.insert(role_name.to_string()) {
-            return Err(GuardError::InvalidArgument(format!(
-                "permissions role include cycle contains `{role_name}`"
-            )));
+            return Err(GuardRejection::InvalidArgument);
         }
-        let role = self
-            .roles
-            .get(role_name)
-            .ok_or_else(|| GuardError::PermissionDenied(format!("principal references unknown role `{role_name}`")))?;
+        let role = self.roles.get(role_name).ok_or(GuardRejection::PermissionDenied)?;
         let mut resolved = vec![role_name.to_string()];
         for included in &role.include {
             resolved.extend(self.collect_role(included, visited)?);

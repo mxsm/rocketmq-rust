@@ -19,7 +19,8 @@
 pub mod adapter;
 pub mod app;
 pub mod config;
-pub mod error;
+mod error;
+pub use error::{McpError, McpResult};
 pub mod guard;
 pub(crate) mod infrastructure;
 pub mod model;

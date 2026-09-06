@@ -18,7 +18,7 @@ use rocketmq_admin_core::core::infrastructure_observation::InfrastructureObserva
 use super::map_logical_admin_error;
 use super::AdminCoreSession;
 use crate::model::contract::QueryPayload;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::infrastructure_tools as tool;
 
 impl AdminCoreSession {
@@ -27,7 +27,7 @@ impl AdminCoreSession {
         broker_names: &[String],
         include_sync_state: bool,
         controller_names: &[String],
-    ) -> Result<QueryPayload<tool::GetHaStatusOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<tool::GetHaStatusOutput>, ToolFailure> {
         let request = admin::QueryHaStatusRequest::try_new(
             self.cluster.rocketmq_cluster_name.clone(),
             broker_names.iter().cloned(),
@@ -93,7 +93,7 @@ impl AdminCoreSession {
     pub(super) async fn query_controller_metadata_observation(
         &mut self,
         controller_names: &[String],
-    ) -> Result<QueryPayload<tool::GetControllerMetadataOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<tool::GetControllerMetadataOutput>, ToolFailure> {
         let request = admin::QueryControllerMetadataRequest::try_new(
             self.cluster.rocketmq_cluster_name.clone(),
             controller_names.iter().cloned(),
@@ -128,7 +128,7 @@ impl AdminCoreSession {
 
     pub(super) async fn query_nameserver_config_summary_observation(
         &mut self,
-    ) -> Result<QueryPayload<tool::GetNameserverConfigSummaryOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<tool::GetNameserverConfigSummaryOutput>, ToolFailure> {
         let request = admin::QueryNameserverConfigSummaryRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
             .map_err(map_logical_admin_error)?;
         let result = self

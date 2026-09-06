@@ -20,8 +20,8 @@ use rocketmq_mcp::app::McpApp;
 use rocketmq_mcp::config::Args;
 use rocketmq_mcp::config::McpConfig;
 use rocketmq_mcp::config::TransportKind;
-use rocketmq_mcp::error::McpError;
 use rocketmq_mcp::transport;
+use rocketmq_mcp::McpError;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -33,17 +33,13 @@ use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 
 const RUNTIME_TEARDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
-fn main() -> Result<(), McpError> {
+fn main() -> rocketmq_mcp::McpResult<()> {
     let owner = RuntimeOwner::plan(mcp_runtime_config())
         .expect("runtime configuration is valid")
         .build()
-        .map_err(|source| McpError::Infrastructure {
-            operation: "create MCP runtime owner",
-            source: Box::new(source),
-        })?;
+        .map_err(McpError::from_source)?;
     let service_context = owner.root_context().component("rocketmq-mcp");
-    let lifecycle = ServiceLifecycle::from_env("rocketmq-mcp")
-        .map_err(|error| McpError::InvalidConfig(format!("invalid MCP lifecycle configuration: {error}")))?;
+    let lifecycle = ServiceLifecycle::from_env("rocketmq-mcp").map_err(McpError::from_source)?;
 
     let run_result = owner.block_on(run(service_context, lifecycle.clone()));
     if run_result.is_err() {
@@ -54,20 +50,16 @@ fn main() -> Result<(), McpError> {
         .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
     let shutdown_result = owner
         .shutdown_runtime_blocking_until(shutdown_request.deadline)
-        .map_err(|source| McpError::Infrastructure {
-            operation: "shutdown MCP runtime owner",
-            source: Box::new(source),
-        });
+        .map_err(McpError::from_source);
 
     match (run_result, shutdown_result) {
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(report)) if !report.is_healthy() => {
             lifecycle.mark_failed();
-            Err(McpError::Infrastructure {
-                operation: "complete MCP runtime shutdown without task leaks",
-                source: Box::new(std::io::Error::other(report.to_json())),
-            })
+            Err(McpError::from_source(std::io::Error::other(
+                "MCP runtime shutdown was unhealthy",
+            )))
         }
         (Ok(()), Ok(_report)) => Ok(()),
     }
@@ -79,14 +71,13 @@ fn mcp_runtime_config() -> RuntimeConfig {
     config
 }
 
-async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
+async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> rocketmq_mcp::McpResult<()> {
     let args = Args::parse();
     let config = McpConfig::load_with_overrides(&args)?;
-    let security_bootstrap = SecurityBootstrapConfig::from_env()
-        .map_err(|error| McpError::InvalidConfig(format!("MCP security bootstrap configuration failed: {error}")))?;
+    let security_bootstrap = SecurityBootstrapConfig::from_env().map_err(McpError::from_source)?;
     let bootstrap_handoff = prepare_mcp_bootstrap(config, &security_bootstrap, lifecycle.config().probe_bind_addr)?;
     let validated_security = bootstrap_handoff.security_outcome();
-    let app = McpApp::bootstrap_validated_typed(bootstrap_handoff, service_context).await?;
+    let app = McpApp::bootstrap_validated(bootstrap_handoff, service_context).await?;
     log_security_bootstrap(validated_security);
     if let Err(error) = app.start_lifecycle(&lifecycle).await {
         lifecycle.mark_failed();
@@ -123,18 +114,14 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     }
     result?;
     if lifecycle_failed {
-        return Err(McpError::Infrastructure {
-            operation: "complete MCP lifecycle shutdown",
-            source: Box::new(std::io::Error::other(
-                "MCP lifecycle failed while observing or completing shutdown",
-            )),
-        });
+        return Err(McpError::from_source(std::io::Error::other(
+            "MCP lifecycle shutdown failed",
+        )));
     }
     if !shutdown_report.is_healthy() {
-        return Err(McpError::Infrastructure {
-            operation: "shutdown MCP within the shared lifecycle deadline",
-            source: Box::new(std::io::Error::other("MCP shutdown report is unhealthy")),
-        });
+        return Err(McpError::from_source(std::io::Error::other(
+            "MCP shutdown report is unhealthy",
+        )));
     }
 
     Ok(())
@@ -160,31 +147,26 @@ fn log_security_bootstrap(outcome: SecurityBootstrapOutcome) {
     }
 }
 
-async fn serve_stdio(app: McpApp, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
-    lifecycle
-        .mark_ready()
-        .map_err(|error| McpError::InvalidConfig(format!("failed to publish MCP readiness: {error}")))?;
+async fn serve_stdio(app: McpApp, lifecycle: ServiceLifecycle) -> rocketmq_mcp::McpResult<()> {
+    lifecycle.mark_ready().map_err(McpError::from_source)?;
     rocketmq_observability::metrics::runtime::record_lifecycle(
         rocketmq_runtime::RuntimeComponent::Mcp,
         rocketmq_observability::metrics::runtime::RuntimeLifecycleState::Ready,
         rocketmq_observability::metrics::runtime::RuntimeLifecycleReason::Startup,
     );
-    transport::stdio::serve_typed_with_lifecycle(app, lifecycle).await
+    transport::stdio::serve_with_lifecycle(app, lifecycle).await
 }
 
-async fn serve_streamable_http(app: McpApp, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
+async fn serve_streamable_http(app: McpApp, lifecycle: ServiceLifecycle) -> rocketmq_mcp::McpResult<()> {
     #[cfg(feature = "streamable-http")]
     {
-        transport::streamable_http::serve_typed_with_lifecycle(app, lifecycle).await
+        transport::streamable_http::serve_with_lifecycle(app, lifecycle).await
     }
 
     #[cfg(not(feature = "streamable-http"))]
     {
         let _ = (app, lifecycle);
-        Err(McpError::FeatureDisabled {
-            transport: "streamable-http",
-            feature: "streamable-http",
-        })
+        Err(McpError::feature_disabled())
     }
 }
 
@@ -287,7 +269,7 @@ mod tests {
         .expect_err("public file Prometheus listener must fail before bind")
         .to_string();
 
-        assert!(error.contains("loopback"));
+        assert_eq!(error, "MCP operation failed");
         assert!(!error.contains("0.0.0.0"));
         assert!(!error.contains("5557"));
     }
