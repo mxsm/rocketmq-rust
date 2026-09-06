@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **docs:** Add missing Apache 2.0 headers to the observability broker metrics example and configuration resolution tests ([#10060](https://github.com/mxsm/rocketmq-rust/issues/10060)).
 - **fix(sre-ui):** Pin TypeScript to 5.9.3 so clean installs satisfy the OpenAPI generator and ESLint peer dependencies ([#10033](https://github.com/mxsm/rocketmq-rust/issues/10033))
 - **fix(sre):** Include Required Signals manifest owners in capability coverage validation so standalone MCP ownership is accepted while invalid mappings remain rejected ([#10032](https://github.com/mxsm/rocketmq-rust/issues/10032))
 - **docs:** Fix Rustdoc generic type markup, broken public links, and references to private items across the workspace ([#10030](https://github.com/mxsm/rocketmq-rust/issues/10030))
