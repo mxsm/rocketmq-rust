@@ -24,6 +24,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use rocketmq_security_api::AuthorizationDecision;
 use tracing::debug;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
@@ -35,7 +36,7 @@ use crate::config::AuthConfig;
 
 /// Result type for authorization strategy operations.
 pub type StrategyResult<T> = Result<T, AuthorizationError>;
-pub type AuthorizationFuture<'a> = Pin<Box<dyn Future<Output = StrategyResult<()>> + 'a>>;
+pub type AuthorizationFuture<'a> = Pin<Box<dyn Future<Output = StrategyResult<AuthorizationDecision>> + 'a>>;
 
 /// Trait defining the core authorization strategy behavior.
 ///
@@ -50,15 +51,18 @@ pub trait AuthorizationStrategy: Send + Sync {
     ///
     /// # Returns
     ///
-    /// * `Ok(())` if authorization is granted
-    /// * `Err(AuthorizationError)` if authorization is denied or evaluation fails
+    /// * `Ok(AuthorizationDecision)` if evaluation reaches an allow or deny
+    /// * `Err(AuthorizationError)` if evaluation cannot make a decision
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// let strategy = StatelessAuthorizationStrategy::new(config, None)?;
     /// let context = DefaultAuthorizationContext::of(subject, resource, action, source_ip);
-    /// strategy.evaluate(&context)?;
+    /// match strategy.evaluate(&context).await? {
+    ///     AuthorizationDecision::Allow => proceed(),
+    ///     AuthorizationDecision::Deny(reason) => reject(reason),
+    /// }
     /// ```
     fn evaluate<'a>(&'a self, context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a>;
 }
@@ -89,7 +93,10 @@ pub trait AuthorizationStrategy: Send + Sync {
 ///
 /// // Evaluate authorization
 /// let context = DefaultAuthorizationContext::of(subject, resource, action, source_ip);
-/// strategy.do_evaluate(&context).await?;
+/// match strategy.do_evaluate(&context).await? {
+///     AuthorizationDecision::Allow => proceed(),
+///     AuthorizationDecision::Deny(reason) => reject(reason),
+/// }
 /// ```
 pub struct AbstractAuthorizationStrategy {
     /// Authorization configuration
@@ -131,7 +138,7 @@ impl AbstractAuthorizationStrategy {
                 let trimmed = rpc_code.trim();
                 if !trimmed.is_empty() {
                     authorization_whitelist.insert(trimmed.to_string());
-                    debug!("Added RPC code '{}' to authorization whitelist", trimmed);
+                    debug!("Added authorization whitelist entry");
                 }
             }
         }
@@ -141,10 +148,12 @@ impl AbstractAuthorizationStrategy {
             authorization_whitelist.len()
         );
 
-        let authorization_provider = Some(
-            AuthorizationFactory::get_provider(&auth_config)
-                .map_err(|error| AuthorizationError::ConfigurationError(error.to_string()))?,
-        );
+        let authorization_provider = Some(AuthorizationFactory::get_provider(&auth_config).map_err(|source| {
+            AuthorizationError::ProviderRuntimeFailed {
+                operation: "initialize authorization provider",
+                source: Box::new(source),
+            }
+        })?);
 
         Ok(Self {
             auth_config,
@@ -167,8 +176,8 @@ impl AbstractAuthorizationStrategy {
     ///
     /// # Returns
     ///
-    /// * `Ok(())` if authorization passes or is skipped (disabled/whitelisted)
-    /// * `Err(AuthorizationError)` if authorization fails
+    /// * `Ok(AuthorizationDecision)` when evaluation reaches a final decision
+    /// * `Err(AuthorizationError)` when evaluation fails operationally
     ///
     /// # Errors
     ///
@@ -183,34 +192,29 @@ impl AbstractAuthorizationStrategy {
     /// let context = DefaultAuthorizationContext::of(subject, resource, action, ip);
     ///
     /// // This will check all preconditions
-    /// strategy.do_evaluate(&context).await?;
+    /// match strategy.do_evaluate(&context).await? {
+    ///     AuthorizationDecision::Allow => proceed(),
+    ///     AuthorizationDecision::Deny(reason) => reject(reason),
+    /// }
     /// ```
-    pub async fn do_evaluate(&self, context: &DefaultAuthorizationContext) -> StrategyResult<()> {
-        // Early return for null/empty context
-        if context.subject().is_none() {
-            debug!("Authorization skipped: context has no subject");
-            return Ok(());
-        }
-
+    pub async fn do_evaluate(&self, context: &DefaultAuthorizationContext) -> StrategyResult<AuthorizationDecision> {
         // Check if authorization is enabled
         if !self.auth_config.authorization_enabled {
             debug!("Authorization disabled in configuration, allowing access");
-            return Ok(());
+            return Ok(AuthorizationDecision::Allow);
         }
 
         // Check whitelist
         if let Some(rpc_code) = context.rpc_code() {
             if self.authorization_whitelist.contains(rpc_code) {
-                debug!("RPC code '{}' is whitelisted, allowing access", rpc_code);
-                return Ok(());
+                debug!("Authorization request class is whitelisted, allowing access");
+                return Ok(AuthorizationDecision::Allow);
             }
         }
 
         debug!(
-            "Authorization evaluation for subject: {:?}, resource: {:?}, actions: {:?}",
-            context.subject().map(|s| s.subject_key()),
-            context.resource(),
-            context.actions()
+            action_count = context.actions().len(),
+            "authorization evaluation started"
         );
 
         let provider = self.authorization_provider.as_ref().ok_or_else(|| {
@@ -351,8 +355,7 @@ mod tests {
         let context = DefaultAuthorizationContext::default();
         let result = strategy.do_evaluate(&context).await;
 
-        // Should pass because authorization is disabled
-        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AuthorizationDecision::Allow);
     }
 
     #[tokio::test]
@@ -369,6 +372,6 @@ mod tests {
         );
         let result = strategy.do_evaluate(&context).await;
 
-        assert!(matches!(result, Err(AuthorizationError::PermissionDenied { .. })));
+        assert!(matches!(result, Ok(AuthorizationDecision::Deny(_))));
     }
 }

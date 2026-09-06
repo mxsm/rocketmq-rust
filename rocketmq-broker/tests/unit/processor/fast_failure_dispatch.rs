@@ -25,7 +25,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_security_api::AuthenticatedRequestContext;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::AdmissionController;
@@ -176,8 +176,8 @@ async fn dropping_run_guards_releases_execution_permits_and_running_ownership() 
 struct AllowEmbeddedPolicy;
 
 impl RequestPolicy for AllowEmbeddedPolicy {
-    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
-        Decision::Allow
+    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
+        AuthorizationDecision::Allow
     }
 }
 

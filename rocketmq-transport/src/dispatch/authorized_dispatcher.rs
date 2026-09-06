@@ -16,6 +16,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
+use rocketmq_error::AUTH_PERMISSION_DENIED;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::OperationContext;
@@ -26,7 +27,7 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_security_api::Action;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::ResourceKind;
 use rocketmq_security_api::SecurityBootstrapProfile;
@@ -54,6 +55,13 @@ use crate::telemetry::TransportTelemetry;
 mod core;
 #[path = "authorized_dispatcher/embedded.rs"]
 mod embedded;
+
+fn authorization_denied_response() -> RemotingCommand {
+    RemotingCommand::create_response_command_with_code_remark(
+        ResponseCode::NoPermission,
+        AUTH_PERMISSION_DENIED.public_message(),
+    )
+}
 
 pub(crate) use core::AuthorizedDispatchError;
 pub(crate) use core::AuthorizedDispatcherCore;
@@ -354,21 +362,20 @@ impl AuthorizedDispatchSession {
                 .map_err(|source| TransportError::dispatch(source))?;
             return Ok(DispatchOutcome::Rejected);
         }
-        if let Decision::Deny { reason } = self.boundary.security.authorize_for_dispatch(
-            &command,
-            context.peer(),
-            context.principal(),
-            Resource::new(ResourceKind::Other, request_code.to_string()),
-            Action::Manage,
+        if !matches!(
+            self.boundary.security.authorize_for_dispatch(
+                &command,
+                context.peer(),
+                context.principal(),
+                Resource::new(ResourceKind::Other, request_code.to_string()),
+                Action::Manage,
+            ),
+            Ok(AuthorizationDecision::Allow)
         ) {
             send_handler_boundary_response(
                 &response_session,
                 is_one_way,
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    reason.to_string(),
-                )
-                .set_opaque(opaque),
+                authorization_denied_response().set_opaque(opaque),
             )
             .await
             .map_err(|source| TransportError::dispatch(source))?;

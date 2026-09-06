@@ -24,13 +24,13 @@ use rocketmq_error::RocketMQError;
 use rocketmq_error::SerializationError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeError;
+use rocketmq_security_api::AuthorizationDecision;
 
 use crate::authentication::provider::LocalAuthenticationMetadataProvider;
 use crate::authorization::builder::default_authorization_context_builder::DefaultAuthorizationContextBuilder;
 use crate::authorization::builder::AuthorizationContextBuilder;
 use crate::authorization::chain::AclAuthorizationHandler;
 use crate::authorization::chain::AuthorizationHandler;
-use crate::authorization::chain::UserAuthorizationDecision;
 use crate::authorization::chain::UserAuthorizationHandler;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
@@ -45,21 +45,12 @@ pub type AuthorizationResult<T> = Result<T, AuthorizationError>;
 
 /// Error type for authorization operations.
 ///
-/// This error type covers all authorization-related failures including:
-/// - Permission denied errors
+/// This error type covers failures that prevent an authorization decision, including:
 /// - Policy evaluation failures
 /// - Configuration errors
 /// - Internal errors
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum AuthorizationError {
-    /// Authorization denied: subject does not have permission to perform the requested action.
-    #[error("Authorization denied for subject '{subject}' on resource '{resource}': {reason}")]
-    PermissionDenied {
-        subject: String,
-        resource: String,
-        reason: String,
-    },
-
     /// Policy evaluation failed due to an error in the policy engine.
     #[error("Policy evaluation failed: {0}")]
     PolicyEvaluationFailed(String),
@@ -81,8 +72,12 @@ pub enum AuthorizationError {
     NotInitialized(String),
 
     /// Authorization provider runtime failed while processing a request.
-    #[error("Authorization provider runtime failed: {0}")]
-    ProviderRuntimeFailed(String),
+    #[error("Authorization provider operation '{operation}' failed")]
+    ProviderRuntimeFailed {
+        operation: &'static str,
+        #[source]
+        source: Box<RocketMQError>,
+    },
 
     /// Authorization metadata read failed.
     #[error("Authorization metadata read failed for '{path}': {reason}")]
@@ -115,17 +110,28 @@ pub enum AuthorizationError {
 
 impl From<AuthorizationError> for RocketMQError {
     fn from(error: AuthorizationError) -> Self {
-        let message = error.to_string();
         match error {
-            AuthorizationError::PermissionDenied { .. } => RocketMQError::BrokerPermissionDenied { operation: message },
-            AuthorizationError::SubjectNotFound(_)
-            | AuthorizationError::ResourceNotFound(_)
-            | AuthorizationError::InvalidContext(_) => RocketMQError::illegal_argument(message),
-            AuthorizationError::ConfigurationError(_) | AuthorizationError::NotInitialized(_) => {
-                RocketMQError::auth_config_invalid("auth.authorization", message)
+            AuthorizationError::SubjectNotFound(subject) => {
+                RocketMQError::illegal_argument(format!("Subject '{subject}' not found"))
             }
-            AuthorizationError::PolicyEvaluationFailed(_) | AuthorizationError::ProviderRuntimeFailed(_) => {
-                RocketMQError::Authentication(AuthError::AuthorizationFailed(message))
+            AuthorizationError::ResourceNotFound(resource) => {
+                RocketMQError::illegal_argument(format!("Resource '{resource}' not found or invalid"))
+            }
+            AuthorizationError::InvalidContext(reason) => {
+                RocketMQError::illegal_argument(format!("Invalid authorization context: {reason}"))
+            }
+            AuthorizationError::ConfigurationError(reason) => {
+                RocketMQError::auth_config_invalid("auth.authorization", format!("Configuration error: {reason}"))
+            }
+            AuthorizationError::NotInitialized(reason) => RocketMQError::auth_config_invalid(
+                "auth.authorization",
+                format!("Authorization provider not initialized: {reason}"),
+            ),
+            AuthorizationError::PolicyEvaluationFailed(reason) => {
+                RocketMQError::Authentication(AuthError::ContextCreationError(reason))
+            }
+            AuthorizationError::ProviderRuntimeFailed { operation, source } => {
+                RocketMQError::authentication_source(operation, *source)
             }
             AuthorizationError::StorageReadFailed { path, reason } => RocketMQError::storage_read_failed(path, reason),
             AuthorizationError::StorageWriteFailed { path, reason } => {
@@ -177,9 +183,12 @@ impl From<AuthorizationError> for RocketMQError {
 ///         Ok(())
 ///     }
 ///
-///     async fn authorize(&self, context: &DefaultAuthorizationContext) -> AuthorizationResult<()> {
+///     async fn authorize(
+///         &self,
+///         context: &DefaultAuthorizationContext,
+///     ) -> AuthorizationResult<AuthorizationDecision> {
 ///         // Implement authorization logic
-///         Ok(())
+///         Ok(AuthorizationDecision::Allow)
 ///     }
 /// }
 /// ```
@@ -235,9 +244,9 @@ pub trait AuthorizationProvider: Send + Sync {
     /// * `context` - Authorization context containing subject, resource, actions, and metadata
     ///
     /// # Returns
-    /// - `Ok(())` if authorization succeeds
-    /// - `Err(AuthorizationError::PermissionDenied)` if authorization is denied
-    /// - Other errors for system failures
+    /// - `Ok(AuthorizationDecision::Allow)` if authorization succeeds
+    /// - `Ok(AuthorizationDecision::Deny(_))` if policy denies the request
+    /// - `Err(AuthorizationError)` if no decision can be made
     ///
     /// # Examples
     ///
@@ -248,9 +257,12 @@ pub trait AuthorizationProvider: Send + Sync {
     ///     vec![Action::Pub],
     ///     source_ip
     /// );
-    /// provider.authorize(&context).await?;
+    /// match provider.authorize(&context).await? {
+    ///     AuthorizationDecision::Allow => proceed(),
+    ///     AuthorizationDecision::Deny(reason) => reject(reason),
+    /// }
     /// ```
-    async fn authorize(&self, context: &DefaultAuthorizationContext) -> AuthorizationResult<()>;
+    async fn authorize(&self, context: &DefaultAuthorizationContext) -> AuthorizationResult<AuthorizationDecision>;
 
     /// Create authorization contexts from gRPC metadata and request message.
     ///
@@ -326,9 +338,9 @@ impl AuthorizationProvider for NoopAuthorizationProvider {
         Ok(())
     }
 
-    async fn authorize(&self, _context: &DefaultAuthorizationContext) -> AuthorizationResult<()> {
+    async fn authorize(&self, _context: &DefaultAuthorizationContext) -> AuthorizationResult<AuthorizationDecision> {
         // Always allow
-        Ok(())
+        Ok(AuthorizationDecision::Allow)
     }
 
     fn new_contexts_from_grpc_metadata(
@@ -392,7 +404,10 @@ impl AuthorizationProvider for NoopAuthorizationProvider {
 /// provider.initialize(config)?;
 ///
 /// // Authorize a request
-/// provider.authorize(&context).await?;
+/// match provider.authorize(&context).await? {
+///     AuthorizationDecision::Allow => proceed(),
+///     AuthorizationDecision::Deny(reason) => reject(reason),
+/// }
 /// ```
 pub struct DefaultAuthorizationProvider {
     /// Authorization configuration
@@ -442,48 +457,29 @@ impl DefaultAuthorizationProvider {
         Ok(())
     }
 
-    /// Audit log an authorization decision.
+    /// Audit an authorization outcome without recording request identities or ACL data.
     ///
-    /// Logs successful authorizations at DEBUG level and denials at INFO level.
-    /// Follows the format: [AUTHORIZATION] Subject = {subject} is {decision} Action = {actions}
-    /// from sourceIp = {ip} on resource = {resource} for request = {rpc_code}
-    fn audit_log(&self, context: &DefaultAuthorizationContext, error: Option<&AuthorizationError>) {
+    /// Only closed decision categories and the action count are emitted. Subject,
+    /// resource, source address, credentials, and operational error details remain
+    /// available to typed diagnostics rather than tracing fields.
+    fn audit_log(&self, context: &DefaultAuthorizationContext, result: &AuthorizationResult<AuthorizationDecision>) {
         use tracing::debug;
         use tracing::info;
+        use tracing::warn;
 
-        let subject_key = match context.subject_key() {
-            Some(key) => key,
-            None => return, // No subject, skip logging
-        };
+        let action_count = context.actions().len();
 
-        let decision = if error.is_some() { "DENY" } else { "ALLOW" };
-
-        let actions = context
-            .actions()
-            .iter()
-            .map(|a| format!("{:?}", a))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let source_ip = context.source_ip().unwrap_or("unknown");
-
-        let resource = context
-            .resource()
-            .map(|r| format!("{:?}", r))
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let rpc_code = context.rpc_code().unwrap_or("unknown");
-
-        if error.is_none() {
-            debug!(
-                "[AUTHORIZATION] Subject = {} is {} Action = {} from sourceIp = {} on resource = {} for request = {}.",
-                subject_key, decision, actions, source_ip, resource, rpc_code
-            );
-        } else {
-            info!(
-                "[AUTHORIZATION] Subject = {} is {} Action = {} from sourceIp = {} on resource = {} for request = {}.",
-                subject_key, decision, actions, source_ip, resource, rpc_code
-            );
+        match result {
+            Ok(AuthorizationDecision::Allow) => {
+                debug!(outcome = "allow", action_count, "authorization decision")
+            }
+            Ok(AuthorizationDecision::Deny(denial)) => info!(
+                outcome = "deny",
+                denial = ?denial,
+                action_count,
+                "authorization decision"
+            ),
+            Err(_) => warn!(outcome = "error", action_count, "authorization evaluation failed"),
         }
     }
 }
@@ -512,8 +508,13 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         self.metadata_service = metadata_service;
         self.context_builder = Some(DefaultAuthorizationContextBuilder::new(config.clone()));
 
-        let authentication_metadata_provider = LocalAuthenticationMetadataProvider::with_config(&config)
-            .map_err(|error| AuthorizationError::ConfigurationError(error.to_string()))?;
+        let authentication_metadata_provider =
+            LocalAuthenticationMetadataProvider::with_config(&config).map_err(|source| {
+                AuthorizationError::ProviderRuntimeFailed {
+                    operation: "initialize authentication metadata provider",
+                    source: Box::new(source),
+                }
+            })?;
         self.authentication_metadata_provider = Some(Arc::new(authentication_metadata_provider));
 
         let mut authorization_metadata_provider = LocalAuthorizationMetadataProvider::new();
@@ -524,7 +525,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         Ok(())
     }
 
-    async fn authorize(&self, context: &DefaultAuthorizationContext) -> AuthorizationResult<()> {
+    async fn authorize(&self, context: &DefaultAuthorizationContext) -> AuthorizationResult<AuthorizationDecision> {
         use tracing::debug;
         use tracing::warn;
 
@@ -554,10 +555,8 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         }
 
         debug!(
-            "Authorizing subject={:?} resource={:?} actions={:?}",
-            context.subject_key(),
-            context.resource(),
-            context.actions()
+            action_count = context.actions().len(),
+            "authorization evaluation started"
         );
 
         let authentication_metadata_provider = self.authentication_metadata_provider.as_ref().ok_or_else(|| {
@@ -567,27 +566,21 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
             AuthorizationError::NotInitialized("Authorization metadata provider is not configured".to_string())
         })?;
 
-        let result = async {
+        let result: AuthorizationResult<AuthorizationDecision> = async {
             let user_handler = UserAuthorizationHandler::new(authentication_metadata_provider.clone());
-            match user_handler
-                .authorize_subject(context)
-                .await
-                .map_err(|error| map_handler_error(context, error))?
-            {
-                UserAuthorizationDecision::SuperUser => Ok(()),
-                UserAuthorizationDecision::Continue => {
+            match user_handler.authorize_subject(context).await? {
+                Some(decision) => Ok(decision),
+                None => {
                     let acl_handler = AclAuthorizationHandler::new(authorization_metadata_provider.clone());
-                    acl_handler
-                        .handle(context)
-                        .await
-                        .map_err(|error| map_handler_error(context, error))
+                    acl_handler.handle(context).await
                 }
             }
         }
         .await;
 
-        self.audit_log(context, result.as_ref().err());
-        self.metrics.record_authorization_result(result.is_ok());
+        self.audit_log(context, &result);
+        self.metrics
+            .record_authorization_result(matches!(&result, Ok(AuthorizationDecision::Allow)));
         result
     }
 
@@ -600,17 +593,6 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
             AuthorizationError::NotInitialized("Authorization context builder is not configured".to_string())
         })?;
         builder.build_from_remoting(auth_context, command)
-    }
-}
-
-fn map_handler_error(
-    context: &DefaultAuthorizationContext,
-    error: rocketmq_error::RocketMQError,
-) -> AuthorizationError {
-    AuthorizationError::PermissionDenied {
-        subject: context.subject_key().unwrap_or("unknown").to_string(),
-        resource: context.resource_key().unwrap_or_else(|| "unknown".to_string()),
-        reason: error.to_string(),
     }
 }
 
@@ -633,21 +615,20 @@ mod tests {
         assert!(provider.initialize(config).is_ok());
 
         // Authorize should always succeed (even with empty context)
-        // Note: This is a simplified test; in real usage, context would be properly constructed
-        // The test here just verifies the no-op behavior
+        assert_eq!(
+            provider
+                .authorize(&DefaultAuthorizationContext::default())
+                .await
+                .unwrap(),
+            AuthorizationDecision::Allow
+        );
     }
 
     #[test]
     fn test_authorization_error_display() {
-        let error = AuthorizationError::PermissionDenied {
-            subject: "user:alice".to_string(),
-            resource: "topic:test".to_string(),
-            reason: "insufficient permissions".to_string(),
-        };
+        let error = AuthorizationError::InvalidContext("missing subject".to_owned());
         let msg = format!("{}", error);
-        assert!(msg.contains("alice"));
-        assert!(msg.contains("test"));
-        assert!(msg.contains("insufficient permissions"));
+        assert!(msg.contains("missing subject"));
     }
 
     #[test]
@@ -659,7 +640,10 @@ mod tests {
             AuthorizationError::PolicyEvaluationFailed("invalid policy".to_string()),
             AuthorizationError::ConfigurationError("missing config".to_string()),
             AuthorizationError::NotInitialized("provider not ready".to_string()),
-            AuthorizationError::ProviderRuntimeFailed("unexpected error".to_string()),
+            AuthorizationError::ProviderRuntimeFailed {
+                operation: "load authorization metadata",
+                source: Box::new(RocketMQError::illegal_argument("unexpected error")),
+            },
             AuthorizationError::StorageReadFailed {
                 path: "acls.json".to_string(),
                 reason: "read failed".to_string(),
@@ -686,13 +670,6 @@ mod tests {
 
     #[test]
     fn test_authorization_error_rocketmq_mapping_categories() {
-        let denied = RocketMQError::from(AuthorizationError::PermissionDenied {
-            subject: "user:alice".to_string(),
-            resource: "topic:test".to_string(),
-            reason: "insufficient permissions".to_string(),
-        });
-        assert!(matches!(denied, RocketMQError::BrokerPermissionDenied { .. }));
-
         let invalid = RocketMQError::from(AuthorizationError::InvalidContext("missing subject".to_string()));
         assert!(matches!(invalid, RocketMQError::IllegalArgument(_)));
 
@@ -705,13 +682,15 @@ mod tests {
             }
         ));
 
-        let provider_runtime = RocketMQError::from(AuthorizationError::ProviderRuntimeFailed(
-            "unexpected error".to_string(),
-        ));
-        assert!(matches!(
-            provider_runtime,
-            RocketMQError::Authentication(AuthError::AuthorizationFailed(_))
-        ));
+        let provider_runtime = RocketMQError::from(AuthorizationError::ProviderRuntimeFailed {
+            operation: "load authorization metadata",
+            source: Box::new(RocketMQError::illegal_argument("unexpected error")),
+        });
+        let RocketMQError::AuthenticationSource { operation, source } = provider_runtime else {
+            panic!("provider failure must retain a typed source")
+        };
+        assert_eq!(operation, "load authorization metadata");
+        assert!(source.downcast_ref::<RocketMQError>().is_some());
 
         let storage = RocketMQError::from(AuthorizationError::StorageWriteFailed {
             path: "acls.json".to_string(),
@@ -731,7 +710,7 @@ mod tests {
         ));
         assert!(matches!(
             policy,
-            RocketMQError::Authentication(AuthError::AuthorizationFailed(_))
+            RocketMQError::Authentication(AuthError::ContextCreationError(_))
         ));
     }
 
@@ -835,7 +814,10 @@ mod tests {
         context.set_actions(vec![rocketmq_security_api::Action::Pub]);
         context.set_source_ip("127.0.0.1");
 
-        assert!(provider.authorize(&context).await.is_ok());
+        assert_eq!(
+            provider.authorize(&context).await.unwrap(),
+            AuthorizationDecision::Allow
+        );
     }
 
     #[tokio::test]
@@ -865,7 +847,10 @@ mod tests {
         context.set_actions(vec![rocketmq_security_api::Action::Pub]);
         context.set_source_ip("127.0.0.1");
 
-        assert!(provider.authorize(&context).await.is_ok());
+        assert_eq!(
+            provider.authorize(&context).await.unwrap(),
+            AuthorizationDecision::Allow
+        );
     }
 
     #[tokio::test]
@@ -905,6 +890,29 @@ mod tests {
         context.set_actions(vec![rocketmq_security_api::Action::Pub]);
         context.set_source_ip("127.0.0.1");
 
-        assert!(provider.authorize(&context).await.is_ok());
+        assert_eq!(
+            provider.authorize(&context).await.unwrap(),
+            AuthorizationDecision::Allow
+        );
+    }
+
+    #[tokio::test]
+    async fn test_default_provider_unknown_user_is_subject_denial() {
+        use crate::authorization::model::resource::Resource;
+        use rocketmq_security_api::AuthorizationDenial;
+
+        let mut provider = DefaultAuthorizationProvider::new();
+        provider.initialize(AuthConfig::default()).unwrap();
+
+        let mut context = DefaultAuthorizationContext::default();
+        context.set_subject("missing-user", SubjectType::User);
+        context.set_resource(Resource::of_topic("test-topic"));
+        context.set_actions(vec![rocketmq_security_api::Action::Pub]);
+        context.set_source_ip("127.0.0.1");
+
+        assert_eq!(
+            provider.authorize(&context).await.unwrap(),
+            AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown)
+        );
     }
 }

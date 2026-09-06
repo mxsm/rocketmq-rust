@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use rocketmq_auth::AuthorizationRequest;
-use rocketmq_auth::Decision as LegacyPolicyDecision;
 #[allow(
     deprecated,
     reason = "This compile-only compatibility test proves frozen 1.x aliases retain type identity."
@@ -69,7 +68,6 @@ use rocketmq_auth::MaintenanceRole as LegacyMaintenanceRole;
     reason = "This compile-only compatibility test proves frozen 1.x aliases retain type identity."
 )]
 use rocketmq_auth::MaintenanceRoleGrant as LegacyMaintenanceRoleGrant;
-use rocketmq_auth::PolicyDecision;
 use rocketmq_auth::PolicyResource;
 use rocketmq_auth::RequestContext as LegacyAuthorizationRequest;
 use rocketmq_auth::Resource as LegacyPolicyResource;
@@ -122,7 +120,6 @@ fn auth_compatibility_path_exports_canonical_security_types() {
 
 #[test]
 fn frozen_maintenance_aliases_compile_with_canonical_type_identity() {
-    let _: fn(PolicyDecision) -> LegacyPolicyDecision = type_identity::<PolicyDecision>;
     let _: fn(PolicyResource) -> LegacyPolicyResource = type_identity::<PolicyResource>;
     let _: fn(AuthorizationRequest) -> LegacyAuthorizationRequest = type_identity::<AuthorizationRequest>;
     let _: fn(MaintenanceAuthorizationContext) -> LegacyMaintenanceAuthorizationContext =

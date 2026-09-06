@@ -20,7 +20,8 @@ use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::evaluate_request;
 use rocketmq_security_api::Action;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
+use rocketmq_security_api::AuthorizationDenial;
 use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::IngressPolicy;
 use rocketmq_security_api::LayerEvaluation;
@@ -34,7 +35,6 @@ use rocketmq_security_api::Resource;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::SigningError;
-use rocketmq_security_api::LAYERED_AUTHORIZATION_DENIED_REASON;
 
 fn empty_fields() -> &'static HashMap<CheetahString, CheetahString> {
     static EMPTY: OnceLock<HashMap<CheetahString, CheetahString>> = OnceLock::new();
@@ -105,8 +105,8 @@ impl TransportSecurity {
     /// Installs a coarse ingress policy for the transport dispatch boundary.
     ///
     /// When configured, this policy is evaluated before a request reaches the
-    /// service processor. The legacy `RequestPolicy` remains available only as
-    /// the compatibility fallback when no ingress policy has been installed.
+    /// service processor. The resource policy is evaluated when no ingress
+    /// policy has been installed.
     #[must_use]
     pub fn with_ingress_policy(mut self, ingress_policy: Arc<dyn IngressPolicy>) -> Self {
         self.ingress_policy = Some(ingress_policy);
@@ -139,15 +139,15 @@ impl TransportSecurity {
         principal: Option<&Principal>,
         resource: Resource,
         action: Action,
-    ) -> Decision {
+    ) -> LayerEvaluation<AuthorizationDecision> {
         let Some(policy) = &self.policy else {
             return match self.profile {
-                SecurityBootstrapProfile::DevelopmentInsecureLoopback => Decision::Allow,
-                SecurityBootstrapProfile::SecureEnforced => Decision::deny("request policy is unavailable"),
+                SecurityBootstrapProfile::DevelopmentInsecureLoopback => Ok(AuthorizationDecision::Allow),
+                SecurityBootstrapProfile::SecureEnforced => Err(LayerFailureKind::Unavailable),
             };
         };
         let context = RequestContext::new(request_view(command, peer), principal, resource, action);
-        evaluate_request(policy.as_ref(), &context)
+        Ok(evaluate_request(policy.as_ref(), &context))
     }
 
     pub(crate) fn authorize_for_dispatch(
@@ -157,11 +157,12 @@ impl TransportSecurity {
         principal: Option<&Principal>,
         resource: Resource,
         action: Action,
-    ) -> Decision {
+    ) -> LayerEvaluation<AuthorizationDecision> {
         if self.ingress_policy.is_some() {
             return match self.authorize_ingress(command, peer) {
-                Ok(IngressDecision::AllowToContinue) => Decision::Allow,
-                Ok(IngressDecision::Deny) | Err(_) => Decision::deny(LAYERED_AUTHORIZATION_DENIED_REASON),
+                Ok(IngressDecision::AllowToContinue) => Ok(AuthorizationDecision::Allow),
+                Ok(IngressDecision::Deny) => Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)),
+                Err(failure) => Err(failure),
             };
         }
         self.authorize(command, peer, principal, resource, action)
@@ -173,18 +174,19 @@ impl TransportSecurity {
         principal: &Principal,
         resource: Resource,
         action: Action,
-    ) -> Decision {
+    ) -> LayerEvaluation<AuthorizationDecision> {
         if self.ingress_policy.is_some() {
             return match self.authorize_ingress(command, None) {
-                Ok(IngressDecision::AllowToContinue) => Decision::Allow,
-                Ok(IngressDecision::Deny) | Err(_) => Decision::deny(LAYERED_AUTHORIZATION_DENIED_REASON),
+                Ok(IngressDecision::AllowToContinue) => Ok(AuthorizationDecision::Allow),
+                Ok(IngressDecision::Deny) => Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)),
+                Err(failure) => Err(failure),
             };
         }
         let Some(policy) = &self.policy else {
-            return Decision::deny("embedded request policy is unavailable");
+            return Err(LayerFailureKind::Unavailable);
         };
         let context = RequestContext::new(request_view(command, None), Some(principal), resource, action);
-        evaluate_request(policy.as_ref(), &context)
+        Ok(evaluate_request(policy.as_ref(), &context))
     }
 
     pub fn sign(&self, command: &mut RemotingCommand, peer: Option<&PeerInfo>) -> Result<(), SigningError> {
@@ -200,5 +202,75 @@ impl TransportSecurity {
             command.add_ext_field(key.clone(), value.expose_secret().clone());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct StaticIngress(LayerEvaluation<IngressDecision>);
+
+    impl IngressPolicy for StaticIngress {
+        fn evaluate_ingress(&self, _request: SecurityRequestView<'_>) -> LayerEvaluation<IngressDecision> {
+            self.0
+        }
+    }
+
+    fn security_with_ingress(decision: LayerEvaluation<IngressDecision>) -> TransportSecurity {
+        TransportSecurity::secure_enforced(None, None).with_ingress_policy(Arc::new(StaticIngress(decision)))
+    }
+
+    #[test]
+    fn dispatch_ingress_deny_has_closed_reason_and_failures_remain_typed() {
+        let command = RemotingCommand::create_remoting_command(10);
+        let principal = Principal::new("authenticated");
+        let resource = Resource::topic("TopicA");
+
+        assert_eq!(
+            security_with_ingress(Ok(IngressDecision::Deny)).authorize_for_dispatch(
+                &command,
+                None,
+                Some(&principal),
+                resource.clone(),
+                Action::Manage,
+            ),
+            Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied))
+        );
+        assert_eq!(
+            security_with_ingress(Ok(IngressDecision::Deny)).authorize_embedded_for_dispatch(
+                &command,
+                &principal,
+                resource.clone(),
+                Action::Manage,
+            ),
+            Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied))
+        );
+
+        for failure in [
+            LayerFailureKind::Unavailable,
+            LayerFailureKind::Error,
+            LayerFailureKind::Timeout,
+        ] {
+            assert_eq!(
+                security_with_ingress(Err(failure)).authorize_for_dispatch(
+                    &command,
+                    None,
+                    Some(&principal),
+                    resource.clone(),
+                    Action::Manage,
+                ),
+                Err(failure)
+            );
+            assert_eq!(
+                security_with_ingress(Err(failure)).authorize_embedded_for_dispatch(
+                    &command,
+                    &principal,
+                    resource.clone(),
+                    Action::Manage,
+                ),
+                Err(failure)
+            );
+        }
     }
 }

@@ -14,7 +14,7 @@
 
 use parking_lot::Mutex;
 use rocketmq_security_api::AuthenticatedRequestContext;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
@@ -137,8 +137,8 @@ impl RequestProcessor for EmbeddedOriginProcessor {
 struct AllowEmbeddedPolicy;
 
 impl RequestPolicy for AllowEmbeddedPolicy {
-    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
-        Decision::Allow
+    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
+        AuthorizationDecision::Allow
     }
 }
 

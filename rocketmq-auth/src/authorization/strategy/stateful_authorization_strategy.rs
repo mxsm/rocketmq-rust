@@ -29,9 +29,13 @@ use std::sync::RwLockWriteGuard;
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_security_api::AuthorizationDecision;
+#[cfg(test)]
+use rocketmq_security_api::AuthorizationDenial;
 use tracing::debug;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
+#[cfg(test)]
 use crate::authorization::provider::AuthorizationError;
 use crate::authorization::strategy::abstract_authorization_strategy::AbstractAuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
@@ -46,33 +50,33 @@ type AuthCache = HashMap<String, CachedAuthResult>;
 /// Cached authorization result.
 #[derive(Clone, Debug)]
 struct CachedAuthResult {
-    /// Whether the authorization was granted
-    granted: bool,
-    /// The error if authorization was denied
-    error: Option<String>,
+    /// The final policy decision. Operational failures are never cached.
+    decision: AuthorizationDecision,
     /// Timestamp when this entry was cached
     cached_at: Instant,
 }
 
 impl CachedAuthResult {
-    fn new_granted() -> Self {
+    fn new(decision: AuthorizationDecision) -> Self {
         Self {
-            granted: true,
-            error: None,
-            cached_at: Instant::now(),
-        }
-    }
-
-    fn new_denied(error: AuthorizationError) -> Self {
-        Self {
-            granted: false,
-            error: Some(error.to_string()),
+            decision,
             cached_at: Instant::now(),
         }
     }
 
     fn is_expired(&self, ttl: Duration) -> bool {
         self.cached_at.elapsed() > ttl
+    }
+}
+
+fn cacheable_decision(
+    result: &StrategyResult<AuthorizationDecision>,
+    cache_negative_result: bool,
+) -> Option<AuthorizationDecision> {
+    match result {
+        Ok(AuthorizationDecision::Allow) => Some(AuthorizationDecision::Allow),
+        Ok(decision @ AuthorizationDecision::Deny(_)) if cache_negative_result => Some(*decision),
+        Ok(AuthorizationDecision::Deny(_)) | Err(_) => None,
     }
 }
 
@@ -129,10 +133,16 @@ impl CachedAuthResult {
 /// // First evaluation: queries provider
 /// let context = DefaultAuthorizationContext::of(subject, resource, action, ip);
 /// context.set_channel_id("channel-123");
-/// strategy.evaluate(&context)?; // Cache miss
+/// match strategy.evaluate(&context).await? { // Cache miss
+///     AuthorizationDecision::Allow => proceed(),
+///     AuthorizationDecision::Deny(reason) => reject(reason),
+/// }
 ///
 /// // Second evaluation: uses cache
-/// strategy.evaluate(&context)?; // Cache hit!
+/// match strategy.evaluate(&context).await? { // Cache hit
+///     AuthorizationDecision::Allow => proceed(),
+///     AuthorizationDecision::Deny(reason) => reject(reason),
+/// }
 /// ```
 pub struct StatefulAuthorizationStrategy {
     /// Base authorization strategy
@@ -349,8 +359,8 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
     ///
     /// # Returns
     ///
-    /// * `Ok(())` if authorization is granted
-    /// * `Err(AuthorizationError)` if authorization is denied
+    /// * `Ok(AuthorizationDecision)` for a final allow or deny
+    /// * `Err(AuthorizationError)` if evaluation cannot make a decision
     ///
     /// # Examples
     ///
@@ -358,7 +368,10 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
     /// let strategy = StatefulAuthorizationStrategy::new(config, None)?;
     /// let mut context = DefaultAuthorizationContext::of(subject, resource, action, ip);
     /// context.set_channel_id("channel-123");
-    /// strategy.evaluate(&context)?;
+    /// match strategy.evaluate(&context).await? {
+    ///     AuthorizationDecision::Allow => proceed(),
+    ///     AuthorizationDecision::Deny(reason) => reject(reason),
+    /// }
     /// ```
     fn evaluate<'a>(&'a self, context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a> {
         Box::pin(async move {
@@ -376,51 +389,36 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
                     Ok(cache) => {
                         if let Some(cached_result) = cache.get(&cache_key) {
                             if !cached_result.is_expired(self.cache_ttl) {
-                                debug!("Cache hit for key: {}", cache_key);
+                                debug!("Authorization cache hit");
                                 self.metrics.record_cache_hit();
-                                return if cached_result.granted {
-                                    Ok(())
-                                } else {
-                                    Err(AuthorizationError::PermissionDenied {
-                                        subject: context.subject_key().unwrap_or("unknown").to_string(),
-                                        resource: context.resource_key().unwrap_or_else(|| "unknown".to_string()),
-                                        reason: cached_result
-                                            .error
-                                            .clone()
-                                            .unwrap_or_else(|| "Authorization denied (cached)".to_string()),
-                                    })
-                                };
+                                return Ok(cached_result.decision);
                             } else {
-                                debug!("Cache entry expired for key: {}", cache_key);
+                                debug!("Authorization cache entry expired");
                             }
                         }
                     }
                     Err(poisoned) => {
                         drop(poisoned);
                         self.recover_poisoned_cache();
-                        debug!("Cache unavailable for key after poison recovery: {}", cache_key);
+                        debug!("Authorization cache unavailable after poison recovery");
                     }
                 }
             }
 
             // Cache miss - evaluate and cache result
-            debug!("Cache miss for key: {}", cache_key);
+            debug!("Authorization cache miss");
             self.metrics.record_cache_miss();
 
             let result = evaluate_base_authorization(&self.base, context).await;
 
             // Cache granted results by default. Denied results are cached only when
             // explicitly enabled because ACL updates must take effect conservatively.
-            if result.is_ok() || self.cache_negative_result {
+            if let Some(decision) = cacheable_decision(&result, self.cache_negative_result) {
                 self.evict_if_full();
 
                 let mut cache = self.write_cache_recovering();
-                let cached_result = match &result {
-                    Ok(()) => CachedAuthResult::new_granted(),
-                    Err(e) => CachedAuthResult::new_denied(e.clone()),
-                };
-                cache.insert(cache_key.clone(), cached_result);
-                debug!("Cached result for key: {}", cache_key);
+                cache.insert(cache_key.clone(), CachedAuthResult::new(decision));
+                debug!("Authorization decision cached");
             }
 
             // Periodic cleanup every 100 requests
@@ -546,7 +544,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_acl_generation_change_invalidates_cached_authorization_result() {
-        let config = create_test_config();
+        let mut config = create_test_config();
+        config.authorization_enabled = false;
         let acl_generation = Arc::new(AtomicU64::new(0));
         let strategy =
             StatefulAuthorizationStrategy::new_with_acl_generation(config, None, acl_generation.clone()).unwrap();
@@ -554,11 +553,11 @@ mod tests {
         context.set_channel_id("ch-123".to_string());
         context.set_source_ip("192.168.0.1".to_string());
 
-        assert!(strategy.evaluate(&context).await.is_ok());
+        assert_eq!(strategy.evaluate(&context).await.unwrap(), AuthorizationDecision::Allow);
         assert_eq!(strategy.cache_size(), 1);
 
         acl_generation.fetch_add(1, Ordering::AcqRel);
-        assert!(strategy.evaluate(&context).await.is_ok());
+        assert_eq!(strategy.evaluate(&context).await.unwrap(), AuthorizationDecision::Allow);
         assert_eq!(strategy.cache_size(), 1);
 
         let cache = strategy.auth_cache.read().unwrap();
@@ -567,7 +566,8 @@ mod tests {
 
     #[tokio::test]
     async fn poisoned_authorization_cache_is_cleared_and_evaluation_continues() {
-        let config = create_test_config();
+        let mut config = create_test_config();
+        config.authorization_enabled = false;
         let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
         let cache = strategy.auth_cache.clone();
 
@@ -581,18 +581,19 @@ mod tests {
         let mut context = DefaultAuthorizationContext::default();
         context.set_channel_id("ch-poison".to_string());
 
-        assert!(strategy.evaluate(&context).await.is_ok());
+        assert_eq!(strategy.evaluate(&context).await.unwrap(), AuthorizationDecision::Allow);
         assert_eq!(strategy.cache_size(), 1);
         assert!(strategy.auth_cache.read().is_ok());
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn evaluate_cache_miss_inside_current_thread_runtime_without_nested_block_on_panic() {
-        let config = create_test_config();
+        let mut config = create_test_config();
+        config.authorization_enabled = false;
         let strategy = StatefulAuthorizationStrategy::new(config, None).unwrap();
         let mut context = DefaultAuthorizationContext::default();
         context.set_channel_id("ch-current-thread".to_string());
-        assert!(strategy.evaluate(&context).await.is_ok());
+        assert_eq!(strategy.evaluate(&context).await.unwrap(), AuthorizationDecision::Allow);
 
         assert_eq!(strategy.cache_size(), 1);
     }
@@ -610,7 +611,10 @@ mod tests {
         );
         context.set_channel_id("ch-denied-default".to_string());
 
-        assert!(strategy.evaluate(&context).await.is_err());
+        assert_eq!(
+            strategy.evaluate(&context).await.unwrap(),
+            AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown)
+        );
         assert_eq!(strategy.cache_size(), 0);
     }
 
@@ -628,7 +632,18 @@ mod tests {
         );
         context.set_channel_id("ch-denied-cached".to_string());
 
-        assert!(strategy.evaluate(&context).await.is_err());
+        assert_eq!(
+            strategy.evaluate(&context).await.unwrap(),
+            AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown)
+        );
         assert_eq!(strategy.cache_size(), 1);
+    }
+
+    #[test]
+    fn operational_errors_are_never_cacheable() {
+        let result = Err(AuthorizationError::InvalidContext("broken context".to_owned()));
+
+        assert_eq!(cacheable_decision(&result, false), None);
+        assert_eq!(cacheable_decision(&result, true), None);
     }
 }

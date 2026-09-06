@@ -31,6 +31,7 @@ use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::DetailedDecision;
 use rocketmq_security_api::LayerEvaluation;
 use rocketmq_security_api::LayerFailureKind;
@@ -70,7 +71,6 @@ use crate::migration::alc::plain_access_config::PlainAccessConfig;
 use crate::migration::alc::plain_permission_manager::PlainPermissionManager;
 use crate::permission::Permission;
 use crate::project_authorization_error;
-use crate::project_authorization_result;
 use crate::AuthMetrics;
 use crate::AuthMetricsSnapshot;
 use crate::RemotingAuthContext;
@@ -738,10 +738,12 @@ impl AuthorizationService {
             })?;
 
         for context in contexts {
-            self.provider
+            let decision = self
+                .provider
                 .authorize(&context)
                 .await
                 .map_err(map_authorization_error)?;
+            require_authorization(decision)?;
         }
 
         Ok(())
@@ -749,9 +751,9 @@ impl AuthorizationService {
 
     /// Evaluates remoting authorization using the layered detailed contract.
     ///
-    /// This adapter leaves the legacy `authorize_remoting` API unchanged. A
-    /// disabled authorization service explicitly abstains; policy denials remain
-    /// denials, while provider and context errors retain a fail-closed failure kind.
+    /// A disabled authorization service explicitly abstains; typed policy denials
+    /// remain denials, while provider and context errors retain a fail-closed
+    /// failure kind.
     pub async fn authorize_remoting_detailed(
         &self,
         auth_context: &RemotingAuthContext,
@@ -775,13 +777,13 @@ impl AuthorizationService {
             })?;
 
         for context in contexts {
-            match project_authorization_result(self.provider.authorize(&context).await) {
-                Ok(DetailedDecision::Allow) => {}
-                Ok(DetailedDecision::Deny | DetailedDecision::Abstain) => {
+            match self.provider.authorize(&context).await {
+                Ok(AuthorizationDecision::Allow) => {}
+                Ok(AuthorizationDecision::Deny(_)) => {
                     return Ok(DetailedDecision::Deny);
                 }
-                Err(failure) => {
-                    return Err(failure);
+                Err(error) => {
+                    return Err(project_authorization_error(&error));
                 }
             }
         }
@@ -1203,6 +1205,15 @@ fn map_authorization_error(error: AuthorizationError) -> RocketMQError {
     RocketMQError::from(error)
 }
 
+fn require_authorization(decision: AuthorizationDecision) -> RocketMQResult<()> {
+    match decision {
+        AuthorizationDecision::Allow => Ok(()),
+        AuthorizationDecision::Deny(_) => Err(RocketMQError::BrokerPermissionDenied {
+            operation: "authorize".to_owned(),
+        }),
+    }
+}
+
 fn access_key_from_command(command: &RemotingCommand) -> Option<&str> {
     command.ext_fields().and_then(|fields| {
         fields
@@ -1222,6 +1233,7 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_security_api::Action;
+    use rocketmq_security_api::AuthorizationDenial;
     use tempfile::TempDir;
     use tokio::time::sleep;
 
@@ -1233,6 +1245,26 @@ mod tests {
     use crate::authorization::model::acl::Acl;
     use crate::authorization::model::policy::Policy;
     use crate::authorization::model::resource::Resource;
+
+    #[test]
+    fn ordinary_denials_use_one_fixed_public_error_and_r16_projection() {
+        for denial in [
+            AuthorizationDenial::SubjectUnknown,
+            AuthorizationDenial::ResourceUnknown,
+            AuthorizationDenial::PermissionDenied,
+            AuthorizationDenial::PolicyNotApplicable,
+            AuthorizationDenial::MaintenanceRestricted,
+        ] {
+            let error = require_authorization(AuthorizationDecision::Deny(denial)).unwrap_err();
+            assert_eq!(error.descriptor(), &rocketmq_error::AUTH_PERMISSION_DENIED);
+            assert_eq!(error.public_message(), "Permission was denied");
+            assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 16);
+            assert!(matches!(
+                error,
+                RocketMQError::BrokerPermissionDenied { ref operation } if operation == "authorize"
+            ));
+        }
+    }
 
     struct AuthRuntimeBuilder;
 

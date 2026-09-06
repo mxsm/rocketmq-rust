@@ -357,16 +357,7 @@ impl AuthAdminService {
 }
 
 fn map_authz_error(error: AuthorizationError) -> RocketMQError {
-    match error {
-        AuthorizationError::PermissionDenied {
-            subject,
-            resource,
-            reason,
-        } => permission_denied(format!(
-            "Authorization denied for subject '{subject}' on resource '{resource}': {reason}"
-        )),
-        other => RocketMQError::from(other),
-    }
+    RocketMQError::from(error)
 }
 
 fn permission_denied(message: impl Into<String>) -> RocketMQError {
@@ -665,17 +656,6 @@ mod tests {
 
     #[test]
     fn map_authz_error_preserves_admin_error_category() {
-        let denied = map_authz_error(AuthorizationError::PermissionDenied {
-            subject: "User:alice".to_string(),
-            resource: "Topic:test".to_string(),
-            reason: "denied".to_string(),
-        });
-        assert!(matches!(
-            denied,
-            RocketMQError::BrokerPermissionDenied { operation }
-                if operation == "Authorization denied for subject 'User:alice' on resource 'Topic:test': denied"
-        ));
-
         let invalid = map_authz_error(AuthorizationError::InvalidContext("missing resource".to_string()));
         assert!(matches!(invalid, RocketMQError::IllegalArgument(_)));
 

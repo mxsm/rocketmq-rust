@@ -23,16 +23,16 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_security_api::AuthorizationDecision;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
+use crate::authorization::provider::AuthorizationResult;
 
 /// Authorization handler trait.
 ///
 /// This trait defines the interface for handlers in the authorization chain.
-/// Each handler processes an authorization request and can either:
-/// - Grant access (return Ok(()))
-/// - Deny access (return Err(RocketMQError))
+/// Each handler returns a final allow/deny decision. Operational failures remain
+/// errors and stop the chain immediately.
 ///
 /// # Design Pattern
 ///
@@ -51,8 +51,8 @@ pub trait AuthorizationHandler: Send + Sync {
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - Authorization granted
-    /// * `Err(RocketMQError)` - Authorization denied with specific error
+    /// * `Ok(AuthorizationDecision)` - A final authorization decision
+    /// * `Err(AuthorizationError)` - The handler could not make a decision
     ///
     /// # Example
     ///
@@ -66,10 +66,10 @@ pub trait AuthorizationHandler: Send + Sync {
     ///     fn handle<'a>(
     ///         &'a self,
     ///         context: &'a DefaultAuthorizationContext,
-    ///     ) -> Pin<Box<dyn Future<Output = Result<(), RocketMQError>> + Send + 'a>> {
+    ///     ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
     ///         Box::pin(async move {
     ///             // Authorization logic here
-    ///             Ok(())
+    ///             Ok(AuthorizationDecision::Allow)
     ///         })
     ///     }
     /// }
@@ -77,5 +77,5 @@ pub trait AuthorizationHandler: Send + Sync {
     fn handle<'a>(
         &'a self,
         context: &'a DefaultAuthorizationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RocketMQError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>>;
 }

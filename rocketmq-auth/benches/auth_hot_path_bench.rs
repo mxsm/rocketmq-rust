@@ -30,6 +30,7 @@ use rocketmq_auth::AclAuthorizationHandler;
 use rocketmq_auth::AuthConfig;
 use rocketmq_auth::AuthenticationProvider;
 use rocketmq_auth::AuthenticationStrategy;
+use rocketmq_auth::AuthorizationDecision;
 use rocketmq_auth::AuthorizationHandler;
 use rocketmq_auth::AuthorizationMetadataProvider;
 use rocketmq_auth::AuthorizationStrategy;
@@ -230,9 +231,10 @@ fn bench_stateful_authorization_cache(c: &mut Criterion) {
     );
     context.set_channel_id("channel-a".to_owned());
 
-    runtime
+    let warm_decision = runtime
         .block_on(strategy.evaluate(&context))
         .expect("benchmark authorization cache should warm");
+    assert_eq!(warm_decision, AuthorizationDecision::Allow);
 
     c.bench_function("auth_stateful_authorization/cache_hit", |b| {
         b.iter(|| {
@@ -276,9 +278,15 @@ fn bench_stateful_authorization_negative_cache(c: &mut Criterion) {
     );
     context.set_channel_id("channel-denied".to_owned());
 
-    assert!(runtime.block_on(disabled_strategy.evaluate(&context)).is_err());
+    assert!(matches!(
+        runtime.block_on(disabled_strategy.evaluate(&context)),
+        Ok(AuthorizationDecision::Deny(_))
+    ));
     assert_eq!(disabled_strategy.cache_size(), 0);
-    assert!(runtime.block_on(enabled_strategy.evaluate(&context)).is_err());
+    assert!(matches!(
+        runtime.block_on(enabled_strategy.evaluate(&context)),
+        Ok(AuthorizationDecision::Deny(_))
+    ));
     assert_eq!(enabled_strategy.cache_size(), 1);
 
     let mut group = c.benchmark_group("auth_stateful_authorization_negative_cache");
@@ -287,7 +295,7 @@ fn bench_stateful_authorization_negative_cache(c: &mut Criterion) {
             black_box(
                 runtime
                     .block_on(disabled_strategy.evaluate(black_box(&context)))
-                    .is_err(),
+                    .is_ok_and(|decision| matches!(decision, AuthorizationDecision::Deny(_))),
             )
         })
     });
@@ -296,7 +304,7 @@ fn bench_stateful_authorization_negative_cache(c: &mut Criterion) {
             black_box(
                 runtime
                     .block_on(enabled_strategy.evaluate(black_box(&context)))
-                    .is_err(),
+                    .is_ok_and(|decision| matches!(decision, AuthorizationDecision::Deny(_))),
             )
         })
     });

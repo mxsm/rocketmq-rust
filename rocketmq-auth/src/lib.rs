@@ -71,8 +71,6 @@ pub use authorization::context::authentication_context::AuthenticationContext;
 pub use authorization::context::default_authorization_context::DefaultAuthorizationContext;
 /// Canonical decision type for authorization policy models.
 pub use authorization::enums::decision::Decision as PolicyDecision;
-/// Frozen 1.x compatibility name for [`PolicyDecision`].
-pub use authorization::enums::decision::Decision;
 pub use authorization::enums::policy_type::PolicyType;
 pub use authorization::evaluator::AuthorizationEvaluator;
 pub use authorization::factory::AuthorizationFactory;
@@ -133,7 +131,6 @@ pub use credential_rotation::CredentialVerificationSource;
 pub use credential_rotation::RetiringCredentialSnapshot;
 pub use credential_rotation::ValidatedCredential;
 pub use layered_authorization::project_authorization_error;
-pub use layered_authorization::project_authorization_result;
 pub use layered_authorization::project_policy_decision;
 pub use maintenance::LoadedMaintenancePolicy;
 #[deprecated(
@@ -203,6 +200,8 @@ pub use remoting_auth_context::RemotingAuthContext;
 pub use rocketmq_observability::metrics::auth::AuthMetricSample;
 pub use rocketmq_observability::metrics::auth::AuthMetrics;
 pub use rocketmq_observability::metrics::auth::AuthMetricsSnapshot;
+pub use rocketmq_security_api::AuthorizationDecision;
+pub use rocketmq_security_api::AuthorizationDenial;
 pub use runtime::AuthRuntime;
 pub use runtime::AuthRuntimeBuilder;
 pub use runtime::AuthenticationService;

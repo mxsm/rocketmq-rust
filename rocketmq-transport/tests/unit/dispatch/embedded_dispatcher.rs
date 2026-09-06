@@ -28,7 +28,8 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_security_api::AuthenticatedRequestContext;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
+use rocketmq_security_api::AuthorizationDenial;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 
@@ -260,8 +261,8 @@ struct EmbeddedFixture {
 struct AllowPolicy;
 
 impl RequestPolicy for AllowPolicy {
-    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
-        Decision::Allow
+    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
+        AuthorizationDecision::Allow
     }
 }
 

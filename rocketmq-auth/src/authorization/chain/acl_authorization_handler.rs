@@ -27,7 +27,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_security_api::AuthorizationDecision;
+use rocketmq_security_api::AuthorizationDenial;
 use rocketmq_security_api::ResourcePattern;
 use rocketmq_security_api::ResourceType;
 
@@ -40,6 +41,8 @@ use crate::authorization::model::acl::Acl;
 use crate::authorization::model::environment::Environment;
 use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
+use crate::authorization::provider::AuthorizationError;
+use crate::authorization::provider::AuthorizationResult;
 
 /// ACL Authorization Handler.
 ///
@@ -232,25 +235,6 @@ impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
 
         Ordering::Equal
     }
-
-    /// Create an authorization error with context details.
-    fn create_error(&self, context: &DefaultAuthorizationContext, detail: &str) -> RocketMQError {
-        let subject_key = context.subject().as_ref().map(|s| s.subject_key()).unwrap_or("unknown");
-        let resource_key = context
-            .resource()
-            .as_ref()
-            .and_then(|r| r.resource_key())
-            .unwrap_or_else(|| "unknown".to_string());
-        let source_ip_binding = context.source_ip();
-        let source_ip = source_ip_binding.unwrap_or("unknown");
-
-        RocketMQError::BrokerPermissionDenied {
-            operation: format!(
-                "{} has no permission to access {} from {}, {}",
-                subject_key, resource_key, source_ip, detail
-            ),
-        }
-    }
 }
 
 struct SubjectLookup {
@@ -272,13 +256,13 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
     fn handle<'a>(
         &'a self,
         context: &'a DefaultAuthorizationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<(), RocketMQError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
         Box::pin(async move {
             // Step 1: Extract subject from context
             let subject_binding = context.subject();
             let subject_wrapper = subject_binding
                 .as_ref()
-                .ok_or_else(|| RocketMQError::illegal_argument("Subject not found in authorization context"))?;
+                .ok_or_else(|| AuthorizationError::InvalidContext("subject is missing".to_owned()))?;
 
             // Create a User subject for ACL lookup (required by metadata provider trait)
             let subject = SubjectLookup {
@@ -287,26 +271,23 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
             };
 
             // Step 2: Fetch ACL from metadata provider
-            let acl = self
-                .metadata_provider
-                .get_acl(&subject)
-                .await
-                .map_err(RocketMQError::from)?
-                .ok_or_else(|| self.create_error(context, "no matched policies"))?;
+            let acl = self.metadata_provider.get_acl(&subject).await?;
+            let Some(acl) = acl else {
+                return Ok(AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown));
+            };
 
             // Step 3: Match policy entries
-            let matched_entry = self
-                .match_policy_entries(context, &acl)
-                .await
-                .ok_or_else(|| self.create_error(context, "no matched policies"))?;
+            let Some(matched_entry) = self.match_policy_entries(context, &acl).await else {
+                return Ok(AuthorizationDecision::Deny(AuthorizationDenial::PolicyNotApplicable));
+            };
 
             // Step 4: Check decision
             if matched_entry.decision() == Decision::Deny {
-                return Err(self.create_error(context, "the decision is deny"));
+                return Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied));
             }
 
             // Step 5: Authorization granted
-            Ok(())
+            Ok(AuthorizationDecision::Allow)
         })
     }
 }
@@ -352,7 +333,7 @@ mod tests {
 
         // Test authorization - should succeed
         let result = handler.handle(&context).await;
-        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AuthorizationDecision::Allow);
     }
 
     #[tokio::test]
@@ -373,9 +354,12 @@ mod tests {
 
         let context = DefaultAuthorizationContext::of("bob", SubjectType::User, resource, Action::Pub, "192.168.1.1");
 
-        // Test authorization - should fail with DENY
+        // An explicit policy denial is a normal decision, not an error.
         let result = handler.handle(&context).await;
-        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap(),
+            AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)
+        );
     }
 
     #[tokio::test]
@@ -388,9 +372,12 @@ mod tests {
         let resource = Resource::of_topic("test-topic");
         let context = DefaultAuthorizationContext::of("charlie", SubjectType::User, resource, Action::Pub, "10.0.0.1");
 
-        // No ACL exists for "charlie" - should fail
+        // A missing ACL is a closed, typed denial.
         let result = handler.handle(&context).await;
-        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap(),
+            AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown)
+        );
     }
 
     #[tokio::test]
@@ -413,9 +400,12 @@ mod tests {
         let context =
             DefaultAuthorizationContext::of("dave", SubjectType::User, requested_resource, Action::Pub, "172.16.0.1");
 
-        // Should fail - no matching policy
+        // The subject is known, but no policy applies to this request.
         let result = handler.handle(&context).await;
-        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap(),
+            AuthorizationDecision::Deny(AuthorizationDenial::PolicyNotApplicable)
+        );
     }
 
     #[test]

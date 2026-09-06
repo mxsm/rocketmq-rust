@@ -18,6 +18,7 @@
 //! authorization decisions in RocketMQ.
 
 use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthorizationDecision;
 use rocketmq_auth::AuthorizationEvaluator;
 use rocketmq_auth::DefaultAuthorizationContext;
 use rocketmq_auth::PolicyResource;
@@ -56,13 +57,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Evaluate all contexts
     match evaluator.evaluate(&contexts).await {
-        Ok(()) => println!("✓ Authorization successful for all contexts"),
-        Err(e) => println!("✗ Authorization failed: {}", e),
+        Ok(AuthorizationDecision::Allow) => println!("✓ Authorization allowed for all contexts"),
+        Ok(AuthorizationDecision::Deny(denial)) => {
+            println!("✗ Authorization denied: {:?}", denial)
+        }
+        Err(e) => println!("✗ Authorization evaluation failed: {}", e),
     }
 
     // Evaluate empty contexts (should succeed immediately)
     let empty_contexts: Vec<DefaultAuthorizationContext> = vec![];
-    assert!(evaluator.evaluate(&empty_contexts).await.is_ok());
+    assert_eq!(evaluator.evaluate(&empty_contexts).await?, AuthorizationDecision::Allow);
     println!("✓ Empty contexts evaluation succeeded (fast path)");
 
     Ok(())

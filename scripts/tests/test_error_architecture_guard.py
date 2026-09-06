@@ -297,6 +297,56 @@ println!("source inventory complete");
 
         self.assertEqual([], self.guard.cli_raw_output_sinks(source))
 
+    def test_authorization_decision_contract_rejects_denial_errors_and_dynamic_remarks(self):
+        unsafe_lines = (
+            (
+                "rocketmq-auth/src/authorization/provider.rs",
+                "AuthorizationError::PermissionDenied { subject, resource, reason }",
+            ),
+            (
+                "rocketmq-auth/src/authorization/provider.rs",
+                "let message = error.to_string();",
+            ),
+            (
+                "rocketmq-transport/src/dispatch/authorized_dispatcher/core.rs",
+                "reason.to_string(),",
+            ),
+            (
+                "rocketmq-security-api/src/lib.rs",
+                "pub enum Decision {",
+            ),
+        )
+
+        for relative_path, line in unsafe_lines:
+            with self.subTest(relative_path=relative_path, line=line):
+                self.assertIsNotNone(
+                    self.guard.authorization_decision_contract_message(relative_path, line)
+                )
+
+    def test_authorization_decision_contract_accepts_closed_values_and_fixed_catalog_output(self):
+        safe_lines = (
+            (
+                "rocketmq-auth/src/authorization/provider.rs",
+                "Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied))",
+            ),
+            (
+                "rocketmq-transport/src/dispatch/authorized_dispatcher/core.rs",
+                "AUTH_PERMISSION_DENIED.public_message(),",
+            ),
+            (
+                "rocketmq-security-api/src/lib.rs",
+                "pub use layered_authorization::AuthorizationDecision;",
+            ),
+        )
+
+        for relative_path, line in safe_lines:
+            with self.subTest(relative_path=relative_path, line=line):
+                self.assertIsNone(
+                    self.guard.authorization_decision_contract_message(relative_path, line)
+                )
+
+        self.assertEqual([], self.guard.check_authorization_decision_contract())
+
 
 if __name__ == "__main__":
     unittest.main()

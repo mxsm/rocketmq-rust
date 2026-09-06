@@ -21,12 +21,13 @@ use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_security_api::Action;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::ResourceKind;
 use tracing::Instrument;
 
 use super::admission_response;
+use super::authorization_denied_response;
 use super::deadline_response;
 use super::AuthorizedDispatchSession;
 use super::DispatchOutcome;
@@ -247,17 +248,17 @@ where
                 .await
                 .map(BoundaryResponseAttempt::dispatch_outcome);
             }
-            if let Decision::Deny { reason } = authorized_session.boundary.security.authorize_for_dispatch(
-                builder.command(),
-                builder.peer(),
-                builder.principal(),
-                Resource::new(ResourceKind::Other, original.original_code().to_string()),
-                Action::Manage,
+            if !matches!(
+                authorized_session.boundary.security.authorize_for_dispatch(
+                    builder.command(),
+                    builder.peer(),
+                    builder.principal(),
+                    Resource::new(ResourceKind::Other, original.original_code().to_string()),
+                    Action::Manage,
+                ),
+                Ok(AuthorizationDecision::Allow)
             ) {
-                let response = RemotingCommand::create_response_command_with_code_remark(
-                    rocketmq_protocol::code::response_code::ResponseCode::NoPermission,
-                    reason.to_string(),
-                );
+                let response = authorization_denied_response();
                 return send_boundary_response(
                     &session,
                     original,

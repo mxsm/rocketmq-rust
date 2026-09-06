@@ -26,7 +26,8 @@ use rocketmq_security_api::evaluate_request;
 use rocketmq_security_api::validate_security_config;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthenticatedRequestContext;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
+use rocketmq_security_api::AuthorizationDenial;
 use rocketmq_security_api::PeerInfo;
 use rocketmq_security_api::RequestContext;
 use rocketmq_security_api::RequestPolicy;
@@ -84,8 +85,8 @@ fn request_view_borrows_payload_and_redacts_sensitive_debug_data() {
 struct AllowAuthenticated;
 
 impl RequestPolicy for AllowAuthenticated {
-    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
-        Decision::Allow
+    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
+        AuthorizationDecision::Allow
     }
 }
 
@@ -96,10 +97,10 @@ fn policy_gate_fails_closed_when_identity_is_missing() {
     let resource = Resource::topic("TopicA");
     let context = RequestContext::new(view, None, resource, Action::Publish);
 
-    assert!(matches!(
+    assert_eq!(
         evaluate_request(&AllowAuthenticated, &context),
-        Decision::Deny { .. }
-    ));
+        AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown)
+    );
 }
 
 #[test]

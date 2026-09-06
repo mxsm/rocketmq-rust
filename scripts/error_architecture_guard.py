@@ -1390,6 +1390,59 @@ def check_redaction_guards() -> list[Finding]:
     return findings
 
 
+def authorization_decision_contract_message(relative_path: str, line: str) -> str | None:
+    """Reject the small set of constructs that can merge auth denials with failures again."""
+    if relative_path == "rocketmq-security-api/src/lib.rs" and re.search(r"\bpub\s+enum\s+Decision\b", line):
+        return "the final authorization decision must use AuthorizationDecision"
+    if relative_path.startswith("rocketmq-auth/src/authorization/") and (
+        "AuthorizationError::PermissionDenied" in line or "PermissionDenied {" in line
+    ):
+        return "permission denial must be an AuthorizationDecision value, not an AuthorizationError"
+    if relative_path == "rocketmq-auth/src/authorization/provider.rs" and "let message = error.to_string();" in line:
+        return "authorization errors must not be stringified before boundary projection"
+    if relative_path.startswith("rocketmq-transport/src/dispatch/authorized_dispatcher") and "reason.to_string()" in line:
+        return "transport authorization denial remarks must use the fixed catalog message"
+    return None
+
+
+def check_authorization_decision_contract() -> list[Finding]:
+    required_tokens = {
+        ROOT / "rocketmq-security-api" / "src" / "layered_authorization.rs": [
+            "pub enum AuthorizationDecision",
+            "Deny(AuthorizationDenial)",
+            "pub enum AuthorizationDenial",
+            ") -> LayerEvaluation<AuthorizationDecision>",
+        ],
+        ROOT / "rocketmq-auth" / "src" / "authorization" / "provider.rs": [
+            ") -> AuthorizationResult<AuthorizationDecision>",
+        ],
+        ROOT / "rocketmq-transport" / "src" / "dispatch" / "authorized_dispatcher.rs": [
+            "AUTH_PERMISSION_DENIED.public_message()",
+        ],
+    }
+    findings: list[Finding] = []
+    for path, needles in required_tokens.items():
+        if not path.exists():
+            findings.append(Finding(path, 1, "required authorization decision contract file is missing"))
+            continue
+        text = read_text(path)
+        for needle in needles:
+            if needle not in text:
+                findings.append(Finding(path, 1, f"required authorization decision token missing: {needle}"))
+
+    paths = [
+        ROOT / "rocketmq-security-api" / "src" / "lib.rs",
+        *rust_files_under("rocketmq-auth", "src", "authorization"),
+        *rust_files_under("rocketmq-transport", "src", "dispatch", "authorized_dispatcher"),
+    ]
+    for path in paths:
+        for line_number, line in iter_non_test_lines(path):
+            message = authorization_decision_contract_message(rel_path(path), line)
+            if message is not None:
+                findings.append(Finding(path, line_number, message))
+    return findings
+
+
 def current_error_codes() -> list[str]:
     kind_path = ROOT / "rocketmq-error" / "src" / "kind.rs"
     match = re.search(
@@ -1445,6 +1498,7 @@ def run() -> int:
         ("internal error allowlist", check_internal_error_allowlist),
         ("anyhow result allowlist", check_anyhow_result_allowlist),
         ("redaction guards", check_redaction_guards),
+        ("authorization decision contract", check_authorization_decision_contract),
         ("error governance artifacts", check_error_governance_artifacts),
     ]
     all_findings: list[Finding] = []

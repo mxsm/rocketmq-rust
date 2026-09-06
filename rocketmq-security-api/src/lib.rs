@@ -27,13 +27,14 @@ pub mod secret_provider;
 pub mod secure_deployment;
 
 pub use layered_authorization::combine_layered_authorization;
+pub use layered_authorization::AuthorizationDecision;
+pub use layered_authorization::AuthorizationDenial;
 pub use layered_authorization::DetailedDecision;
 pub use layered_authorization::IngressDecision;
 pub use layered_authorization::IngressPolicy;
 pub use layered_authorization::LayerEvaluation;
 pub use layered_authorization::LayerFailureKind;
 pub use layered_authorization::LayerRequirement;
-pub use layered_authorization::LAYERED_AUTHORIZATION_DENIED_REASON;
 pub use maintenance::MaintenanceAuthorizationContext;
 pub use maintenance::MaintenanceAuthorizationError;
 pub use maintenance::MaintenanceAuthorizationGrant;
@@ -404,25 +405,6 @@ impl fmt::Display for Action {
     }
 }
 
-/// Final authorization decision.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Decision {
-    /// Represents the allow case.
-    Allow,
-    /// Represents the deny case.
-    Deny {
-        /// The reason value.
-        reason: CheetahString,
-    },
-}
-
-impl Decision {
-    /// Creates the deny value.
-    pub fn deny(reason: impl Into<CheetahString>) -> Self {
-        Self::Deny { reason: reason.into() }
-    }
-}
-
 /// Complete security input before authentication has been required.
 pub struct RequestContext<'a> {
     request: SecurityRequestView<'a>,
@@ -486,14 +468,17 @@ impl<'a> AuthenticatedRequestContext<'a> {
 
 /// Authorization policy that can only evaluate authenticated requests.
 pub trait RequestPolicy: Send + Sync {
-    /// Returns the evaluate authenticated.
-    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> Decision;
+    /// Returns the final decision for an authenticated request.
+    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision;
 }
 
 /// Applies the mandatory fail-closed identity gate before invoking a policy.
-pub fn evaluate_request(policy: &dyn RequestPolicy, context: &RequestContext<'_>) -> Decision {
+///
+/// A missing principal resolves to [`AuthorizationDenial::SubjectUnknown`]
+/// without invoking the policy.
+pub fn evaluate_request(policy: &dyn RequestPolicy, context: &RequestContext<'_>) -> AuthorizationDecision {
     let Some(principal) = context.principal else {
-        return Decision::deny("missing authenticated principal");
+        return AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown);
     };
     policy.evaluate_authenticated(AuthenticatedRequestContext {
         request: context.request,

@@ -24,6 +24,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::AUTH_PERMISSION_DENIED;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -31,7 +32,7 @@ use rocketmq_protocol::protocol::EncodedFrame;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_security_api::AuthenticatedRequestContext;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::OutboundSigner;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
@@ -126,8 +127,8 @@ struct ControlledProcessor {
 struct AllowAuthenticated;
 
 impl RequestPolicy for AllowAuthenticated {
-    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
-        Decision::Allow
+    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
+        AuthorizationDecision::Allow
     }
 }
 
@@ -159,13 +160,13 @@ impl RecordPeerTls {
 }
 
 impl RequestPolicy for RecordPeerTls {
-    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> Decision {
+    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.saw_tls.store(
             context.request().peer().expect("transport peer metadata").is_tls(),
             Ordering::SeqCst,
         );
-        Decision::Allow
+        AuthorizationDecision::Allow
     }
 }
 
@@ -486,6 +487,15 @@ async fn transport_security_signs_outbound_and_fails_closed_without_a_principal(
         .expect("denial frame")
         .expect("denial response");
     assert_eq!(denied.code(), ResponseCode::NoPermission.to_i32());
+    assert_eq!(denied.opaque(), 11);
+    assert_eq!(
+        denied.remark().map(CheetahString::as_str),
+        Some(AUTH_PERMISSION_DENIED.public_message())
+    );
+    assert!(denied.is_response_type());
+    assert!(!denied.is_oneway_rpc());
+    assert!(denied.body().is_none());
+    assert!(denied.ext_fields().is_none());
 
     let _ = server
         .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))

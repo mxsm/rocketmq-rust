@@ -15,21 +15,24 @@
 //! Authorization handler chain implementation.
 //!
 //! This module provides a chain of authorization handlers that execute sequentially
-//! until one grants access or all deny it.
+//! until one grants access, all deny it, or an operational failure stops evaluation.
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_security_api::AuthorizationDecision;
+#[cfg(test)]
+use rocketmq_security_api::AuthorizationDenial;
 
 use super::handler::AuthorizationHandler;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
+use crate::authorization::provider::AuthorizationError;
+use crate::authorization::provider::AuthorizationResult;
 
 /// Authorization handler chain.
 ///
-/// Executes handlers in sequence, implementing fail-fast semantics:
-/// - If any handler returns Ok(()), authorization succeeds
-/// - If all handlers return Err(...), authorization fails
-/// - Execution stops at first Ok(())
+/// Executes handlers in sequence with fail-closed semantics. An allow grants
+/// access, ordinary denials may be followed by another authorization source,
+/// and operational errors stop evaluation immediately.
 ///
 /// # Example
 ///
@@ -40,8 +43,11 @@ use crate::authorization::context::default_authorization_context::DefaultAuthori
 /// let chain = AuthorizationHandlerChain::new()
 ///     .add_handler(Arc::new(AclAuthorizationHandler::new(provider)));
 ///
-/// // Execute chain
-/// chain.handle(&context).await?;
+/// // Execute the chain and consume both normal outcomes.
+/// match chain.handle(&context).await? {
+///     AuthorizationDecision::Allow => proceed(),
+///     AuthorizationDecision::Deny(reason) => reject(reason),
+/// }
 /// ```
 pub struct AuthorizationHandlerChain {
     handlers: Vec<Arc<dyn AuthorizationHandler>>,
@@ -61,36 +67,37 @@ impl AuthorizationHandlerChain {
 
     /// Execute the authorization chain.
     ///
-    /// Handlers are executed in order until one succeeds.
+    /// Handlers are executed in order until one allows the request, every
+    /// handler denies it, or an operational failure occurs.
     ///
     /// # Returns
     ///
-    /// - `Ok(())` if any handler grants access
-    /// - `Err(RocketMQError)` if all handlers deny access
-    pub async fn handle(&self, context: &DefaultAuthorizationContext) -> Result<(), RocketMQError> {
+    /// - `Ok(AuthorizationDecision)` for a final allow or deny
+    /// - `Err(AuthorizationError)` when evaluation cannot produce a decision
+    pub async fn handle(&self, context: &DefaultAuthorizationContext) -> AuthorizationResult<AuthorizationDecision> {
         if self.handlers.is_empty() {
-            return Err(RocketMQError::auth_config_invalid(
-                "auth.authorization.handlers",
-                "No authorization handlers configured",
+            return Err(AuthorizationError::NotInitialized(
+                "no authorization handlers configured".to_owned(),
             ));
         }
 
-        let mut last_error = None;
-
+        let mut denial = None;
         for handler in &self.handlers {
             match handler.handle(context).await {
-                Ok(()) => return Ok(()), // Authorization granted
-                Err(e) => {
-                    last_error = Some(e);
-                    // Continue to next handler
-                }
-            }
+                Ok(AuthorizationDecision::Allow) => return Ok(AuthorizationDecision::Allow),
+                Ok(AuthorizationDecision::Deny(reason)) => denial.get_or_insert(reason),
+                Err(error) => return Err(error),
+            };
         }
 
-        // All handlers failed
-        Err(last_error.unwrap_or_else(|| RocketMQError::BrokerPermissionDenied {
-            operation: "All authorization handlers denied access".to_string(),
-        }))
+        denial.map_or_else(
+            || {
+                Err(AuthorizationError::NotInitialized(
+                    "authorization handler chain did not produce a decision".to_owned(),
+                ))
+            },
+            |reason| Ok(AuthorizationDecision::Deny(reason)),
+        )
     }
 
     /// Get the number of handlers in the chain.
@@ -118,7 +125,6 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
-    use rocketmq_error::RocketMQError;
     use rocketmq_security_api::Action;
 
     use super::*;
@@ -135,9 +141,9 @@ mod tests {
         fn handle<'a>(
             &'a self,
             _context: &'a DefaultAuthorizationContext,
-        ) -> Pin<Box<dyn Future<Output = Result<(), RocketMQError>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move { Ok(()) })
+            Box::pin(async move { Ok(AuthorizationDecision::Allow) })
         }
     }
 
@@ -149,13 +155,23 @@ mod tests {
         fn handle<'a>(
             &'a self,
             _context: &'a DefaultAuthorizationContext,
-        ) -> Pin<Box<dyn Future<Output = Result<(), RocketMQError>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Err(RocketMQError::BrokerPermissionDenied {
-                    operation: "Access denied".to_string(),
-                })
-            })
+            Box::pin(async move { Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)) })
+        }
+    }
+
+    struct FailureHandler {
+        call_count: Arc<AtomicUsize>,
+    }
+
+    impl AuthorizationHandler for FailureHandler {
+        fn handle<'a>(
+            &'a self,
+            _context: &'a DefaultAuthorizationContext,
+        ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Err(AuthorizationError::InvalidContext("broken context".to_owned())) })
         }
     }
 
@@ -177,7 +193,7 @@ mod tests {
         );
 
         let result = chain.handle(&context).await;
-        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AuthorizationDecision::Allow);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
@@ -199,7 +215,10 @@ mod tests {
         );
 
         let result = chain.handle(&context).await;
-        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap(),
+            AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)
+        );
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
@@ -225,13 +244,13 @@ mod tests {
         );
 
         let result = chain.handle(&context).await;
-        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AuthorizationDecision::Allow);
         assert_eq!(counter1.load(Ordering::SeqCst), 1);
         assert_eq!(counter2.load(Ordering::SeqCst), 0); // Should not be called
     }
 
     #[tokio::test]
-    async fn test_chain_multiple_handlers_second_allow() {
+    async fn test_chain_deny_can_be_followed_by_allow() {
         let counter1 = Arc::new(AtomicUsize::new(0));
         let counter2 = Arc::new(AtomicUsize::new(0));
 
@@ -252,9 +271,9 @@ mod tests {
         );
 
         let result = chain.handle(&context).await;
-        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AuthorizationDecision::Allow);
         assert_eq!(counter1.load(Ordering::SeqCst), 1);
-        assert_eq!(counter2.load(Ordering::SeqCst), 1); // Should be called after first fails
+        assert_eq!(counter2.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -279,9 +298,33 @@ mod tests {
         );
 
         let result = chain.handle(&context).await;
-        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap(),
+            AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)
+        );
         assert_eq!(counter1.load(Ordering::SeqCst), 1);
         assert_eq!(counter2.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_chain_operational_failure_is_terminal() {
+        let failure_count = Arc::new(AtomicUsize::new(0));
+        let allow_count = Arc::new(AtomicUsize::new(0));
+        let chain = AuthorizationHandlerChain::new()
+            .add_handler(Arc::new(FailureHandler {
+                call_count: failure_count.clone(),
+            }))
+            .add_handler(Arc::new(AllowHandler {
+                call_count: allow_count.clone(),
+            }));
+        let context = DefaultAuthorizationContext::default();
+
+        assert!(matches!(
+            chain.handle(&context).await,
+            Err(AuthorizationError::InvalidContext(_))
+        ));
+        assert_eq!(failure_count.load(Ordering::SeqCst), 1);
+        assert_eq!(allow_count.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

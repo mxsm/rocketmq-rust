@@ -530,7 +530,7 @@ mod tests {
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
     use rocketmq_security_api::AuthenticatedRequestContext;
-    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::AuthorizationDecision;
     use rocketmq_security_api::MaintenancePolicy;
     use rocketmq_security_api::MaintenancePrincipalBinding;
     use rocketmq_security_api::MaintenanceResourceBudget;
@@ -561,8 +561,8 @@ mod tests {
     struct AllowEmbeddedPolicy;
 
     impl RequestPolicy for AllowEmbeddedPolicy {
-        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
-            Decision::Allow
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
+            AuthorizationDecision::Allow
         }
     }
 
