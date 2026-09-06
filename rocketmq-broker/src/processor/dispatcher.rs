@@ -23,19 +23,19 @@ use std::sync::Arc;
 
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::RemotingAuthContext;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
-use rocketmq_transport::api::command_from_error_with_factory_remark_and_opaque;
-use rocketmq_transport::api::request_code_not_supported_with_factory;
-use rocketmq_transport::api::request_code_not_supported_with_factory_and_opaque;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::IngressRequestView;
 use rocketmq_transport::api::RejectRequestDecision;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestOrdering;
@@ -399,11 +399,15 @@ where
             let error = rocketmq_error::RocketMQError::authentication_failed(
                 "Broker maintenance API is disabled or unavailable",
             );
-            let response = command_from_error_with_factory_remark_and_opaque(
-                &self.command_factory,
-                &error,
-                error.to_string(),
-                opaque,
+            let context = error.context();
+            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+            let response = error_response(
+                view,
+                RemotingErrorTarget::Reply {
+                    factory: &self.command_factory,
+                    opaque,
+                },
             );
             return BrokerResponseParts::from_command(response)?.into_handler_outcome();
         }
@@ -413,11 +417,15 @@ where
                 BrokerAuthState::Unconfigured => {
                     let error =
                         rocketmq_error::RocketMQError::authentication_failed("Broker authentication is not configured");
-                    let response = command_from_error_with_factory_remark_and_opaque(
-                        &self.command_factory,
-                        &error,
-                        error.to_string(),
-                        opaque,
+                    let context = error.context();
+                    let view = PublicErrorView::try_new(error.descriptor(), &context)
+                        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                    let response = error_response(
+                        view,
+                        RemotingErrorTarget::Reply {
+                            factory: &self.command_factory,
+                            opaque,
+                        },
                     );
                     return BrokerResponseParts::from_command(response)?.into_handler_outcome();
                 }
@@ -426,11 +434,15 @@ where
                     let auth_context = match RemotingAuthContext::from_request(request) {
                         Ok(auth_context) => auth_context,
                         Err(error) => {
-                            let response = command_from_error_with_factory_remark_and_opaque(
-                                &self.command_factory,
-                                &error,
-                                error.to_string(),
-                                opaque,
+                            let context = error.context();
+                            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                            let response = error_response(
+                                view,
+                                RemotingErrorTarget::Reply {
+                                    factory: &self.command_factory,
+                                    opaque,
+                                },
                             );
                             return BrokerResponseParts::from_command(response)?.into_handler_outcome();
                         }
@@ -439,11 +451,15 @@ where
                         .check_remoting_for_code(&auth_context, request.command(), request_code)
                         .await
                     {
-                        let response = command_from_error_with_factory_remark_and_opaque(
-                            &self.command_factory,
-                            &error,
-                            error.to_string(),
-                            opaque,
+                        let context = error.context();
+                        let view = PublicErrorView::try_new(error.descriptor(), &context)
+                            .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                        let response = error_response(
+                            view,
+                            RemotingErrorTarget::Reply {
+                                factory: &self.command_factory,
+                                opaque,
+                            },
                         );
                         return BrokerResponseParts::from_command(response)?.into_handler_outcome();
                     }
@@ -456,8 +472,13 @@ where
             None => match self.default_request_processor.as_ref() {
                 Some(processor) => (processor.as_ref().clone(), true),
                 None => {
-                    let response =
-                        request_code_not_supported_with_factory_and_opaque(&self.command_factory, request_code, opaque);
+                    let response = error_response(
+                        PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+                        RemotingErrorTarget::Reply {
+                            factory: &self.command_factory,
+                            opaque,
+                        },
+                    );
                     return BrokerResponseParts::from_command(response)?.into_handler_outcome();
                 }
             },
@@ -479,7 +500,10 @@ where
             None => match self.default_request_processor.as_ref() {
                 Some(processor) => processor.reject_request(code),
                 None => {
-                    let response = request_code_not_supported_with_factory(&self.command_factory, code);
+                    let response = error_response(
+                        PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+                        RemotingErrorTarget::Fresh(&self.command_factory),
+                    );
                     response_rejection(response, "unsupported request code")
                 }
             },
@@ -553,7 +577,16 @@ where
         match result {
             Ok(outcome) => Ok(outcome),
             Err(error) => {
-                let response = command_from_error_with_factory_and_opaque(&self.command_factory, &error, opaque);
+                let context = error.context();
+                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                    .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                let response = error_response(
+                    view,
+                    RemotingErrorTarget::Reply {
+                        factory: &self.command_factory,
+                        opaque,
+                    },
+                );
                 BrokerResponseParts::from_command(response)?.into_handler_outcome()
             }
         }
@@ -567,7 +600,16 @@ fn map_request_header_error(
 ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
     match result {
         Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
-            let response = command_from_error_with_factory_and_opaque(command_factory, &error, opaque);
+            let context = error.context();
+            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+            let response = error_response(
+                view,
+                RemotingErrorTarget::Reply {
+                    factory: command_factory,
+                    opaque,
+                },
+            );
             BrokerResponseParts::from_command(response)?.into_handler_outcome()
         }
         result => result,

@@ -42,17 +42,19 @@ use crate::processor::admin_broker_processor::update_cold_data_flow_ctr_group_co
 use crate::processor::admin_broker_processor::update_global_white_addrs_config_request_handler::UpdateGlobalWhiteAddrsConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
 use rocketmq_error::AuthError;
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::apply_error_to_response;
-use rocketmq_transport::api::request_code_not_supported_with_remark;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::EmbeddedCaller;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
@@ -674,18 +676,9 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
                     .get_subscription_group_config(broker_runtime_inner, request_code, request)
                     .await
             }
-            RequestCode::UpdateAndCreateAclConfig => Ok(get_legacy_acl_cmd_response(
-                request_code,
-                "legacy ACL config API is deprecated; use AuthCreateAcl/AuthUpdateAcl instead",
-            )),
-            RequestCode::DeleteAclConfig => Ok(get_legacy_acl_cmd_response(
-                request_code,
-                "legacy ACL config API is deprecated; use AuthDeleteAcl instead",
-            )),
-            RequestCode::GetBrokerClusterAclInfo => Ok(get_legacy_acl_cmd_response(
-                request_code,
-                "legacy broker ACL cluster info API is deprecated; use AuthListAcl instead",
-            )),
+            RequestCode::UpdateAndCreateAclConfig
+            | RequestCode::DeleteAclConfig
+            | RequestCode::GetBrokerClusterAclInfo => Ok(get_legacy_acl_cmd_response(request_code)),
             RequestCode::UpdateGlobalWhiteAddrsConfig => {
                 self.update_global_white_addrs_config_request_handler
                     .update_global_white_addrs_config(request_code, request)
@@ -792,42 +785,37 @@ fn get_unknown_cmd_response(request_code: RequestCode) -> Option<RemotingCommand
         request_code,
         request_code.to_i32()
     );
-    Some(request_code_not_supported_with_remark(
-        request_code.to_i32(),
-        format!(" request type {} not supported", request_code.to_i32()),
+    let command_factory = application_remoting_command_factory();
+    Some(error_response(
+        PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+        RemotingErrorTarget::Fresh(&command_factory),
     ))
 }
 
-fn get_legacy_acl_cmd_response(request_code: RequestCode, remark: &str) -> Option<RemotingCommand> {
+fn get_legacy_acl_cmd_response(request_code: RequestCode) -> Option<RemotingCommand> {
     warn!(
-        "legacy acl request type {:?}-{} is deprecated: {}",
+        "legacy acl request type {:?}-{} is deprecated",
         request_code,
-        request_code.to_i32(),
-        remark
+        request_code.to_i32()
     );
-    Some(request_code_not_supported_with_remark(request_code.to_i32(), remark))
+    let command_factory = application_remoting_command_factory();
+    Some(error_response(
+        PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+        RemotingErrorTarget::Fresh(&command_factory),
+    ))
 }
 
 fn map_auth_admin_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
     if matches!(error, RocketMQError::Authentication(AuthError::UserNotFound(_))) {
         return response
             .set_code(ResponseCode::UserNotExist)
-            .set_remark(error.to_string());
+            .set_remark("User does not exist");
     }
 
-    let remark = match &error {
-        RocketMQError::IllegalArgument(message) | RocketMQError::RequestHeaderError(message) => message.clone(),
-        RocketMQError::RequestBodyInvalid { reason, .. }
-        | RocketMQError::ConfigParseFailed { reason, .. }
-        | RocketMQError::ConfigInvalidValue { reason, .. }
-        | RocketMQError::AuthConfigInvalid { reason, .. }
-        | RocketMQError::AuthHotReloadFailed { reason, .. } => reason.clone(),
-        RocketMQError::ConfigMissing { key } => (*key).to_owned(),
-        RocketMQError::BrokerPermissionDenied { operation } => operation.clone(),
-        other => other.to_string(),
-    };
-
-    apply_error_to_response(response, &error, remark)
+    let context = error.context();
+    let view = PublicErrorView::try_new(error.descriptor(), &context)
+        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+    error_response(view, RemotingErrorTarget::Existing(response))
 }
 
 fn auth_admin_body_decode_error(operation: &'static str, error: RocketMQError) -> RocketMQError {
@@ -844,6 +832,7 @@ mod tests {
     use super::AdminOriginFact;
     use super::AdminRequestCaller;
     use super::AdminSessionFact;
+    use bytes::Bytes;
     use rocketmq_error::RocketMQError;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
@@ -919,20 +908,17 @@ mod tests {
 
     #[test]
     fn legacy_acl_responses_are_explicitly_deprecated() {
-        let response = get_legacy_acl_cmd_response(
-            RequestCode::UpdateAndCreateAclConfig,
-            "legacy ACL config API is deprecated; use AuthCreateAcl/AuthUpdateAcl instead",
-        )
-        .expect("legacy acl response should exist");
+        let response = get_legacy_acl_cmd_response(RequestCode::UpdateAndCreateAclConfig)
+            .expect("legacy acl response should exist");
 
         assert_eq!(
             ResponseCode::from(response.code()),
             ResponseCode::RequestCodeNotSupported
         );
-        assert!(response
-            .remark()
-            .expect("legacy acl response should carry remark")
-            .contains("deprecated"));
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some("Protocol request is unsupported")
+        );
     }
 
     #[test]
@@ -942,12 +928,35 @@ mod tests {
             RocketMQError::user_not_found("alice"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::UserNotExist);
-
-        let response = map_auth_admin_error_response(
-            RemotingCommand::create_java_default_error_response_command(),
-            RocketMQError::authentication_failed("bad credentials"),
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some("User does not exist")
         );
+        assert!(!response.remark().is_some_and(|remark| remark.contains("alice")));
+
+        let mut existing = RemotingCommand::create_java_default_error_response_command()
+            .set_opaque(704)
+            .set_version(321)
+            .set_flag(0x24)
+            .set_body(Bytes::from_static(b"preserved-body"));
+        existing.add_ext_field("preserved-key", "preserved-value");
+        let response = map_auth_admin_error_response(existing, RocketMQError::authentication_failed("bad credentials"));
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some("Authentication credentials are invalid")
+        );
+        assert_eq!(response.opaque(), 704);
+        assert_eq!(response.version(), 321);
+        assert_eq!(response.flag(), 0x24);
+        assert_eq!(response.body(), Some(&Bytes::from_static(b"preserved-body")));
+        assert_eq!(
+            response
+                .ext_fields()
+                .and_then(|fields| fields.get("preserved-key"))
+                .map(|value| value.as_str()),
+            Some("preserved-value")
+        );
 
         let response = map_auth_admin_error_response(
             RemotingCommand::create_java_default_error_response_command(),

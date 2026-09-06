@@ -18,6 +18,8 @@ use std::sync::Arc;
 
 use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_filter::filter::FilterFactory;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::mix_all;
@@ -34,8 +36,9 @@ use rocketmq_protocol::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::BrokerStorePort;
-use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
@@ -189,11 +192,12 @@ where
             "ClientManageProcessor received unknown request code: {:?}",
             request_code
         );
-        Ok(Some(request_code_not_supported_with_factory_remark_and_opaque(
-            &self.command_factory,
-            request.code(),
-            format!("ClientManageProcessor request code {} not supported", request.code()),
-            request.opaque(),
+        Ok(Some(error_response(
+            PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+            RemotingErrorTarget::Reply {
+                factory: &self.command_factory,
+                opaque: request.opaque(),
+            },
         )))
     }
 

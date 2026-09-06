@@ -166,6 +166,8 @@ pub enum RemotingResponseCode {
     SystemBusy = 2,
     /// Represents the request code not supported case.
     RequestCodeNotSupported = 3,
+    /// Represents the service not available case.
+    ServiceNotAvailable = 14,
     /// Represents the no permission case.
     NoPermission = 16,
     /// Represents the topic not exist case.

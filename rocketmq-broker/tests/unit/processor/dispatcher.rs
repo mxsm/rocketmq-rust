@@ -34,7 +34,6 @@ use rocketmq_security_api::AuthenticatedRequestContext;
 use rocketmq_security_api::Decision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
-use rocketmq_transport::api::no_permission_with_remark;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
@@ -307,8 +306,10 @@ fn router_delegates_typed_rejection_and_rejects_unknown_codes() {
     let RejectRequestDecision::Reject(unknown_plan) = router.reject_request(ROUTED_CODE + 1) else {
         panic!("unknown Broker code must fail before execution");
     };
-    let expected = request_code_not_supported_with_factory(&application_remoting_command_factory(), ROUTED_CODE + 1);
-    assert_eq!(unknown_plan.response_code(), expected.code());
+    assert_eq!(
+        unknown_plan.response_code(),
+        ResponseCode::RequestCodeNotSupported as i32
+    );
 }
 
 #[test]
@@ -339,10 +340,7 @@ async fn unconfigured_auth_fails_closed_before_leaf_dispatch() {
     let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
         panic!("unconfigured auth must return one denial reply");
     };
-    assert_eq!(
-        plan.response_code(),
-        no_permission_with_remark("expected denial").code()
-    );
+    assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     fixture.finish().await;
 }
@@ -378,10 +376,7 @@ async fn broker_auth_uses_original_code_after_a_before_hook_mutates_the_command(
     let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
         panic!("Broker auth denial must return one reply");
     };
-    assert_eq!(
-        plan.response_code(),
-        no_permission_with_remark("expected denial").code()
-    );
+    assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
     fixture.finish().await;
@@ -513,10 +508,7 @@ async fn real_authorization_provider_denies_all_six_supervised_codes_before_leaf
         let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
             panic!("authorization denial must reply");
         };
-        assert_eq!(
-            plan.response_code(),
-            no_permission_with_remark("expected denial").code()
-        );
+        assert_eq!(plan.response_code(), ResponseCode::NoPermission as i32);
     }
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(auth_runtime.metrics_snapshot().authorization_failures >= 6);

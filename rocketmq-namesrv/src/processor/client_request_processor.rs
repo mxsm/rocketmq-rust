@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_error::PublicErrorView;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_model::version::RocketMqVersion;
 use rocketmq_observability::metrics::namesrv::NameServerRouteCacheOutcome;
@@ -30,14 +31,15 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
 use tracing::debug;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeHandle;
-use crate::processor::response_factory::NameServerResponseFactoryExt;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::route::response_cache::JsonEncoding;
 use crate::route::response_cache::RouteCacheKey;
@@ -124,10 +126,13 @@ impl ClientRequestProcessor {
                 warn!("name server not ready. request code {}", request.code());
                 let error = rocketmq_error::RocketMQError::not_initialized("name server not ready");
                 route_span.record("result", "not_ready");
-                return Ok(Some(
-                    self.command_factory
-                        .command_from_error_with_remark(&error, "name server not ready"),
-                ));
+                let context = error.context();
+                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                    .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                return Ok(Some(error_response(
+                    view,
+                    RemotingErrorTarget::Fresh(&self.command_factory),
+                )));
             }
         }
 

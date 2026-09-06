@@ -20,17 +20,19 @@ use std::fs::File;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::FileRangeTransferHandle;
 use rocketmq_store::SelectMappedBufferResult;
-use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::FileRegion;
 use rocketmq_transport::api::FileRegionLease;
 use rocketmq_transport::api::FileRegionSequence;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::TransportContractViolation;
 
@@ -155,7 +157,16 @@ pub(crate) fn immediate_outcome_from_command_result(
         Ok(Some(command)) => command,
         Ok(None) => return Err(RocketMQError::invariant_violated(missing_response)),
         Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
-            command_from_error_with_factory_and_opaque(command_factory, &error, original_opaque)
+            let context = error.context();
+            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+            error_response(
+                view,
+                RemotingErrorTarget::Reply {
+                    factory: command_factory,
+                    opaque: original_opaque,
+                },
+            )
         }
         Err(error) => return Err(error),
     };

@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,320 +12,172 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::ProtocolError;
-use rocketmq_error::RocketMQError;
-
+use rocketmq_error::PublicErrorView;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 
-use crate::contract::TransportContractViolation;
-use crate::dispatch::RemotingResponse;
-
-/// Convert a typed RocketMQ error into a remoting response command.
-pub fn command_from_error(error: &RocketMQError) -> RemotingCommand {
-    command_from_error_with_factory(&application_remoting_command_factory(), error)
+/// Owner-managed command state used to construct a safe remoting error response.
+pub enum RemotingErrorTarget<'a> {
+    /// Create a new response with the supplied factory's defaults.
+    Fresh(&'a RemotingCommandFactory),
+    /// Create a new response and preserve the request opaque.
+    Reply {
+        /// Factory that owns the response defaults.
+        factory: &'a RemotingCommandFactory,
+        /// Opaque copied from the request.
+        opaque: i32,
+    },
+    /// Replace only the error code and remark on an existing response.
+    Existing(RemotingCommand),
 }
 
-pub(crate) fn remoting_response_from_error(
-    error: &RocketMQError,
-) -> Result<RemotingResponse, TransportContractViolation> {
-    RemotingResponse::command(command_from_error(error))
-}
-
-/// Convert a typed RocketMQ error with an explicitly owned command factory.
-pub fn command_from_error_with_factory(
-    command_factory: &RemotingCommandFactory,
-    error: &RocketMQError,
-) -> RemotingCommand {
-    command_factory.create_response_command_from_error(error)
-}
-
-/// Convert a typed RocketMQ error into a remoting response command and preserve
-/// the request opaque.
-pub fn command_from_error_with_opaque(error: &RocketMQError, opaque: i32) -> RemotingCommand {
-    command_from_error(error).set_opaque(opaque)
-}
-
-/// Convert a typed RocketMQ error with an explicitly owned factory and opaque.
-pub fn command_from_error_with_factory_and_opaque(
-    command_factory: &RemotingCommandFactory,
-    error: &RocketMQError,
-    opaque: i32,
-) -> RemotingCommand {
-    command_from_error_with_factory(command_factory, error).set_opaque(opaque)
-}
-
-/// Convert a typed RocketMQ error into a remoting response command with an
-/// explicit wire remark.
-pub fn command_from_error_with_remark(error: &RocketMQError, remark: impl Into<String>) -> RemotingCommand {
-    command_from_error_with_remark_and_factory(&application_remoting_command_factory(), error, remark)
-}
-
-/// Convert a typed RocketMQ error with an explicit wire remark and factory.
-pub fn command_from_error_with_remark_and_factory(
-    command_factory: &RemotingCommandFactory,
-    error: &RocketMQError,
-    remark: impl Into<String>,
-) -> RemotingCommand {
-    command_factory.create_response_command_from_error_with_remark(error, remark.into())
-}
-
-/// Apply a typed RocketMQ error mapping to an existing remoting response.
-pub fn apply_error_to_response(
-    response: RemotingCommand,
-    error: &RocketMQError,
-    remark: impl Into<String>,
-) -> RemotingCommand {
-    let view = error.boundary_view();
-    response
-        .set_code(view.remoting().code.as_i32())
-        .set_remark(remark.into())
-}
-
-/// Convert a typed RocketMQ error into a remoting response command with an
-/// explicit wire remark and request opaque.
-pub fn command_from_error_with_remark_and_opaque(
-    error: &RocketMQError,
-    remark: impl Into<String>,
-    opaque: i32,
-) -> RemotingCommand {
-    command_from_error_with_remark(error, remark).set_opaque(opaque)
-}
-
-/// Convert a typed RocketMQ error with an explicit factory, remark, and opaque.
-pub fn command_from_error_with_factory_remark_and_opaque(
-    command_factory: &RemotingCommandFactory,
-    error: &RocketMQError,
-    remark: impl Into<String>,
-    opaque: i32,
-) -> RemotingCommand {
-    command_from_error_with_remark_and_factory(command_factory, error, remark).set_opaque(opaque)
-}
-
-/// Build the standard unsupported-request-code response from the central
-/// remoting boundary mapping.
-pub fn request_code_not_supported(request_code: i32) -> RemotingCommand {
-    request_code_not_supported_with_remark(
-        request_code,
-        format!("The request code {request_code} is not supported."),
-    )
-}
-
-/// Build the standard unsupported-request response with an explicit factory.
-pub fn request_code_not_supported_with_factory(
-    command_factory: &RemotingCommandFactory,
-    request_code: i32,
-) -> RemotingCommand {
-    request_code_not_supported_with_factory_and_remark(
-        command_factory,
-        request_code,
-        format!("The request code {request_code} is not supported."),
-    )
-}
-
-/// Build the standard unsupported-request response with an explicit factory and opaque.
-pub fn request_code_not_supported_with_factory_and_opaque(
-    command_factory: &RemotingCommandFactory,
-    request_code: i32,
-    opaque: i32,
-) -> RemotingCommand {
-    request_code_not_supported_with_factory_remark_and_opaque(
-        command_factory,
-        request_code,
-        format!("The request code {request_code} is not supported."),
-        opaque,
-    )
-}
-
-/// Build an unsupported-request-code response with a caller-specific remark.
-pub fn request_code_not_supported_with_remark(request_code: i32, remark: impl Into<String>) -> RemotingCommand {
-    let error = RocketMQError::Protocol(ProtocolError::invalid_command(request_code));
-    command_from_error_with_remark(&error, remark)
-}
-
-/// Build an unsupported-request response with an explicit factory and caller-specific remark.
-pub fn request_code_not_supported_with_factory_and_remark(
-    command_factory: &RemotingCommandFactory,
-    request_code: i32,
-    remark: impl Into<String>,
-) -> RemotingCommand {
-    let error = RocketMQError::Protocol(ProtocolError::invalid_command(request_code));
-    command_from_error_with_remark_and_factory(command_factory, &error, remark)
-}
-
-/// Build the standard unsupported-request-code response and preserve request
-/// opaque.
-pub fn request_code_not_supported_with_opaque(request_code: i32, opaque: i32) -> RemotingCommand {
-    request_code_not_supported(request_code).set_opaque(opaque)
-}
-
-/// Build an unsupported-request-code response with a caller-specific remark and
-/// request opaque.
-pub fn request_code_not_supported_with_remark_and_opaque(
-    request_code: i32,
-    remark: impl Into<String>,
-    opaque: i32,
-) -> RemotingCommand {
-    request_code_not_supported_with_remark(request_code, remark).set_opaque(opaque)
-}
-
-/// Build an unsupported-request response with an explicit factory and opaque.
-pub fn request_code_not_supported_with_factory_remark_and_opaque(
-    command_factory: &RemotingCommandFactory,
-    request_code: i32,
-    remark: impl Into<String>,
-    opaque: i32,
-) -> RemotingCommand {
-    let error = RocketMQError::Protocol(ProtocolError::invalid_command(request_code));
-    command_from_error_with_factory_remark_and_opaque(command_factory, &error, remark, opaque)
-}
-
-/// Build an invalid-parameter response from the central remoting boundary
-/// mapping.
-pub fn invalid_parameter_with_remark(remark: impl Into<String>) -> RemotingCommand {
-    let remark = remark.into();
-    let error = RocketMQError::illegal_argument(remark.clone());
-    command_from_error_with_remark(&error, remark)
-}
-
-/// Build an invalid-parameter response and preserve request opaque.
-pub fn invalid_parameter_with_remark_and_opaque(remark: impl Into<String>, opaque: i32) -> RemotingCommand {
-    invalid_parameter_with_remark(remark).set_opaque(opaque)
-}
-
-/// Build a no-permission response from the central remoting boundary mapping.
-pub fn no_permission_with_remark(remark: impl Into<String>) -> RemotingCommand {
-    let remark = remark.into();
-    let error = RocketMQError::BrokerPermissionDenied {
-        operation: remark.clone(),
-    };
-    command_from_error_with_remark(&error, remark)
-}
-
-/// Build a no-permission response and preserve request opaque.
-pub fn no_permission_with_remark_and_opaque(remark: impl Into<String>, opaque: i32) -> RemotingCommand {
-    no_permission_with_remark(remark).set_opaque(opaque)
-}
-
-/// Build a query-not-found response from the central remoting boundary mapping.
-pub fn query_not_found_with_remark(remark: impl Into<String>) -> RemotingCommand {
-    let remark = remark.into();
-    let error = RocketMQError::query_not_found(remark.clone());
-    command_from_error_with_remark(&error, remark)
-}
-
-/// Build a query-not-found response and preserve request opaque.
-pub fn query_not_found_with_remark_and_opaque(remark: impl Into<String>, opaque: i32) -> RemotingCommand {
-    query_not_found_with_remark(remark).set_opaque(opaque)
-}
-
-/// Build a generic internal-error response from the central remoting boundary
-/// mapping.
-pub fn internal_error(remark: impl Into<String>) -> RemotingCommand {
-    let remark = remark.into();
-    let error = RocketMQError::invariant_violated("legacy remoting handler returned an internal response");
-    command_from_error_with_remark(&error, remark)
-}
-
-/// Build a generic internal-error response from the central remoting boundary
-/// mapping and preserve request opaque.
-pub fn internal_error_with_opaque(opaque: i32, remark: impl Into<String>) -> RemotingCommand {
-    internal_error(remark).set_opaque(opaque)
-}
-
-/// Build a generic internal-error response with an explicit factory and opaque.
-pub fn internal_error_with_factory_and_opaque(
-    command_factory: &RemotingCommandFactory,
-    opaque: i32,
-    remark: impl Into<String>,
-) -> RemotingCommand {
-    let error = RocketMQError::invariant_violated("legacy remoting handler returned an internal response");
-    command_from_error_with_factory_remark_and_opaque(command_factory, &error, remark, opaque)
+/// Builds a descriptor-backed remoting error response.
+///
+/// The adapter reads only the catalog-owned remoting projection and fixed
+/// public message from `view`. Factory defaults and all existing response state
+/// remain owned by `target`.
+#[must_use]
+pub fn error_response(view: PublicErrorView<'_>, target: RemotingErrorTarget<'_>) -> RemotingCommand {
+    let code = view.projection().remoting().code.as_i32();
+    let message = view.message();
+    match target {
+        RemotingErrorTarget::Fresh(factory) => factory.create_response_command_with_code_remark(code, message),
+        RemotingErrorTarget::Reply { factory, opaque } => factory
+            .create_response_command_with_code_remark(code, message)
+            .set_opaque(opaque),
+        RemotingErrorTarget::Existing(response) => response.set_code(code).set_remark(message),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::RemotingResponseCode;
+    use std::collections::HashMap;
+
+    use bytes::Bytes;
+    use cheetah_string::CheetahString;
+    use rocketmq_error::Error;
+    use rocketmq_error::ErrorContext;
+    use rocketmq_error::PublicErrorView;
+    use rocketmq_error::CORE_INTERNAL_FAILURE;
+    use rocketmq_error::PROTOCOL_BODY_INVALID;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
+    use rocketmq_protocol::protocol::SerializeType;
 
     use super::*;
-    use rocketmq_protocol::code::response_code::ResponseCode;
 
     #[test]
-    fn command_from_error_uses_central_remoting_spec() {
-        let response = command_from_error(&RocketMQError::response_process_failed("decode", "bad header"));
+    fn fresh_error_response_uses_supplied_factory_defaults() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(654, SerializeType::ROCKETMQ));
+        let view = PublicErrorView::descriptor_only(&CORE_INTERNAL_FAILURE);
 
+        let response = error_response(view, RemotingErrorTarget::Fresh(&factory));
+
+        assert_eq!(response.version(), 654);
+        assert_eq!(response.serialize_type(), SerializeType::ROCKETMQ);
+        assert!(response.is_response_type());
+        assert_eq!(response.code(), 1);
+        assert_eq!(response.remark().map(CheetahString::as_str), Some("Internal error"));
+    }
+
+    #[test]
+    fn reply_error_response_preserves_request_opaque() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::default());
+        let view = PublicErrorView::descriptor_only(&PROTOCOL_BODY_INVALID);
+
+        let response = error_response(
+            view,
+            RemotingErrorTarget::Reply {
+                factory: &factory,
+                opaque: 73,
+            },
+        );
+
+        assert_eq!(response.opaque(), 73);
+        assert_eq!(response.code(), 29);
         assert_eq!(
-            ResponseCode::from(response.code()),
-            ResponseCode::from(RemotingResponseCode::InvalidParameter.as_i32())
+            response.remark().map(CheetahString::as_str),
+            Some("Request body is invalid")
         );
+    }
+
+    #[test]
+    fn existing_error_response_preserves_owner_managed_state() {
+        let mut ext_fields = HashMap::new();
+        ext_fields.insert(
+            CheetahString::from_static_str("owner"),
+            CheetahString::from_static_str("broker"),
+        );
+        let existing = RemotingCommand::create_response_command_with_code(7)
+            .set_opaque(41)
+            .set_version(321)
+            .set_serialize_type(SerializeType::ROCKETMQ)
+            .set_ext_fields(ext_fields.clone())
+            .set_command_custom_header(EmptyHeader::default())
+            .set_body(Bytes::from_static(b"retained"))
+            .set_suspended(true);
+        let original_flag = existing.flag();
+        let view = PublicErrorView::descriptor_only(&PROTOCOL_BODY_INVALID);
+
+        let response = error_response(view, RemotingErrorTarget::Existing(existing));
+
+        assert_eq!(response.code(), 29);
+        assert_eq!(response.opaque(), 41);
+        assert_eq!(response.version(), 321);
+        assert_eq!(response.serialize_type(), SerializeType::ROCKETMQ);
+        assert_eq!(response.ext_fields(), Some(&ext_fields));
+        assert_eq!(response.body().map(Bytes::as_ref), Some(b"retained".as_slice()));
+        assert!(response.command_custom_header_ref().is_some());
+        assert!(response.suspended());
+        assert_eq!(response.flag(), original_flag);
         assert_eq!(
-            response.remark().map(|remark| remark.as_str()),
-            Some("Response processing failed")
+            response.remark().map(CheetahString::as_str),
+            Some("Request body is invalid")
         );
     }
 
     #[test]
-    fn command_from_error_uses_public_remark_for_internal_errors() {
-        let response = command_from_error(&RocketMQError::internal(
-            "run remoting worker",
-            std::io::Error::other("password=plain-text; worker failed"),
-        ));
+    fn invalid_context_fallback_keeps_descriptor_code_and_fixed_message() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::default());
+        let error = Error::new(&PROTOCOL_BODY_INVALID)
+            .with_context(ErrorContext::new().with_text(rocketmq_error::fields::TOPIC, "password=secret"));
+        let view = error
+            .public_view()
+            .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
-        assert_eq!(response.remark().map(|remark| remark.as_str()), Some("Internal error"));
-        assert!(!response.remark().expect("remark should be set").contains("plain-text"));
-    }
+        let response = error_response(view, RemotingErrorTarget::Fresh(&factory));
 
-    #[test]
-    fn request_code_not_supported_uses_protocol_spec_mapping() {
-        let response = request_code_not_supported_with_opaque(999, 7);
-
+        assert_eq!(response.code(), 29);
         assert_eq!(
-            ResponseCode::from(response.code()),
-            ResponseCode::RequestCodeNotSupported
+            response.remark().map(CheetahString::as_str),
+            Some("Request body is invalid")
         );
-        assert_eq!(response.opaque(), 7);
-        assert_eq!(
-            response.remark().map(|remark| remark.as_str()),
-            Some("The request code 999 is not supported.")
-        );
+        assert!(!response.remark().expect("fixed remark").contains("secret"));
     }
 
     #[test]
-    fn internal_error_uses_system_error_mapping() {
-        let response = internal_error_with_opaque(9, "worker failed");
+    fn legacy_error_policy_surfaces_are_absent() {
+        let module = include_str!("error_response.rs");
+        let public_api = include_str!("public_api.rs");
+        let protocol_factory = include_str!("../../rocketmq-protocol/src/protocol/remoting_command_defaults.rs");
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
-        assert_eq!(response.opaque(), 9);
-        assert_eq!(response.remark().map(|remark| remark.as_str()), Some("worker failed"));
-    }
-
-    #[test]
-    fn common_response_helpers_use_central_remoting_spec() {
-        let invalid = invalid_parameter_with_remark_and_opaque("bad argument", 11);
-        assert_eq!(ResponseCode::from(invalid.code()), ResponseCode::InvalidParameter);
-        assert_eq!(invalid.opaque(), 11);
-
-        let denied = no_permission_with_remark_and_opaque("forbidden", 12);
-        assert_eq!(ResponseCode::from(denied.code()), ResponseCode::NoPermission);
-        assert_eq!(denied.opaque(), 12);
-
-        let missing = query_not_found_with_remark_and_opaque("missing kv", 13);
-        assert_eq!(ResponseCode::from(missing.code()), ResponseCode::QueryNotFound);
-        assert_eq!(missing.opaque(), 13);
-    }
-
-    #[test]
-    fn apply_error_to_response_preserves_existing_response_shape() {
-        let response = apply_error_to_response(
-            RemotingCommand::create_success_response_command().set_opaque(23),
-            &RocketMQError::illegal_argument("bad field"),
-            "bad field",
-        );
-
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
-        assert_eq!(response.opaque(), 23);
-        assert_eq!(response.remark().map(|remark| remark.as_str()), Some("bad field"));
+        for removed in [
+            concat!("command_from", "_error"),
+            concat!("request_code", "_not_supported"),
+            concat!("invalid_parameter", "_with_remark"),
+            concat!("no_permission", "_with_remark"),
+            concat!("query_not_found", "_with_remark"),
+            concat!("internal_error", "_with_opaque"),
+            concat!("apply_error", "_to_response"),
+            concat!("remoting_response", "_from_error"),
+        ] {
+            assert!(!module.contains(removed), "legacy Transport helper returned: {removed}");
+            assert!(
+                !public_api.contains(removed),
+                "legacy Transport re-export returned: {removed}"
+            );
+        }
+        assert!(!protocol_factory.contains(concat!("create_response_command", "_from_error")));
+        assert_eq!(public_api.matches("crate::error_response::").count(), 2);
     }
 }

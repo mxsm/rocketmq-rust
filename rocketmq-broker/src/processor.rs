@@ -14,9 +14,6 @@
 
 use crate::latency::broker_fast_failure::FastFailureQueueKind;
 use rocketmq_protocol::code::request_code::RequestCode;
-use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
-use rocketmq_transport::api::internal_error_with_factory_and_opaque;
 
 pub(crate) mod ack_message_processor;
 pub(crate) mod admin_broker_processor;
@@ -76,12 +73,4 @@ fn fast_failure_queue_kind(request_code: i32, default_processor: bool) -> Option
         RequestCode::AckMessage | RequestCode::BatchAckMessage => Some(FastFailureQueueKind::Ack),
         _ => None,
     }
-}
-
-fn system_error_response(
-    command_factory: &RemotingCommandFactory,
-    opaque: i32,
-    remark: impl Into<String>,
-) -> RemotingCommand {
-    internal_error_with_factory_and_opaque(command_factory, opaque, remark)
 }

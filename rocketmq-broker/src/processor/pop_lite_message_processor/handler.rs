@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::command_from_error_with_factory_remark_and_opaque;
-use rocketmq_transport::api::internal_error_with_factory_and_opaque;
-use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::error_response as remoting_error_response;
 use rocketmq_transport::api::DeferredResponderOutcome;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
@@ -53,24 +53,19 @@ where
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         if RequestCode::from(request.original_identity().original_code()) != RequestCode::PopLiteMessage {
-            return command_outcome(request_code_not_supported_with_factory_remark_and_opaque(
-                &self.context.command_factory,
-                request.original_identity().original_code(),
-                "PopLiteMessageProcessor request code is not supported",
-                request.original_identity().original_opaque(),
+            return command_outcome(remoting_error_response(
+                PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
+                RemotingErrorTarget::Reply {
+                    factory: &self.context.command_factory,
+                    opaque: request.original_identity().original_opaque(),
+                },
             ));
         }
         if request.original_identity().is_one_way() {
-            return self.invalid_reply(
-                "POP Lite does not support one-way requests",
-                request.original_identity().original_opaque(),
-            );
+            return self.invalid_reply(request.original_identity().original_opaque());
         }
         if !matches!(request.origin(), RequestOrigin::Network { .. }) {
-            return self.invalid_reply(
-                "POP Lite requires a trusted network peer",
-                request.original_identity().original_opaque(),
-            );
+            return self.invalid_reply(request.original_identity().original_opaque());
         }
         let request_header = match request
             .command()
@@ -78,10 +73,7 @@ where
         {
             Ok(header) => header,
             Err(_) => {
-                return self.invalid_reply(
-                    "decode POP Lite request header failed",
-                    request.original_identity().original_opaque(),
-                );
+                return self.invalid_reply(request.original_identity().original_opaque());
             }
         };
         if let Some((code, remark)) = self.pre_check(&request_header) {
@@ -147,7 +139,7 @@ where
             }
             PopLiteDeferredPrepareError::EmbeddedOrigin
             | PopLiteDeferredPrepareError::Header(_)
-            | PopLiteDeferredPrepareError::InvalidHeader => self.invalid_reply("invalid deferred POP Lite request", 0),
+            | PopLiteDeferredPrepareError::InvalidHeader => self.invalid_reply(0),
             PopLiteDeferredPrepareError::ServiceClosed => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "the deferred POP Lite service is unavailable",
@@ -155,9 +147,7 @@ where
             PopLiteDeferredPrepareError::InvalidExpiryMargins
             | PopLiteDeferredPrepareError::RetainedSizeOverflow
             | PopLiteDeferredPrepareError::Index(_)
-            | PopLiteDeferredPrepareError::Contract(_) => {
-                self.internal_reply("the deferred POP Lite request could not be prepared", 0)
-            }
+            | PopLiteDeferredPrepareError::Contract(_) => self.internal_reply(0),
         }
     }
 
@@ -172,9 +162,7 @@ where
                     ResponseCode::ServiceNotAvailable,
                     "the deferred POP Lite service is unavailable",
                 ),
-            PopLiteDeferredRegisterError::ProvenanceMismatch => {
-                self.internal_reply("the deferred POP Lite request could not be registered", 0)
-            }
+            PopLiteDeferredRegisterError::ProvenanceMismatch => self.internal_reply(0),
             PopLiteDeferredRegisterError::Responder(DeferredResponderOutcome::OneWayRequest) => {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingTimeout)
             }
@@ -184,21 +172,17 @@ where
             ),
             PopLiteDeferredRegisterError::Responder(
                 DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
-            ) => self.internal_reply("the deferred POP Lite request could not be registered", 0),
+            ) => self.internal_reply(0),
             PopLiteDeferredRegisterError::Responder(DeferredResponderOutcome::Taken(responder)) => {
                 drop(responder);
-                self.internal_reply("the deferred POP Lite request could not be registered", 0)
+                self.internal_reply(0)
             }
             PopLiteDeferredRegisterError::Expiry { outcome: _, parts } => {
                 drop(parts);
-                self.internal_reply("the deferred POP Lite request could not be registered", 0)
+                self.internal_reply(0)
             }
-            PopLiteDeferredRegisterError::RegistryRejected => {
-                self.internal_reply("the deferred POP Lite request could not be registered", 0)
-            }
-            PopLiteDeferredRegisterError::RegistryIdentityExhausted => {
-                self.internal_reply("the deferred POP Lite request exceeded registry capacity", 0)
-            }
+            PopLiteDeferredRegisterError::RegistryRejected => self.internal_reply(0),
+            PopLiteDeferredRegisterError::RegistryIdentityExhausted => self.internal_reply(0),
             PopLiteDeferredRegisterError::RegistryContract(violation) => {
                 Err(RocketMQError::internal("register deferred POP Lite request", violation))
             }
@@ -240,21 +224,23 @@ where
         )
     }
 
-    fn invalid_reply(&self, remark: &'static str, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let error = RocketMQError::illegal_argument(remark);
-        command_outcome(command_from_error_with_factory_remark_and_opaque(
-            &self.context.command_factory,
-            &error,
-            remark,
-            opaque,
+    fn invalid_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        command_outcome(remoting_error_response(
+            PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
+            RemotingErrorTarget::Reply {
+                factory: &self.context.command_factory,
+                opaque,
+            },
         ))
     }
 
-    fn internal_reply(&self, remark: &'static str, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        command_outcome(internal_error_with_factory_and_opaque(
-            &self.context.command_factory,
-            opaque,
-            remark,
+    fn internal_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        command_outcome(remoting_error_response(
+            PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
+            RemotingErrorTarget::Reply {
+                factory: &self.context.command_factory,
+                opaque,
+            },
         ))
     }
 }

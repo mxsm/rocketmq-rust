@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::PublicErrorView;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -47,8 +48,9 @@ use rocketmq_store::BrokerReadStore;
 use rocketmq_store::GetMessageResult;
 use rocketmq_store::GetMessageStatus;
 use rocketmq_store::MAX_PULL_MSG_SIZE;
-use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::error_response as remoting_error_response;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
@@ -148,14 +150,12 @@ where
             }
             _ => {
                 warn!(?request_code, "PullMessageProcessor received an unknown request code");
-                BrokerResponseParts::command(request_code_not_supported_with_factory_remark_and_opaque(
-                    &self.context.command_factory,
-                    request.original_identity().original_code(),
-                    format!(
-                        "PullMessageProcessor request code {} not supported",
-                        request.original_identity().original_code()
-                    ),
-                    request.original_identity().original_opaque(),
+                BrokerResponseParts::command(remoting_error_response(
+                    PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.context.command_factory,
+                        opaque: request.original_identity().original_opaque(),
+                    },
                 ))?
                 .into_handler_outcome()
             }
@@ -883,26 +883,30 @@ where
             }
             PullDeferredRegisterError::Expiry { outcome: _, parts } => {
                 drop(parts);
-                BrokerResponseParts::command(rocketmq_transport::api::internal_error_with_factory_and_opaque(
-                    &self.context.command_factory,
-                    opaque,
-                    "the deferred Pull request could not be registered",
+                BrokerResponseParts::command(remoting_error_response(
+                    PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.context.command_factory,
+                        opaque,
+                    },
                 ))?
                 .into_handler_outcome()
             }
-            PullDeferredRegisterError::RegistryRejected => {
-                BrokerResponseParts::command(rocketmq_transport::api::internal_error_with_factory_and_opaque(
-                    &self.context.command_factory,
+            PullDeferredRegisterError::RegistryRejected => BrokerResponseParts::command(remoting_error_response(
+                PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
+                RemotingErrorTarget::Reply {
+                    factory: &self.context.command_factory,
                     opaque,
-                    "the deferred Pull request could not be registered",
-                ))?
-                .into_handler_outcome()
-            }
+                },
+            ))?
+            .into_handler_outcome(),
             PullDeferredRegisterError::RegistryIdentityExhausted => {
-                BrokerResponseParts::command(rocketmq_transport::api::internal_error_with_factory_and_opaque(
-                    &self.context.command_factory,
-                    opaque,
-                    "the deferred Pull request exceeded registry capacity",
+                BrokerResponseParts::command(remoting_error_response(
+                    PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.context.command_factory,
+                        opaque,
+                    },
                 ))?
                 .into_handler_outcome()
             }

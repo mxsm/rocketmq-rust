@@ -94,6 +94,8 @@ impl ComponentId {
     pub const BROKER: Self = Self("broker");
     /// Client services.
     pub const CLIENT: Self = Self("client");
+    /// Proxy services.
+    pub const PROXY: Self = Self("proxy");
     /// Administrative tools.
     pub const TOOLS: Self = Self("tools");
     /// Observability services.

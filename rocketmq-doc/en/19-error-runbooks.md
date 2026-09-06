@@ -65,11 +65,12 @@ Symptoms:
 
 Action:
 
-1. Convert unsupported request-code responses with
-   `rocketmq_remoting::error_response::request_code_not_supported*`.
-2. Convert typed failures with
-   `rocketmq_remoting::error_response::command_from_error*`.
-3. Preserve request `opaque` where the old response did so.
+1. Select the canonical descriptor at the processor's final owner boundary.
+2. Construct a `PublicErrorView`; if retained context is invalid, use the same
+   descriptor's `PublicErrorView::descriptor_only` fallback.
+3. Call `rocketmq_transport::api::error_response` with an explicit
+   `RemotingErrorTarget` so the owner factory, request `opaque`, or existing
+   response state is preserved.
 4. Keep business-specific success and domain response codes in the owning
    processor.
 5. Run focused broker or namesrv tests plus the guard.

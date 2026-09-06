@@ -18,6 +18,8 @@ use std::time::Duration;
 
 use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mq_version::RocketMqVersion;
@@ -52,7 +54,8 @@ use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFacto
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::error_response;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::ServerRequestCommand;
 use rocketmq_transport::api::ServerRequestOutcome;
 use tracing::warn;
@@ -823,11 +826,13 @@ impl ConsumerRequestHandler {
                 ServerRequestCommand::ConsumeMessageDirectly { header, body }
             }
             code => {
-                return Ok(Some(request_code_not_supported_with_factory_remark_and_opaque(
-                    self.broker_to_client.command_factory(),
-                    request.code(),
-                    format!("broker-to-consumer request code {code:?} is not allowlisted"),
-                    request.opaque(),
+                warn!("broker-to-consumer request code {code:?} is not allowlisted");
+                return Ok(Some(error_response(
+                    PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+                    RemotingErrorTarget::Reply {
+                        factory: self.broker_to_client.command_factory(),
+                        opaque: request.opaque(),
+                    },
                 )));
             }
         };

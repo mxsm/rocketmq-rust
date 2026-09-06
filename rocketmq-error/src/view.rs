@@ -121,6 +121,23 @@ pub struct PublicErrorView<'a> {
     context: &'a ErrorContext,
 }
 
+static EMPTY_ERROR_CONTEXT: ErrorContext = ErrorContext::new();
+
+impl PublicErrorView<'static> {
+    /// Creates a public view containing descriptor-owned data only.
+    ///
+    /// This is the safe fallback when retained context fails descriptor
+    /// validation. It preserves the original descriptor and performs no
+    /// allocation.
+    #[inline]
+    pub const fn descriptor_only(descriptor: &'static ErrorDescriptor) -> Self {
+        Self {
+            descriptor,
+            context: &EMPTY_ERROR_CONTEXT,
+        }
+    }
+}
+
 impl<'a> PublicErrorView<'a> {
     /// Validates `context` against `descriptor` and creates a public safe view.
     ///
@@ -550,5 +567,16 @@ mod tests {
             diagnostic.fields().next().expect("diagnostic field").value(),
             ViewValueRef::U64(42)
         );
+    }
+
+    #[test]
+    fn descriptor_only_view_preserves_descriptor_policy_without_context() {
+        let view = PublicErrorView::descriptor_only(&crate::PROTOCOL_BODY_INVALID);
+
+        assert_eq!(view.code(), crate::PROTOCOL_BODY_INVALID.code());
+        assert_eq!(view.message(), crate::PROTOCOL_BODY_INVALID.public_message());
+        assert_eq!(view.projection(), crate::PROTOCOL_BODY_INVALID.projection());
+        assert!(view.fields().next().is_none());
+        assert!(!view.is_truncated());
     }
 }
