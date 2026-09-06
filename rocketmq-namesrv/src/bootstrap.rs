@@ -2038,6 +2038,8 @@ mod tests {
     }
     use crate::processor::default_request_processor::DefaultRequestProcessor;
     use crate::processor::ClientRequestProcessor;
+    use crate::processor::ClusterTestTopicRouteOutcome;
+    use crate::route::route_info_manager::TopicRouteLookupOutcome;
     use crate::route::types::BrokerSession;
 
     fn test_broker_session(remote_addr: SocketAddr) -> (BrokerSession, SessionId) {
@@ -2336,8 +2338,11 @@ mod tests {
             })
         }
 
-        fn lookup_topic_route(&self, _topic: &CheetahString) -> TestRouteLookupFuture<'_, Option<TopicRouteData>> {
-            Box::pin(async { Ok(None) })
+        fn lookup_topic_route(
+            &self,
+            _topic: &CheetahString,
+        ) -> TestRouteLookupFuture<'_, ClusterTestTopicRouteOutcome> {
+            Box::pin(async { Ok(ClusterTestTopicRouteOutcome::NotFound) })
         }
 
         fn shutdown(&self) -> TestRouteLookupFuture<'_, ()> {
@@ -3388,12 +3393,14 @@ mod tests {
             ResponseCode::Success
         );
         assert!(
-            bootstrap
-                .name_server_runtime
-                .inner
-                .route_info_manager()
-                .pickup_topic_route_data(&registered_topic)
-                .is_ok(),
+            matches!(
+                bootstrap
+                    .name_server_runtime
+                    .inner
+                    .route_info_manager()
+                    .pickup_topic_route_data(&registered_topic),
+                Ok(TopicRouteLookupOutcome::Found(_))
+            ),
             "registered topic should be visible through route manager"
         );
 
@@ -3406,12 +3413,14 @@ mod tests {
             process_with_default_processor(&bootstrap, &harness, &mut delete_topic_request).await;
         assert_eq!(ResponseCode::from(delete_topic_response.code()), ResponseCode::Success);
         assert!(
-            bootstrap
-                .name_server_runtime
-                .inner
-                .route_info_manager()
-                .pickup_topic_route_data(&registered_topic)
-                .is_err(),
+            matches!(
+                bootstrap
+                    .name_server_runtime
+                    .inner
+                    .route_info_manager()
+                    .pickup_topic_route_data(&registered_topic),
+                Ok(TopicRouteLookupOutcome::NotFound)
+            ),
             "deleted topic should no longer have route data"
         );
     }
@@ -3531,12 +3540,14 @@ mod tests {
         let register_response = process_with_default_processor(&bootstrap, &harness, &mut register_request).await;
         assert_eq!(ResponseCode::from(register_response.code()), ResponseCode::Success);
         assert!(
-            bootstrap
-                .name_server_runtime
-                .inner
-                .route_info_manager()
-                .pickup_topic_route_data(&topic_name)
-                .is_ok(),
+            matches!(
+                bootstrap
+                    .name_server_runtime
+                    .inner
+                    .route_info_manager()
+                    .pickup_topic_route_data(&topic_name),
+                Ok(TopicRouteLookupOutcome::Found(_))
+            ),
             "registered topic route should exist before unregister"
         );
 
@@ -3557,12 +3568,14 @@ mod tests {
         assert_eq!(ResponseCode::from(unregister_response.code()), ResponseCode::Success);
 
         wait_until("processor unregister broker route cleanup", || {
-            bootstrap
-                .name_server_runtime
-                .inner
-                .route_info_manager()
-                .pickup_topic_route_data(&topic_name)
-                .is_err()
+            matches!(
+                bootstrap
+                    .name_server_runtime
+                    .inner
+                    .route_info_manager()
+                    .pickup_topic_route_data(&topic_name),
+                Ok(TopicRouteLookupOutcome::NotFound)
+            )
         })
         .await;
         shutdown_unregister_service(&bootstrap).await;
@@ -3789,12 +3802,15 @@ mod tests {
         )
         .await;
 
-        let topic_route_data = bootstrap
+        let TopicRouteLookupOutcome::Found(topic_route_data) = bootstrap
             .name_server_runtime
             .inner
             .route_info_manager()
             .pickup_topic_route_data(&topic_name)
-            .expect("topic route data should exist");
+            .expect("topic route lookup should succeed")
+        else {
+            panic!("topic route data should exist");
+        };
         let broker_data = topic_route_data
             .broker_datas
             .iter()
@@ -3852,10 +3868,12 @@ mod tests {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
 
-            route_manager.pickup_topic_route_data(&topic_name).is_err()
-                && route_manager
-                    .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
-                    .is_none()
+            matches!(
+                route_manager.pickup_topic_route_data(&topic_name),
+                Ok(TopicRouteLookupOutcome::NotFound)
+            ) && route_manager
+                .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
+                .is_none()
                 && cluster_info
                     .cluster_addr_table
                     .as_ref()
@@ -3956,10 +3974,12 @@ mod tests {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
 
-            route_manager.pickup_topic_route_data(&topic_name).is_err()
-                && route_manager
-                    .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
-                    .is_none()
+            matches!(
+                route_manager.pickup_topic_route_data(&topic_name),
+                Ok(TopicRouteLookupOutcome::NotFound)
+            ) && route_manager
+                .query_broker_topic_config(cluster_name.clone(), broker_addr.clone())
+                .is_none()
                 && cluster_info
                     .cluster_addr_table
                     .as_ref()
@@ -4043,7 +4063,8 @@ mod tests {
         wait_until("duplicate unregister cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
+            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            else {
                 return false;
             };
             let Some(route_broker_data) = route_data
@@ -4141,7 +4162,8 @@ mod tests {
         wait_until("channel destroy cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
+            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            else {
                 return false;
             };
 
@@ -4241,7 +4263,8 @@ mod tests {
         wait_until("acting master cleanup", || {
             let route_manager = bootstrap.name_server_runtime.inner.route_info_manager();
             let cluster_info = route_manager.get_all_cluster_info();
-            let Ok(route_data) = route_manager.pickup_topic_route_data(&topic_name) else {
+            let Ok(TopicRouteLookupOutcome::Found(route_data)) = route_manager.pickup_topic_route_data(&topic_name)
+            else {
                 return false;
             };
             let Some(route_broker_data) = route_data
@@ -4629,10 +4652,10 @@ mod tests {
         let first_session = tokio::time::timeout(Duration::from_secs(2), next_connected(&mut session_events))
             .await
             .expect("first broker session should publish connect");
-        assert!(runtime
-            .route_info_manager()
-            .pickup_topic_route_data(&topic_name)
-            .is_ok());
+        assert!(matches!(
+            runtime.route_info_manager().pickup_topic_route_data(&topic_name),
+            Ok(TopicRouteLookupOutcome::Found(_))
+        ));
 
         let mut replacement = connect(&addr).await;
         send_registration(&mut replacement, registration().set_opaque(0x72b2)).await;
@@ -4657,10 +4680,10 @@ mod tests {
         })
         .await;
         assert!(
-            runtime
-                .route_info_manager()
-                .pickup_topic_route_data(&topic_name)
-                .is_ok(),
+            matches!(
+                runtime.route_info_manager().pickup_topic_route_data(&topic_name),
+                Ok(TopicRouteLookupOutcome::Found(_))
+            ),
             "an old session disconnect must not remove its replacement registration"
         );
 
@@ -4676,10 +4699,10 @@ mod tests {
         })
         .await;
         wait_until("replacement disconnect route cleanup", || {
-            runtime
-                .route_info_manager()
-                .pickup_topic_route_data(&topic_name)
-                .is_err()
+            matches!(
+                runtime.route_info_manager().pickup_topic_route_data(&topic_name),
+                Ok(TopicRouteLookupOutcome::NotFound)
+            )
         })
         .await;
 
@@ -4910,11 +4933,18 @@ mod tests {
         let response = process_with_client_processor(&bootstrap, &harness, &mut request).await;
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::TopicNotExist);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("Topic route was not found")
+        );
         assert_eq!(response.version(), 660);
         assert_eq!(
             response.serialize_type(),
             rocketmq_protocol::protocol::SerializeType::ROCKETMQ
         );
+        assert!(response.is_response_type());
+        assert!(response.body().is_none());
+        assert!(response.ext_fields().is_none());
     }
 
     #[tokio::test]

@@ -49,7 +49,6 @@ use tracing::warn;
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::route::batch_unregistration_service::BatchUnregistrationService;
 use crate::route::batch_unregistration_service::BrokerUnregistrationRequest;
-use crate::route::error::RocketMQError;
 use crate::route::error::RouteResult;
 use crate::route::tables::BrokerAddrTable;
 use crate::route::tables::BrokerLiveInfo;
@@ -63,6 +62,9 @@ use crate::route::topic_route_snapshot::RouteMutationGuard;
 use crate::route::topic_route_snapshot::TopicRouteView;
 use crate::route::types::BrokerName;
 use crate::route::types::BrokerSession;
+
+#[cfg(test)]
+use crate::route::error::RocketMQError;
 use crate::route::types::RemotingConnectionId;
 use crate::route::types::TopicName;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
@@ -70,6 +72,15 @@ use crate::route_info::broker_addr_info::BrokerAddrInfo;
 mod management;
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
+
+/// Result of looking up route data for a topic.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TopicRouteLookupOutcome<T> {
+    /// The requested topic has published route data.
+    Found(T),
+    /// The requested topic has no published route data.
+    NotFound,
+}
 
 /// Canonical route manager with serialized mutations and immutable route snapshots
 ///
@@ -1546,18 +1557,19 @@ impl RouteInfoManager {
     ///
     /// This method loads one immutable snapshot. Source tables are consulted only
     /// by the serialized write model when publishing a replacement snapshot.
-    pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteData> {
-        self.load_topic_route_view(topic)
-            .map(|view| view.route_data().as_ref().clone())
+    pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteLookupOutcome<TopicRouteData>> {
+        self.load_topic_route_view(topic).map(|outcome| match outcome {
+            TopicRouteLookupOutcome::Found(view) => TopicRouteLookupOutcome::Found(view.route_data().as_ref().clone()),
+            TopicRouteLookupOutcome::NotFound => TopicRouteLookupOutcome::NotFound,
+        })
     }
 
-    pub(crate) fn load_topic_route_view(&self, topic: &str) -> RouteResult<TopicRouteView> {
+    pub(crate) fn load_topic_route_view(&self, topic: &str) -> RouteResult<TopicRouteLookupOutcome<TopicRouteView>> {
         use rocketmq_model::common::topic::TopicValidator;
 
-        let snapshot = self
-            .route_mutations
-            .load(topic)
-            .ok_or_else(|| RocketMQError::route_not_found(topic))?;
+        let Some(snapshot) = self.route_mutations.load(topic) else {
+            return Ok(TopicRouteLookupOutcome::NotFound);
+        };
         debug!(
             "Loaded topic route snapshot: topic={}, version={}, published_at={}",
             topic, snapshot.version, snapshot.published_at
@@ -1569,10 +1581,12 @@ impl RouteInfoManager {
             .support_acting_master
             || topic.starts_with(TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX)
         {
-            return Ok(snapshot.base_view());
+            return Ok(TopicRouteLookupOutcome::Found(snapshot.base_view()));
         }
 
-        Ok(snapshot.acting_master_view(build_acting_master_route_data))
+        Ok(TopicRouteLookupOutcome::Found(
+            snapshot.acting_master_view(build_acting_master_route_data),
+        ))
     }
 }
 
@@ -2045,6 +2059,13 @@ mod tests {
     use rocketmq_transport::test_support::session_id_for_test;
     use rocketmq_transport::test_support::LocalChannelHarness;
 
+    fn expect_found<T>(result: RouteResult<TopicRouteLookupOutcome<T>>, expectation: &str) -> T {
+        match result.expect(expectation) {
+            TopicRouteLookupOutcome::Found(value) => value,
+            TopicRouteLookupOutcome::NotFound => panic!("{expectation}"),
+        }
+    }
+
     use super::*;
     use crate::bootstrap::Builder;
 
@@ -2265,15 +2286,18 @@ mod tests {
         );
         manager.register_topic(topic.clone(), vec![QueueData::new(broker_name, 4, 4, 6, 0)]);
 
-        let first = manager
-            .load_topic_route_view(topic.as_str())
-            .expect("first shared view should exist");
-        let second = manager
-            .load_topic_route_view(topic.as_str())
-            .expect("second shared view should exist");
-        let owned = manager
-            .pickup_topic_route_data(topic.as_str())
-            .expect("the compatibility API should still return a route");
+        let first = expect_found(
+            manager.load_topic_route_view(topic.as_str()),
+            "first shared view should exist",
+        );
+        let second = expect_found(
+            manager.load_topic_route_view(topic.as_str()),
+            "second shared view should exist",
+        );
+        let owned = expect_found(
+            manager.pickup_topic_route_data(topic.as_str()),
+            "the owned API should return a route",
+        );
 
         assert_eq!(first.variant(), crate::route::topic_route_snapshot::RouteVariant::Base);
         assert_eq!(first.version(), second.version());
@@ -2306,9 +2330,10 @@ mod tests {
         let first_version = manager
             .topic_route_snapshot_version(topic.as_str())
             .expect("registering the topic should publish a snapshot");
-        let route_before_rejected_update = manager
-            .pickup_topic_route_data(topic.as_str())
-            .expect("registered topic should have a route");
+        let route_before_rejected_update = expect_found(
+            manager.pickup_topic_route_data(topic.as_str()),
+            "registered topic should have a route",
+        );
         manager.register_topic(
             topic.clone(),
             vec![QueueData::new(
@@ -2324,9 +2349,10 @@ mod tests {
             Some(first_version)
         );
         assert_eq!(
-            manager
-                .pickup_topic_route_data(topic.as_str())
-                .expect("rejected update must preserve the old snapshot"),
+            expect_found(
+                manager.pickup_topic_route_data(topic.as_str()),
+                "rejected update must preserve the old snapshot",
+            ),
             route_before_rejected_update
         );
 
@@ -2336,9 +2362,10 @@ mod tests {
             .expect("permission mutation should republish the topic");
         assert!(second_version > first_version);
 
-        let initial_route = manager
-            .pickup_topic_route_data(topic.as_str())
-            .expect("registered topic should have a complete route");
+        let initial_route = expect_found(
+            manager.pickup_topic_route_data(topic.as_str()),
+            "registered topic should have a complete route",
+        );
         assert_eq!(initial_route.queue_datas.len(), 1);
         assert_eq!(initial_route.broker_datas.len(), 1);
         assert!(!PermName::is_writeable(initial_route.queue_datas[0].perm()));
@@ -2385,11 +2412,16 @@ mod tests {
             .expect("management read should complete after mutation publication");
         management_thread.join().expect("management thread should not panic");
 
-        let route_while_unregistration_is_paused = route_while_unregistration_is_paused
-            .expect("an unpublished unregister mutation must leave the complete old route visible");
+        let route_while_unregistration_is_paused = expect_found(
+            route_while_unregistration_is_paused,
+            "an unpublished unregister mutation must leave the complete old route visible",
+        );
         assert_eq!(route_while_unregistration_is_paused, initial_route);
         assert!(matches!(management_result, Err(RocketMQError::ClusterNotFound { .. })));
-        assert!(manager.pickup_topic_route_data(topic.as_str()).is_err());
+        assert!(matches!(
+            manager.pickup_topic_route_data(topic.as_str()),
+            Ok(TopicRouteLookupOutcome::NotFound)
+        ));
     }
 
     #[test]
@@ -2436,9 +2468,10 @@ mod tests {
             .topic_route_snapshot_version(topic.as_str())
             .expect("metadata mutation should republish the snapshot");
         assert!(metadata_version > initial_version);
-        let route = manager
-            .pickup_topic_route_data(topic.as_str())
-            .expect("metadata update should keep a complete route");
+        let route = expect_found(
+            manager.pickup_topic_route_data(topic.as_str()),
+            "metadata update should keep a complete route",
+        );
         assert_eq!(route.filter_server_table.get(&broker_addr), Some(&vec![filter_server]));
         assert!(route
             .topic_queue_mapping_by_broker
@@ -2446,7 +2479,24 @@ mod tests {
             .is_some_and(|mapping| mapping.contains_key(&broker_name)));
 
         manager.delete_topic(topic.clone(), None);
-        assert!(manager.pickup_topic_route_data(topic.as_str()).is_err());
+        assert!(matches!(
+            manager.pickup_topic_route_data(topic.as_str()),
+            Ok(TopicRouteLookupOutcome::NotFound)
+        ));
+    }
+
+    #[test]
+    fn missing_topic_is_an_explicit_normal_lookup_outcome() {
+        let (_bootstrap, manager) = test_route_manager();
+
+        assert!(matches!(
+            manager.pickup_topic_route_data("missing-topic"),
+            Ok(TopicRouteLookupOutcome::NotFound)
+        ));
+        assert!(matches!(
+            manager.load_topic_route_view("missing-topic"),
+            Ok(TopicRouteLookupOutcome::NotFound)
+        ));
     }
 
     #[tokio::test]

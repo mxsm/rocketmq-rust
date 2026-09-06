@@ -19,7 +19,6 @@ use std::time::Instant;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::PublicErrorView;
-use rocketmq_model::common::FAQUrl;
 use rocketmq_model::version::RocketMqVersion;
 use rocketmq_observability::metrics::namesrv::NameServerRouteCacheOutcome;
 use rocketmq_observability::metrics::namesrv::NameServerRouteStage;
@@ -45,6 +44,7 @@ use crate::route::response_cache::JsonEncoding;
 use crate::route::response_cache::RouteCacheKey;
 use crate::route::response_cache::RouteCacheOutcomeKind;
 use crate::route::response_cache::RouteCachePolicy;
+use crate::route::route_info_manager::TopicRouteLookupOutcome;
 use crate::route::zone_filter::filter_route_by_zone;
 use crate::route::zone_filter::ZoneRequest;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
@@ -142,21 +142,13 @@ impl ClientRequestProcessor {
             .route_info_manager()
             .load_topic_route_view(request_header.topic.as_ref())
         {
-            Ok(data) => data,
-            Err(
-                rocketmq_error::RocketMQError::TopicNotExist { .. }
-                | rocketmq_error::RocketMQError::RouteNotFound { .. },
-            ) => {
+            Ok(TopicRouteLookupOutcome::Found(data)) => data,
+            Ok(TopicRouteLookupOutcome::NotFound) => {
                 route_span.record("result", "not_found");
-                return Ok(Some(
-                    self.command_factory
-                        .create_response_command_with_code(ResponseCode::TopicNotExist)
-                        .set_remark(format!(
-                            "No topic route info in name server for the topic: {}{}",
-                            request_header.topic,
-                            FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                        )),
-                ));
+                return Ok(Some(error_response(
+                    PublicErrorView::descriptor_only(&rocketmq_error::ROUTE_TOPIC_NOT_FOUND),
+                    RemotingErrorTarget::Fresh(&self.command_factory),
+                )));
             }
             Err(error) => {
                 route_span.record("result", "internal");

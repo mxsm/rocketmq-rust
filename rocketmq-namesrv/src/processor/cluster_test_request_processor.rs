@@ -13,13 +13,15 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_model::common::FAQUrl;
+use rocketmq_error::PublicErrorView;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
 use tracing::debug;
@@ -28,6 +30,7 @@ use tracing::info;
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::client_request_processor::encode_topic_route_response_for_zone;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
+use crate::route::route_info_manager::TopicRouteLookupOutcome;
 use crate::route::zone_filter::filter_route_by_zone;
 use crate::route::zone_filter::ZoneRequest;
 use crate::route::zone_filter::TYPED_ZONE_ROUTE_ENABLED;
@@ -38,6 +41,7 @@ mod lookup_cache;
 mod route_lookup;
 
 pub(crate) use route_lookup::ClusterTestRouteLookup;
+pub(crate) use route_lookup::ClusterTestTopicRouteOutcome;
 pub(crate) use route_lookup::TransportClusterTestRouteLookup;
 
 pub struct ClusterTestRequestProcessor {
@@ -66,11 +70,8 @@ impl ClusterTestRequestProcessor {
             .route_info_manager()
             .pickup_topic_route_data(request_header.topic.as_ref())
         {
-            Ok(route_data) => Some(route_data),
-            Err(
-                rocketmq_error::RocketMQError::TopicNotExist { .. }
-                | rocketmq_error::RocketMQError::RouteNotFound { .. },
-            ) => None,
+            Ok(TopicRouteLookupOutcome::Found(route_data)) => Some(route_data),
+            Ok(TopicRouteLookupOutcome::NotFound) => None,
             Err(error) => return Err(error),
         };
 
@@ -84,14 +85,15 @@ impl ClusterTestRequestProcessor {
                 .lookup_topic_route(&request_header.topic)
                 .await
             {
-                Ok(Some(route_data)) => {
+                Ok(ClusterTestTopicRouteOutcome::Found(route_data)) => {
                     topic_route_data = Some(route_data);
                 }
-                Ok(None) => {}
+                Ok(ClusterTestTopicRouteOutcome::NotFound | ClusterTestTopicRouteOutcome::Unavailable) => {}
                 Err(error) => {
                     info!(
-                        "get route info by topic from product environment failed. envName={}, error={}",
-                        route_config.product_env_name, error
+                        product_env = %route_config.product_env_name,
+                        error_code = %error.descriptor().code(),
+                        "product environment route lookup failed"
                     );
                 }
             }
@@ -125,15 +127,10 @@ impl ClusterTestRequestProcessor {
             ));
         }
 
-        Ok(Some(
-            self.command_factory
-                .create_response_command_with_code(ResponseCode::TopicNotExist)
-                .set_remark(format!(
-                    "No topic route info in name server for the topic: {}{}",
-                    request_header.topic,
-                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                )),
-        ))
+        Ok(Some(error_response(
+            PublicErrorView::descriptor_only(&rocketmq_error::ROUTE_TOPIC_NOT_FOUND),
+            RemotingErrorTarget::Fresh(&self.command_factory),
+        )))
     }
 
     pub(crate) async fn handle_request(
@@ -176,8 +173,14 @@ mod tests {
 
     use super::route_lookup::ClusterTestLookupFuture;
 
+    #[derive(Clone)]
+    enum TestLookupResult {
+        Outcome(ClusterTestTopicRouteOutcome),
+        Failure,
+    }
+
     struct TestClusterTestRouteLookup {
-        route: Option<TopicRouteData>,
+        result: TestLookupResult,
     }
 
     impl ClusterTestRouteLookup for TestClusterTestRouteLookup {
@@ -185,9 +188,19 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
 
-        fn lookup_topic_route(&self, _topic: &CheetahString) -> ClusterTestLookupFuture<'_, Option<TopicRouteData>> {
-            let route = self.route.clone();
-            Box::pin(async move { Ok(route) })
+        fn lookup_topic_route(
+            &self,
+            _topic: &CheetahString,
+        ) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteOutcome> {
+            let result = self.result.clone();
+            Box::pin(async move {
+                match result {
+                    TestLookupResult::Outcome(outcome) => Ok(outcome),
+                    TestLookupResult::Failure => Err(rocketmq_error::RocketMQError::not_initialized(
+                        "private product lookup failure",
+                    )),
+                }
+            })
         }
 
         fn shutdown(&self) -> ClusterTestLookupFuture<'_, ()> {
@@ -220,7 +233,7 @@ mod tests {
             ..NamesrvConfig::default()
         };
         let mock_lookup = Arc::new(TestClusterTestRouteLookup {
-            route: Some(sample_topic_route_data()),
+            result: TestLookupResult::Outcome(ClusterTestTopicRouteOutcome::Found(sample_topic_route_data())),
         });
 
         let runtime = rocketmq_runtime::RuntimeContext::from_current("namesrv-cluster-test-processor");
@@ -265,5 +278,60 @@ mod tests {
             body.as_ref(),
             route_data.encode().expect("legacy encoding should succeed").as_slice()
         );
+    }
+
+    #[tokio::test]
+    async fn cluster_test_absence_unavailable_and_failure_keep_fixed_owner_r17() {
+        for result in [
+            TestLookupResult::Outcome(ClusterTestTopicRouteOutcome::NotFound),
+            TestLookupResult::Outcome(ClusterTestTopicRouteOutcome::Unavailable),
+            TestLookupResult::Failure,
+        ] {
+            let namesrv_config = NamesrvConfig {
+                cluster_test: true,
+                ..NamesrvConfig::default()
+            };
+            let runtime = rocketmq_runtime::RuntimeContext::from_current("namesrv-cluster-test-r17");
+            let command_factory = rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory::new(
+                rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults::new(
+                    657,
+                    rocketmq_protocol::protocol::SerializeType::ROCKETMQ,
+                ),
+            );
+            let bootstrap = Builder::new(
+                runtime.service_context("namesrv"),
+                rocketmq_observability::TelemetryHandle::noop(),
+            )
+            .set_name_server_config(namesrv_config)
+            .set_remoting_command_factory(command_factory)
+            .set_cluster_test_route_lookup(Arc::new(TestClusterTestRouteLookup { result }))
+            .build();
+            let runtime_inner = bootstrap.runtime_inner();
+            let processor = ClusterTestRequestProcessor::new(NameServerRuntimeHandle::new(&runtime_inner));
+            let mut request = RemotingCommand::create_request_command(
+                RequestCode::GetRouteinfoByTopic,
+                GetRouteInfoRequestHeader::new(CheetahString::from("missing-topic"), Some(true)),
+            );
+            request.make_custom_header_to_net();
+
+            let response = processor
+                .handle_request(&mut request)
+                .await
+                .expect("fallback should retain the owner response")
+                .expect("cluster-test route lookup should respond");
+
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::TopicNotExist);
+            assert_eq!(
+                response.remark().map(CheetahString::as_str),
+                Some("Topic route was not found")
+            );
+            assert_eq!(response.version(), 657);
+            assert_eq!(
+                response.serialize_type(),
+                rocketmq_protocol::protocol::SerializeType::ROCKETMQ
+            );
+            assert!(response.is_response_type());
+            assert!(response.body().is_none());
+        }
     }
 }

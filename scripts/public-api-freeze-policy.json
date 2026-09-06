@@ -170,6 +170,19 @@
       "reason": "The repository owner approved the unreleased E5-2 Controller convergence. Controller operational failures now use the catalog-backed canonical Error with typed Raft, storage, runtime, configuration, persistence, and lifecycle sources; existing RocketMQResult boundaries explicitly share the same Arc allocation. The duplicate public leaf, error aliases, nested and direct mega-enum variants, and convenience constructors are removed without compatibility shims, blanket conversion, or changes to owner-controlled response state and remoting values 2007 and 2015.",
       "approved_by": "repository-owner",
       "approved_on": "2026-09-05"
+    },
+    {
+      "id": "API-1.0-001",
+      "classification": "approved-break",
+      "applies_to": "post-freeze",
+      "profile_id": "rocketmq-namesrv:default",
+      "package": "rocketmq-namesrv",
+      "item_path": "rocketmq_namesrv::route::route_info_manager::RouteInfoManager::pickup_topic_route_data",
+      "change": "signature",
+      "replacement": "RouteResult<TopicRouteLookupOutcome<TopicRouteData>>",
+      "reason": "Issue #10116 separates ordinary NameServer route absence from operational lookup failure with one explicit outcome. The unreleased API changes directly without a compatibility wrapper while RocketMQ remoting response codes and wire state remain unchanged.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-09-06"
     }
   ],
   "frozen_contracts": [

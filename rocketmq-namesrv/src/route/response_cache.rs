@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error as StdError;
+use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -99,6 +101,31 @@ impl CachedRouteBody {
             Self::Ready(body) | Self::Oversize(body) => body,
         }
     }
+}
+
+#[derive(Debug)]
+struct SharedRouteEncodeFailure {
+    source: Arc<RocketMQError>,
+}
+
+impl fmt::Display for SharedRouteEncodeFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("NameServer route response encoding failed")
+    }
+}
+
+impl StdError for SharedRouteEncodeFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+fn route_encode_failure(source: Arc<RocketMQError>) -> RocketMQError {
+    RocketMQError::Serialization(SerializationError::source(
+        "encode",
+        "namesrv-route-response",
+        SharedRouteEncodeFailure { source },
+    ))
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -197,12 +224,7 @@ impl RouteResponseCache {
                     }
                 })
             })
-            .map_err(|error| {
-                RocketMQError::Serialization(SerializationError::encode_failed(
-                    "namesrv-route-response",
-                    error.to_string(),
-                ))
-            })?;
+            .map_err(route_encode_failure)?;
 
         match value {
             CachedRouteBody::Ready(body) => Ok(RouteCacheOutcome {
@@ -248,7 +270,23 @@ struct RouteResponseCacheConfig {
 mod tests {
     use std::sync::atomic::AtomicUsize;
 
+    use rocketmq_error::Error;
+    use rocketmq_error::PublicErrorView;
+    use rocketmq_error::CORE_SERIALIZATION_FAILED;
+
     use super::*;
+
+    fn find_source<'a, T>(mut error: &'a (dyn StdError + 'static)) -> Option<&'a T>
+    where
+        T: StdError + 'static,
+    {
+        loop {
+            if let Some(source) = error.downcast_ref::<T>() {
+                return Some(source);
+            }
+            error = error.source()?;
+        }
+    }
 
     fn cache(max_bytes: u64, max_entries: u64, max_single_response_bytes: u64) -> RouteResponseCache {
         RouteResponseCache::new(RouteResponseCacheConfig {
@@ -340,6 +378,42 @@ mod tests {
 
         assert!(stats.entry_count <= 2, "{stats:?}");
         assert!(stats.weighted_size <= 300, "{stats:?}");
+    }
+
+    #[test]
+    fn shared_encode_failure_preserves_typed_source_and_is_not_cached() {
+        let cache = cache(1024, 10, 512);
+        let key = key(1, RouteVariant::Base, JsonEncoding::Legacy);
+        let canonical = Arc::new(Error::caused_by(
+            &CORE_SERIALIZATION_FAILED,
+            std::io::Error::other("private route encoder detail"),
+        ));
+
+        let error =
+            match cache.get_or_try_insert_with(key.clone(), || Err(RocketMQError::Shared(Arc::clone(&canonical)))) {
+                Ok(_) => panic!("route encoding failure must remain visible"),
+                Err(error) => error,
+            };
+
+        assert_eq!(error.descriptor(), &CORE_SERIALIZATION_FAILED);
+        assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 1);
+        let context = error.context();
+        let view = PublicErrorView::try_new(error.descriptor(), &context).expect("source context must be valid");
+        assert_eq!(view.message(), "Serialization failed");
+        assert!(!error.to_string().contains("private route encoder detail"));
+        let wrapper = find_source::<SharedRouteEncodeFailure>(&error)
+            .expect("cache failure must retain its shared typed source wrapper");
+        let RocketMQError::Shared(retained) = wrapper.source.as_ref() else {
+            panic!("cache failure wrapper must retain the original canonical carrier")
+        };
+        assert!(Arc::ptr_eq(retained, &canonical));
+        assert!(find_source::<std::io::Error>(&error).is_some());
+
+        let retry = cache
+            .get_or_try_insert_with(key, || Ok(vec![1, 2, 3]))
+            .expect("failed route encoding must not be cached");
+        assert_eq!(retry.kind, RouteCacheOutcomeKind::Miss);
+        assert_eq!(retry.body, Bytes::from_static(&[1, 2, 3]));
     }
 
     #[test]

@@ -72,10 +72,17 @@ pub(super) enum RouteLookupOutcome<T> {
     Cancelled,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ClusterTestTopicRouteOutcome {
+    Found(TopicRouteData),
+    NotFound,
+    Unavailable,
+}
+
 pub(crate) trait ClusterTestRouteLookup: Send + Sync {
     fn start(&self) -> ClusterTestLookupFuture<'_, ()>;
 
-    fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, Option<TopicRouteData>>;
+    fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteOutcome>;
 
     fn shutdown(&self) -> ClusterTestLookupFuture<'_, ()>;
 }
@@ -301,7 +308,7 @@ impl ClusterTestRouteLookup for TransportClusterTestRouteLookup {
         })
     }
 
-    fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, Option<TopicRouteData>> {
+    fn lookup_topic_route(&self, topic: &CheetahString) -> ClusterTestLookupFuture<'_, ClusterTestTopicRouteOutcome> {
         let topic = topic.clone();
         Box::pin(async move {
             let deadline = RequestDeadline::after(self.request_timeout);
@@ -312,8 +319,9 @@ impl ClusterTestRouteLookup for TransportClusterTestRouteLookup {
                 result = self.lookup_topic_route_until(&topic, deadline) => result,
             }?;
             match outcome {
-                RouteLookupOutcome::Resolved(route) => Ok(route),
-                RouteLookupOutcome::Unavailable => Ok(None),
+                RouteLookupOutcome::Resolved(Some(route)) => Ok(ClusterTestTopicRouteOutcome::Found(route)),
+                RouteLookupOutcome::Resolved(None) => Ok(ClusterTestTopicRouteOutcome::NotFound),
+                RouteLookupOutcome::Unavailable => Ok(ClusterTestTopicRouteOutcome::Unavailable),
                 RouteLookupOutcome::Cancelled => Err(route_lookup_cancelled_error()),
             }
         })
@@ -599,6 +607,17 @@ mod tests {
     }
 
     #[derive(Clone)]
+    struct MissingRouteProcessor;
+
+    impl RequestProcessor for MissingRouteProcessor {
+        async fn process(&mut self, _request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+            response_outcome(RemotingCommand::create_response_command_with_code(
+                ResponseCode::TopicNotExist,
+            ))
+        }
+    }
+
+    #[derive(Clone)]
     struct BlockingRouteProcessor {
         entered: Arc<Notify>,
         release: Arc<Notify>,
@@ -742,12 +761,73 @@ mod tests {
             .lookup_topic_route(&CheetahString::from("missing-topic"))
             .await
             .unwrap();
-        assert_eq!(first, Some(sample_route()));
+        assert_eq!(first, ClusterTestTopicRouteOutcome::Found(sample_route()));
         assert_eq!(second, first);
         assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
 
         lookup.shutdown().await.unwrap();
         server.shutdown().await;
+        runtime
+            .shutdown_tasks(Duration::from_secs(1))
+            .await
+            .assert_no_task_leak()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn transport_lookup_returns_explicit_not_found_and_caches_it() {
+        let runtime = RuntimeContext::from_current("namesrv-route-lookup-not-found-test");
+        let server = RunningRouteServer::bind(runtime.service_context("route-server"), MissingRouteProcessor).await;
+        let resolver = Arc::new(FixedEndpointResolver::new(vec![server.local_addr()]));
+        let lookup = TransportClusterTestRouteLookup::with_resolver(
+            runtime.service_context("route-lookup"),
+            resolver.clone(),
+            Duration::from_secs(1),
+            TransportTelemetry::noop(),
+        );
+        lookup.start().await.unwrap();
+
+        let first = lookup
+            .lookup_topic_route(&CheetahString::from("missing-topic"))
+            .await
+            .unwrap();
+        let second = lookup
+            .lookup_topic_route(&CheetahString::from("missing-topic"))
+            .await
+            .unwrap();
+
+        assert_eq!(first, ClusterTestTopicRouteOutcome::NotFound);
+        assert_eq!(second, first);
+        assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+
+        lookup.shutdown().await.unwrap();
+        server.shutdown().await;
+        runtime
+            .shutdown_tasks(Duration::from_secs(1))
+            .await
+            .assert_no_task_leak()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn transport_lookup_returns_explicit_unavailable_without_endpoints() {
+        let runtime = RuntimeContext::from_current("namesrv-route-lookup-unavailable-test");
+        let lookup = TransportClusterTestRouteLookup::with_resolver(
+            runtime.service_context("route-lookup"),
+            Arc::new(FixedEndpointResolver::new(Vec::new())),
+            Duration::from_secs(1),
+            TransportTelemetry::noop(),
+        );
+        lookup.start().await.unwrap();
+
+        let outcome = lookup
+            .lookup_topic_route(&CheetahString::from("missing-topic"))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, ClusterTestTopicRouteOutcome::Unavailable);
+
+        lookup.shutdown().await.unwrap();
         runtime
             .shutdown_tasks(Duration::from_secs(1))
             .await
