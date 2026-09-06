@@ -835,9 +835,9 @@ pub struct NamesrvConfig {
     #[serde(alias = "deleteTopicWithBrokerRegistration", default)]
     pub delete_topic_with_broker_registration: bool,
 
-    /// Migration-only escape hatch for an unauthenticated non-loopback listener.
-    /// Secure deployments must leave this disabled and select the secure profile.
-    #[serde(alias = "allowInsecurePublicListener", default)]
+    /// Compatibility mode for an unauthenticated non-loopback listener.
+    /// Disable this explicitly to fail closed, or select the secure profile.
+    #[serde(alias = "allowInsecurePublicListener", default = "defaults::default_true")]
     pub allow_insecure_public_listener: bool,
 
     /// Shared RocketMQ authentication and authorization configuration.
@@ -897,7 +897,7 @@ impl Default for NamesrvConfig {
             need_wait_for_service: false,
             wait_seconds_for_service: 45,
             delete_topic_with_broker_registration: false,
-            allow_insecure_public_listener: false,
+            allow_insecure_public_listener: true,
             auth_config: AuthConfig::default(),
             config_black_list: "configBlackList;configStorePath;kvConfigPath".to_string(),
         }
@@ -1600,13 +1600,22 @@ mod tests {
         assert!(!config.need_wait_for_service);
         assert_eq!(config.wait_seconds_for_service, 45);
         assert!(!config.delete_topic_with_broker_registration);
-        assert!(!config.allow_insecure_public_listener);
+        assert!(config.allow_insecure_public_listener);
         assert!(!config.auth_config.authentication_enabled);
         assert!(!config.auth_config.authorization_enabled);
         assert_eq!(
             config.config_black_list,
             "configBlackList;configStorePath;kvConfigPath".to_string()
         );
+    }
+
+    #[test]
+    fn test_namesrv_config_listener_compatibility_serde_default() {
+        let omitted: NamesrvConfig = serde_json::from_str("{}").unwrap();
+        assert!(omitted.allow_insecure_public_listener);
+
+        let disabled: NamesrvConfig = serde_json::from_str(r#"{"allowInsecurePublicListener":false}"#).unwrap();
+        assert!(!disabled.allow_insecure_public_listener);
     }
 
     #[test]

@@ -1017,8 +1017,8 @@ mod tests {
     }
 
     #[test]
-    fn disabled_security_bootstrap_requires_explicit_public_listener_opt_in() {
-        let error = validate_namesrv_security(
+    fn disabled_security_bootstrap_allows_public_listener_by_default() {
+        let outcome = validate_namesrv_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
             &NamesrvConfig::default(),
             &ServerConfig::default(),
@@ -1026,14 +1026,14 @@ mod tests {
             None,
             None,
         )
-        .expect_err("an unauthenticated public listener must fail closed");
-        assert!(error.to_string().contains("allowInsecurePublicListener"));
+        .expect("the default compatibility mode should allow the legacy public listener");
+        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
 
         let namesrv = NamesrvConfig {
-            allow_insecure_public_listener: true,
+            allow_insecure_public_listener: false,
             ..NamesrvConfig::default()
         };
-        let outcome = validate_namesrv_security(
+        let error = validate_namesrv_security(
             &rocketmq_security_api::SecurityBootstrap::Disabled,
             &namesrv,
             &ServerConfig::default(),
@@ -1041,8 +1041,8 @@ mod tests {
             None,
             None,
         )
-        .expect("explicit migration opt-in should preserve the legacy public listener");
-        assert_eq!(outcome, rocketmq_security_api::SecurityBootstrapOutcome::Disabled);
+        .expect_err("an explicit secure opt-out should reject the public listener");
+        assert!(error.to_string().contains("allowInsecurePublicListener"));
     }
 
     #[test]
@@ -1184,10 +1184,17 @@ mod tests {
         };
 
         let error = validate_namesrv_security(&security, &NamesrvConfig::default(), &server, None, None, None)
+            .expect_err("secure mode must reject the default compatibility flag");
+        assert!(error.to_string().contains("allowInsecurePublicListener"));
+
+        let mut namesrv = NamesrvConfig {
+            allow_insecure_public_listener: false,
+            ..NamesrvConfig::default()
+        };
+        let error = validate_namesrv_security(&security, &namesrv, &server, None, None, None)
             .expect_err("secure mode without protocol auth must fail");
         assert!(error.to_string().contains("authenticationEnabled"));
 
-        let mut namesrv = NamesrvConfig::default();
         namesrv.auth_config.authentication_enabled = true;
         namesrv.auth_config.authorization_enabled = true;
         namesrv.auth_config.auth_config_path = root.path().join("auth").to_string_lossy().as_ref().into();
@@ -1212,7 +1219,10 @@ mod tests {
     fn validated_bootstrap_installs_only_the_coarse_ingress_projection() {
         let root = tempfile::tempdir().expect("temporary security root");
         let security = secure_bootstrap(root.path());
-        let mut namesrv = NamesrvConfig::default();
+        let mut namesrv = NamesrvConfig {
+            allow_insecure_public_listener: false,
+            ..NamesrvConfig::default()
+        };
         namesrv.auth_config.authentication_enabled = true;
         namesrv.auth_config.authorization_enabled = true;
         namesrv.auth_config.auth_config_path = root.path().join("auth").to_string_lossy().as_ref().into();

@@ -35,7 +35,9 @@ tls.server.trustCertPath = "/opt/rocketmq/security/ca.crt"
 tls.protocols = "TLSv1.3,TLSv1.2"
 
 # Security
-allowInsecurePublicListener = false
+# Compatibility default for legacy public listeners. Set this to false to
+# require a configured security profile before binding a non-loopback address.
+allowInsecurePublicListener = true
 authenticationEnabled = true
 authorizationEnabled = true
 authConfigPath = "/opt/rocketmq/data/auth"
