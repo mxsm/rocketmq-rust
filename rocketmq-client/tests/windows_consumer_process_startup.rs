@@ -36,6 +36,7 @@ use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
+use rocketmq_model::common::message::message_single::Message;
 use rocketmq_namesrv::bootstrap::Builder as NameServerBuilder;
 use rocketmq_namesrv::NamesrvConfig;
 use rocketmq_observability::TelemetryHandle;
@@ -257,6 +258,21 @@ async fn run_producer_startup(client_runtime: Arc<ClientRuntime>, namesrv_addr: 
 
     println!("{PRODUCER_STARTUP_MARKER}");
     std::io::stdout().flush().expect("flush producer startup marker");
+
+    // Keep the send/select state in the caller, as in the quickstart example. A startup-only
+    // caller has a smaller poll frame and can hide submission-time stack overflows.
+    let message = Message::builder()
+        .topic("WindowsStackOverflowTest")
+        .body_slice(b"stack probe")
+        .build_unchecked();
+    tokio::select! {
+        result = producer.send_with_timeout(message, 2000) => {
+            assert!(result.is_err(), "the isolated NameServer has no registered brokers");
+        }
+        _ = tokio::time::sleep(Duration::from_secs(10)) => {
+            panic!("route lookup should complete within the send timeout");
+        }
+    }
 
     producer.shutdown().await;
     println!("{PRODUCER_SHUTDOWN_MARKER}");
