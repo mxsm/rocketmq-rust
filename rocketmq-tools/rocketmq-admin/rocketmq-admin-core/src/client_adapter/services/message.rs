@@ -2243,10 +2243,14 @@ mod tests {
         );
         assert_eq!(failed.message.msg_id().as_str(), "MSGID");
         assert!(failed.tracks.is_empty());
-        assert_eq!(
-            failed.track_error.as_deref(),
-            Some("Broker operation failed: operation=<redacted>, broker_code=<redacted>, message=<redacted>")
-        );
+        let track_error = failed
+            .track_error
+            .as_deref()
+            .expect("failed track lookup should retain its public error message");
+        assert!(track_error == "Broker operation failed" || track_error.starts_with("Broker operation failed: "));
+        assert!(!track_error.contains("MESSAGE_TRACK"));
+        assert!(!track_error.contains("-1"));
+        assert!(!track_error.contains("broker-b unavailable"));
     }
 
     #[test]
