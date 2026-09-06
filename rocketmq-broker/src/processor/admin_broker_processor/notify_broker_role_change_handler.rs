@@ -81,8 +81,12 @@ impl NotifyBrokerRoleChangeHandler {
             .replicas_manager()
             .is_none()
         {
-            warn!("Ignore notifyBrokerRoleChanged because controller mode is not initialized");
-            return Ok(Some(response.set_code(ResponseCode::Success)));
+            warn!("Reject notifyBrokerRoleChanged because controller mode is not initialized");
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("controller mode is not initialized"),
+            ));
         }
 
         let sync_state_set = sync_state_set_info.get_sync_state_set().cloned().unwrap_or_default();
@@ -179,6 +183,10 @@ mod tests {
             .expect("notification should return a response");
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("controller mode is not initialized")
+        );
     }
 
     #[tokio::test]

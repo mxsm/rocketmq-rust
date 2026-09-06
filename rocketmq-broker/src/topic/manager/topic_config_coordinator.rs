@@ -197,6 +197,16 @@ impl TopicConfigCoordinator {
             .count()
     }
 
+    async fn wait_for_blocking_tasks_until(&self, deadline: ShutdownDeadline) -> usize {
+        loop {
+            let blocking_still_running = self.blocking_still_running();
+            if blocking_still_running == 0 || deadline.is_expired() {
+                return blocking_still_running;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
     async fn ensure_started(&self) -> RocketMQResult<()> {
         let mut lifecycle = self.lifecycle.lock().await;
         if lifecycle.finalized {
@@ -370,13 +380,13 @@ impl TopicConfigCoordinator {
         } else {
             false
         };
-        let timed_out = deadline.is_expired() || (!final_persist_succeeded && detail.is_none());
+        let persistence_timed_out = deadline.is_expired() || (!final_persist_succeeded && detail.is_none());
         let worker_exited = self
             .runtime_capabilities()
             .task_group
             .wait_task(run.worker, deadline.remaining())
             .await;
-        let blocking_still_running = self.blocking_still_running();
+        let blocking_still_running = self.wait_for_blocking_tasks_until(deadline).await;
         let report = TopicConfigCoordinatorShutdownReport {
             admission_closed,
             pending_at_end: self.pending_count(),
@@ -385,7 +395,7 @@ impl TopicConfigCoordinator {
             registration_quiesced: worker_exited,
             unregister_succeeded: false,
             blocking_still_running,
-            timed_out: timed_out || !worker_exited,
+            timed_out: persistence_timed_out || !worker_exited || blocking_still_running > 0,
             elapsed: started.elapsed(),
             detail,
         };
