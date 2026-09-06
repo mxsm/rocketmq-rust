@@ -26,11 +26,13 @@ use rocketmq_store::MessageFilter;
 
 use super::deadline::PullWaitDeadline;
 use super::deadline::PullWaitDeadlineErrorKind;
+use super::deadline::PullWaitDeadlineOutcome;
 use super::index::PullArrivalView;
 use super::index::PullCriteriaIndex;
 use super::index::PullCriteriaKey;
 use super::index::PullCriteriaLimits;
-use super::index::PullIndexErrorKind;
+use super::index::PullIndexRejection;
+use super::index::PullIndexReserveOutcome;
 use super::index::PullIndexSnapshot;
 use super::index::PullScanCursor;
 use super::service::PullSuspendTiming;
@@ -92,14 +94,18 @@ fn key() -> PullCriteriaKey {
 #[test]
 fn pull_deadline_preserves_inclusive_legacy_boundary() {
     let suspend_monotonic = tokio::time::Instant::now();
-    let before = PullWaitDeadline::checked(
+    let before = match PullWaitDeadline::checked(
         1_000,
         suspend_monotonic,
         100,
         1_099,
         suspend_monotonic + Duration::from_millis(99),
     )
-    .expect("one millisecond remains");
+    .expect("one millisecond remains")
+    {
+        PullWaitDeadlineOutcome::Pending(deadline) => deadline,
+        PullWaitDeadlineOutcome::AlreadyExpired => panic!("one millisecond must remain"),
+    };
     assert_eq!(before.protocol_end_millis(), 1_100);
     assert_eq!(before.protocol_at(), suspend_monotonic + Duration::from_millis(100));
 
@@ -110,8 +116,8 @@ fn pull_deadline_preserves_inclusive_legacy_boundary() {
         1_100,
         suspend_monotonic + Duration::from_millis(99),
     )
-    .expect_err("equal wall boundary expires");
-    assert_eq!(equal.kind(), PullWaitDeadlineErrorKind::AlreadyExpired);
+    .expect("equal wall boundary is a normal outcome");
+    assert_eq!(equal, PullWaitDeadlineOutcome::AlreadyExpired);
     let monotonic_equal = PullWaitDeadline::checked(
         1_000,
         suspend_monotonic,
@@ -119,11 +125,11 @@ fn pull_deadline_preserves_inclusive_legacy_boundary() {
         1_099,
         suspend_monotonic + Duration::from_millis(100),
     )
-    .expect_err("equal monotonic boundary expires");
-    assert_eq!(monotonic_equal.kind(), PullWaitDeadlineErrorKind::AlreadyExpired);
+    .expect("equal monotonic boundary is a normal outcome");
+    assert_eq!(monotonic_equal, PullWaitDeadlineOutcome::AlreadyExpired);
     let zero = PullWaitDeadline::checked(1_000, suspend_monotonic, 0, 1_000, suspend_monotonic)
-        .expect_err("zero timeout is immediate");
-    assert_eq!(zero.kind(), PullWaitDeadlineErrorKind::AlreadyExpired);
+        .expect("zero timeout is a normal immediate outcome");
+    assert_eq!(zero, PullWaitDeadlineOutcome::AlreadyExpired);
 }
 
 #[test]
@@ -172,18 +178,16 @@ fn pull_suspend_timing_selects_long_or_short_policy_at_suspend_start() {
 fn index_reservations_enforce_global_and_per_key_capacity() {
     let index = PullCriteriaIndex::<u64>::new(PullCriteriaLimits::new(nonzero(2), nonzero(1)));
     let first = index.reserve(key()).expect("first reservation");
-    let per_key = match index.reserve(key()) {
-        Ok(_) => panic!("per-key capacity must reject"),
-        Err(error) => error,
-    };
-    assert_eq!(per_key.kind(), PullIndexErrorKind::BucketCapacity);
+    assert!(matches!(
+        index.reserve(key()),
+        Ok(PullIndexReserveOutcome::Rejected(PullIndexRejection::BucketCapacity))
+    ));
     let second_key = PullCriteriaKey::new(CheetahString::from_static_str("TopicB"), 3);
     let second = index.reserve(second_key.clone()).expect("second reservation");
-    let global = match index.reserve(second_key) {
-        Ok(_) => panic!("global capacity must reject"),
-        Err(error) => error,
-    };
-    assert_eq!(global.kind(), PullIndexErrorKind::GlobalCapacity);
+    assert!(matches!(
+        index.reserve(second_key),
+        Ok(PullIndexReserveOutcome::Rejected(PullIndexRejection::GlobalCapacity))
+    ));
     assert_eq!(index.snapshot().reserved(), 2);
     drop((first, second));
     assert_eq!(index.snapshot(), PullIndexSnapshot::default());

@@ -66,10 +66,10 @@ async fn lifecycle_owned_sweeper_claims_protocol_timeout_and_releases_index() {
 }
 
 #[test]
-fn index_and_wait_admission_fail_before_responder_transfer_and_release_every_reservation() {
+fn index_and_wait_admission_reject_before_responder_transfer_and_release_every_reservation() {
     let index_controller = AdmissionController::new(AdmissionLimits::default());
     let index_limited = service(&index_controller, 2, 1, 1);
-    let first = index_limited
+    let first = match index_limited
         .prepare_at(
             preflight_test_data("TopicA", "127.0.0.1:1"),
             None,
@@ -78,8 +78,12 @@ fn index_and_wait_admission_fail_before_responder_transfer_and_release_every_res
             10_000,
             tokio::time::Instant::now(),
         )
-        .expect("first index reservation");
-    let Err(index_error) = index_limited.prepare_at(
+        .expect("first index reservation")
+    {
+        PopDeferredPrepareOutcome::Prepared(prepared) => prepared,
+        PopDeferredPrepareOutcome::Rejected(_) => panic!("first request must be prepared"),
+    };
+    let Ok(PopDeferredPrepareOutcome::Rejected(index_rejection)) = index_limited.prepare_at(
         preflight_test_data("TopicB", "127.0.0.1:2"),
         None,
         None,
@@ -89,13 +93,13 @@ fn index_and_wait_admission_fail_before_responder_transfer_and_release_every_res
     ) else {
         panic!("global POP index capacity must reject before responder transfer");
     };
-    assert_eq!(index_error.kind(), PopDeferredPrepareErrorKind::Index);
+    assert_eq!(index_rejection.kind(), PopDeferredPrepareRejectionKind::IndexCapacity);
     drop(first);
     assert_released(&index_limited);
 
     let admission_controller = AdmissionController::new(AdmissionLimits::default());
     let admission_limited = service(&admission_controller, 1, 2, 2);
-    let first = admission_limited
+    let first = match admission_limited
         .prepare_at(
             preflight_test_data("TopicA", "127.0.0.1:3"),
             None,
@@ -104,8 +108,12 @@ fn index_and_wait_admission_fail_before_responder_transfer_and_release_every_res
             10_000,
             tokio::time::Instant::now(),
         )
-        .expect("first wait permit");
-    let Err(admission_error) = admission_limited.prepare_at(
+        .expect("first wait permit")
+    {
+        PopDeferredPrepareOutcome::Prepared(prepared) => prepared,
+        PopDeferredPrepareOutcome::Rejected(_) => panic!("first request must be prepared"),
+    };
+    let Ok(PopDeferredPrepareOutcome::Rejected(admission_rejection)) = admission_limited.prepare_at(
         preflight_test_data("TopicB", "127.0.0.1:4"),
         None,
         None,
@@ -115,7 +123,10 @@ fn index_and_wait_admission_fail_before_responder_transfer_and_release_every_res
     ) else {
         panic!("independent wait admission must reject before responder transfer");
     };
-    assert_eq!(admission_error.kind(), PopDeferredPrepareErrorKind::Admission);
+    assert_eq!(
+        admission_rejection.kind(),
+        PopDeferredPrepareRejectionKind::AdmissionCapacity
+    );
     assert_eq!(admission_limited.index_snapshot().reserved(), 1);
     drop(first);
     assert_released(&admission_limited);
@@ -220,7 +231,7 @@ async fn shutdown_terminalizes_active_waiter_emits_no_frame_and_cannot_reopen() 
         rocketmq_transport::api::DeferredRegistryShutdownOutcome::Completed(_)
     ));
     assert_released(&service);
-    let Err(reopen) = service.prepare_at(
+    let Ok(PopDeferredPrepareOutcome::Rejected(reopen)) = service.prepare_at(
         preflight_test_data("TopicB", "127.0.0.1:5"),
         None,
         None,
@@ -230,7 +241,7 @@ async fn shutdown_terminalizes_active_waiter_emits_no_frame_and_cannot_reopen() 
     ) else {
         panic!("sealed POP service must reject new preparation before responder transfer");
     };
-    assert_eq!(reopen.kind(), PopDeferredPrepareErrorKind::ServiceClosed);
+    assert_eq!(reopen.kind(), PopDeferredPrepareRejectionKind::ServiceClosed);
     assert_released(&service);
 
     running.finish().await;

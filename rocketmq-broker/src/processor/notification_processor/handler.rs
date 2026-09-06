@@ -29,9 +29,12 @@ use rocketmq_transport::api::RequestProcessor;
 use super::core::NotificationCoreOutcome;
 use super::response::compose_notification_response;
 use super::NotificationProcessor;
-use crate::long_polling::notification_deferred::index::NotificationIndexErrorKind;
-use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareError;
-use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterError;
+use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareFailure;
+use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareOutcome;
+use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareRejection;
+use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterFailure;
+use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterOutcome;
+use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterRejection;
 use crate::long_polling::notification_deferred::service::NotificationRetainedEstimate;
 use crate::processor::response_assembly::BrokerResponseParts;
 
@@ -115,12 +118,20 @@ where
                     .unwrap_or((None, None));
                 let prepared =
                     match service.prepare(request, subscription, filter, NotificationRetainedEstimate::default()) {
-                        Ok(prepared) => prepared,
-                        Err(error) => return self.prepare_error_outcome(error),
+                        Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
+                        Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+                            return self.prepare_rejection_outcome(rejection);
+                        }
+                        Err(failure) => return self.prepare_failure_outcome(failure),
                     };
                 match service.register(prepared, request) {
-                    Ok(registration) => Ok(HandlerOutcome::Deferred(registration)),
-                    Err(error) => self.register_error_outcome(error),
+                    Ok(NotificationDeferredRegisterOutcome::Registered(registration)) => {
+                        Ok(HandlerOutcome::Deferred(*registration))
+                    }
+                    Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => {
+                        self.register_rejection_outcome(*rejection)
+                    }
+                    Err(failure) => self.register_failure_outcome(failure),
                 }
             }
         }
@@ -131,92 +142,116 @@ impl<MS> NotificationProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
-    fn prepare_error_outcome(
+    fn prepare_rejection_outcome(
         &self,
-        error: NotificationDeferredPrepareError,
+        rejection: NotificationDeferredPrepareRejection,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        match error {
-            NotificationDeferredPrepareError::Deadline(_)
-            | NotificationDeferredPrepareError::WallTimeOverflow
-            | NotificationDeferredPrepareError::OneWay => command_outcome(compose_notification_response(
-                &self.context.command_factory,
-                false,
-                false,
-                0,
-            )),
-            NotificationDeferredPrepareError::Index(error)
-                if matches!(
-                    error.kind(),
-                    NotificationIndexErrorKind::GlobalCapacity | NotificationIndexErrorKind::PerKeyCapacity
-                ) =>
-            {
+        match rejection {
+            NotificationDeferredPrepareRejection::Deadline(_) | NotificationDeferredPrepareRejection::OneWay => {
                 command_outcome(compose_notification_response(
                     &self.context.command_factory,
                     false,
-                    true,
+                    false,
                     0,
                 ))
             }
-            NotificationDeferredPrepareError::Admission(_) => command_outcome(compose_notification_response(
+            NotificationDeferredPrepareRejection::IndexCapacity(_) => command_outcome(compose_notification_response(
                 &self.context.command_factory,
                 false,
                 true,
                 0,
             )),
-            NotificationDeferredPrepareError::EmbeddedOrigin | NotificationDeferredPrepareError::Header(_) => {
-                self.invalid_reply(0)
-            }
-            NotificationDeferredPrepareError::ServiceClosed => self.reply_with_code(
+            NotificationDeferredPrepareRejection::Admission(_) => command_outcome(compose_notification_response(
+                &self.context.command_factory,
+                false,
+                true,
+                0,
+            )),
+            NotificationDeferredPrepareRejection::EmbeddedOrigin => self.invalid_reply(0),
+            NotificationDeferredPrepareRejection::ServiceClosed => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "the deferred Notification service is unavailable",
             ),
-            NotificationDeferredPrepareError::InvalidExpiryMargins
-            | NotificationDeferredPrepareError::RetainedSizeOverflow
-            | NotificationDeferredPrepareError::Index(_)
-            | NotificationDeferredPrepareError::Contract(_) => self.internal_reply(0),
         }
     }
 
-    fn register_error_outcome(
+    fn prepare_failure_outcome(
         &self,
-        error: NotificationDeferredRegisterError,
+        failure: NotificationDeferredPrepareFailure,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        match error {
-            NotificationDeferredRegisterError::ServiceClosedBeforeTake
-            | NotificationDeferredRegisterError::ServiceClosedAfterTake => self.reply_with_code(
+        match failure {
+            NotificationDeferredPrepareFailure::Header(_) => self.invalid_reply(0),
+            NotificationDeferredPrepareFailure::WallTimeOverflow | NotificationDeferredPrepareFailure::Deadline(_) => {
+                command_outcome(compose_notification_response(
+                    &self.context.command_factory,
+                    false,
+                    false,
+                    0,
+                ))
+            }
+            NotificationDeferredPrepareFailure::InvalidExpiryMargins
+            | NotificationDeferredPrepareFailure::RetainedSizeOverflow
+            | NotificationDeferredPrepareFailure::Index(_)
+            | NotificationDeferredPrepareFailure::Contract(_) => self.internal_reply(0),
+        }
+    }
+
+    fn register_rejection_outcome(
+        &self,
+        rejection: NotificationDeferredRegisterRejection,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        match rejection {
+            NotificationDeferredRegisterRejection::ServiceClosedBeforeTake
+            | NotificationDeferredRegisterRejection::ServiceClosedAfterTake => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "the deferred Notification service is unavailable",
             ),
-            NotificationDeferredRegisterError::ProvenanceMismatch => self.internal_reply(0),
-            NotificationDeferredRegisterError::Responder(DeferredResponderOutcome::OneWayRequest) => command_outcome(
-                compose_notification_response(&self.context.command_factory, false, false, 0),
-            ),
-            NotificationDeferredRegisterError::Responder(DeferredResponderOutcome::Unavailable) => self
+            NotificationDeferredRegisterRejection::ProvenanceMismatch => self.internal_reply(0),
+            NotificationDeferredRegisterRejection::Responder(DeferredResponderOutcome::OneWayRequest) => {
+                command_outcome(compose_notification_response(
+                    &self.context.command_factory,
+                    false,
+                    false,
+                    0,
+                ))
+            }
+            NotificationDeferredRegisterRejection::Responder(DeferredResponderOutcome::Unavailable) => self
                 .reply_with_code(
                     ResponseCode::ServiceNotAvailable,
                     "a deferred Notification responder is unavailable",
                 ),
-            NotificationDeferredRegisterError::Responder(
+            NotificationDeferredRegisterRejection::Responder(
                 DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
             ) => self.internal_reply(0),
-            NotificationDeferredRegisterError::Responder(DeferredResponderOutcome::Taken(responder)) => {
+            NotificationDeferredRegisterRejection::Responder(DeferredResponderOutcome::Taken(responder)) => {
                 drop(responder);
                 self.internal_reply(0)
             }
-            NotificationDeferredRegisterError::Expiry { outcome: _, parts } => {
+            NotificationDeferredRegisterRejection::Expiry { outcome: _, parts } => {
                 drop(parts);
                 self.internal_reply(0)
             }
-            NotificationDeferredRegisterError::RegistryRejected => self.internal_reply(0),
-            NotificationDeferredRegisterError::RegistryIdentityExhausted => self.internal_reply(0),
-            NotificationDeferredRegisterError::RegistryContract(violation) => Err(RocketMQError::internal(
+            NotificationDeferredRegisterRejection::DuplicateRequest
+            | NotificationDeferredRegisterRejection::ParentCancelled
+            | NotificationDeferredRegisterRejection::SessionClosed
+            | NotificationDeferredRegisterRejection::DeadlineExpired => self.internal_reply(0),
+        }
+    }
+
+    fn register_failure_outcome(
+        &self,
+        failure: NotificationDeferredRegisterFailure,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        match failure {
+            NotificationDeferredRegisterFailure::IdentityExhausted => self.internal_reply(0),
+            NotificationDeferredRegisterFailure::RegistryContract(violation) => Err(RocketMQError::internal(
                 "register deferred Notification request",
                 violation,
             )),
-            NotificationDeferredRegisterError::RegistryOperational(error) => {
+            NotificationDeferredRegisterFailure::RegistryOperational(error) => {
                 Err(RocketMQError::internal("register deferred Notification request", error))
             }
-            NotificationDeferredRegisterError::Contract { violation, parts } => {
+            NotificationDeferredRegisterFailure::Contract { violation, parts } => {
                 drop(parts);
                 Err(RocketMQError::internal(
                     "register deferred Notification request",

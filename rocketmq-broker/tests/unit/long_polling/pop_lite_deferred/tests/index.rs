@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::TryReserveError;
+use std::error::Error;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
@@ -20,16 +22,34 @@ use cheetah_string::CheetahString;
 use crate::config::broker_config::BrokerConfig;
 use crate::long_polling::pop_lite_deferred::data::PopLiteDeferredPolicy;
 use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadline;
+use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineOutcome;
 use crate::long_polling::pop_lite_deferred::index::PopLiteCriteriaIndex;
-use crate::long_polling::pop_lite_deferred::index::PopLiteIndexErrorKind;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexLimits;
+use crate::long_polling::pop_lite_deferred::index::PopLiteIndexOperationalError;
+use crate::long_polling::pop_lite_deferred::index::PopLiteIndexReserveOutcome;
+use crate::long_polling::pop_lite_deferred::index::PopLiteIndexReserveRejection;
 
 fn nonzero(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).expect("test limit is non-zero")
 }
 
+macro_rules! expect_reserved {
+    ($result:expr, $message:literal) => {
+        match $result {
+            Ok(PopLiteIndexReserveOutcome::Reserved(reservation)) => reservation,
+            Ok(PopLiteIndexReserveOutcome::Rejected(rejection)) => panic!("{}: {rejection:?}", $message),
+            Err(error) => panic!("{}: {error:?}", $message),
+        }
+    };
+}
+
 fn deadline(base: tokio::time::Instant, end_millis: i64) -> PopLiteWaitDeadline {
-    PopLiteWaitDeadline::checked(0, end_millis + 49, 0, base, Duration::from_secs(300)).expect("test deadline")
+    match PopLiteWaitDeadline::checked(0, end_millis + 49, 0, base, Duration::from_secs(300))
+        .expect("test deadline should not overflow")
+    {
+        PopLiteWaitDeadlineOutcome::Pending(deadline) => deadline,
+        PopLiteWaitDeadlineOutcome::Rejected(_) => panic!("test deadline should be pending"),
+    }
 }
 
 #[test]
@@ -37,17 +57,11 @@ fn pop_lite_deferred_index_selects_earliest_expiry_then_oldest_sequence() {
     let base = tokio::time::Instant::now();
     let index = PopLiteCriteriaIndex::<u64>::new(PopLiteIndexLimits::new(nonzero(4), nonzero(2), nonzero(4)));
     let client = CheetahString::from_static_str("client-a");
-    let late = index
-        .reserve(client.clone(), base)
-        .expect("late reservation")
-        .publish(1, deadline(base, 200));
-    let first_equal = index
-        .reserve(client.clone(), base)
-        .expect("first equal reservation")
+    let late =
+        expect_reserved!(index.reserve(client.clone(), base), "late reservation").publish(1, deadline(base, 200));
+    let first_equal = expect_reserved!(index.reserve(client.clone(), base), "first equal reservation")
         .publish(2, deadline(base, 100));
-    let second_equal = index
-        .reserve(client.clone(), base)
-        .expect("second equal reservation")
+    let second_equal = expect_reserved!(index.reserve(client.clone(), base), "second equal reservation")
         .publish(3, deadline(base, 100));
 
     let first = index.reserve_oldest(&client).expect("earliest candidate");
@@ -68,23 +82,38 @@ fn pop_lite_deferred_index_maps_global_client_and_per_client_capacities() {
     let client_a = CheetahString::from_static_str("client-a");
     let client_b = CheetahString::from_static_str("client-b");
     let index = PopLiteCriteriaIndex::<u64>::new(PopLiteIndexLimits::new(nonzero(2), nonzero(1), nonzero(1)));
-    let first = index.reserve(client_a.clone(), base).expect("first reservation");
+    let first = expect_reserved!(index.reserve(client_a.clone(), base), "first reservation");
 
     assert_eq!(
-        index.reserve(client_a, base).err().expect("per-client full").kind(),
-        PopLiteIndexErrorKind::PerClientCapacity
+        match index.reserve(client_a, base) {
+            Ok(PopLiteIndexReserveOutcome::Rejected(rejection)) => rejection,
+            Ok(PopLiteIndexReserveOutcome::Reserved(_)) | Err(_) => panic!("per-client full"),
+        },
+        PopLiteIndexReserveRejection::PerClient
     );
     assert_eq!(
-        index
-            .reserve(client_b, base)
-            .err()
-            .expect("distinct client full")
-            .kind(),
-        PopLiteIndexErrorKind::ClientCapacity
+        match index.reserve(client_b, base) {
+            Ok(PopLiteIndexReserveOutcome::Rejected(rejection)) => rejection,
+            Ok(PopLiteIndexReserveOutcome::Reserved(_)) | Err(_) => panic!("distinct client full"),
+        },
+        PopLiteIndexReserveRejection::Client
     );
     drop(first);
     assert_eq!(index.snapshot().reserved, 0);
     assert_eq!(index.snapshot().clients, 0);
+}
+
+#[test]
+fn pop_lite_index_allocation_failure_keeps_the_typed_source() {
+    let source = Vec::<u8>::new()
+        .try_reserve(usize::MAX)
+        .expect_err("unrepresentable allocation must fail");
+    let error = PopLiteIndexOperationalError::Allocation(source);
+
+    assert!(error
+        .source()
+        .and_then(|source| source.downcast_ref::<TryReserveError>())
+        .is_some());
 }
 
 #[test]

@@ -23,7 +23,8 @@ use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
 use super::*;
-use crate::long_polling::pop_deferred::service::PopDeferredRegisterErrorKind;
+use crate::long_polling::pop_deferred::service::PopDeferredRegisterOutcome;
+use crate::long_polling::pop_deferred::service::PopDeferredRegisterRejectionKind;
 use crate::long_polling::pop_deferred::service::PreparedPopRegistration;
 
 fn success_reply() -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -52,18 +53,27 @@ impl RequestProcessor for ProvenanceProbeProcessor {
             state.prepared.take()
         };
         if let Some(prepared) = prepared {
-            let error = self
-                .service
-                .register(prepared, request)
-                .expect_err("a prepared proof cannot be paired with another request");
-            assert_eq!(error.kind(), PopDeferredRegisterErrorKind::ProvenanceMismatch);
+            let rejection = match self.service.register(prepared, request) {
+                Ok(PopDeferredRegisterOutcome::Rejected(rejection)) => *rejection,
+                Ok(PopDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                    panic!("a prepared proof cannot be paired with another request")
+                }
+            };
+            assert_eq!(rejection.kind(), PopDeferredRegisterRejectionKind::ProvenanceMismatch);
             return success_reply();
         }
 
-        let prepared = self
+        let prepared = match self
             .service
             .prepare(request, None, None, PopRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+            .map_err(|error| {
+                RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+            })? {
+            PopDeferredPrepareOutcome::Prepared(prepared) => *prepared,
+            PopDeferredPrepareOutcome::Rejected(_) => {
+                return Err(RocketMQError::illegal_argument("unexpected POP preparation rejection"));
+            }
+        };
         self.state.lock().prepared = Some(prepared);
         success_reply()
     }

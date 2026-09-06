@@ -207,38 +207,41 @@ where
         .try_fold(0usize, |total, value| total.checked_add(value))
     }
 
-    pub(crate) fn reserve(&self, key: PullCriteriaKey) -> Result<PullIndexReservation<I>, PullIndexError> {
+    pub(crate) fn reserve(
+        &self,
+        key: PullCriteriaKey,
+    ) -> Result<PullIndexReserveOutcome<I>, PullIndexOperationalError> {
         let mut state = self.inner.state.lock();
         let occupied = state
             .live
             .checked_add(state.reserved)
-            .ok_or_else(|| PullIndexError::new(PullIndexErrorKind::GlobalCapacity))?;
+            .ok_or_else(|| PullIndexOperationalError::new(PullIndexOperationalErrorKind::AccountingOverflow))?;
         if occupied >= self.inner.limits.max_entries.get() {
-            return Err(PullIndexError::new(PullIndexErrorKind::GlobalCapacity));
+            return Ok(PullIndexReserveOutcome::Rejected(PullIndexRejection::GlobalCapacity));
         }
         let per_key = state.buckets.get(&key).map_or(0, VecDeque::len);
         let reserved_for_key = state.reserved_keys.get(&key).copied().unwrap_or_default();
         let occupied_for_key = per_key
             .checked_add(reserved_for_key)
-            .ok_or_else(|| PullIndexError::new(PullIndexErrorKind::BucketCapacity))?;
+            .ok_or_else(|| PullIndexOperationalError::new(PullIndexOperationalErrorKind::AccountingOverflow))?;
         if occupied_for_key >= self.inner.limits.max_entries_per_key.get() {
-            return Err(PullIndexError::new(PullIndexErrorKind::BucketCapacity));
+            return Ok(PullIndexReserveOutcome::Rejected(PullIndexRejection::BucketCapacity));
         }
         let sequence = state.next_sequence;
         state.next_sequence = sequence
             .checked_add(1)
-            .ok_or_else(|| PullIndexError::new(PullIndexErrorKind::SequenceExhausted))?;
+            .ok_or_else(|| PullIndexOperationalError::new(PullIndexOperationalErrorKind::SequenceExhausted))?;
         if !state.reserved_keys.contains_key(&key) {
             state
                 .reserved_keys
                 .try_reserve(1)
-                .map_err(|_| PullIndexError::new(PullIndexErrorKind::Allocation))?;
+                .map_err(PullIndexOperationalError::allocation)?;
         }
         if !state.buckets.contains_key(&key) {
             state
                 .buckets
                 .try_reserve(1)
-                .map_err(|_| PullIndexError::new(PullIndexErrorKind::Allocation))?;
+                .map_err(PullIndexOperationalError::allocation)?;
             state.buckets.insert(key.clone(), VecDeque::new());
         }
         state
@@ -248,23 +251,23 @@ where
             .try_reserve(
                 reserved_for_key
                     .checked_add(1)
-                    .ok_or_else(|| PullIndexError::new(PullIndexErrorKind::BucketCapacity))?,
+                    .ok_or_else(|| PullIndexOperationalError::new(PullIndexOperationalErrorKind::AccountingOverflow))?,
             )
-            .map_err(|_| PullIndexError::new(PullIndexErrorKind::Allocation))?;
+            .map_err(PullIndexOperationalError::allocation)?;
         let reserved_count = state.reserved_keys.entry(key.clone()).or_default();
         *reserved_count = reserved_count
             .checked_add(1)
-            .ok_or_else(|| PullIndexError::new(PullIndexErrorKind::BucketCapacity))?;
+            .ok_or_else(|| PullIndexOperationalError::new(PullIndexOperationalErrorKind::AccountingOverflow))?;
         state.reserved = state
             .reserved
             .checked_add(1)
-            .ok_or_else(|| PullIndexError::new(PullIndexErrorKind::GlobalCapacity))?;
-        Ok(PullIndexReservation {
+            .ok_or_else(|| PullIndexOperationalError::new(PullIndexOperationalErrorKind::AccountingOverflow))?;
+        Ok(PullIndexReserveOutcome::Reserved(PullIndexReservation {
             inner: Some(Arc::clone(&self.inner)),
             key: Some(key),
             sequence,
             membership: Arc::new(PullIndexMembership::default()),
-        })
+        }))
     }
 
     /// Filters a bounded ordered prefix outside the mutex and atomically hides matches.
@@ -767,41 +770,80 @@ impl PullIndexSnapshot {
     }
 }
 
+#[must_use]
+pub(crate) enum PullIndexReserveOutcome<I>
+where
+    I: Copy + Eq,
+{
+    Reserved(PullIndexReservation<I>),
+    Rejected(PullIndexRejection),
+}
+
+#[cfg(test)]
+impl<I> PullIndexReserveOutcome<I>
+where
+    I: Copy + Eq,
+{
+    pub(crate) fn publish(self, id: I, criteria: Arc<PullMatchCriteria>) -> PullIndexLease<I> {
+        match self {
+            Self::Reserved(reservation) => reservation.publish(id, criteria),
+            Self::Rejected(rejection) => panic!("expected Pull index reservation, got {rejection:?}"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum PullIndexErrorKind {
+pub(crate) enum PullIndexRejection {
     GlobalCapacity,
     BucketCapacity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum PullIndexOperationalErrorKind {
+    AccountingOverflow,
     SequenceExhausted,
     Allocation,
 }
 
-pub(crate) struct PullIndexError {
-    kind: PullIndexErrorKind,
+pub(crate) struct PullIndexOperationalError {
+    kind: PullIndexOperationalErrorKind,
+    source: Option<std::collections::TryReserveError>,
 }
 
-impl PullIndexError {
-    const fn new(kind: PullIndexErrorKind) -> Self {
-        Self { kind }
+impl PullIndexOperationalError {
+    const fn new(kind: PullIndexOperationalErrorKind) -> Self {
+        Self { kind, source: None }
     }
 
-    pub(crate) const fn kind(&self) -> PullIndexErrorKind {
+    fn allocation(source: std::collections::TryReserveError) -> Self {
+        Self {
+            kind: PullIndexOperationalErrorKind::Allocation,
+            source: Some(source),
+        }
+    }
+
+    pub(crate) const fn kind(&self) -> PullIndexOperationalErrorKind {
         self.kind
     }
 }
 
-impl fmt::Debug for PullIndexError {
+impl fmt::Debug for PullIndexOperationalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("PullIndexError")
+            .debug_struct("PullIndexOperationalError")
             .field("kind", &self.kind)
             .finish_non_exhaustive()
     }
 }
 
-impl fmt::Display for PullIndexError {
+impl fmt::Display for PullIndexOperationalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "Pull criteria index failed: {:?}", self.kind)
     }
 }
 
-impl Error for PullIndexError {}
+impl Error for PullIndexOperationalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source.as_ref().map(|source| source as &(dyn Error + 'static))
+    }
+}

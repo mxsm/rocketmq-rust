@@ -60,8 +60,14 @@ use tokio::sync::oneshot;
 
 use super::index::NotificationArrivalView;
 use super::index::NotificationCriteriaLimits;
+use super::service::NotificationContinuationOutcome;
+use super::service::NotificationDeferredPrepareFailure;
+use super::service::NotificationDeferredPrepareOutcome;
+use super::service::NotificationDeferredRegisterFailure;
+use super::service::NotificationDeferredRegisterOutcome;
 use super::service::NotificationDeferredService;
 use super::service::NotificationRetainedEstimate;
+use super::service::PreparedNotificationRegistration;
 
 const ORIGINAL_OPAQUE: i32 = 9_833;
 
@@ -117,6 +123,30 @@ struct Registration {
     peer: SocketAddr,
 }
 
+fn prepared_or_test_error(
+    result: Result<NotificationDeferredPrepareOutcome, NotificationDeferredPrepareFailure>,
+) -> rocketmq_error::RocketMQResult<PreparedNotificationRegistration> {
+    match result {
+        Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => Ok(*prepared),
+        Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+            Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())))
+        }
+        Err(error) => Err(RocketMQError::illegal_argument(error.to_string())),
+    }
+}
+
+fn registration_or_test_error(
+    result: Result<NotificationDeferredRegisterOutcome, NotificationDeferredRegisterFailure>,
+) -> rocketmq_error::RocketMQResult<rocketmq_transport::api::DeferredRegistration> {
+    match result {
+        Ok(NotificationDeferredRegisterOutcome::Registered(registration)) => Ok(*registration),
+        Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => {
+            Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())))
+        }
+        Err(error) => Err(RocketMQError::illegal_argument(error.to_string())),
+    }
+}
+
 #[derive(Clone)]
 struct DeferredProcessor {
     service: Arc<NotificationDeferredService>,
@@ -126,23 +156,17 @@ struct DeferredProcessor {
 
 impl RequestProcessor for DeferredProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let prepared = self
-            .service
-            .prepare(
-                request,
-                None,
-                self.filter.clone(),
-                NotificationRetainedEstimate::default(),
-            )
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let prepared = prepared_or_test_error(self.service.prepare(
+            request,
+            None,
+            self.filter.clone(),
+            NotificationRetainedEstimate::default(),
+        ))?;
         let peer = match request.origin() {
             RequestOrigin::Network { peer } => peer.address(),
             _ => return Err(RocketMQError::illegal_argument("trusted network origin required")),
         };
-        let registration = self
-            .service
-            .register(prepared, request)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let registration = registration_or_test_error(self.service.register(prepared, request))?;
         self.registrations
             .send(Registration { peer })
             .map_err(|_| RocketMQError::illegal_argument("Notification registration observer closed"))?;
@@ -581,9 +605,13 @@ async fn notification_deferred_newest_first_bounded_batch_continuation_advances_
         "same-key selection is newest-first"
     );
 
-    let continuation = service
-        .admit_continuation(arrival, cursor)
-        .expect("admit bounded continuation");
+    let continuation = match service.admit_continuation(arrival, cursor) {
+        Ok(NotificationContinuationOutcome::Continued(continuation)) => continuation,
+        Ok(NotificationContinuationOutcome::Rejected(rejection)) => {
+            panic!("admit bounded continuation: {rejection:?}")
+        }
+        Err(error) => panic!("admit bounded continuation: {error:?}"),
+    };
     let (claims_tx, mut claims_rx) = mpsc::unbounded_channel();
     let handle_claims = Arc::new(move |claims| {
         let claims_tx = claims_tx.clone();

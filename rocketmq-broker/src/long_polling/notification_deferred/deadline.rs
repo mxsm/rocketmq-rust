@@ -32,46 +32,46 @@ impl NotificationWaitDeadline {
         poll_time: i64,
         wall_now: i64,
         monotonic_now: tokio::time::Instant,
-    ) -> Result<Self, NotificationWaitDeadlineError> {
+    ) -> Result<NotificationWaitDeadlineOutcome, NotificationWaitDeadlineOperationalError> {
         if born_time < 0 {
-            return Err(NotificationWaitDeadlineError::new(
-                NotificationWaitDeadlineErrorKind::NegativeBornTime,
+            return Ok(NotificationWaitDeadlineOutcome::Rejected(
+                NotificationWaitDeadlineRejection::new(NotificationWaitDeadlineRejectionReason::NegativeBornTime),
             ));
         }
         if poll_time <= 0 {
-            return Err(NotificationWaitDeadlineError::new(
-                NotificationWaitDeadlineErrorKind::NonPositivePollTime,
+            return Ok(NotificationWaitDeadlineOutcome::Rejected(
+                NotificationWaitDeadlineRejection::new(NotificationWaitDeadlineRejectionReason::NonPositivePollTime),
             ));
         }
         if wall_now < 0 {
-            return Err(NotificationWaitDeadlineError::new(
-                NotificationWaitDeadlineErrorKind::NegativeWallTime,
+            return Ok(NotificationWaitDeadlineOutcome::Rejected(
+                NotificationWaitDeadlineRejection::new(NotificationWaitDeadlineRejectionReason::NegativeWallTime),
             ));
         }
         let requested_end = born_time
             .checked_add(poll_time)
-            .ok_or_else(|| NotificationWaitDeadlineError::new(NotificationWaitDeadlineErrorKind::ProtocolOverflow))?;
+            .ok_or(NotificationWaitDeadlineOperationalError::ProtocolOverflow)?;
         let cutoff = requested_end.saturating_sub(EARLY_WAKE_MILLIS);
         if wall_now > cutoff {
-            return Err(NotificationWaitDeadlineError::new(
-                NotificationWaitDeadlineErrorKind::AlreadyExpired,
+            return Ok(NotificationWaitDeadlineOutcome::Rejected(
+                NotificationWaitDeadlineRejection::new(NotificationWaitDeadlineRejectionReason::AlreadyExpired),
             ));
         }
         let protocol_millis = cutoff
             .checked_add(1)
-            .ok_or_else(|| NotificationWaitDeadlineError::new(NotificationWaitDeadlineErrorKind::ProtocolOverflow))?;
+            .ok_or(NotificationWaitDeadlineOperationalError::ProtocolOverflow)?;
         let remaining = protocol_millis
             .checked_sub(wall_now)
-            .ok_or_else(|| NotificationWaitDeadlineError::new(NotificationWaitDeadlineErrorKind::ProtocolOverflow))?;
-        let remaining = u64::try_from(remaining)
-            .map_err(|_| NotificationWaitDeadlineError::new(NotificationWaitDeadlineErrorKind::ProtocolOverflow))?;
+            .ok_or(NotificationWaitDeadlineOperationalError::ProtocolOverflow)?;
+        let remaining =
+            u64::try_from(remaining).map_err(|_| NotificationWaitDeadlineOperationalError::ProtocolOverflow)?;
         let protocol_at = monotonic_now
             .checked_add(Duration::from_millis(remaining))
-            .ok_or_else(|| NotificationWaitDeadlineError::new(NotificationWaitDeadlineErrorKind::MonotonicOverflow))?;
-        Ok(Self {
+            .ok_or(NotificationWaitDeadlineOperationalError::MonotonicOverflow)?;
+        Ok(NotificationWaitDeadlineOutcome::Pending(Self {
             protocol_millis,
             protocol_at,
-        })
+        }))
     }
 
     #[must_use]
@@ -85,44 +85,64 @@ impl NotificationWaitDeadline {
     }
 }
 
+#[derive(Debug)]
+#[must_use]
+pub(crate) enum NotificationWaitDeadlineOutcome {
+    Pending(NotificationWaitDeadline),
+    Rejected(NotificationWaitDeadlineRejection),
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum NotificationWaitDeadlineErrorKind {
+pub(crate) enum NotificationWaitDeadlineRejectionReason {
     NegativeBornTime,
     NonPositivePollTime,
     NegativeWallTime,
-    ProtocolOverflow,
     AlreadyExpired,
-    MonotonicOverflow,
 }
 
-pub(crate) struct NotificationWaitDeadlineError {
-    kind: NotificationWaitDeadlineErrorKind,
+pub(crate) struct NotificationWaitDeadlineRejection {
+    reason: NotificationWaitDeadlineRejectionReason,
 }
 
-impl NotificationWaitDeadlineError {
-    const fn new(kind: NotificationWaitDeadlineErrorKind) -> Self {
-        Self { kind }
+impl NotificationWaitDeadlineRejection {
+    const fn new(reason: NotificationWaitDeadlineRejectionReason) -> Self {
+        Self { reason }
     }
 
     #[must_use]
-    pub(crate) const fn kind(&self) -> NotificationWaitDeadlineErrorKind {
-        self.kind
+    pub(crate) const fn reason(&self) -> NotificationWaitDeadlineRejectionReason {
+        self.reason
     }
 }
 
-impl fmt::Debug for NotificationWaitDeadlineError {
+impl fmt::Debug for NotificationWaitDeadlineRejection {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("NotificationWaitDeadlineError")
-            .field("kind", &self.kind)
+            .debug_struct("NotificationWaitDeadlineRejection")
+            .field("reason", &self.reason)
             .finish_non_exhaustive()
     }
 }
 
-impl fmt::Display for NotificationWaitDeadlineError {
+impl fmt::Display for NotificationWaitDeadlineRejection {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Notification wait deadline failed: {:?}", self.kind)
+        write!(formatter, "Notification wait deadline rejected: {:?}", self.reason)
     }
 }
 
-impl Error for NotificationWaitDeadlineError {}
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum NotificationWaitDeadlineOperationalError {
+    ProtocolOverflow,
+    MonotonicOverflow,
+}
+
+impl fmt::Display for NotificationWaitDeadlineOperationalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ProtocolOverflow => "Notification protocol deadline overflowed",
+            Self::MonotonicOverflow => "Notification monotonic deadline overflowed",
+        })
+    }
+}
+
+impl Error for NotificationWaitDeadlineOperationalError {}

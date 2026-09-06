@@ -58,6 +58,7 @@ use super::AdminRequestMetadata;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::topic::manager::topic_config_manager::TopicConfigCasError;
+use crate::topic::manager::topic_config_manager::TopicConfigCasOutcome;
 
 fn decode_topic_queue_mapping_detail(body: &[u8]) -> Result<TopicQueueMappingDetail, String> {
     match serde_json::from_slice::<TopicQueueMappingDetail>(body) {
@@ -317,15 +318,15 @@ impl TopicRequestHandler {
                 request_header.order,
                 broker_runtime_inner.topic_config_state_machine_version(),
             ) {
-            Ok(update) => update,
-            Err(TopicConfigCasError::TopicNotFound) => {
+            Ok(TopicConfigCasOutcome::Applied(update)) => update,
+            Ok(TopicConfigCasOutcome::TopicNotFound) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::TopicNotExist)
                         .set_remark("Topic configuration does not exist on this Broker"),
                 ));
             }
-            Err(TopicConfigCasError::VersionConflict {
+            Ok(TopicConfigCasOutcome::VersionConflict {
                 expected_version,
                 actual_version,
             }) => {
@@ -341,7 +342,7 @@ impl TopicRequestHandler {
                         )),
                 ));
             }
-            Err(TopicConfigCasError::NoChange) => {
+            Ok(TopicConfigCasOutcome::NoChange) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::InvalidParameter)
@@ -362,7 +363,7 @@ impl TopicRequestHandler {
                         .set_remark("Topic configuration version is exhausted"),
                 ));
             }
-            Err(TopicConfigCasError::StateConflict { .. } | TopicConfigCasError::PersistenceDirty { .. }) => {
+            Ok(TopicConfigCasOutcome::StateConflict { .. }) | Err(TopicConfigCasError::PersistenceDirty { .. }) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
@@ -481,8 +482,8 @@ impl TopicRequestHandler {
             replacement,
             runtime.topic_config_state_machine_version(),
         ) {
-            Ok(update) => update,
-            Err(TopicConfigCasError::StateConflict { actual_version }) => {
+            Ok(TopicConfigCasOutcome::Applied(update)) => update,
+            Ok(TopicConfigCasOutcome::StateConflict { actual_version }) => {
                 let state = actual_version.map_or(ExpectedState::Absent, |version| ExpectedState::Present { version });
                 return Ok(Some(
                     response.set_code(ResponseCode::InvalidParameter).set_body(
@@ -511,19 +512,15 @@ impl TopicRequestHandler {
                     ),
                 ));
             }
-            Err(TopicConfigCasError::NoChange) => {
+            Ok(TopicConfigCasOutcome::NoChange) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::InvalidParameter)
                         .set_remark("Topic state replacement has no effect"),
                 ));
             }
-            Err(
-                TopicConfigCasError::VersionUnavailable
-                | TopicConfigCasError::VersionExhausted
-                | TopicConfigCasError::TopicNotFound
-                | TopicConfigCasError::VersionConflict { .. },
-            ) => {
+            Ok(TopicConfigCasOutcome::TopicNotFound | TopicConfigCasOutcome::VersionConflict { .. })
+            | Err(TopicConfigCasError::VersionUnavailable | TopicConfigCasError::VersionExhausted) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
@@ -1079,8 +1076,8 @@ impl TopicRequestHandler {
             .topic_config_manager()
             .select_topic_config_with_version(topic)
         {
-            Ok(snapshot) => snapshot,
-            Err(TopicConfigCasError::TopicNotFound) => {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::TopicNotExist)
@@ -1090,20 +1087,12 @@ impl TopicRequestHandler {
             Err(
                 TopicConfigCasError::VersionUnavailable
                 | TopicConfigCasError::VersionExhausted
-                | TopicConfigCasError::StateConflict { .. }
                 | TopicConfigCasError::PersistenceDirty { .. },
             ) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
                         .set_remark("Topic configuration version is unavailable"),
-                ));
-            }
-            Err(TopicConfigCasError::VersionConflict { .. } | TopicConfigCasError::NoChange) => {
-                return Ok(Some(
-                    response
-                        .set_code(ResponseCode::SystemError)
-                        .set_remark("Topic configuration snapshot is unavailable"),
                 ));
             }
         };

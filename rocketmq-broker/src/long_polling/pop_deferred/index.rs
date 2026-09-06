@@ -117,28 +117,31 @@ where
     }
 
     /// Reserves index capacity before a deferred responder is taken.
-    pub(crate) fn reserve(&self, key: PopCriteriaKey) -> Result<PopIndexReservation<I>, PopIndexError> {
+    pub(crate) fn reserve(&self, key: PopCriteriaKey) -> Result<PopIndexReserveOutcome<I>, PopIndexOperationalError> {
         let mut state = self.inner.state.lock();
         let total = state
             .live
             .checked_add(state.reserved)
-            .ok_or_else(|| PopIndexError::new(PopIndexErrorKind::GlobalCapacity))?;
+            .ok_or_else(|| PopIndexOperationalError::new(PopIndexOperationalErrorKind::AccountingOverflow))?;
         if total >= self.inner.limits.max_entries.get() {
-            return Err(PopIndexError::new(PopIndexErrorKind::GlobalCapacity));
+            return Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::GlobalCapacity));
         }
         let next_sequence = state
             .next_sequence
             .checked_add(1)
-            .ok_or_else(|| PopIndexError::new(PopIndexErrorKind::SequenceExhausted))?;
-        let occupied = state.buckets.get(&key).map_or(0, |bucket| {
+            .ok_or_else(|| PopIndexOperationalError::new(PopIndexOperationalErrorKind::SequenceExhausted))?;
+        let occupied = if let Some(bucket) = state.buckets.get(&key) {
             bucket
                 .entries
                 .len()
-                .saturating_add(bucket.candidates)
-                .saturating_add(bucket.reserved)
-        });
+                .checked_add(bucket.candidates)
+                .and_then(|occupied| occupied.checked_add(bucket.reserved))
+                .ok_or_else(|| PopIndexOperationalError::new(PopIndexOperationalErrorKind::AccountingOverflow))?
+        } else {
+            0
+        };
         if occupied >= self.inner.limits.max_entries_per_key.get() {
-            return Err(PopIndexError::new(PopIndexErrorKind::BucketCapacity));
+            return Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::BucketCapacity));
         }
 
         let fanout_key = PopTopicQueueKey::from_criteria(&key);
@@ -155,26 +158,26 @@ where
                 .reserved
                 .checked_add(bucket.candidates)
                 .and_then(|pending| pending.checked_add(1))
-                .ok_or_else(|| PopIndexError::new(PopIndexErrorKind::Allocation))
+                .ok_or_else(|| PopIndexOperationalError::new(PopIndexOperationalErrorKind::AccountingOverflow))
         })?;
         if bucket_missing {
             state
                 .buckets
                 .try_reserve(1)
-                .map_err(|_| PopIndexError::new(PopIndexErrorKind::Allocation))?;
+                .map_err(PopIndexOperationalError::allocation)?;
         }
         if fanout_missing {
             state
                 .fanout
                 .try_reserve(1)
-                .map_err(|_| PopIndexError::new(PopIndexErrorKind::Allocation))?;
+                .map_err(PopIndexOperationalError::allocation)?;
         }
         let mut new_bucket = bucket_missing.then(PopIndexBucket::default);
         if let Some(bucket) = new_bucket.as_mut() {
             bucket
                 .entries
                 .try_reserve(additional_entry_capacity)
-                .map_err(|_| PopIndexError::new(PopIndexErrorKind::Allocation))?;
+                .map_err(PopIndexOperationalError::allocation)?;
         } else {
             state
                 .buckets
@@ -182,7 +185,7 @@ where
                 .expect("existing POP bucket remains present")
                 .entries
                 .try_reserve(additional_entry_capacity)
-                .map_err(|_| PopIndexError::new(PopIndexErrorKind::Allocation))?;
+                .map_err(PopIndexOperationalError::allocation)?;
         }
         let mut new_fanout = fanout_missing.then(PopFanoutBucket::default);
         if !group_exists {
@@ -190,7 +193,7 @@ where
                 bucket
                     .groups
                     .try_reserve(1)
-                    .map_err(|_| PopIndexError::new(PopIndexErrorKind::Allocation))?;
+                    .map_err(PopIndexOperationalError::allocation)?;
             } else {
                 state
                     .fanout
@@ -198,7 +201,7 @@ where
                     .expect("existing POP fanout bucket remains present")
                     .groups
                     .try_reserve(1)
-                    .map_err(|_| PopIndexError::new(PopIndexErrorKind::Allocation))?;
+                    .map_err(PopIndexOperationalError::allocation)?;
             }
         }
         if let Some(bucket) = new_bucket {
@@ -231,13 +234,13 @@ where
         state.reserved += 1;
         let sequence = next_sequence - 1;
         drop(state);
-        Ok(PopIndexReservation {
+        Ok(PopIndexReserveOutcome::Reserved(PopIndexReservation {
             inner: Some(Arc::clone(&self.inner)),
             key: Some(key),
             fanout_key: Some(fanout_key),
             sequence,
             membership: Arc::new(PopIndexMembership::default()),
-        })
+        }))
     }
 
     #[cfg(test)]
@@ -1064,57 +1067,97 @@ impl PopIndexSnapshot {
     }
 }
 
+#[must_use]
+pub(crate) enum PopIndexReserveOutcome<I> {
+    Reserved(PopIndexReservation<I>),
+    Rejected(PopIndexRejection),
+}
+
+#[cfg(test)]
+impl<I> PopIndexReserveOutcome<I>
+where
+    I: Copy + Eq,
+{
+    pub(crate) fn publish(
+        self,
+        id: I,
+        deadline: LongPollingDeadline,
+        criteria: Arc<PopMatchCriteria>,
+    ) -> PopIndexLease<I> {
+        match self {
+            Self::Reserved(reservation) => reservation.publish(id, deadline, criteria),
+            Self::Rejected(rejection) => panic!("expected POP index reservation, got {rejection:?}"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum PopIndexErrorKind {
+pub(crate) enum PopIndexRejection {
     GlobalCapacity,
     BucketCapacity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum PopIndexOperationalErrorKind {
+    AccountingOverflow,
     SequenceExhausted,
     Allocation,
 }
 
-impl PopIndexErrorKind {
+impl PopIndexOperationalErrorKind {
     #[must_use]
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::GlobalCapacity => "global_capacity",
-            Self::BucketCapacity => "bucket_capacity",
+            Self::AccountingOverflow => "accounting_overflow",
             Self::SequenceExhausted => "sequence_exhausted",
             Self::Allocation => "allocation",
         }
     }
 }
 
-pub(crate) struct PopIndexError {
-    kind: PopIndexErrorKind,
+pub(crate) struct PopIndexOperationalError {
+    kind: PopIndexOperationalErrorKind,
+    source: Option<std::collections::TryReserveError>,
 }
 
-impl PopIndexError {
-    const fn new(kind: PopIndexErrorKind) -> Self {
-        Self { kind }
+impl PopIndexOperationalError {
+    const fn new(kind: PopIndexOperationalErrorKind) -> Self {
+        Self { kind, source: None }
+    }
+
+    fn allocation(source: std::collections::TryReserveError) -> Self {
+        Self {
+            kind: PopIndexOperationalErrorKind::Allocation,
+            source: Some(source),
+        }
     }
 
     #[must_use]
-    pub(crate) const fn kind(&self) -> PopIndexErrorKind {
+    pub(crate) const fn kind(&self) -> PopIndexOperationalErrorKind {
         self.kind
     }
 }
 
-impl fmt::Debug for PopIndexError {
+impl fmt::Debug for PopIndexOperationalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("PopIndexError")
+            .debug_struct("PopIndexOperationalError")
             .field("kind", &self.kind.as_str())
             .finish_non_exhaustive()
     }
 }
 
-impl fmt::Display for PopIndexError {
+impl fmt::Display for PopIndexOperationalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "POP criteria index failed: {}", self.kind.as_str())
     }
 }
 
-impl Error for PopIndexError {}
+impl Error for PopIndexOperationalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source.as_ref().map(|source| source as &(dyn Error + 'static))
+    }
+}
 
 #[cfg(test)]
 #[path = "../../../tests/unit/long_polling/pop_deferred/index/p1_tests.rs"]

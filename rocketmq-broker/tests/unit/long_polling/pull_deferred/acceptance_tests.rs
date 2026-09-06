@@ -23,7 +23,9 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use futures::SinkExt;
 use parking_lot::Mutex;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -69,8 +71,10 @@ use super::index::PullIndexSnapshot;
 use super::index::PullScanCursor;
 use super::service::PreparedPullRegistration;
 use super::service::PullDeferredPrepareError;
-use super::service::PullDeferredPrepareErrorKind;
-use super::service::PullDeferredRegisterErrorKind;
+use super::service::PullDeferredPrepareOutcome;
+use super::service::PullDeferredPrepareRejectionKind;
+use super::service::PullDeferredRegisterOutcome;
+use super::service::PullDeferredRegisterRejectionKind;
 use super::service::PullDeferredService;
 use super::service::PullRetainedEstimate;
 use super::service::PullSuspendTiming;
@@ -343,7 +347,7 @@ impl RequestProcessor for PullDeferredTestProcessor {
             ResponseCode::PullNotFound,
         ))
         .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let prepared = self
+        let prepared = match self
             .service
             .prepare(
                 request,
@@ -358,11 +362,24 @@ impl RequestProcessor for PullDeferredTestProcessor {
                 ),
                 PullRetainedEstimate::default(),
             )
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let registration = self
-            .service
-            .register(prepared, request)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+            .map_err(|error| {
+                RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+            })? {
+            PullDeferredPrepareOutcome::Prepared(prepared) => prepared,
+            PullDeferredPrepareOutcome::Rejected(_) => {
+                return Err(RocketMQError::illegal_argument("unexpected Pull preparation rejection"));
+            }
+        };
+        let registration = match self.service.register(prepared, request).map_err(|error| {
+            RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+        })? {
+            PullDeferredRegisterOutcome::Registered(registration) => *registration,
+            PullDeferredRegisterOutcome::Rejected(_) => {
+                return Err(RocketMQError::illegal_argument(
+                    "unexpected Pull registration rejection",
+                ));
+            }
+        };
         self.registrations
             .send(RegistrationObservation {
                 id: registration.deferred_id(),

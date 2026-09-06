@@ -43,6 +43,7 @@ use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
 
 use super::AdminRequestMetadata;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCasError;
+use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCasOutcome;
 
 pub(super) struct SubscriptionGroupHandler;
 
@@ -203,7 +204,7 @@ impl SubscriptionGroupHandler {
                 retry_queue_nums,
                 consume_timeout_minutes,
             ) {
-            Ok(update) => update,
+            Ok(SubscriptionGroupConfigCasOutcome::Applied(update)) => update,
             Err(SubscriptionGroupConfigCasError::InvalidGroupName) => {
                 return Ok(Some(
                     response
@@ -211,14 +212,14 @@ impl SubscriptionGroupHandler {
                         .set_remark("The specified group is invalid."),
                 ));
             }
-            Err(SubscriptionGroupConfigCasError::GroupNotFound) => {
+            Ok(SubscriptionGroupConfigCasOutcome::GroupNotFound) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SubscriptionGroupNotExist)
                         .set_remark("Subscription Group configuration does not exist on this Broker"),
                 ));
             }
-            Err(SubscriptionGroupConfigCasError::VersionConflict {
+            Ok(SubscriptionGroupConfigCasOutcome::VersionConflict {
                 expected_version,
                 actual_version,
             }) => {
@@ -234,7 +235,7 @@ impl SubscriptionGroupHandler {
                         )),
                 ));
             }
-            Err(SubscriptionGroupConfigCasError::NoChange) => {
+            Ok(SubscriptionGroupConfigCasOutcome::NoChange) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::InvalidParameter)
@@ -260,10 +261,8 @@ impl SubscriptionGroupHandler {
                         .set_remark("Subscription Group configuration version is exhausted"),
                 ));
             }
-            Err(
-                SubscriptionGroupConfigCasError::StateConflict { .. }
-                | SubscriptionGroupConfigCasError::PersistenceDirty { .. },
-            ) => {
+            Ok(SubscriptionGroupConfigCasOutcome::StateConflict { .. })
+            | Err(SubscriptionGroupConfigCasError::PersistenceDirty { .. }) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
@@ -358,8 +357,8 @@ impl SubscriptionGroupHandler {
             .subscription_group_manager()
             .replace_subscription_group_config_if_state(&header.group, body.expected_state, config)
         {
-            Ok(update) => update,
-            Err(SubscriptionGroupConfigCasError::StateConflict { actual_version }) => {
+            Ok(SubscriptionGroupConfigCasOutcome::Applied(update)) => update,
+            Ok(SubscriptionGroupConfigCasOutcome::StateConflict { actual_version }) => {
                 let state = actual_version.map_or(ExpectedState::Absent, |version| ExpectedState::Present { version });
                 return Ok(Some(
                     response.set_code(ResponseCode::InvalidParameter).set_body(
@@ -388,17 +387,19 @@ impl SubscriptionGroupHandler {
                     ),
                 ));
             }
-            Err(SubscriptionGroupConfigCasError::NoChange) => {
+            Ok(SubscriptionGroupConfigCasOutcome::NoChange) => {
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::InvalidParameter)
                         .set_remark("Subscription Group state replacement has no effect"),
                 ));
             }
-            Err(
+            Ok(
+                SubscriptionGroupConfigCasOutcome::GroupNotFound
+                | SubscriptionGroupConfigCasOutcome::VersionConflict { .. },
+            )
+            | Err(
                 SubscriptionGroupConfigCasError::InvalidGroupName
-                | SubscriptionGroupConfigCasError::GroupNotFound
-                | SubscriptionGroupConfigCasError::VersionConflict { .. }
                 | SubscriptionGroupConfigCasError::VersionUnavailable
                 | SubscriptionGroupConfigCasError::VersionExhausted
                 | SubscriptionGroupConfigCasError::ValueOutOfRange,
@@ -471,7 +472,7 @@ impl SubscriptionGroupHandler {
             .select_subscription_group_config_with_version(group);
 
         match group_config {
-            Ok((config, subscription_group_version)) => Ok(Some(
+            Ok(Some((config, subscription_group_version))) => Ok(Some(
                 RemotingCommand::create_success_response_command_with_header(
                     UpdateSubscriptionGroupConfigCasResponseHeader {
                         subscription_group_version,
@@ -479,7 +480,7 @@ impl SubscriptionGroupHandler {
                 )
                 .set_body(config.encode()?),
             )),
-            Err(SubscriptionGroupConfigCasError::GroupNotFound) => Ok(Some(
+            Ok(None) => Ok(Some(
                 response
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
                     .set_remark(format!("No group in this broker. group: {}", group)),
@@ -492,18 +493,13 @@ impl SubscriptionGroupHandler {
             Err(
                 SubscriptionGroupConfigCasError::VersionUnavailable
                 | SubscriptionGroupConfigCasError::VersionExhausted
-                | SubscriptionGroupConfigCasError::StateConflict { .. }
                 | SubscriptionGroupConfigCasError::PersistenceDirty { .. },
             ) => Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark("Subscription Group configuration version is unavailable"),
             )),
-            Err(
-                SubscriptionGroupConfigCasError::VersionConflict { .. }
-                | SubscriptionGroupConfigCasError::ValueOutOfRange
-                | SubscriptionGroupConfigCasError::NoChange,
-            ) => {
+            Err(SubscriptionGroupConfigCasError::ValueOutOfRange) => {
                 Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(
                     "Subscription Group configuration snapshot is unavailable",
                 )))
@@ -1048,6 +1044,7 @@ mod tests {
         let (_, initial_version) = admin
             .subscription_group_manager()
             .select_subscription_group_config_with_version(&group)
+            .expect("Subscription Group version should be readable")
             .expect("versioned Subscription Group should exist");
 
         let mut request = RemotingCommand::create_request_command(

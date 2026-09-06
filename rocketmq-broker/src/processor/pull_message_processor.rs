@@ -852,18 +852,64 @@ where
                     suspension.timing,
                     PullRetainedEstimate::default(),
                 ) {
-                    Ok(prepared) => prepared,
+                    Ok(crate::long_polling::pull_deferred::PullDeferredPrepareOutcome::Prepared(prepared)) => prepared,
+                    Ok(crate::long_polling::pull_deferred::PullDeferredPrepareOutcome::Rejected(rejection)) => {
+                        return Ok(HandlerOutcome::Reply(rejection.into_fallback()))
+                    }
                     Err(error) => return Ok(HandlerOutcome::Reply(error.into_fallback())),
                 };
                 match service.register(prepared, request) {
-                    Ok(registration) => Ok(HandlerOutcome::Deferred(registration)),
-                    Err(error) => match error.into_pre_take_fallback() {
-                        Ok(fallback) => Ok(HandlerOutcome::Reply(fallback)),
-                        Err(error) => self
-                            .register_deferred_pull_error_outcome(request.original_identity().original_opaque(), error),
-                    },
+                    Ok(crate::long_polling::pull_deferred::PullDeferredRegisterOutcome::Registered(registration)) => {
+                        Ok(HandlerOutcome::Deferred(*registration))
+                    }
+                    Ok(crate::long_polling::pull_deferred::PullDeferredRegisterOutcome::Rejected(rejection)) => {
+                        match (*rejection).into_pre_take_fallback() {
+                            Ok(fallback) => Ok(HandlerOutcome::Reply(fallback)),
+                            Err(rejection) => self.register_deferred_pull_rejection_outcome(
+                                request.original_identity().original_opaque(),
+                                rejection,
+                            ),
+                        }
+                    }
+                    Err(error) => {
+                        self.register_deferred_pull_error_outcome(request.original_identity().original_opaque(), error)
+                    }
                 }
             }
+        }
+    }
+
+    fn register_deferred_pull_rejection_outcome(
+        &self,
+        opaque: i32,
+        rejection: crate::long_polling::pull_deferred::PullDeferredRegisterRejection,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        use crate::long_polling::pull_deferred::PullDeferredRegisterRejection;
+
+        match rejection {
+            PullDeferredRegisterRejection::PreTake { prepared, .. } => {
+                let fallback = (*prepared).into_candidate().into_fallback();
+                Ok(HandlerOutcome::Reply(fallback))
+            }
+            PullDeferredRegisterRejection::Expiry { outcome: _, parts } => {
+                drop(parts);
+                BrokerResponseParts::command(remoting_error_response(
+                    PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.context.command_factory,
+                        opaque,
+                    },
+                ))?
+                .into_handler_outcome()
+            }
+            PullDeferredRegisterRejection::RegistryRejected => BrokerResponseParts::command(remoting_error_response(
+                PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
+                RemotingErrorTarget::Reply {
+                    factory: &self.context.command_factory,
+                    opaque,
+                },
+            ))?
+            .into_handler_outcome(),
         }
     }
 
@@ -875,31 +921,6 @@ where
         use crate::long_polling::pull_deferred::PullDeferredRegisterError;
 
         match error {
-            PullDeferredRegisterError::PreTake {
-                prepared, source: _, ..
-            } => {
-                let fallback = (*prepared).into_candidate().into_fallback();
-                Ok(HandlerOutcome::Reply(fallback))
-            }
-            PullDeferredRegisterError::Expiry { outcome: _, parts } => {
-                drop(parts);
-                BrokerResponseParts::command(remoting_error_response(
-                    PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
-                    RemotingErrorTarget::Reply {
-                        factory: &self.context.command_factory,
-                        opaque,
-                    },
-                ))?
-                .into_handler_outcome()
-            }
-            PullDeferredRegisterError::RegistryRejected => BrokerResponseParts::command(remoting_error_response(
-                PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
-                RemotingErrorTarget::Reply {
-                    factory: &self.context.command_factory,
-                    opaque,
-                },
-            ))?
-            .into_handler_outcome(),
             PullDeferredRegisterError::RegistryIdentityExhausted => {
                 BrokerResponseParts::command(remoting_error_response(
                     PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),

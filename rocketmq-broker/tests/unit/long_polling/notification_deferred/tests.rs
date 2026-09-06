@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::collections::TryReserveError;
+use std::error::Error;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
@@ -35,24 +37,89 @@ use rocketmq_transport::api::DeferredExpiryMargins;
 use rocketmq_transport::api::DeferredWaitLimits;
 
 use super::deadline::NotificationWaitDeadline;
-use super::deadline::NotificationWaitDeadlineErrorKind;
+use super::deadline::NotificationWaitDeadlineOperationalError;
+use super::deadline::NotificationWaitDeadlineOutcome;
+use super::deadline::NotificationWaitDeadlineRejectionReason;
 use super::index::NotificationArrivalView;
 use super::index::NotificationCandidateSelection;
 use super::index::NotificationCriteriaIndex;
 use super::index::NotificationCriteriaKey;
 use super::index::NotificationCriteriaLimits;
-use super::index::NotificationIndexErrorKind;
+use super::index::NotificationIndexOperationalError;
+use super::index::NotificationIndexReserveOutcome;
+use super::index::NotificationIndexReserveRejection;
 use super::index::NotificationIndexSnapshot;
 use super::index::NotificationMatchCriteria;
 use super::index::NotificationScanCursor;
-use super::service::NotificationContinuationError;
-use super::service::NotificationDeferredPrepareErrorKind;
+use super::service::NotificationContinuationOperationalError;
+use super::service::NotificationContinuationOutcome;
+use super::service::NotificationContinuationRejection;
+use super::service::NotificationDeferredPrepareOutcome;
+use super::service::NotificationDeferredPrepareRejectionKind;
 use super::service::NotificationDeferredService;
 use super::service::NotificationRequestData;
 use super::service::NotificationRetainedEstimate;
 
 fn nonzero(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).expect("test limit is non-zero")
+}
+
+fn expect_deadline(
+    result: Result<NotificationWaitDeadlineOutcome, NotificationWaitDeadlineOperationalError>,
+) -> NotificationWaitDeadline {
+    match result {
+        Ok(NotificationWaitDeadlineOutcome::Pending(deadline)) => deadline,
+        Ok(NotificationWaitDeadlineOutcome::Rejected(rejection)) => {
+            panic!("expected pending Notification deadline, got {:?}", rejection.reason())
+        }
+        Err(error) => panic!("expected pending Notification deadline: {error}"),
+    }
+}
+
+fn expect_deadline_rejection(
+    result: Result<NotificationWaitDeadlineOutcome, NotificationWaitDeadlineOperationalError>,
+) -> NotificationWaitDeadlineRejectionReason {
+    match result {
+        Ok(NotificationWaitDeadlineOutcome::Rejected(rejection)) => rejection.reason(),
+        Ok(NotificationWaitDeadlineOutcome::Pending(_)) => panic!("expected rejected Notification deadline"),
+        Err(error) => panic!("expected rejected Notification deadline: {error}"),
+    }
+}
+
+macro_rules! expect_reserved {
+    ($result:expr, $message:literal) => {
+        match $result {
+            Ok(NotificationIndexReserveOutcome::Reserved(reservation)) => reservation,
+            Ok(NotificationIndexReserveOutcome::Rejected(rejection)) => {
+                panic!("{}: {rejection:?}", $message)
+            }
+            Err(error) => panic!("{}: {error:?}", $message),
+        }
+    };
+}
+
+macro_rules! expect_continued {
+    ($result:expr, $message:literal) => {
+        match $result {
+            Ok(NotificationContinuationOutcome::Continued(continuation)) => continuation,
+            Ok(NotificationContinuationOutcome::Rejected(rejection)) => {
+                panic!("{}: {rejection:?}", $message)
+            }
+            Err(error) => panic!("{}: {error:?}", $message),
+        }
+    };
+}
+
+macro_rules! expect_prepared {
+    ($result:expr, $message:literal) => {
+        match $result {
+            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
+            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+                panic!("{}: {:?}", $message, rejection.kind())
+            }
+            Err(error) => panic!("{}: {error:?}", $message),
+        }
+    };
 }
 
 fn key(group: &str, queue_id: i32) -> NotificationCriteriaKey {
@@ -122,32 +189,24 @@ impl MessageFilter for ToggleFilter {
 #[test]
 fn notification_deferred_deadline_preserves_signed_strict_fifty_millisecond_boundary() {
     let monotonic = tokio::time::Instant::now();
-    let live = NotificationWaitDeadline::checked(1_000, 100, 1_050, monotonic).expect("cutoff equality is live");
+    let live = expect_deadline(NotificationWaitDeadline::checked(1_000, 100, 1_050, monotonic));
     assert_eq!(live.protocol_millis(), 1_051);
     assert_eq!(live.protocol_at(), monotonic + Duration::from_millis(1));
     assert_eq!(
-        NotificationWaitDeadline::checked(1_000, 100, 1_051, monotonic)
-            .expect_err("the next integer millisecond expires")
-            .kind(),
-        NotificationWaitDeadlineErrorKind::AlreadyExpired
+        expect_deadline_rejection(NotificationWaitDeadline::checked(1_000, 100, 1_051, monotonic)),
+        NotificationWaitDeadlineRejectionReason::AlreadyExpired
     );
     assert_eq!(
-        NotificationWaitDeadline::checked(-1, 100, 0, monotonic)
-            .expect_err("negative born time is rejected")
-            .kind(),
-        NotificationWaitDeadlineErrorKind::NegativeBornTime
+        expect_deadline_rejection(NotificationWaitDeadline::checked(-1, 100, 0, monotonic)),
+        NotificationWaitDeadlineRejectionReason::NegativeBornTime
     );
     assert_eq!(
-        NotificationWaitDeadline::checked(i64::MAX, 1, 0, monotonic)
-            .expect_err("signed end overflow is rejected")
-            .kind(),
-        NotificationWaitDeadlineErrorKind::ProtocolOverflow
+        NotificationWaitDeadline::checked(i64::MAX, 1, 0, monotonic).expect_err("signed end overflow is operational"),
+        NotificationWaitDeadlineOperationalError::ProtocolOverflow
     );
     assert_eq!(
-        NotificationWaitDeadline::checked(1_000, 0, 0, monotonic)
-            .expect_err("non-positive poll time is immediate")
-            .kind(),
-        NotificationWaitDeadlineErrorKind::NonPositivePollTime
+        expect_deadline_rejection(NotificationWaitDeadline::checked(1_000, 0, 0, monotonic)),
+        NotificationWaitDeadlineRejectionReason::NonPositivePollTime
     );
 }
 
@@ -155,35 +214,43 @@ fn notification_deferred_deadline_preserves_signed_strict_fifty_millisecond_boun
 fn notification_deferred_index_uses_legacy_plus_one_per_key_and_hint_is_not_a_key_limit() {
     let index = NotificationCriteriaIndex::<u64>::new(NotificationCriteriaLimits::new(nonzero(4), 1, 1));
     let criteria = Arc::new(NotificationMatchCriteria::new(None, None));
-    let deadline = NotificationWaitDeadline::checked(0, 1_000, 0, tokio::time::Instant::now()).expect("test deadline");
-    let first =
-        index
-            .reserve(key("group-a", 0))
-            .expect("legacy length zero")
-            .publish(1, deadline, Arc::clone(&criteria));
-    let second =
-        index
-            .reserve(key("group-a", 0))
-            .expect("legacy length one")
-            .publish(2, deadline, Arc::clone(&criteria));
+    let deadline = expect_deadline(NotificationWaitDeadline::checked(
+        0,
+        1_000,
+        0,
+        tokio::time::Instant::now(),
+    ));
+    let first = expect_reserved!(index.reserve(key("group-a", 0)), "legacy length zero").publish(
+        1,
+        deadline,
+        Arc::clone(&criteria),
+    );
+    let second = expect_reserved!(index.reserve(key("group-a", 0)), "legacy length one").publish(
+        2,
+        deadline,
+        Arc::clone(&criteria),
+    );
     let full = match index.reserve(key("group-a", 0)) {
-        Ok(_) => panic!("third entry exceeds pop_polling_size + 1"),
-        Err(error) => error,
+        Ok(NotificationIndexReserveOutcome::Rejected(rejection)) => rejection,
+        Ok(NotificationIndexReserveOutcome::Reserved(_)) | Err(_) => {
+            panic!("third entry exceeds pop_polling_size + 1")
+        }
     };
-    assert_eq!(full.kind(), NotificationIndexErrorKind::PerKeyCapacity);
-    let other = index
-        .reserve(key("group-b", 0))
-        .expect("allocation hint is not a key cap")
-        .publish(3, deadline, Arc::clone(&criteria));
-    let fourth = index
-        .reserve(key("group-c", 0))
-        .expect("fourth global entry")
-        .publish(4, deadline, criteria);
+    assert_eq!(full, NotificationIndexReserveRejection::PerKeyCapacity);
+    let other = expect_reserved!(index.reserve(key("group-b", 0)), "allocation hint is not a key cap").publish(
+        3,
+        deadline,
+        Arc::clone(&criteria),
+    );
+    let fourth =
+        expect_reserved!(index.reserve(key("group-c", 0)), "fourth global entry").publish(4, deadline, criteria);
     let global = match index.reserve(key("group-d", 0)) {
-        Ok(_) => panic!("fifth entry exceeds the global live+reserved cap"),
-        Err(error) => error,
+        Ok(NotificationIndexReserveOutcome::Rejected(rejection)) => rejection,
+        Ok(NotificationIndexReserveOutcome::Reserved(_)) | Err(_) => {
+            panic!("fifth entry exceeds the global live+reserved cap")
+        }
     };
-    assert_eq!(global.kind(), NotificationIndexErrorKind::GlobalCapacity);
+    assert_eq!(global, NotificationIndexReserveRejection::GlobalCapacity);
     assert_eq!(index.snapshot().keys(), 3);
     drop((first, second, other, fourth));
     assert_eq!(index.snapshot(), NotificationIndexSnapshot::default());
@@ -192,26 +259,28 @@ fn notification_deferred_index_uses_legacy_plus_one_per_key_and_hint_is_not_a_ke
 #[test]
 fn notification_deferred_cursor_is_wildcard_first_and_newest_first_without_revisiting_miss() {
     let index = NotificationCriteriaIndex::<u64>::new(NotificationCriteriaLimits::direct(nonzero(8), nonzero(8)));
-    let deadline = NotificationWaitDeadline::checked(0, 1_000, 0, tokio::time::Instant::now()).expect("test deadline");
+    let deadline = expect_deadline(NotificationWaitDeadline::checked(
+        0,
+        1_000,
+        0,
+        tokio::time::Instant::now(),
+    ));
     let toggle = Arc::new(AtomicBool::new(false));
     let filtered = Arc::new(NotificationMatchCriteria::new(
         Some(SubscriptionData::default()),
         Some(Arc::new(ToggleFilter(Arc::clone(&toggle)))),
     ));
-    let wildcard = index.reserve(key("group", -1)).expect("wildcard").publish(
+    let wildcard = expect_reserved!(index.reserve(key("group", -1)), "wildcard").publish(
         1,
         deadline,
         Arc::new(NotificationMatchCriteria::new(None, None)),
     );
-    let exact_old = index.reserve(key("group", 3)).expect("exact old").publish(
+    let exact_old = expect_reserved!(index.reserve(key("group", 3)), "exact old").publish(
         2,
         deadline,
         Arc::new(NotificationMatchCriteria::new(None, None)),
     );
-    let exact_new = index
-        .reserve(key("group", 3))
-        .expect("exact new")
-        .publish(3, deadline, filtered);
+    let exact_new = expect_reserved!(index.reserve(key("group", 3)), "exact new").publish(3, deadline, filtered);
     let topic = CheetahString::from_static_str("topic");
     let arrival = NotificationArrivalView::new(&topic, 3).with_filter_metadata(Some(7), 10, None, None);
     let mut cursor = index.scan_cursor(&arrival);
@@ -254,8 +323,13 @@ fn notification_deferred_cursor_is_wildcard_first_and_newest_first_without_revis
 #[test]
 fn notification_deferred_retry_arrival_normalizes_before_fanout_snapshot() {
     let index = NotificationCriteriaIndex::<u64>::new(NotificationCriteriaLimits::direct(nonzero(2), nonzero(2)));
-    let deadline = NotificationWaitDeadline::checked(0, 1_000, 0, tokio::time::Instant::now()).expect("test deadline");
-    let lease = index.reserve(key("group", 3)).expect("normal topic key").publish(
+    let deadline = expect_deadline(NotificationWaitDeadline::checked(
+        0,
+        1_000,
+        0,
+        tokio::time::Instant::now(),
+    ));
+    let lease = expect_reserved!(index.reserve(key("group", 3)), "normal topic key").publish(
         7,
         deadline,
         Arc::new(NotificationMatchCriteria::new(None, None)),
@@ -286,23 +360,26 @@ fn notification_deferred_prepare_failures_release_index_and_wait_capacity() {
         0,
         monotonic,
     ) {
-        Ok(_) => panic!("invalid signed deadline stays pre-take"),
-        Err(error) => error,
+        Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => rejection,
+        Ok(NotificationDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+            panic!("invalid signed deadline stays pre-take")
+        }
     };
-    assert_eq!(invalid.kind(), NotificationDeferredPrepareErrorKind::Deadline);
+    assert_eq!(invalid.kind(), NotificationDeferredPrepareRejectionKind::Deadline);
     assert_eq!(service.snapshot().index(), NotificationIndexSnapshot::default());
     assert_eq!(service.snapshot().admission().waiting_count(), 0);
 
-    let prepared = service
-        .prepare_at(
+    let prepared = expect_prepared!(
+        service.prepare_at(
             request(1_000, 1_000, "group", 0),
             None,
             None,
             NotificationRetainedEstimate::default(),
             1_100,
             monotonic,
-        )
-        .expect("valid prepared registration");
+        ),
+        "valid prepared registration"
+    );
     assert!(prepared.retained_bytes() > 0);
     assert_eq!(service.snapshot().prepared(), 1);
     assert_eq!(service.snapshot().index().reserved(), 1);
@@ -317,15 +394,18 @@ fn notification_deferred_continuation_has_independent_count_and_bytes_admission(
     let deferred_service = service(1, 1, 1, 4096);
     let topic = CheetahString::from_static_str("topic");
     let arrival = NotificationArrivalView::new(&topic, 0);
-    let continuation = deferred_service
-        .admit_continuation(arrival, NotificationScanCursor::for_test(1))
-        .expect("first continuation is admitted");
+    let continuation = expect_continued!(
+        deferred_service.admit_continuation(arrival, NotificationScanCursor::for_test(1)),
+        "first continuation is admitted"
+    );
     assert_eq!(deferred_service.snapshot().active_continuations(), 1);
     let second = match deferred_service.admit_continuation(arrival, NotificationScanCursor::for_test(1)) {
-        Ok(_) => panic!("second continuation exceeds the count cap"),
-        Err(error) => error,
+        Ok(NotificationContinuationOutcome::Rejected(rejection)) => rejection,
+        Ok(NotificationContinuationOutcome::Continued(_)) | Err(_) => {
+            panic!("second continuation exceeds the count cap")
+        }
     };
-    assert_eq!(second, NotificationContinuationError::CountFull);
+    assert_eq!(second, NotificationContinuationRejection::CountFull);
     drop(continuation);
     assert_eq!(deferred_service.snapshot().active_continuations(), 0);
     assert_eq!(deferred_service.snapshot().continuation_bytes(), 0);
@@ -337,12 +417,40 @@ fn notification_deferred_continuation_has_independent_count_and_bytes_admission(
         NotificationArrivalView::new(&large_topic, 0),
         NotificationScanCursor::for_test(1),
     ) {
-        Ok(_) => panic!("arrival payload exceeds continuation byte capacity"),
-        Err(error) => error,
+        Ok(NotificationContinuationOutcome::Rejected(rejection)) => rejection,
+        Ok(NotificationContinuationOutcome::Continued(_)) | Err(_) => {
+            panic!("arrival payload exceeds continuation byte capacity")
+        }
     };
-    assert_eq!(bytes_error, NotificationContinuationError::BytesFull);
+    assert_eq!(bytes_error, NotificationContinuationRejection::BytesFull);
     assert_eq!(bytes_limited.snapshot().active_continuations(), 0);
     assert_eq!(bytes_limited.snapshot().continuation_bytes(), 0);
+}
+
+#[test]
+fn notification_index_allocation_failure_keeps_the_typed_source() {
+    let source = Vec::<u8>::new()
+        .try_reserve(usize::MAX)
+        .expect_err("unrepresentable allocation must fail");
+    let error = NotificationIndexOperationalError::Allocation(source);
+
+    assert!(error
+        .source()
+        .and_then(|source| source.downcast_ref::<TryReserveError>())
+        .is_some());
+}
+
+#[test]
+fn notification_continuation_allocation_failure_keeps_the_typed_source() {
+    let source = Vec::<u8>::new()
+        .try_reserve(usize::MAX)
+        .expect_err("unrepresentable allocation must fail");
+    let error = NotificationContinuationOperationalError::Allocation(source);
+
+    assert!(error
+        .source()
+        .and_then(|source| source.downcast_ref::<TryReserveError>())
+        .is_some());
 }
 
 #[test]
@@ -359,17 +467,20 @@ fn notification_deferred_continuation_charges_fixed_cursor_and_property_storage_
     let arrival = NotificationArrivalView::new(&topic, 0).with_filter_metadata(None, 0, None, Some(&properties));
     let constrained = service(1, 1, 1, 4096);
     let error = match constrained.admit_continuation(arrival, NotificationScanCursor::for_test(64)) {
-        Ok(_) => panic!("fixed owners, cursor backing, buckets, and short properties exceed the byte cap"),
-        Err(error) => error,
+        Ok(NotificationContinuationOutcome::Rejected(rejection)) => rejection,
+        Ok(NotificationContinuationOutcome::Continued(_)) | Err(_) => {
+            panic!("fixed owners, cursor backing, buckets, and short properties exceed the byte cap")
+        }
     };
-    assert_eq!(error, NotificationContinuationError::BytesFull);
+    assert_eq!(error, NotificationContinuationRejection::BytesFull);
     assert_eq!(constrained.snapshot().active_continuations(), 0);
     assert_eq!(constrained.snapshot().continuation_bytes(), 0);
 
     let admitted = service(1, 1, 1, 1024 * 1024);
-    let continuation = admitted
-        .admit_continuation(arrival, NotificationScanCursor::for_test(64))
-        .expect("the conservative retained oracle fits the generous cap");
+    let continuation = expect_continued!(
+        admitted.admit_continuation(arrival, NotificationScanCursor::for_test(64)),
+        "the conservative retained oracle fits the generous cap"
+    );
     assert!(
         admitted.snapshot().continuation_bytes() > topic.len() + properties.len(),
         "the charge includes fixed owners and collection backing, not only string payload bytes"
@@ -390,9 +501,10 @@ async fn notification_deferred_continuation_spends_one_conflict_budget_across_ba
     let initial = service.claim_prepared_arrival(initial).await;
     let (initial_claims, cursor) = initial.into_parts();
     assert!(initial_claims.is_empty());
-    let continuation = service
-        .admit_continuation(arrival, cursor)
-        .expect("conflict continuation admission");
+    let continuation = expect_continued!(
+        service.admit_continuation(arrival, cursor),
+        "conflict continuation admission"
+    );
     assert_eq!(service.snapshot().active_continuations(), 1);
     let runtime = RuntimeOwner::plan(RuntimeConfig::server_default("notification-conflict-budget"))
         .expect("test runtime configuration is valid")

@@ -27,17 +27,11 @@ struct DeadlineProcessor {
 
 impl RequestProcessor for DeadlineProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let prepared = self
-            .service
-            .prepare(request, PopLiteRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         self.deadlines
             .send(prepared.deadline())
             .map_err(|_| RocketMQError::illegal_argument("PopLite deadline observer closed"))?;
-        let registration = self
-            .service
-            .register(prepared, request)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let registration = registration_or_test_error(self.service.register(prepared, request))?;
         Ok(HandlerOutcome::Deferred(registration))
     }
 }

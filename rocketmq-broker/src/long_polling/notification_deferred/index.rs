@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::collections::TryReserveError;
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -339,7 +340,7 @@ where
     pub(crate) fn reserve(
         &self,
         key: NotificationCriteriaKey,
-    ) -> Result<NotificationIndexReservation<I>, NotificationIndexError> {
+    ) -> Result<NotificationIndexReserveOutcome<I>, NotificationIndexOperationalError> {
         self.reserve_at(key, tokio::time::Instant::now())
     }
 
@@ -347,46 +348,76 @@ where
         &self,
         key: NotificationCriteriaKey,
         admitted_at: tokio::time::Instant,
-    ) -> Result<NotificationIndexReservation<I>, NotificationIndexError> {
+    ) -> Result<NotificationIndexReserveOutcome<I>, NotificationIndexOperationalError> {
         let mut state = self.inner.state.lock();
-        if state.live.saturating_add(state.reserved) >= self.inner.limits.max_entries.get() {
-            return Err(NotificationIndexError::new(NotificationIndexErrorKind::GlobalCapacity));
+        let occupied = state
+            .live
+            .checked_add(state.reserved)
+            .ok_or(NotificationIndexOperationalError::AccountingOverflow)?;
+        if occupied >= self.inner.limits.max_entries.get() {
+            return Ok(NotificationIndexReserveOutcome::Rejected(
+                NotificationIndexReserveRejection::GlobalCapacity,
+            ));
         }
-        let occupied = state.buckets.get(&key).map_or(0, |bucket| {
-            bucket
+        let occupied = match state.buckets.get(&key) {
+            Some(bucket) => bucket
                 .records
                 .len()
-                .saturating_add(bucket.reserved)
-                .saturating_add(bucket.candidates)
-        });
+                .checked_add(bucket.reserved)
+                .and_then(|occupied| occupied.checked_add(bucket.candidates))
+                .ok_or(NotificationIndexOperationalError::AccountingOverflow)?,
+            None => 0,
+        };
         if occupied >= self.inner.limits.max_entries_per_key.get() {
-            return Err(NotificationIndexError::new(NotificationIndexErrorKind::PerKeyCapacity));
+            return Ok(NotificationIndexReserveOutcome::Rejected(
+                NotificationIndexReserveRejection::PerKeyCapacity,
+            ));
         }
         let sequence = state
             .next_sequence
             .checked_add(1)
-            .ok_or_else(|| NotificationIndexError::new(NotificationIndexErrorKind::SequenceExhausted))?;
-        if !state.buckets.contains_key(&key) {
+            .ok_or(NotificationIndexOperationalError::SequenceExhausted)?;
+        let bucket_missing = !state.buckets.contains_key(&key);
+        if bucket_missing {
             state
                 .buckets
                 .try_reserve(1)
-                .map_err(|_| NotificationIndexError::new(NotificationIndexErrorKind::Allocation))?;
+                .map_err(NotificationIndexOperationalError::Allocation)?;
         }
-        let bucket = state.buckets.entry(key.clone()).or_default();
-        bucket
-            .records
-            .try_reserve(1)
-            .map_err(|_| NotificationIndexError::new(NotificationIndexErrorKind::Allocation))?;
+        let mut new_bucket = bucket_missing.then(NotificationBucket::default);
+        if let Some(bucket) = new_bucket.as_mut() {
+            bucket
+                .records
+                .try_reserve(1)
+                .map_err(NotificationIndexOperationalError::Allocation)?;
+        } else {
+            state
+                .buckets
+                .get_mut(&key)
+                .expect("existing Notification bucket remains present")
+                .records
+                .try_reserve(1)
+                .map_err(NotificationIndexOperationalError::Allocation)?;
+        }
+        if let Some(bucket) = new_bucket {
+            state.buckets.insert(key.clone(), bucket);
+        }
+        let bucket = state
+            .buckets
+            .get_mut(&key)
+            .expect("reserved Notification bucket exists");
         bucket.reserved += 1;
         state.reserved += 1;
         state.next_sequence = sequence;
         drop(state);
-        Ok(NotificationIndexReservation {
-            inner: Some(Arc::clone(&self.inner)),
-            key: Some(key),
-            sequence,
-            admitted_at,
-        })
+        Ok(NotificationIndexReserveOutcome::Reserved(
+            NotificationIndexReservation {
+                inner: Some(Arc::clone(&self.inner)),
+                key: Some(key),
+                sequence,
+                admitted_at,
+            },
+        ))
     }
 
     /// Freezes groups, wildcard-before-exact key order, and sequence ceilings.
@@ -836,41 +867,48 @@ impl NotificationIndexSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum NotificationIndexErrorKind {
+pub(crate) enum NotificationIndexReserveRejection {
     GlobalCapacity,
     PerKeyCapacity,
+}
+
+#[must_use]
+pub(crate) enum NotificationIndexReserveOutcome<I> {
+    Reserved(NotificationIndexReservation<I>),
+    Rejected(NotificationIndexReserveRejection),
+}
+
+pub(crate) enum NotificationIndexOperationalError {
+    AccountingOverflow,
     SequenceExhausted,
-    Allocation,
+    Allocation(TryReserveError),
 }
 
-pub(crate) struct NotificationIndexError {
-    kind: NotificationIndexErrorKind,
-}
-
-impl NotificationIndexError {
-    const fn new(kind: NotificationIndexErrorKind) -> Self {
-        Self { kind }
-    }
-
-    #[must_use]
-    pub(crate) const fn kind(&self) -> NotificationIndexErrorKind {
-        self.kind
-    }
-}
-
-impl fmt::Debug for NotificationIndexError {
+impl fmt::Debug for NotificationIndexOperationalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("NotificationIndexError")
-            .field("kind", &self.kind)
-            .finish_non_exhaustive()
+        formatter.write_str(match self {
+            Self::AccountingOverflow => "NotificationIndexOperationalError::AccountingOverflow",
+            Self::SequenceExhausted => "NotificationIndexOperationalError::SequenceExhausted",
+            Self::Allocation(_) => "NotificationIndexOperationalError::Allocation",
+        })
     }
 }
 
-impl fmt::Display for NotificationIndexError {
+impl fmt::Display for NotificationIndexOperationalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Notification criteria index failed: {:?}", self.kind)
+        formatter.write_str(match self {
+            Self::AccountingOverflow => "Notification criteria index accounting overflowed",
+            Self::SequenceExhausted => "Notification criteria index sequence exhausted",
+            Self::Allocation(_) => "Notification criteria index allocation failed",
+        })
     }
 }
 
-impl Error for NotificationIndexError {}
+impl Error for NotificationIndexOperationalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(source) => Some(source),
+            Self::AccountingOverflow | Self::SequenceExhausted => None,
+        }
+    }
+}

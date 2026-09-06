@@ -127,7 +127,10 @@ fn criteria_key(queue_id: i32) -> PopCriteriaKey {
 }
 
 fn deadline_after(base: tokio::time::Instant, millis: u64) -> LongPollingDeadline {
-    LongPollingDeadline::checked(0, millis + 49, 0, base).expect("test deadline")
+    match LongPollingDeadline::checked(0, millis + 49, 0, base).expect("test deadline") {
+        LongPollingDeadlineOutcome::Pending(deadline) => deadline,
+        LongPollingDeadlineOutcome::Immediate => panic!("test deadline must remain pending"),
+    }
 }
 
 fn match_all_criteria() -> Arc<PopMatchCriteria> {
@@ -179,24 +182,31 @@ impl MessageFilter for CountingFilter {
 #[test]
 fn deadline_preserves_legacy_strict_fifty_millisecond_formula() {
     let monotonic_now = tokio::time::Instant::now();
-    let deadline = LongPollingDeadline::checked(1_000, 100, 1_049, monotonic_now).expect("live deadline");
+    let deadline = match LongPollingDeadline::checked(1_000, 100, 1_049, monotonic_now).expect("live deadline") {
+        LongPollingDeadlineOutcome::Pending(deadline) => deadline,
+        LongPollingDeadlineOutcome::Immediate => panic!("deadline must remain live"),
+    };
     assert_eq!(deadline.protocol_millis(), 1_051);
     assert_eq!(deadline.protocol_at(), monotonic_now + Duration::from_millis(2));
 
-    let boundary = LongPollingDeadline::checked(1_000, 100, 1_050, monotonic_now).expect("strict boundary is live");
+    let boundary =
+        match LongPollingDeadline::checked(1_000, 100, 1_050, monotonic_now).expect("strict boundary is live") {
+            LongPollingDeadlineOutcome::Pending(deadline) => deadline,
+            LongPollingDeadlineOutcome::Immediate => panic!("strict boundary must remain live"),
+        };
     assert_eq!(boundary.protocol_at(), monotonic_now + Duration::from_millis(1));
 
-    let expired = LongPollingDeadline::checked(1_000, 100, 1_051, monotonic_now).expect_err("strictly later expires");
-    assert_eq!(expired.kind(), LongPollingDeadlineErrorKind::AlreadyExpired);
+    let expired = LongPollingDeadline::checked(1_000, 100, 1_051, monotonic_now)
+        .expect("strictly later is a normal immediate outcome");
+    assert_eq!(expired, LongPollingDeadlineOutcome::Immediate);
 }
 
 #[test]
-fn deadline_rejects_zero_and_checked_protocol_overflow() {
+fn deadline_returns_immediate_for_zero_and_errors_on_protocol_overflow() {
     assert_eq!(
         LongPollingDeadline::checked(1, 0, 0, tokio::time::Instant::now())
-            .expect_err("zero polling is not deferred")
-            .kind(),
-        LongPollingDeadlineErrorKind::ZeroPollTime
+            .expect("zero polling is a normal immediate outcome"),
+        LongPollingDeadlineOutcome::Immediate
     );
     assert_eq!(
         LongPollingDeadline::checked(u64::MAX, 1, 0, tokio::time::Instant::now())
@@ -220,17 +230,15 @@ fn index_reservations_enforce_both_limits_and_drop_to_zero() {
         1,
     );
     let first = index.reserve(first_key.clone()).expect("first reservation");
-    let per_key = match index.reserve(first_key) {
-        Ok(_) => panic!("per-key capacity must reject"),
-        Err(error) => error,
-    };
-    assert_eq!(per_key.kind(), PopIndexErrorKind::BucketCapacity);
+    assert!(matches!(
+        index.reserve(first_key),
+        Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::BucketCapacity))
+    ));
     let second = index.reserve(second_key.clone()).expect("second reservation");
-    let global = match index.reserve(second_key) {
-        Ok(_) => panic!("global capacity must reject"),
-        Err(error) => error,
-    };
-    assert_eq!(global.kind(), PopIndexErrorKind::GlobalCapacity);
+    assert!(matches!(
+        index.reserve(second_key),
+        Ok(PopIndexReserveOutcome::Rejected(PopIndexRejection::GlobalCapacity))
+    ));
     assert_eq!(index.snapshot().reserved(), 2);
     drop((first, second));
     assert_eq!(index.snapshot(), PopIndexSnapshot::default());
@@ -364,7 +372,7 @@ fn affine_index_lease_releases_record_and_owned_filter_exactly_once() {
 fn prepared_registration_owns_index_and_wait_capacity_until_drop() {
     let service = service(2, 2);
     let monotonic_now = tokio::time::Instant::now();
-    let prepared = service
+    let prepared = match service
         .prepare_at(
             request(10_000, 1_000),
             None,
@@ -373,7 +381,11 @@ fn prepared_registration_owns_index_and_wait_capacity_until_drop() {
             10_100,
             monotonic_now,
         )
-        .expect("prepare before responder transfer");
+        .expect("prepare before responder transfer")
+    {
+        PopDeferredPrepareOutcome::Prepared(prepared) => prepared,
+        PopDeferredPrepareOutcome::Rejected(_) => panic!("live request must be prepared"),
+    };
     assert!(prepared.retained_bytes() > 0);
     assert_eq!(
         prepared.deadline().protocol_at(),
@@ -391,7 +403,7 @@ fn prepared_registration_owns_index_and_wait_capacity_until_drop() {
 fn shutdown_rejects_prepare_before_reserving_business_or_wait_capacity() {
     let service = service(2, 2);
     let _ = service.shutdown();
-    let error = match service.prepare_at(
+    let rejection = match service.prepare_at(
         request(10_000, 1_000),
         None,
         None,
@@ -399,10 +411,11 @@ fn shutdown_rejects_prepare_before_reserving_business_or_wait_capacity() {
         10_100,
         tokio::time::Instant::now(),
     ) {
-        Ok(_) => panic!("closed service must reject preparation"),
-        Err(error) => error,
+        Ok(PopDeferredPrepareOutcome::Rejected(rejection)) => rejection,
+        Ok(PopDeferredPrepareOutcome::Prepared(_)) => panic!("closed service must reject preparation"),
+        Err(_) => panic!("closed service is a source-free rejection"),
     };
-    assert_eq!(error.kind(), PopDeferredPrepareErrorKind::ServiceClosed);
+    assert_eq!(rejection.kind(), PopDeferredPrepareRejectionKind::ServiceClosed);
     assert_eq!(service.index_snapshot(), PopIndexSnapshot::default());
     assert_eq!(service.admission_snapshot().waiting_count(), 0);
     assert_eq!(service.admission_snapshot().retained_bytes(), 0);
