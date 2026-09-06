@@ -273,7 +273,6 @@ mod tests {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use rocketmq_admin_core::core::AdminError;
-    use rocketmq_error::REDACTED;
     use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeError;
     use serde_json::Value;
@@ -298,13 +297,13 @@ mod tests {
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(!body.success);
-        assert_eq!(body.code, "ROUTE_NOT_FOUND");
+        assert_eq!(body.code, "route.topic.not_found");
         assert!(body.message.starts_with(public_message));
         assert!(body.message.contains("topic=TopicA"));
     }
 
     #[tokio::test]
-    async fn rocketmq_error_response_uses_redacted_context() {
+    async fn rocketmq_internal_error_response_omits_diagnostic_context() {
         let (status, body) = failure_response(DashboardError::from(RocketMQError::internal(
             "run dashboard request",
             std::io::Error::other("password=plain-text"),
@@ -312,8 +311,9 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(body.code, "INTERNAL");
-        assert!(body.message.contains(REDACTED));
+        assert_eq!(body.code, "core.internal.failure");
+        assert_eq!(body.message, "Internal error");
+        assert!(!body.message.contains("run dashboard request"));
         assert!(!body.message.contains("password=plain-text"));
     }
 
