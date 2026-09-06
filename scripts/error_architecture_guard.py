@@ -29,6 +29,7 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[1]
 RUST_SUFFIX = ".rs"
 PROXY_STATUS_MAPPER = ROOT / "rocketmq-proxy-core" / "src" / "status.rs"
+PROXY_REMOTING_BOUNDARY = ROOT / "rocketmq-proxy" / "src" / "remoting.rs"
 EXTERNAL_CFG_TEST_MODULES = frozenset(
     {
         "rocketmq-store-rocksdb/src/release_checkpoint_tests.rs",
@@ -598,13 +599,11 @@ def check_required_mapping_adapters() -> list[Finding]:
         ],
         PROXY_STATUS_MAPPER: [
             "ProxyErrorKind",
-            "ProxyError::BrokerResponse(inner)",
-            "canonical_error_grpc_mapping",
-            "boundary_view().grpc()",
+            "let descriptor = error.descriptor();",
+            "descriptor.projection().grpc()",
+            "descriptor.public_message()",
             "grpc_payload_to_code",
             "grpc_status_to_tonic_code",
-            "local_error_grpc_mapping",
-            "view.message()",
         ],
         ROOT
         / "rocketmq-dashboard"
@@ -701,6 +700,54 @@ def check_proxy_grpc_boundary() -> list[Finding]:
         "ResponseCode::from": "Proxy status mapping must consume canonical projections instead of raw Broker response codes",
     }
     return scan_forbidden_terms([path], forbidden)
+
+
+PROXY_REMOTING_FORBIDDEN_TERMS = {
+    "entry.status.message()": "Proxy remoting send responses must not expose arbitrary payload status messages",
+    "plan.status.message()": "Proxy remoting pull/offset responses must not expose arbitrary payload status messages",
+    'response_process_failed("proxy_remoting_response", error.to_string())': (
+        "Proxy remoting response construction must retain the typed transport contract violation"
+    ),
+    'format!("the consumer group[{}] not online"': "Proxy remoting remarks must not echo consumer-group input",
+    'format!("no consumer for this group, {}"': "Proxy remoting remarks must not echo consumer-group input",
+    '"no remoting channel for consumer group {}, clients are online"': (
+        "Proxy remoting remarks must not echo consumer-group input"
+    ),
+    '"no matching remoting lite consumer for group {}, clientId {}"': (
+        "Proxy remoting remarks must not echo consumer or client input"
+    ),
+    'format!("parent topic \'{}\' has no lite subscriptions"': "Proxy remoting remarks must not echo topic input",
+    '"lite topic \'{}\' under \'{}\' has no subscribers"': "Proxy remoting remarks must not echo topic input",
+    '"group \'{}\' has no lite subscription for \'{}\'"': (
+        "Proxy remoting remarks must not echo group or topic input"
+    ),
+}
+
+
+def proxy_remoting_boundary_message(line: str) -> str | None:
+    for term, message in PROXY_REMOTING_FORBIDDEN_TERMS.items():
+        if term in line:
+            return message
+    return None
+
+
+def check_proxy_remoting_boundary() -> list[Finding]:
+    path = PROXY_REMOTING_BOUNDARY
+    if not path.exists():
+        return [Finding(path, 1, "Proxy remoting boundary is missing")]
+
+    findings: list[Finding] = []
+    for line_number, line in iter_non_test_lines(path):
+        if message := proxy_remoting_boundary_message(line):
+            findings.append(Finding(path, line_number, message))
+    source = "\n".join(line for _, line in iter_non_test_lines(path))
+    for token in (
+        "local if local.local_kind().is_some()",
+        "PublicErrorView::try_new(local.descriptor(), &context)",
+    ):
+        if token not in source:
+            findings.append(Finding(path, 1, f"Proxy-local remoting catalog projection is missing: {token}"))
+    return findings
 
 
 def check_dashboard_http_boundary() -> list[Finding]:
@@ -867,7 +914,7 @@ def check_error_descriptor_contract() -> list[Finding]:
             "BoundaryErrorView::new(self.descriptor(), self.context())",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_descriptor_catalog.rs": [
-            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 108",
+            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 128",
             "descriptor_catalog_snapshot_is_exact",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [
@@ -1278,6 +1325,7 @@ def run() -> int:
         ("processor generic response allowlist", check_processor_generic_response_allowlist),
         ("required mapping adapters", check_required_mapping_adapters),
         ("proxy grpc boundary", check_proxy_grpc_boundary),
+        ("proxy remoting boundary", check_proxy_remoting_boundary),
         ("dashboard http boundary", check_dashboard_http_boundary),
         ("client callback boundary", check_client_callback_boundary),
         ("client retry boundary", check_client_retry_boundary),

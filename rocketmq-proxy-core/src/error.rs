@@ -14,6 +14,7 @@
 
 use rocketmq_error::fields;
 use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::PROXY_BROKER_CONSUMER_GROUP_NOT_FOUND;
@@ -24,6 +25,26 @@ use rocketmq_error::PROXY_BROKER_REQUEST_UNSUPPORTED;
 use rocketmq_error::PROXY_BROKER_RESOURCE_NOT_FOUND;
 use rocketmq_error::PROXY_BROKER_RESPONSE_FAILED;
 use rocketmq_error::PROXY_BROKER_TOPIC_NOT_FOUND;
+use rocketmq_error::PROXY_CAPABILITY_UNSUPPORTED;
+use rocketmq_error::PROXY_CAPACITY_EXHAUSTED;
+use rocketmq_error::PROXY_CLIENT_ID_REQUIRED;
+use rocketmq_error::PROXY_CLIENT_TYPE_UNRECOGNIZED;
+use rocketmq_error::PROXY_DELIVERY_TIME_INVALID;
+use rocketmq_error::PROXY_FILTER_EXPRESSION_INVALID;
+use rocketmq_error::PROXY_INVISIBLE_TIME_INVALID;
+use rocketmq_error::PROXY_LITE_SUBSCRIPTION_QUOTA_EXCEEDED;
+use rocketmq_error::PROXY_LITE_TOPIC_INVALID;
+use rocketmq_error::PROXY_MESSAGE_GROUP_INVALID;
+use rocketmq_error::PROXY_MESSAGE_ID_INVALID;
+use rocketmq_error::PROXY_MESSAGE_PROPERTY_CONFLICT;
+use rocketmq_error::PROXY_METADATA_INVALID;
+use rocketmq_error::PROXY_OFFSET_INVALID;
+use rocketmq_error::PROXY_POLLING_TIME_INVALID;
+use rocketmq_error::PROXY_RECEIPT_HANDLE_INVALID;
+use rocketmq_error::PROXY_REQUEST_DRAINING;
+use rocketmq_error::PROXY_SETTINGS_UNAVAILABLE;
+use rocketmq_error::PROXY_TRANSACTION_ID_INVALID;
+use rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use thiserror::Error;
 
@@ -51,6 +72,34 @@ pub enum ProxyErrorKind {
     LiteSubscriptionQuotaExceeded,
     MessagePropertyConflictWithType,
     SettingsUnavailable,
+}
+
+impl ProxyErrorKind {
+    /// Returns the catalog descriptor that owns every external projection for this kind.
+    pub const fn descriptor(self) -> &'static ErrorDescriptor {
+        match self {
+            Self::ClientIdRequired => &PROXY_CLIENT_ID_REQUIRED,
+            Self::UnrecognizedClientType => &PROXY_CLIENT_TYPE_UNRECOGNIZED,
+            Self::NotImplemented => &PROXY_CAPABILITY_UNSUPPORTED,
+            Self::TooManyRequests => &PROXY_CAPACITY_EXHAUSTED,
+            Self::Draining => &PROXY_REQUEST_DRAINING,
+            Self::InvalidMetadata => &PROXY_METADATA_INVALID,
+            Self::Transport => &PROXY_TRANSPORT_UNAVAILABLE,
+            Self::IllegalMessageId => &PROXY_MESSAGE_ID_INVALID,
+            Self::InvalidTransactionId => &PROXY_TRANSACTION_ID_INVALID,
+            Self::IllegalMessageGroup => &PROXY_MESSAGE_GROUP_INVALID,
+            Self::IllegalDeliveryTime => &PROXY_DELIVERY_TIME_INVALID,
+            Self::IllegalPollingTime => &PROXY_POLLING_TIME_INVALID,
+            Self::IllegalOffset => &PROXY_OFFSET_INVALID,
+            Self::IllegalInvisibleTime => &PROXY_INVISIBLE_TIME_INVALID,
+            Self::IllegalFilterExpression => &PROXY_FILTER_EXPRESSION_INVALID,
+            Self::InvalidReceiptHandle => &PROXY_RECEIPT_HANDLE_INVALID,
+            Self::IllegalLiteTopic => &PROXY_LITE_TOPIC_INVALID,
+            Self::LiteSubscriptionQuotaExceeded => &PROXY_LITE_SUBSCRIPTION_QUOTA_EXCEEDED,
+            Self::MessagePropertyConflictWithType => &PROXY_MESSAGE_PROPERTY_CONFLICT,
+            Self::SettingsUnavailable => &PROXY_SETTINGS_UNAVAILABLE,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -147,6 +196,64 @@ impl ProxyError {
             Self::MessagePropertyConflictWithType { .. } => ProxyErrorKind::MessagePropertyConflictWithType,
             Self::SettingsUnavailable { .. } => ProxyErrorKind::SettingsUnavailable,
         })
+    }
+
+    /// Returns the single catalog descriptor that owns this error's boundary behavior.
+    pub fn descriptor(&self) -> &'static ErrorDescriptor {
+        match self {
+            Self::RocketMQ(error) => error.descriptor(),
+            Self::BrokerResponse(error) => error.descriptor(),
+            Self::ClientIdRequired => ProxyErrorKind::ClientIdRequired.descriptor(),
+            Self::UnrecognizedClientType(_) => ProxyErrorKind::UnrecognizedClientType.descriptor(),
+            Self::NotImplemented { .. } => ProxyErrorKind::NotImplemented.descriptor(),
+            Self::TooManyRequests { .. } => ProxyErrorKind::TooManyRequests.descriptor(),
+            Self::Draining => ProxyErrorKind::Draining.descriptor(),
+            Self::InvalidMetadata { .. } => ProxyErrorKind::InvalidMetadata.descriptor(),
+            Self::Transport { .. } => ProxyErrorKind::Transport.descriptor(),
+            Self::IllegalMessageId { .. } => ProxyErrorKind::IllegalMessageId.descriptor(),
+            Self::InvalidTransactionId { .. } => ProxyErrorKind::InvalidTransactionId.descriptor(),
+            Self::IllegalMessageGroup { .. } => ProxyErrorKind::IllegalMessageGroup.descriptor(),
+            Self::IllegalDeliveryTime { .. } => ProxyErrorKind::IllegalDeliveryTime.descriptor(),
+            Self::IllegalPollingTime { .. } => ProxyErrorKind::IllegalPollingTime.descriptor(),
+            Self::IllegalOffset { .. } => ProxyErrorKind::IllegalOffset.descriptor(),
+            Self::IllegalInvisibleTime { .. } => ProxyErrorKind::IllegalInvisibleTime.descriptor(),
+            Self::IllegalFilterExpression { .. } => ProxyErrorKind::IllegalFilterExpression.descriptor(),
+            Self::InvalidReceiptHandle { .. } => ProxyErrorKind::InvalidReceiptHandle.descriptor(),
+            Self::IllegalLiteTopic { .. } => ProxyErrorKind::IllegalLiteTopic.descriptor(),
+            Self::LiteSubscriptionQuotaExceeded { .. } => ProxyErrorKind::LiteSubscriptionQuotaExceeded.descriptor(),
+            Self::MessagePropertyConflictWithType { .. } => {
+                ProxyErrorKind::MessagePropertyConflictWithType.descriptor()
+            }
+            Self::SettingsUnavailable { .. } => ProxyErrorKind::SettingsUnavailable.descriptor(),
+        }
+    }
+
+    /// Builds descriptor-declared diagnostic context without retaining raw values in public output.
+    pub fn context(&self) -> ErrorContext {
+        match self {
+            Self::RocketMQ(error) => error.context(),
+            Self::BrokerResponse(error) => error.context().clone(),
+            Self::ClientIdRequired | Self::UnrecognizedClientType(_) | Self::Draining => ErrorContext::new(),
+            Self::NotImplemented { feature } => ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, *feature),
+            Self::TooManyRequests { resource } => {
+                ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, *resource)
+            }
+            Self::InvalidMetadata { .. }
+            | Self::Transport { .. }
+            | Self::IllegalMessageId { .. }
+            | Self::InvalidTransactionId { .. }
+            | Self::IllegalMessageGroup { .. }
+            | Self::IllegalDeliveryTime { .. }
+            | Self::IllegalPollingTime { .. }
+            | Self::IllegalOffset { .. }
+            | Self::IllegalInvisibleTime { .. }
+            | Self::IllegalFilterExpression { .. }
+            | Self::InvalidReceiptHandle { .. }
+            | Self::IllegalLiteTopic { .. }
+            | Self::LiteSubscriptionQuotaExceeded { .. }
+            | Self::MessagePropertyConflictWithType { .. }
+            | Self::SettingsUnavailable { .. } => ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT),
+        }
     }
 
     pub fn not_implemented(feature: &'static str) -> Self {

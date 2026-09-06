@@ -167,6 +167,40 @@ class ErrorArchitectureGuardTests(unittest.TestCase):
             [finding.message for finding in findings],
         )
 
+    def test_proxy_remoting_boundary_rejects_dynamic_public_remarks_and_source_stringification(self):
+        unsafe_lines = (
+            "entry.status.message().to_owned(),",
+            "(!plan.status.is_ok()).then(|| plan.status.message().to_owned()),",
+            'RocketMQError::response_process_failed("proxy_remoting_response", error.to_string())',
+            'format!("the consumer group[{}] not online", header.consumer_group),',
+            'format!("no consumer for this group, {}", header.consumer_group),',
+            '"no remoting channel for consumer group {}, clients are online",',
+            '"no matching remoting lite consumer for group {}, clientId {}",',
+            'format!("parent topic \'{}\' has no lite subscriptions", topic),',
+            '"lite topic \'{}\' under \'{}\' has no subscribers",',
+            '"group \'{}\' has no lite subscription for \'{}\'",',
+        )
+
+        for line in unsafe_lines:
+            with self.subTest(line=line):
+                self.assertIsNotNone(self.guard.proxy_remoting_boundary_message(line))
+
+    def test_proxy_remoting_boundary_allows_fixed_catalog_and_business_remarks(self):
+        safe_lines = (
+            "safe_send_status_remark(&entry.status),",
+            "safe_pull_status_remark(&plan.status).to_owned(),",
+            "safe_offset_status_remark(&plan.status).to_owned(),",
+            'owner_error_with_source(&CORE_INTERNAL_FAILURE, "build Proxy remoting response", error)',
+            '"Consumer group is not online",',
+            '"Parent topic has no lite subscriptions",',
+        )
+
+        for line in safe_lines:
+            with self.subTest(line=line):
+                self.assertIsNone(self.guard.proxy_remoting_boundary_message(line))
+
+        self.assertEqual([], self.guard.check_proxy_remoting_boundary())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -88,6 +88,26 @@ const EXPECTED_DESCRIPTOR_SNAPSHOTS: &[&str] = &[
     "proxy.broker_response.offset_invalid|validation|InvalidArgument|Caller|proxy|Broker rejected an invalid offset|Info|never|Never|Generic|1|IllegalOffset|InvalidArgument|400|64|operation:Diagnostic:Text:Some(64),broker_code:Diagnostic:I64:None,broker_addr:Diagnostic:Text:Some(256),message:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
     "proxy.broker_response.request_unsupported|unsupported|Unimplemented|Dependency|proxy|Broker does not support the Proxy request|Error|never|Never|Generic|1|Unsupported|Unimplemented|501|70|operation:Diagnostic:Text:Some(64),broker_code:Diagnostic:I64:None,broker_addr:Diagnostic:Text:Some(256),message:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
     "proxy.broker_response.failed|internal|Internal|RemotePeer|proxy|Broker response failed|Error|switch_broker|Never|Generic|1|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),broker_code:Diagnostic:I64:None,broker_addr:Diagnostic:Text:Some(256),message:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "proxy.client.id.required|validation|InvalidArgument|Caller|proxy|gRPC client id is required|Info|never|Never|Generic|1|ClientIdRequired|InvalidArgument|400|64|",
+    "proxy.client.type.unrecognized|validation|InvalidArgument|Caller|proxy|Proxy client type is not recognized|Info|never|Never|Generic|1|UnrecognizedClientType|InvalidArgument|400|64|",
+    "proxy.capability.unsupported|unsupported|Unimplemented|Configuration|proxy|Proxy capability is not implemented|Error|never|Never|Generic|3|NotImplemented|Unimplemented|501|70|operation:Diagnostic:Text:Some(64)",
+    "proxy.capacity.exhausted|capacity|ResourceExhausted|LocalResource|proxy|Proxy capacity is exhausted|Warn|backoff|Never|Generic|2|TooManyRequests|ResourceExhausted|429|75|operation:Diagnostic:Text:Some(64)",
+    "proxy.request.draining|unavailable|Unavailable|LocalResource|proxy|Proxy is draining and does not accept new requests|Warn|backoff|Never|Generic|1|InternalError|Unavailable|503|69|",
+    "proxy.metadata.invalid|validation|InvalidArgument|Caller|proxy|gRPC metadata is invalid|Info|never|Never|Generic|1|BadRequest|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.transport.unavailable|unavailable|Unavailable|Unknown|proxy|Proxy transport is unavailable|Error|backoff|Never|Generic|1|InternalError|Unavailable|503|69|message:SecretPresenceOnly:Presence:None",
+    "proxy.message.id.invalid|validation|InvalidArgument|Caller|proxy|Message id is invalid|Info|never|Never|Generic|13|IllegalMessageId|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.transaction.id.invalid|validation|InvalidArgument|Caller|proxy|Transaction id is invalid|Info|never|Never|Generic|1|InvalidTransactionId|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.message.group.invalid|validation|InvalidArgument|Caller|proxy|Message group is invalid|Info|never|Never|Generic|13|IllegalMessageGroup|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.delivery.time.invalid|validation|InvalidArgument|Caller|proxy|Delivery time is invalid|Info|never|Never|Generic|13|IllegalDeliveryTime|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.polling.time.invalid|validation|InvalidArgument|Caller|proxy|Polling time is invalid|Info|never|Never|Generic|1|IllegalPollingTime|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.offset.invalid|validation|InvalidArgument|Caller|proxy|Offset is invalid|Info|never|Never|Generic|21|IllegalOffset|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.invisible.time.invalid|validation|InvalidArgument|Caller|proxy|Invisible time is invalid|Info|never|Never|Generic|1|IllegalInvisibleTime|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.filter.expression.invalid|validation|InvalidArgument|Caller|proxy|Filter expression is invalid|Info|never|Never|Generic|23|IllegalFilterExpression|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.receipt.handle.invalid|validation|InvalidArgument|Caller|proxy|Receipt handle is invalid|Info|never|Never|Generic|1|InvalidReceiptHandle|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.lite_topic.invalid|validation|InvalidArgument|Caller|proxy|Lite topic is invalid|Info|never|Never|Generic|1|IllegalLiteTopic|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.lite_subscription.quota_exceeded|capacity|ResourceExhausted|LocalResource|proxy|Lite subscription quota is exceeded|Warn|backoff|Never|Generic|1|LiteSubscriptionQuotaExceeded|ResourceExhausted|429|75|message:SecretPresenceOnly:Presence:None",
+    "proxy.message.property_conflict|validation|InvalidArgument|Caller|proxy|Message property conflicts with message type|Info|never|Never|Generic|13|MessagePropertyConflictWithType|InvalidArgument|400|64|message:SecretPresenceOnly:Presence:None",
+    "proxy.settings.unavailable|validation|FailedPrecondition|Configuration|proxy|Authoritative client settings are unavailable|Error|operator_action|Never|Generic|1|InternalError|FailedPrecondition|409|78|message:SecretPresenceOnly:Presence:None",
     "proxy.remoting.request.invalid|validation|InvalidArgument|Caller|proxy|Proxy remoting request is invalid|Info|never|Never|Generic|1|BadRequest|InvalidArgument|400|64|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
     "proxy.upstream.request.failed|unavailable|Unavailable|Dependency|proxy|Proxy upstream request failed|Error|backoff|Never|Generic|1|InternalError|Unavailable|503|69|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
     "proxy.drain.unavailable|unavailable|Unavailable|LocalResource|proxy|Proxy drain service is unavailable|Error|operator_action|Never|Generic|14|InternalError|Unavailable|503|69|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
@@ -186,7 +206,7 @@ fn descriptor_snapshot(descriptor: &ErrorDescriptor) -> String {
 
 #[test]
 fn descriptor_catalog_snapshot_is_exact() {
-    assert_eq!(EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 108);
+    assert_eq!(EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 128);
     assert_eq!(ALL_DESCRIPTORS.len(), EXPECTED_DESCRIPTOR_SNAPSHOTS.len());
 
     for (descriptor, expected) in ALL_DESCRIPTORS.iter().zip(EXPECTED_DESCRIPTOR_SNAPSHOTS) {

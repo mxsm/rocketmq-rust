@@ -172,8 +172,12 @@ pub enum RemotingResponseCode {
     NoPermission = 16,
     /// Represents the topic not exist case.
     TopicNotExist = 17,
+    /// Represents the pull-offset-moved case.
+    PullOffsetMoved = 21,
     /// Represents the query not found case.
     QueryNotFound = 22,
+    /// Represents the subscription-parse-failed case.
+    SubscriptionParseFailed = 23,
     /// Represents the subscription not exist case.
     SubscriptionNotExist = 24,
     /// Represents the subscription group not exist case.
@@ -251,6 +255,34 @@ pub enum GrpcPayloadCode {
     TooManyRequests,
     /// Represents the unsupported case.
     Unsupported,
+    /// Represents a missing Proxy client identifier.
+    ClientIdRequired,
+    /// Represents an unrecognized Proxy client type.
+    UnrecognizedClientType,
+    /// Represents a Proxy capability that is not implemented.
+    NotImplemented,
+    /// Represents an illegal message identifier.
+    IllegalMessageId,
+    /// Represents an invalid transaction identifier.
+    InvalidTransactionId,
+    /// Represents an illegal message group.
+    IllegalMessageGroup,
+    /// Represents an illegal delivery time.
+    IllegalDeliveryTime,
+    /// Represents an illegal polling time.
+    IllegalPollingTime,
+    /// Represents an illegal invisible time.
+    IllegalInvisibleTime,
+    /// Represents an illegal filter expression.
+    IllegalFilterExpression,
+    /// Represents an invalid receipt handle.
+    InvalidReceiptHandle,
+    /// Represents an illegal lite topic.
+    IllegalLiteTopic,
+    /// Represents an exhausted lite-subscription quota.
+    LiteSubscriptionQuotaExceeded,
+    /// Represents a message property that conflicts with the message type.
+    MessagePropertyConflictWithType,
 }
 
 /// Transport-level gRPC status primitive.

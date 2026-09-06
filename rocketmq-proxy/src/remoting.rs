@@ -105,6 +105,7 @@ use rocketmq_proxy_core::ProxyDrainController;
 use rocketmq_proxy_core::ProxyDrainError;
 use rocketmq_proxy_core::ProxyDrainPhase;
 use rocketmq_proxy_core::ProxyDrainSnapshot;
+use rocketmq_proxy_core::ProxyPayloadStatus;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_transport::api::error_response;
@@ -347,13 +348,10 @@ where
             match self.drain.try_admit() {
                 Ok(admission) => Some(admission),
                 Err(_) => {
-                    return remoting_response(
-                        self.dispatcher
-                            .command_factory
-                            .create_response_command_with_code(ResponseCode::ServiceNotAvailable)
-                            .set_remark("Proxy is draining and does not accept new requests")
-                            .set_opaque(request.original_identity().original_opaque()),
-                    );
+                    return remoting_response(drain_admission_rejected_response(
+                        &self.dispatcher.command_factory,
+                        request.original_identity().original_opaque(),
+                    ));
                 }
             }
         };
@@ -465,7 +463,13 @@ fn protocol_no_response_contract_error(error: TransportContractViolation) -> Roc
 fn remoting_response(response: RemotingCommand) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
     RemotingResponse::from_command(response)
         .map(HandlerOutcome::Reply)
-        .map_err(|error| RocketMQError::response_process_failed("proxy_remoting_response", error.to_string()))
+        .map_err(|error| {
+            RocketMQError::Shared(Arc::new(owner_error_with_source(
+                &CORE_INTERNAL_FAILURE,
+                "build Proxy remoting response",
+                error,
+            )))
+        })
 }
 
 #[doc(hidden)]
@@ -1021,7 +1025,7 @@ where
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::ConsumerNotOnline,
-                format!("the consumer group[{}] not online", header.consumer_group),
+                "Consumer group is not online",
             );
         }
 
@@ -1274,7 +1278,7 @@ where
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::SystemError,
-                format!("no consumer for this group, {}", header.consumer_group),
+                "No consumer is registered for the group",
             );
         }
 
@@ -1330,7 +1334,7 @@ where
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::ConsumerNotOnline,
-                format!("no consumer for this group, {}", header.consumer_group),
+                "Consumer group is not online",
             );
         }
         let mut forwarded = 0usize;
@@ -1368,10 +1372,7 @@ where
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::ConsumerNotOnline,
-                format!(
-                    "no remoting channel for consumer group {}, clients are online",
-                    header.consumer_group
-                ),
+                "Consumer group has no remoting channel",
             );
         }
         self.command_factory
@@ -1407,10 +1408,7 @@ where
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::ConsumerNotOnline,
-                format!(
-                    "no matching remoting lite consumer for group {}, clientId {}",
-                    header.consumer_group, header.client_id
-                ),
+                "Matching remoting lite consumer is not online",
             );
         };
         let push = ServerPushCommand::NotifyUnsubscribeLite {
@@ -1508,7 +1506,7 @@ where
             &self.command_factory,
             request.opaque(),
             RemotingStatusMapper::from_send_payload(&entry.status),
-            entry.status.message().to_owned(),
+            safe_send_status_remark(&entry.status),
         )
     }
 
@@ -1567,7 +1565,7 @@ where
             request.opaque(),
             RemotingStatusMapper::from_pull_payload(&plan.status),
             response_header,
-            (!plan.status.is_ok()).then(|| plan.status.message().to_owned()),
+            (!plan.status.is_ok()).then(|| safe_pull_status_remark(&plan.status).to_owned()),
             body,
         )
     }
@@ -1603,7 +1601,7 @@ where
             request.opaque(),
             RemotingStatusMapper::from_offset_payload(&plan.status, ResponseCode::QueryNotFound),
             UpdateConsumerOffsetResponseHeader::default(),
-            (!plan.status.is_ok()).then(|| plan.status.message().to_owned()),
+            (!plan.status.is_ok()).then(|| safe_offset_status_remark(&plan.status).to_owned()),
             None,
         )
     }
@@ -1641,7 +1639,7 @@ where
             QueryConsumerOffsetResponseHeader {
                 offset: plan.status.is_ok().then_some(plan.offset),
             },
-            (!plan.status.is_ok()).then(|| plan.status.message().to_owned()),
+            (!plan.status.is_ok()).then(|| safe_offset_status_remark(&plan.status).to_owned()),
             None,
         )
     }
@@ -1689,7 +1687,7 @@ where
             GetMaxOffsetResponseHeader {
                 offset: if plan.status.is_ok() { plan.offset } else { 0 },
             },
-            (!plan.status.is_ok()).then(|| plan.status.message().to_owned()),
+            (!plan.status.is_ok()).then(|| safe_offset_status_remark(&plan.status).to_owned()),
             None,
         )
     }
@@ -1737,7 +1735,7 @@ where
             GetMinOffsetResponseHeader {
                 offset: if plan.status.is_ok() { plan.offset } else { 0 },
             },
-            (!plan.status.is_ok()).then(|| plan.status.message().to_owned()),
+            (!plan.status.is_ok()).then(|| safe_offset_status_remark(&plan.status).to_owned()),
             None,
         )
     }
@@ -1780,7 +1778,7 @@ where
             SearchOffsetResponseHeader {
                 offset: if plan.status.is_ok() { plan.offset } else { 0 },
             },
-            (!plan.status.is_ok()).then(|| plan.status.message().to_owned()),
+            (!plan.status.is_ok()).then(|| safe_offset_status_remark(&plan.status).to_owned()),
             None,
         )
     }
@@ -1828,7 +1826,7 @@ where
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::QueryNotFound,
-                format!("parent topic '{}' has no lite subscriptions", topic),
+                "Parent topic has no lite subscriptions",
             );
         };
         let encoded = match body.encode() {
@@ -1866,10 +1864,7 @@ where
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::QueryNotFound,
-                format!(
-                    "lite topic '{}' under '{}' has no subscribers",
-                    header.lite_topic, header.parent_topic
-                ),
+                "Lite topic has no subscribers",
             );
         };
         let encoded = match body.encode() {
@@ -1913,10 +1908,7 @@ where
                 &self.command_factory,
                 request.opaque(),
                 ResponseCode::QueryNotFound,
-                format!(
-                    "group '{}' has no lite subscription for '{}'",
-                    header.group, header.lite_topic
-                ),
+                "Group has no matching lite subscription",
             );
         };
         let encoded = match body.encode() {
@@ -2416,6 +2408,50 @@ fn is_transaction_prepared(message: &Message) -> bool {
         .unwrap_or(false)
 }
 
+fn safe_send_status_remark(status: &ProxyPayloadStatus) -> &'static str {
+    match RemotingStatusMapper::from_send_payload(status) {
+        ResponseCode::Success => "OK",
+        ResponseCode::FlushDiskTimeout => "broker flush disk timed out",
+        ResponseCode::FlushSlaveTimeout => "broker slave flush timed out",
+        ResponseCode::SlaveNotAvailable => "slave broker not available",
+        ResponseCode::TopicNotExist => "Topic does not exist",
+        ResponseCode::SubscriptionGroupNotExist => "Subscription group does not exist",
+        ResponseCode::NoPermission => "Permission was denied",
+        ResponseCode::SystemBusy => "Proxy request capacity is exhausted",
+        ResponseCode::MessageIllegal => "Proxy message is invalid",
+        ResponseCode::RequestCodeNotSupported => "Proxy operation is unsupported",
+        _ => "Proxy send operation failed",
+    }
+}
+
+fn safe_pull_status_remark(status: &ProxyPayloadStatus) -> &'static str {
+    match RemotingStatusMapper::from_pull_payload(status) {
+        ResponseCode::Success => "OK",
+        ResponseCode::PullNotFound => "no message available",
+        ResponseCode::PullOffsetMoved => "pull offset is illegal",
+        ResponseCode::TopicNotExist => "Topic does not exist",
+        ResponseCode::SubscriptionGroupNotExist => "Subscription group does not exist",
+        ResponseCode::NoPermission => "Permission was denied",
+        ResponseCode::SystemBusy => "broker polling queue is full",
+        ResponseCode::InvalidParameter => "Proxy pull request is invalid",
+        _ => "Proxy pull operation failed",
+    }
+}
+
+fn safe_offset_status_remark(status: &ProxyPayloadStatus) -> &'static str {
+    match RemotingStatusMapper::from_offset_payload(status, ResponseCode::QueryNotFound) {
+        ResponseCode::Success => "OK",
+        ResponseCode::QueryNotFound => "Offset was not found",
+        ResponseCode::TopicNotExist => "Topic does not exist",
+        ResponseCode::SubscriptionGroupNotExist => "Subscription group does not exist",
+        ResponseCode::NoPermission => "Permission was denied",
+        ResponseCode::SystemBusy => "Proxy request capacity is exhausted",
+        ResponseCode::InvalidParameter => "Proxy request offset is invalid",
+        ResponseCode::RequestCodeNotSupported => "Proxy operation is unsupported",
+        _ => "Proxy offset operation failed",
+    }
+}
+
 fn response_with_header<H>(
     command_factory: &RemotingCommandFactory,
     opaque: i32,
@@ -2447,6 +2483,15 @@ fn response_with_code(
     command_factory
         .create_response_command_with_code_remark(code, remark.into())
         .set_opaque(opaque)
+}
+
+fn drain_admission_rejected_response(command_factory: &RemotingCommandFactory, opaque: i32) -> RemotingCommand {
+    response_with_code(
+        command_factory,
+        opaque,
+        ResponseCode::ServiceNotAvailable,
+        "Proxy is draining and does not accept new requests",
+    )
 }
 
 fn owner_error(descriptor: &'static ErrorDescriptor, operation: &'static str) -> Error {
@@ -2558,39 +2603,18 @@ fn proxy_operation_error_response(
                 },
             )
         }
-        ProxyError::TooManyRequests { .. } => response_with_code(
-            command_factory,
-            opaque,
-            ResponseCode::SystemBusy,
-            "Proxy request capacity is exhausted",
-        ),
-        ProxyError::IllegalOffset { .. } => response_with_code(
-            command_factory,
-            opaque,
-            ResponseCode::PullOffsetMoved,
-            "Proxy request offset is invalid",
-        ),
-        ProxyError::IllegalFilterExpression { .. } => response_with_code(
-            command_factory,
-            opaque,
-            ResponseCode::SubscriptionParseFailed,
-            "Proxy filter expression is invalid",
-        ),
-        ProxyError::NotImplemented { .. } => response_with_code(
-            command_factory,
-            opaque,
-            ResponseCode::RequestCodeNotSupported,
-            "Proxy operation is unsupported",
-        ),
-        ProxyError::IllegalMessageId { .. }
-        | ProxyError::IllegalMessageGroup { .. }
-        | ProxyError::IllegalDeliveryTime { .. }
-        | ProxyError::MessagePropertyConflictWithType { .. } => response_with_code(
-            command_factory,
-            opaque,
-            ResponseCode::MessageIllegal,
-            "Proxy message is invalid",
-        ),
+        local if local.local_kind().is_some() => {
+            let context = local.context();
+            let view = PublicErrorView::try_new(local.descriptor(), &context)
+                .unwrap_or_else(|_| PublicErrorView::descriptor_only(local.descriptor()));
+            error_response(
+                view,
+                RemotingErrorTarget::Reply {
+                    factory: command_factory,
+                    opaque,
+                },
+            )
+        }
         source => upstream_failure_response(command_factory, opaque, operation, source),
     }
 }
@@ -2650,6 +2674,7 @@ mod tests {
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
     use rocketmq_protocol::protocol::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
+    use rocketmq_protocol::protocol::header::notify_unsubscribe_lite_request_header::NotifyUnsubscribeLiteRequestHeader;
     use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
     use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
     use rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
@@ -2687,6 +2712,7 @@ mod tests {
     use rocketmq_transport::api::RemotingRequest;
     use rocketmq_transport::api::RemotingResponse;
     use rocketmq_transport::api::RequestProcessor;
+    use rocketmq_transport::api::TransportContractViolation;
     use rocketmq_transport::api::TransportSecurity;
     use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
@@ -2741,6 +2767,7 @@ mod tests {
     use rocketmq_proxy_core::ProxyDrainController;
     use rocketmq_proxy_core::ProxyMessage;
     use rocketmq_proxy_core::ProxyMessageExt;
+    use rocketmq_proxy_core::ProxyPayloadStatus;
 
     fn test_context() -> ProxyContext {
         ProxyContext::for_internal_client("Remoting", "remoting-client")
@@ -2809,6 +2836,25 @@ mod tests {
     }
 
     #[test]
+    fn remoting_response_retains_typed_contract_violation() {
+        let malformed = RemotingCommand::create_remoting_command(RequestCode::CheckClientConfig);
+        let error = super::remoting_response(malformed).expect_err("request command must be rejected as a response");
+        let RocketMQError::Shared(owner) = error else {
+            panic!("expected canonical response-processing owner");
+        };
+
+        assert_eq!(owner.descriptor(), &rocketmq_error::CORE_INTERNAL_FAILURE);
+        assert!(owner.public_view().is_ok());
+        assert!(owner.diagnostic_view().is_ok());
+        assert!(matches!(
+            owner
+                .source()
+                .and_then(|source| source.downcast_ref::<TransportContractViolation>()),
+            Some(TransportContractViolation::ResponseRequestHead)
+        ));
+    }
+
+    #[test]
     fn request_invalid_owner_retains_typed_r29_cause_while_emitting_r1() {
         let owner = super::owner_error_with_source(
             &rocketmq_error::PROXY_REMOTING_REQUEST_INVALID,
@@ -2852,6 +2898,18 @@ mod tests {
     }
 
     #[test]
+    fn drain_admission_rejection_stays_r14_with_fixed_message_and_opaque() {
+        let response = super::drain_admission_rejected_response(&super::application_remoting_command_factory(), 8_014);
+
+        assert_eq!(response.code(), 14);
+        assert_eq!(response.opaque(), 8_014);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("Proxy is draining and does not accept new requests")
+        );
+    }
+
+    #[test]
     fn proxy_drain_invalid_body_is_r29_with_fixed_message() {
         let response = super::proxy_drain_request_error_response(
             &super::application_remoting_command_factory(),
@@ -2888,42 +2946,137 @@ mod tests {
     }
 
     #[test]
-    fn local_proxy_business_mappings_keep_frozen_codes_and_safe_messages() {
+    fn all_local_proxy_errors_use_catalog_remoting_codes_and_safe_messages() {
         let cases = [
+            (ProxyError::ClientIdRequired, 1, "gRPC client id is required"),
+            (
+                ProxyError::UnrecognizedClientType(99),
+                1,
+                "Proxy client type is not recognized",
+            ),
             (
                 ProxyError::TooManyRequests {
                     resource: "secret queue",
                 },
                 2,
-                "Proxy request capacity is exhausted",
+                "Proxy capacity is exhausted",
             ),
             (
                 ProxyError::NotImplemented {
                     feature: "secret feature",
                 },
                 3,
-                "Proxy operation is unsupported",
+                "Proxy capability is not implemented",
+            ),
+            (
+                ProxyError::Draining,
+                1,
+                "Proxy is draining and does not accept new requests",
+            ),
+            (
+                ProxyError::InvalidMetadata {
+                    message: "secret metadata".to_owned(),
+                },
+                1,
+                "gRPC metadata is invalid",
+            ),
+            (
+                ProxyError::Transport {
+                    message: "secret transport".to_owned(),
+                },
+                1,
+                "Proxy transport is unavailable",
             ),
             (
                 ProxyError::IllegalMessageId {
                     message: "secret id".to_owned(),
                 },
                 13,
-                "Proxy message is invalid",
+                "Message id is invalid",
+            ),
+            (
+                ProxyError::InvalidTransactionId {
+                    message: "secret transaction".to_owned(),
+                },
+                1,
+                "Transaction id is invalid",
+            ),
+            (
+                ProxyError::IllegalMessageGroup {
+                    message: "secret group".to_owned(),
+                },
+                13,
+                "Message group is invalid",
+            ),
+            (
+                ProxyError::IllegalDeliveryTime {
+                    message: "secret delivery".to_owned(),
+                },
+                13,
+                "Delivery time is invalid",
+            ),
+            (
+                ProxyError::IllegalPollingTime {
+                    message: "secret polling".to_owned(),
+                },
+                1,
+                "Polling time is invalid",
             ),
             (
                 ProxyError::IllegalOffset {
                     message: "secret offset".to_owned(),
                 },
                 21,
-                "Proxy request offset is invalid",
+                "Offset is invalid",
+            ),
+            (
+                ProxyError::IllegalInvisibleTime {
+                    message: "secret invisible".to_owned(),
+                },
+                1,
+                "Invisible time is invalid",
             ),
             (
                 ProxyError::IllegalFilterExpression {
                     message: "secret filter".to_owned(),
                 },
                 23,
-                "Proxy filter expression is invalid",
+                "Filter expression is invalid",
+            ),
+            (
+                ProxyError::InvalidReceiptHandle {
+                    message: "secret receipt".to_owned(),
+                },
+                1,
+                "Receipt handle is invalid",
+            ),
+            (
+                ProxyError::IllegalLiteTopic {
+                    message: "secret lite topic".to_owned(),
+                },
+                1,
+                "Lite topic is invalid",
+            ),
+            (
+                ProxyError::LiteSubscriptionQuotaExceeded {
+                    message: "secret quota".to_owned(),
+                },
+                1,
+                "Lite subscription quota is exceeded",
+            ),
+            (
+                ProxyError::MessagePropertyConflictWithType {
+                    message: "secret property".to_owned(),
+                },
+                13,
+                "Message property conflicts with message type",
+            ),
+            (
+                ProxyError::SettingsUnavailable {
+                    message: "secret settings".to_owned(),
+                },
+                1,
+                "Authoritative client settings are unavailable",
             ),
         ];
 
@@ -3899,6 +4052,82 @@ mod tests {
         assert_eq!(header.offset, Some(7));
     }
 
+    #[test]
+    fn translated_payload_status_uses_fixed_business_remark_and_preserves_wire_shape() {
+        let hostile = "password=plain-text\r\nC:\\private\\proxy.conf";
+        let status = ProxyPayloadStatus::new(crate::proto::v2::Code::MessageNotFound as i32, hostile);
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(722, SerializeType::ROCKETMQ));
+        let response = response_with_header(
+            &factory,
+            8_122,
+            super::RemotingStatusMapper::from_pull_payload(&status),
+            PullMessageResponseHeader {
+                suggest_which_broker_id: 3,
+                next_begin_offset: 8,
+                min_offset: 1,
+                max_offset: 13,
+                offset_delta: None,
+                topic_sys_flag: None,
+                group_sys_flag: None,
+                forbidden_type: None,
+            },
+            Some(super::safe_pull_status_remark(&status).to_owned()),
+            Some(Bytes::from_static(b"preserved-body")),
+        );
+
+        assert_eq!(response.code(), 19);
+        assert_eq!(response.opaque(), 8_122);
+        assert_eq!(response.version(), 722);
+        assert_eq!(response.serialize_type(), SerializeType::ROCKETMQ);
+        assert_eq!(response.flag(), 1);
+        assert!(response.is_response_type());
+        assert!(!response.is_oneway_rpc());
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("no message available")
+        );
+        assert!(!response.remark().expect("fixed remark").contains("plain-text"));
+        assert!(!response.remark().expect("fixed remark").contains("private"));
+        assert_eq!(response.body().map(Bytes::as_ref), Some(b"preserved-body".as_slice()));
+        let header = response
+            .decode_command_custom_header::<PullMessageResponseHeader>()
+            .expect("pull response header");
+        assert_eq!(header.suggest_which_broker_id, 3);
+        assert_eq!(header.next_begin_offset, 8);
+        assert_eq!(header.min_offset, 1);
+        assert_eq!(header.max_offset, 13);
+
+        for (remark, expected) in [
+            (
+                super::safe_send_status_remark(&ProxyPayloadStatus::new(
+                    crate::proto::v2::Code::TopicNotFound as i32,
+                    hostile,
+                )),
+                "Topic does not exist",
+            ),
+            (
+                super::safe_pull_status_remark(&ProxyPayloadStatus::new(
+                    crate::proto::v2::Code::IllegalOffset as i32,
+                    hostile,
+                )),
+                "pull offset is illegal",
+            ),
+            (
+                super::safe_offset_status_remark(&ProxyPayloadStatus::new(
+                    crate::proto::v2::Code::OffsetNotFound as i32,
+                    hostile,
+                )),
+                "Offset was not found",
+            ),
+        ] {
+            assert_eq!(remark, expected);
+            assert!(!remark.contains("plain-text"));
+            assert!(!remark.contains("private"));
+            assert!(!remark.contains('\r'));
+            assert!(!remark.contains('\n'));
+        }
+    }
+
     #[tokio::test]
     async fn dispatch_pull_message_returns_header_and_body() {
         let dispatcher = test_dispatcher();
@@ -4019,20 +4248,116 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_notify_consumer_ids_changed_requires_online_consumers() {
-        let dispatcher = test_dispatcher();
-        let mut request = RemotingCommand::create_request_command(
-            RequestCode::NotifyConsumerIdsChanged,
-            NotifyConsumerIdsChangedRequestHeader {
-                consumer_group: CheetahString::from("GroupA"),
-                rpc_request_header: None,
-            },
-        );
-        request.make_custom_header_to_net();
+    async fn request_field_failures_use_fixed_remarks_and_preserve_wire_contract() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(723, SerializeType::JSON));
+        let dispatcher = test_dispatcher_with_factory(factory);
+        let hostile = "password=plain-text\r\nC:\\private\\proxy.conf";
+        let mut requests = [
+            (
+                RemotingCommand::create_request_command(
+                    RequestCode::GetConsumerConnectionList,
+                    GetConsumerConnectionListRequestHeader {
+                        consumer_group: CheetahString::from(hostile),
+                        rpc_request_header: None,
+                    },
+                ),
+                206,
+                "Consumer group is not online",
+            ),
+            (
+                RemotingCommand::create_request_command(
+                    RequestCode::GetConsumerListByGroup,
+                    GetConsumerListByGroupRequestHeader {
+                        consumer_group: CheetahString::from(hostile),
+                        rpc: None,
+                    },
+                ),
+                1,
+                "No consumer is registered for the group",
+            ),
+            (
+                RemotingCommand::create_request_command(
+                    RequestCode::NotifyConsumerIdsChanged,
+                    NotifyConsumerIdsChangedRequestHeader {
+                        consumer_group: CheetahString::from(hostile),
+                        rpc_request_header: None,
+                    },
+                ),
+                206,
+                "Consumer group is not online",
+            ),
+            (
+                RemotingCommand::create_request_command(
+                    RequestCode::NotifyUnsubscribeLite,
+                    NotifyUnsubscribeLiteRequestHeader {
+                        lite_topic: CheetahString::from(hostile),
+                        consumer_group: CheetahString::from(hostile),
+                        client_id: CheetahString::from(hostile),
+                        rpc_request_header: None,
+                    },
+                ),
+                206,
+                "Matching remoting lite consumer is not online",
+            ),
+            (
+                RemotingCommand::create_request_command(
+                    RequestCode::GetParentTopicInfo,
+                    GetParentTopicInfoRequestHeader {
+                        topic: CheetahString::from(hostile),
+                        rpc: None,
+                    },
+                ),
+                22,
+                "Parent topic has no lite subscriptions",
+            ),
+            (
+                RemotingCommand::create_request_command(
+                    RequestCode::GetLiteTopicInfo,
+                    GetLiteTopicInfoRequestHeader {
+                        parent_topic: CheetahString::from(hostile),
+                        lite_topic: CheetahString::from(hostile),
+                    },
+                ),
+                22,
+                "Lite topic has no subscribers",
+            ),
+            (
+                RemotingCommand::create_request_command(
+                    RequestCode::GetLiteGroupInfo,
+                    GetLiteGroupInfoRequestHeader {
+                        group: CheetahString::from(hostile),
+                        lite_topic: CheetahString::from(hostile),
+                        top_k: 10,
+                        rpc: None,
+                    },
+                ),
+                22,
+                "Group has no matching lite subscription",
+            ),
+        ];
 
-        let response = dispatcher.dispatch(&test_context(), &request).await;
+        for (index, (request, expected_code, expected_remark)) in requests.iter_mut().enumerate() {
+            let opaque = 8_200 + index as i32;
+            request.set_opaque_mut(opaque);
+            request.make_custom_header_to_net();
+            let response = dispatcher.dispatch(&test_context(), request).await;
 
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::ConsumerNotOnline);
+            assert_eq!(response.code(), *expected_code);
+            assert_eq!(response.opaque(), opaque);
+            assert_eq!(response.version(), 723);
+            assert_eq!(response.serialize_type(), SerializeType::JSON);
+            assert_eq!(response.flag(), 1);
+            assert!(response.is_response_type());
+            assert!(!response.is_oneway_rpc());
+            assert!(response.body().is_none());
+            assert!(response.ext_fields().is_none_or(HashMap::is_empty));
+            assert_eq!(response.remark().map(CheetahString::as_str), Some(*expected_remark));
+            let remark = response.remark().expect("fixed remark");
+            assert!(!remark.contains("plain-text"));
+            assert!(!remark.contains("private"));
+            assert!(!remark.contains('\r'));
+            assert!(!remark.contains('\n'));
+        }
     }
 
     #[tokio::test]
