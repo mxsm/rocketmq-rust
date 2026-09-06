@@ -35,9 +35,9 @@ use rocketmq_protocol::protocol::SerializeType;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_security_api::OutboundSigner;
 use rocketmq_security_api::Secret;
+use rocketmq_security_api::SecurityProviderError;
 use rocketmq_security_api::SecurityRequestView;
 use rocketmq_security_api::Signature;
-use rocketmq_security_api::SigningError;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DefaultRequestProcessor;
@@ -246,7 +246,7 @@ struct CountingSigner {
 }
 
 impl OutboundSigner for CountingSigner {
-    fn sign(&self, _request: SecurityRequestView<'_>) -> Result<Signature, SigningError> {
+    fn sign(&self, _request: SecurityRequestView<'_>) -> Result<Signature, SecurityProviderError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         Ok(Signature::new(vec![(
             CheetahString::from_static_str("connectionSignature"),

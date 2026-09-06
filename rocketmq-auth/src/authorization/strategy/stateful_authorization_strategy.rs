@@ -35,15 +35,15 @@ use rocketmq_security_api::AuthorizationDenial;
 use tracing::debug;
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-#[cfg(test)]
-use crate::authorization::provider::AuthorizationError;
 use crate::authorization::strategy::abstract_authorization_strategy::AbstractAuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
-use crate::authorization::strategy::abstract_authorization_strategy::StrategyResult;
 use crate::authorization::strategy::evaluate_base_authorization;
 use crate::authorization::strategy::AuthorizationFuture;
 use crate::config::AuthConfig;
 use crate::AuthMetrics;
+#[cfg(test)]
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 type AuthCache = HashMap<String, CachedAuthResult>;
 
@@ -70,7 +70,7 @@ impl CachedAuthResult {
 }
 
 fn cacheable_decision(
-    result: &StrategyResult<AuthorizationDecision>,
+    result: &AuthServiceResult<AuthorizationDecision>,
     cache_negative_result: bool,
 ) -> Option<AuthorizationDecision> {
     match result {
@@ -187,7 +187,10 @@ impl StatefulAuthorizationStrategy {
     /// let config = AuthConfig::default();
     /// let strategy = StatefulAuthorizationStrategy::new(config, None)?;
     /// ```
-    pub fn new(auth_config: AuthConfig, metadata_service: Option<Box<dyn Any + Send + Sync>>) -> StrategyResult<Self> {
+    pub fn new(
+        auth_config: AuthConfig,
+        metadata_service: Option<Box<dyn Any + Send + Sync>>,
+    ) -> AuthServiceResult<Self> {
         Self::new_with_acl_generation(auth_config, metadata_service, Arc::new(AtomicU64::new(0)))
     }
 
@@ -196,7 +199,7 @@ impl StatefulAuthorizationStrategy {
         auth_config: AuthConfig,
         metadata_service: Option<Box<dyn Any + Send + Sync>>,
         acl_generation: Arc<AtomicU64>,
-    ) -> StrategyResult<Self> {
+    ) -> AuthServiceResult<Self> {
         Self::new_with_acl_generation_and_metrics(auth_config, metadata_service, acl_generation, AuthMetrics::default())
     }
 
@@ -205,7 +208,7 @@ impl StatefulAuthorizationStrategy {
         metadata_service: Option<Box<dyn Any + Send + Sync>>,
         acl_generation: Arc<AtomicU64>,
         metrics: AuthMetrics,
-    ) -> StrategyResult<Self> {
+    ) -> AuthServiceResult<Self> {
         let cache_ttl = Duration::from_secs(auth_config.stateful_authorization_cache_expired_second as u64);
         let cache_max_size = auth_config.stateful_authorization_cache_max_num as usize;
         let cache_negative_result = auth_config.stateful_authorization_cache_negative_enable;
@@ -360,7 +363,7 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
     /// # Returns
     ///
     /// * `Ok(AuthorizationDecision)` for a final allow or deny
-    /// * `Err(AuthorizationError)` if evaluation cannot make a decision
+    /// * `Err(AuthServiceError)` if evaluation cannot make a decision
     ///
     /// # Examples
     ///
@@ -641,7 +644,7 @@ mod tests {
 
     #[test]
     fn operational_errors_are_never_cacheable() {
-        let result = Err(AuthorizationError::InvalidContext("broken context".to_owned()));
+        let result = Err(AuthServiceError::invalid_context("broken context".to_owned()));
 
         assert_eq!(cacheable_decision(&result, false), None);
         assert_eq!(cacheable_decision(&result, true), None);

@@ -19,15 +19,17 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use rocketmq_auth::AuthFailureKind;
+use rocketmq_auth::AuthOperation;
+use rocketmq_auth::AuthServiceError;
+#[cfg(unix)]
+use rocketmq_auth::AuthServiceResult;
 #[cfg(unix)]
 use rocketmq_auth::BootstrapAdminIdentity;
 #[cfg(unix)]
 use rocketmq_auth::BootstrapAdminProvisioner;
 #[cfg(unix)]
-use rocketmq_auth::BootstrapAdminProvisioningError;
-#[cfg(unix)]
 use rocketmq_auth::BootstrapEnrollmentRequest;
-use rocketmq_auth::BootstrapError;
 use rocketmq_auth::BootstrapGrant;
 #[cfg(unix)]
 use rocketmq_auth::BootstrapStatus;
@@ -77,7 +79,7 @@ fn request(cluster: &str, listener: &str, verified_tls: bool, proof: &[u8]) -> B
 #[cfg(unix)]
 struct RecordingProvisioner {
     calls: AtomicUsize,
-    result: Result<(), BootstrapAdminProvisioningError>,
+    failure: Option<AuthFailureKind>,
 }
 
 #[cfg(unix)]
@@ -85,14 +87,14 @@ impl RecordingProvisioner {
     fn successful() -> Self {
         Self {
             calls: AtomicUsize::new(0),
-            result: Ok(()),
+            failure: None,
         }
     }
 
     fn failing() -> Self {
         Self {
             calls: AtomicUsize::new(0),
-            result: Err(BootstrapAdminProvisioningError::Unavailable),
+            failure: Some(AuthFailureKind::Unavailable),
         }
     }
 
@@ -103,10 +105,18 @@ impl RecordingProvisioner {
 
 #[cfg(unix)]
 impl BootstrapAdminProvisioner for RecordingProvisioner {
-    fn create_first_admin(&self, _identity: &BootstrapAdminIdentity) -> Result<(), BootstrapAdminProvisioningError> {
+    fn create_first_admin(&self, _identity: &BootstrapAdminIdentity) -> AuthServiceResult<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.result
+        match self.failure {
+            Some(kind) => Err(AuthServiceError::new(AuthOperation::Bootstrap, kind)),
+            None => Ok(()),
+        }
     }
+}
+
+fn assert_bootstrap_error(error: AuthServiceError, kind: AuthFailureKind) {
+    assert_eq!(error.operation(), AuthOperation::Bootstrap);
+    assert_eq!(error.kind(), kind);
 }
 
 #[cfg(windows)]
@@ -118,7 +128,7 @@ fn bootstrap_persistence_fails_closed_without_acl_verification() {
         directory.path().join("bootstrap.json"),
     )
     .unwrap_err();
-    assert_eq!(error, BootstrapError::UnsupportedPlatform);
+    assert_bootstrap_error(error, AuthFailureKind::Unsupported);
 }
 
 #[cfg(unix)]
@@ -145,7 +155,7 @@ fn successful_bootstrap_consumes_once_and_survives_restart_without_proof_bytes()
     assert_eq!(result.status(), BootstrapStatus::Consumed);
     assert_eq!(provisioner.calls(), 1);
     assert!(!bootstrap.is_open(SystemTime::now()).unwrap());
-    assert_eq!(
+    assert_bootstrap_error(
         bootstrap
             .enroll(
                 request(CLUSTER, LISTENER, true, &PROOF),
@@ -153,7 +163,7 @@ fn successful_bootstrap_consumes_once_and_survives_restart_without_proof_bytes()
                 &provisioner,
             )
             .unwrap_err(),
-        BootstrapError::AlreadyConsumed
+        AuthFailureKind::Conflict,
     );
     assert_eq!(provisioner.calls(), 1);
 
@@ -165,7 +175,7 @@ fn successful_bootstrap_consumes_once_and_survives_restart_without_proof_bytes()
 
     let restarted = OneTimeBootstrap::open(grant(expires_at), state_path).unwrap();
     assert_eq!(restarted.status().unwrap(), BootstrapStatus::Consumed);
-    assert_eq!(
+    assert_bootstrap_error(
         restarted
             .enroll(
                 request(CLUSTER, LISTENER, true, &PROOF),
@@ -173,7 +183,7 @@ fn successful_bootstrap_consumes_once_and_survives_restart_without_proof_bytes()
                 &provisioner,
             )
             .unwrap_err(),
-        BootstrapError::AlreadyConsumed
+        AuthFailureKind::Conflict,
     );
     assert_eq!(provisioner.calls(), 1);
 }
@@ -187,24 +197,27 @@ fn invalid_transport_binding_and_proof_do_not_claim_the_grant() {
     let provisioner = RecordingProvisioner::successful();
 
     let cases = [
-        (request(CLUSTER, LISTENER, false, &PROOF), BootstrapError::TlsRequired),
+        (
+            request(CLUSTER, LISTENER, false, &PROOF),
+            AuthFailureKind::Unauthenticated,
+        ),
         (
             request("other-cluster", LISTENER, true, &PROOF),
-            BootstrapError::BindingMismatch,
+            AuthFailureKind::Unauthenticated,
         ),
         (
             request(CLUSTER, "127.0.0.1:29876", true, &PROOF),
-            BootstrapError::BindingMismatch,
+            AuthFailureKind::Unauthenticated,
         ),
         (
             request(CLUSTER, LISTENER, true, &[0x42; 32]),
-            BootstrapError::InvalidProof,
+            AuthFailureKind::Unauthenticated,
         ),
     ];
     for (request, expected) in cases {
-        assert_eq!(
+        assert_bootstrap_error(
             bootstrap.enroll(request, SystemTime::now(), &provisioner).unwrap_err(),
-            expected
+            expected,
         );
         assert_eq!(bootstrap.status().unwrap(), BootstrapStatus::Available);
     }
@@ -231,7 +244,7 @@ fn expired_grant_never_invokes_the_provisioner() {
     .unwrap();
     let provisioner = RecordingProvisioner::successful();
     assert!(!bootstrap.is_open(SystemTime::now()).unwrap());
-    assert_eq!(
+    assert_bootstrap_error(
         bootstrap
             .enroll(
                 request(CLUSTER, LISTENER, true, &PROOF),
@@ -239,7 +252,7 @@ fn expired_grant_never_invokes_the_provisioner() {
                 &provisioner,
             )
             .unwrap_err(),
-        BootstrapError::Expired
+        AuthFailureKind::Expired,
     );
     assert_eq!(provisioner.calls(), 0);
 }
@@ -252,7 +265,7 @@ fn provisioning_failure_leaves_a_persistent_claim_and_never_retries() {
     let expires_at = SystemTime::now() + Duration::from_secs(60);
     let bootstrap = OneTimeBootstrap::open(grant(expires_at), &state_path).unwrap();
     let provisioner = RecordingProvisioner::failing();
-    assert_eq!(
+    assert_bootstrap_error(
         bootstrap
             .enroll(
                 request(CLUSTER, LISTENER, true, &PROOF),
@@ -260,11 +273,11 @@ fn provisioning_failure_leaves_a_persistent_claim_and_never_retries() {
                 &provisioner,
             )
             .unwrap_err(),
-        BootstrapError::AdminProvisioningFailed
+        AuthFailureKind::Unavailable,
     );
     assert_eq!(bootstrap.status().unwrap(), BootstrapStatus::Claimed);
     assert_eq!(provisioner.calls(), 1);
-    assert_eq!(
+    assert_bootstrap_error(
         bootstrap
             .enroll(
                 request(CLUSTER, LISTENER, true, &PROOF),
@@ -272,7 +285,7 @@ fn provisioning_failure_leaves_a_persistent_claim_and_never_retries() {
                 &provisioner,
             )
             .unwrap_err(),
-        BootstrapError::AlreadyClaimed
+        AuthFailureKind::Conflict,
     );
     assert_eq!(provisioner.calls(), 1);
 
@@ -311,7 +324,11 @@ fn concurrent_coordinators_share_one_atomic_claim() {
     assert_eq!(
         results
             .iter()
-            .filter(|result| matches!(result, Err(BootstrapError::AlreadyClaimed)))
+            .filter(|result| {
+                result
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == AuthFailureKind::Conflict)
+            })
             .count(),
         1
     );
@@ -328,13 +345,13 @@ fn broad_state_directory_permissions_are_rejected() {
     let insecure = directory.path().join("insecure");
     fs::create_dir(&insecure).unwrap();
     fs::set_permissions(&insecure, fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(
+    assert_bootstrap_error(
         OneTimeBootstrap::open(
             grant(SystemTime::now() + Duration::from_secs(60)),
             insecure.join("bootstrap.json"),
         )
         .unwrap_err(),
-        BootstrapError::InsecurePermissions
+        AuthFailureKind::InvalidConfiguration,
     );
 }
 
@@ -355,8 +372,8 @@ fn malformed_persisted_state_fails_closed() {
     fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
     fs::set_permissions(&state_path, fs::Permissions::from_mode(0o400)).unwrap();
 
-    assert_eq!(
+    assert_bootstrap_error(
         OneTimeBootstrap::open(grant(expires_at), state_path).unwrap_err(),
-        BootstrapError::StateUnavailable
+        AuthFailureKind::Unavailable,
     );
 }

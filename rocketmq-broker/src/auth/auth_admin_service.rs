@@ -2,8 +2,12 @@ use std::sync::Arc;
 
 use rocketmq_auth::Acl;
 use rocketmq_auth::AuthConfig;
+#[cfg(test)]
+use rocketmq_auth::AuthFailureKind;
+#[cfg(test)]
+use rocketmq_auth::AuthOperation;
+use rocketmq_auth::AuthServiceError;
 use rocketmq_auth::AuthenticationMetadataProvider;
-use rocketmq_auth::AuthorizationError;
 use rocketmq_auth::AuthorizationMetadataProvider;
 use rocketmq_auth::FileAclConfigStore;
 use rocketmq_auth::LocalAuthenticationMetadataProvider;
@@ -356,7 +360,7 @@ impl AuthAdminService {
     }
 }
 
-fn map_authz_error(error: AuthorizationError) -> RocketMQError {
+fn map_authz_error(error: AuthServiceError) -> RocketMQError {
     RocketMQError::from(error)
 }
 
@@ -656,23 +660,29 @@ mod tests {
 
     #[test]
     fn map_authz_error_preserves_admin_error_category() {
-        let invalid = map_authz_error(AuthorizationError::InvalidContext("missing resource".to_string()));
-        assert!(matches!(invalid, RocketMQError::IllegalArgument(_)));
-
-        let config = map_authz_error(AuthorizationError::NotInitialized("provider not ready".to_string()));
-        assert!(matches!(
-            config,
-            RocketMQError::AuthConfigInvalid {
-                key: "auth.authorization",
-                ..
-            }
+        let invalid = map_authz_error(AuthServiceError::new(
+            AuthOperation::BuildContext,
+            AuthFailureKind::InvalidInput,
         ));
+        assert_eq!(invalid.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
 
-        let storage = map_authz_error(AuthorizationError::StorageReadFailed {
-            path: "auth.authorization.acls".to_string(),
-            reason: "storage failed".to_string(),
-        });
-        assert!(matches!(storage, RocketMQError::StorageReadFailed { .. }));
+        let config = map_authz_error(AuthServiceError::new(
+            AuthOperation::Initialize,
+            AuthFailureKind::InvalidConfiguration,
+        ));
+        assert_eq!(config.descriptor(), &rocketmq_error::AUTH_CONFIGURATION_INVALID);
+
+        let storage = map_authz_error(AuthServiceError::with_source(
+            AuthOperation::ReadMetadata,
+            AuthFailureKind::Unavailable,
+            std::io::Error::other("storage failed"),
+        ));
+        assert_eq!(storage.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
+        let RocketMQError::Shared(canonical) = storage else {
+            panic!("canonical storage projection must use the shared carrier")
+        };
+        let auth = std::error::Error::source(canonical.as_ref()).expect("auth facade source");
+        assert!(auth.downcast_ref::<AuthServiceError>().is_some());
     }
 
     #[tokio::test]

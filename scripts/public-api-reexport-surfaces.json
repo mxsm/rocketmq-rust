@@ -2,18 +2,6 @@
   "profiles": {
     "rocketmq-auth:default": {
       "item_paths": [
-        "rocketmq_auth::MaintenanceAuthorizationContext",
-        "rocketmq_auth::MaintenanceAuthorizationError",
-        "rocketmq_auth::MaintenanceAuthorizationGrant",
-        "rocketmq_auth::MaintenanceAuthorizer",
-        "rocketmq_auth::MaintenanceCapability",
-        "rocketmq_auth::MaintenancePolicy",
-        "rocketmq_auth::MaintenancePrincipalBinding",
-        "rocketmq_auth::MaintenanceRequestClass",
-        "rocketmq_auth::MaintenanceResourceBudget",
-        "rocketmq_auth::MaintenanceRole",
-        "rocketmq_auth::MaintenanceRoleGrant",
-        "rocketmq_auth::MAINTENANCE_POLICY_SCHEMA_VERSION",
         "rocketmq_auth::SecurityPrincipal",
         "rocketmq_auth::SecurityResource"
       ],

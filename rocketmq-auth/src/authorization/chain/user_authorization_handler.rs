@@ -25,8 +25,9 @@ use crate::authentication::enums::user_type::UserType;
 use crate::authentication::model::user::User;
 use crate::authentication::provider::AuthenticationMetadataProvider;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use crate::authorization::provider::AuthorizationError;
-use crate::authorization::provider::AuthorizationResult;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 pub struct UserAuthorizationHandler<P: AuthenticationMetadataProvider> {
     authentication_metadata_provider: Arc<P>,
@@ -42,7 +43,7 @@ impl<P: AuthenticationMetadataProvider> UserAuthorizationHandler<P> {
     pub async fn authorize_subject(
         &self,
         context: &DefaultAuthorizationContext,
-    ) -> AuthorizationResult<Option<AuthorizationDecision>> {
+    ) -> AuthServiceResult<Option<AuthorizationDecision>> {
         let subject = match context.subject() {
             Some(subject) => subject,
             None => return Ok(None),
@@ -59,10 +60,7 @@ impl<P: AuthenticationMetadataProvider> UserAuthorizationHandler<P> {
                 return Ok(Some(AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown)));
             }
             Err(source) => {
-                return Err(AuthorizationError::ProviderRuntimeFailed {
-                    operation: "load authorization subject",
-                    source: Box::new(source),
-                });
+                return Err(AuthServiceError::provider_failed(AuthOperation::Authorize, source));
             }
         };
 

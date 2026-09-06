@@ -17,33 +17,26 @@
 //! Runtime-neutral policy validation and authorization live in
 //! [`rocketmq_security_api::maintenance`]. This module owns only external I/O,
 //! path confinement, JSON decoding, and SHA-256 pin verification. The public
-//! re-exports preserve the former `rocketmq_auth` paths for one compatibility
-//! cycle.
+//! policy contract remains owned by `rocketmq-security-api`.
 
+use std::error::Error;
+use std::fmt;
 use std::fs;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub use rocketmq_security_api::maintenance::MaintenanceAuthorizationContext;
-pub use rocketmq_security_api::maintenance::MaintenanceAuthorizationError;
-pub use rocketmq_security_api::maintenance::MaintenanceAuthorizationGrant;
-pub use rocketmq_security_api::maintenance::MaintenanceAuthorizer;
-pub use rocketmq_security_api::maintenance::MaintenanceCapability;
-pub use rocketmq_security_api::maintenance::MaintenancePolicy;
-pub use rocketmq_security_api::maintenance::MaintenancePrincipalBinding;
-pub use rocketmq_security_api::maintenance::MaintenanceRequestClass;
-pub use rocketmq_security_api::maintenance::MaintenanceResourceBudget;
-pub use rocketmq_security_api::maintenance::MaintenanceRole;
-pub use rocketmq_security_api::maintenance::MaintenanceRoleGrant;
-pub use rocketmq_security_api::maintenance::MAINTENANCE_POLICY_SCHEMA_VERSION;
-use rocketmq_security_api::MaintenancePolicyError as MaintenanceContractError;
+use rocketmq_security_api::maintenance::MaintenancePolicy;
 use rocketmq_security_api::ValidatedMaintenancePolicy;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
-use thiserror::Error;
+
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 /// Immutable reference used to pin a policy by path, version, and SHA-256.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -65,18 +58,23 @@ impl MaintenancePolicyReference {
     /// Returns a typed error when the reference is unsafe, the file cannot be
     /// read, the digest or version does not match, JSON decoding fails, or the
     /// policy is not fail closed.
-    pub fn load_from(
+    pub fn load_from(&self, configuration_root: impl AsRef<Path>) -> AuthServiceResult<LoadedMaintenancePolicy> {
+        self.load_from_inner(configuration_root)
+            .map_err(|source| AuthServiceError::with_source(AuthOperation::MaintainService, source.kind(), source))
+    }
+
+    fn load_from_inner(
         &self,
         configuration_root: impl AsRef<Path>,
-    ) -> Result<LoadedMaintenancePolicy, MaintenancePolicyError> {
+    ) -> Result<LoadedMaintenancePolicy, MaintenancePolicyLoadError> {
         validate_sha256(&self.sha256)?;
         if self.version == 0 {
-            return Err(MaintenancePolicyError::InvalidReference(
+            return Err(MaintenancePolicyLoadError::InvalidReference(
                 "policy reference version must be greater than zero".to_string(),
             ));
         }
         if self.path.as_os_str().is_empty() {
-            return Err(MaintenancePolicyError::InvalidReference(
+            return Err(MaintenancePolicyLoadError::InvalidReference(
                 "policy reference path is empty".to_string(),
             ));
         }
@@ -88,7 +86,7 @@ impl MaintenancePolicyReference {
                 )
             })
         {
-            return Err(MaintenancePolicyError::InvalidReference(
+            return Err(MaintenancePolicyLoadError::InvalidReference(
                 "relative policy path cannot escape the configuration root".to_string(),
             ));
         }
@@ -98,26 +96,28 @@ impl MaintenancePolicyReference {
         } else {
             configuration_root.as_ref().join(&self.path)
         };
-        let bytes = fs::read(&resolved_path).map_err(|source| MaintenancePolicyError::Read {
+        let bytes = fs::read(&resolved_path).map_err(|source| MaintenancePolicyLoadError::Read {
             path: resolved_path.clone(),
             source,
         })?;
         let actual_sha256 = hex::encode(Sha256::digest(&bytes));
         if actual_sha256 != self.sha256 {
-            return Err(MaintenancePolicyError::DigestMismatch {
+            return Err(MaintenancePolicyLoadError::DigestMismatch {
                 expected: self.sha256.clone(),
                 actual: actual_sha256,
             });
         }
 
         let policy: MaintenancePolicy =
-            serde_json::from_slice(&bytes).map_err(|source| MaintenancePolicyError::Decode {
+            serde_json::from_slice(&bytes).map_err(|source| MaintenancePolicyLoadError::Decode {
                 path: resolved_path.clone(),
                 source,
             })?;
-        let policy = policy.into_validated()?;
+        let policy = policy
+            .into_validated()
+            .map_err(|source| MaintenancePolicyLoadError::Contract(Box::new(source)))?;
         if policy.policy().policy_version != self.version {
-            return Err(MaintenancePolicyError::VersionMismatch {
+            return Err(MaintenancePolicyLoadError::VersionMismatch {
                 expected: self.version,
                 actual: policy.policy().policy_version,
             });
@@ -162,32 +162,65 @@ impl From<LoadedMaintenancePolicy> for ValidatedMaintenancePolicy {
     }
 }
 
-/// Policy reference, loading, pinning, or semantic validation failure.
-#[derive(Debug, Error)]
-pub enum MaintenancePolicyError {
-    #[error("invalid maintenance policy reference: {0}")]
+#[derive(Debug)]
+enum MaintenancePolicyLoadError {
     InvalidReference(String),
-    #[error("failed to read maintenance policy {path}: {source}")]
-    Read {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("failed to decode maintenance policy {path}: {source}")]
-    Decode {
-        path: PathBuf,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("maintenance policy SHA-256 mismatch: expected {expected}, actual {actual}")]
+    Read { path: PathBuf, source: std::io::Error },
+    Decode { path: PathBuf, source: serde_json::Error },
     DigestMismatch { expected: String, actual: String },
-    #[error("maintenance policy version mismatch: expected {expected}, actual {actual}")]
     VersionMismatch { expected: u64, actual: u64 },
-    #[error(transparent)]
-    Contract(#[from] MaintenanceContractError),
+    Contract(Box<dyn Error + Send + Sync + 'static>),
 }
 
-fn validate_sha256(value: &str) -> Result<(), MaintenancePolicyError> {
+impl MaintenancePolicyLoadError {
+    const fn kind(&self) -> AuthFailureKind {
+        match self {
+            Self::InvalidReference(_) | Self::Contract(_) => AuthFailureKind::InvalidConfiguration,
+            Self::Read { .. } => AuthFailureKind::Unavailable,
+            Self::Decode { .. } | Self::DigestMismatch { .. } | Self::VersionMismatch { .. } => {
+                AuthFailureKind::InvalidData
+            }
+        }
+    }
+}
+
+impl fmt::Display for MaintenancePolicyLoadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidReference(reason) => write!(formatter, "invalid maintenance policy reference: {reason}"),
+            Self::Read { path, source } => write!(formatter, "failed to read maintenance policy {path:?}: {source}"),
+            Self::Decode { path, source } => {
+                write!(formatter, "failed to decode maintenance policy {path:?}: {source}")
+            }
+            Self::DigestMismatch { expected, actual } => {
+                write!(
+                    formatter,
+                    "maintenance policy digest mismatch: expected {expected}, actual {actual}"
+                )
+            }
+            Self::VersionMismatch { expected, actual } => {
+                write!(
+                    formatter,
+                    "maintenance policy version mismatch: expected {expected}, actual {actual}"
+                )
+            }
+            Self::Contract(source) => write!(formatter, "maintenance policy contract violation: {source}"),
+        }
+    }
+}
+
+impl Error for MaintenancePolicyLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Read { source, .. } => Some(source),
+            Self::Decode { source, .. } => Some(source),
+            Self::Contract(source) => Some(source.as_ref()),
+            Self::InvalidReference(_) | Self::DigestMismatch { .. } | Self::VersionMismatch { .. } => None,
+        }
+    }
+}
+
+fn validate_sha256(value: &str) -> Result<(), MaintenancePolicyLoadError> {
     if value.len() == 64
         && value
             .bytes()
@@ -195,7 +228,7 @@ fn validate_sha256(value: &str) -> Result<(), MaintenancePolicyError> {
     {
         Ok(())
     } else {
-        Err(MaintenancePolicyError::InvalidReference(
+        Err(MaintenancePolicyLoadError::InvalidReference(
             "policy SHA-256 must be 64 lowercase hexadecimal characters".to_string(),
         ))
     }

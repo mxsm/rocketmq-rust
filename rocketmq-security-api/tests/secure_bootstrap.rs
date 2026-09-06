@@ -16,9 +16,11 @@ use std::fs;
 use std::net::SocketAddr;
 
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapError;
 use rocketmq_security_api::SecurityBootstrapMaterial;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityContractViolation;
+use rocketmq_security_api::SecurityProviderError;
+use rocketmq_security_api::SecurityProviderFailure;
 use rocketmq_security_api::MOUNTED_FILES_SECRET_PROVIDER;
 use tempfile::TempDir;
 
@@ -68,6 +70,13 @@ impl SecurityFiles {
     }
 }
 
+fn contract_source(error: &SecurityProviderError) -> SecurityContractViolation {
+    *error
+        .source()
+        .and_then(|source| source.downcast_ref::<SecurityContractViolation>())
+        .expect("provider error should retain its contract source")
+}
+
 #[test]
 fn development_insecure_bootstrap_accepts_only_loopback_listeners() {
     let config = SecurityBootstrapConfig::new(SecurityBootstrapProfile::DevelopmentInsecureLoopback);
@@ -84,11 +93,12 @@ fn development_insecure_bootstrap_accepts_only_loopback_listeners() {
     );
     assert_eq!(validated.listener_count(), 2);
 
+    let error = config
+        .validate(&[SocketAddr::from(([0, 0, 0, 0], 10911))])
+        .expect_err("wildcard listener must fail closed");
     assert_eq!(
-        config
-            .validate(&[SocketAddr::from(([0, 0, 0, 0], 10911))])
-            .expect_err("wildcard listener must fail closed"),
-        SecurityBootstrapError::DevelopmentListenerNotLoopback
+        contract_source(&error),
+        SecurityContractViolation::DevelopmentListenerNotLoopback
     );
 }
 
@@ -98,8 +108,10 @@ fn secure_bootstrap_requires_every_material_and_supported_provider() {
         .validate(&[SocketAddr::from(([0, 0, 0, 0], 10911))])
         .expect_err("missing secure material must fail closed");
     assert_eq!(
-        missing,
-        SecurityBootstrapError::MissingMaterial(SecurityBootstrapMaterial::TrustAnchor)
+        contract_source(&missing),
+        SecurityContractViolation::BootstrapMaterialRequired {
+            material: SecurityBootstrapMaterial::TrustAnchor,
+        }
     );
 
     let files = SecurityFiles::create();
@@ -108,7 +120,10 @@ fn secure_bootstrap_requires_every_material_and_supported_provider() {
         .with_secret_provider("untrusted-provider-value")
         .validate(&[SocketAddr::from(([0, 0, 0, 0], 10911))])
         .expect_err("unknown provider must fail closed");
-    assert_eq!(unsupported, SecurityBootstrapError::UnsupportedSecretProvider);
+    assert_eq!(
+        contract_source(&unsupported),
+        SecurityContractViolation::SecretProviderUnsupported
+    );
     assert!(!unsupported.to_string().contains("untrusted-provider-value"));
 
     let validated = files
@@ -138,15 +153,18 @@ fn bootstrap_debug_and_errors_do_not_expose_configured_paths() {
     let error = config
         .validate(&[])
         .expect_err("unavailable private key must fail closed");
-    assert_eq!(
-        error,
-        SecurityBootstrapError::MaterialUnavailable(SecurityBootstrapMaterial::TlsPrivateKey)
-    );
+    assert_eq!(error.kind(), SecurityProviderFailure::Unavailable);
+    assert!(error
+        .source()
+        .is_some_and(|source| source.downcast_ref::<std::io::Error>().is_some()));
     assert!(!error.to_string().contains("tls.key"));
 
     fs::write(&files.private_key, []).expect("create empty private key fixture");
+    let error = config.validate(&[]).expect_err("empty private key must fail closed");
     assert_eq!(
-        config.validate(&[]).expect_err("empty private key must fail closed"),
-        SecurityBootstrapError::MaterialEmpty(SecurityBootstrapMaterial::TlsPrivateKey)
+        contract_source(&error),
+        SecurityContractViolation::BootstrapMaterialEmpty {
+            material: SecurityBootstrapMaterial::TlsPrivateKey,
+        }
     );
 }

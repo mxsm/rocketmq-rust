@@ -22,8 +22,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use rocketmq_security_api::SecretProvider;
-use rocketmq_security_api::SecretProviderError;
 use rocketmq_security_api::SecretProviderId;
+
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 pub use encrypted_file::EncryptedFileSecretProvider;
 pub use environment::EnvironmentSecretProvider;
@@ -43,11 +47,14 @@ impl SecretProviderRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`SecretProviderError::DuplicateProvider`] when the identifier is already present.
-    pub fn register(&mut self, provider: Arc<dyn SecretProvider>) -> Result<(), SecretProviderError> {
+    /// Returns a redacted conflict when the identifier is already present.
+    pub fn register(&mut self, provider: Arc<dyn SecretProvider>) -> AuthServiceResult<()> {
         let id = provider.id().clone();
         if self.providers.contains_key(&id) {
-            return Err(SecretProviderError::DuplicateProvider);
+            return Err(AuthServiceError::new(
+                AuthOperation::LoadSecret,
+                AuthFailureKind::Conflict,
+            ));
         }
         self.providers.insert(id, provider);
         Ok(())
@@ -57,9 +64,11 @@ impl SecretProviderRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`SecretProviderError::ProviderNotRegistered`] when no exact identifier is present.
-    pub fn provider(&self, id: &SecretProviderId) -> Result<&Arc<dyn SecretProvider>, SecretProviderError> {
-        self.providers.get(id).ok_or(SecretProviderError::ProviderNotRegistered)
+    /// Returns a redacted not-found failure when no exact identifier is present.
+    pub fn provider(&self, id: &SecretProviderId) -> AuthServiceResult<&Arc<dyn SecretProvider>> {
+        self.providers
+            .get(id)
+            .ok_or_else(|| AuthServiceError::new(AuthOperation::LoadSecret, AuthFailureKind::NotFound))
     }
 
     pub fn len(&self) -> usize {

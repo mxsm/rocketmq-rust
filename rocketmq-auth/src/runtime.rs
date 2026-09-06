@@ -62,7 +62,6 @@ use crate::authorization::model::acl::Acl;
 use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
 use crate::authorization::model::resource::Resource;
-use crate::authorization::provider::AuthorizationError;
 use crate::authorization::provider::AuthorizationProvider;
 use crate::authorization::provider::DefaultAuthorizationProvider;
 use crate::config::AuthConfig;
@@ -73,6 +72,7 @@ use crate::permission::Permission;
 use crate::project_authorization_error;
 use crate::AuthMetrics;
 use crate::AuthMetricsSnapshot;
+use crate::AuthServiceError;
 use crate::RemotingAuthContext;
 
 const ACCESS_KEY: &str = "AccessKey";
@@ -1201,7 +1201,7 @@ async fn create_user_if_absent(provider: Arc<LocalAuthenticationMetadataProvider
     provider.create_user(user).await
 }
 
-fn map_authorization_error(error: AuthorizationError) -> RocketMQError {
+fn map_authorization_error(error: AuthServiceError) -> RocketMQError {
     RocketMQError::from(error)
 }
 
@@ -1920,8 +1920,19 @@ accounts:
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("acls.json"));
-        assert!(matches!(error, RocketMQError::Serialization(_)));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
+        assert!(!error.to_string().contains("acls.json"));
+        let RocketMQError::Shared(canonical) = error else {
+            panic!("ACL snapshot decoding must use the canonical shared error");
+        };
+        let auth_error = std::error::Error::source(canonical.as_ref())
+            .and_then(|source| source.downcast_ref::<crate::AuthServiceError>())
+            .expect("canonical error must retain the auth facade source");
+        assert_eq!(auth_error.operation(), crate::AuthOperation::DecodeMetadata);
+        assert_eq!(auth_error.kind(), crate::AuthFailureKind::InvalidData);
+        assert!(std::error::Error::source(auth_error)
+            .and_then(|source| source.downcast_ref::<serde_json::Error>())
+            .is_some());
     }
 
     #[tokio::test]

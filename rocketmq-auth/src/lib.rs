@@ -18,6 +18,7 @@ mod authorization;
 mod bootstrap;
 mod config;
 mod credential_rotation;
+mod error;
 mod layered_authorization;
 mod maintenance;
 mod migration;
@@ -78,7 +79,6 @@ pub use authorization::manager::metadata_manager::AuthorizationMetadataManager;
 pub use authorization::manager::AuthorizationMetadataManagerImpl;
 pub use authorization::metadata_provider::AuthorizationMetadataProvider;
 pub use authorization::metadata_provider::LocalAuthorizationMetadataProvider;
-pub use authorization::metadata_provider::MetadataResult;
 pub use authorization::metadata_provider::NoopMetadataProvider;
 pub use authorization::model::acl::Acl;
 pub use authorization::model::environment::Environment;
@@ -92,9 +92,7 @@ pub use authorization::model::request_context::RequestContext;
 pub use authorization::model::resource::Resource as PolicyResource;
 /// Frozen 1.x compatibility name for [`PolicyResource`].
 pub use authorization::model::resource::Resource;
-pub use authorization::provider::AuthorizationError;
 pub use authorization::provider::AuthorizationProvider;
-pub use authorization::provider::AuthorizationResult;
 pub use authorization::provider::DefaultAuthorizationProvider;
 pub use authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
 pub use authorization::strategy::StatefulAuthorizationStrategy;
@@ -103,10 +101,8 @@ pub use authorization::strategy::StatelessAuthorizationStrategy;
 pub use bench_support::AuthAclWatcherLifecycleProbe;
 pub use bootstrap::BootstrapAdminIdentity;
 pub use bootstrap::BootstrapAdminProvisioner;
-pub use bootstrap::BootstrapAdminProvisioningError;
 pub use bootstrap::BootstrapEnrollmentRequest;
 pub use bootstrap::BootstrapEnrollmentResult;
-pub use bootstrap::BootstrapError;
 pub use bootstrap::BootstrapGrant;
 pub use bootstrap::BootstrapStatus;
 pub use bootstrap::BootstrapTransportContext;
@@ -118,83 +114,23 @@ pub use credential_rotation::CredentialAuditAction;
 pub use credential_rotation::CredentialAuditEvent;
 pub use credential_rotation::CredentialAuditOutcome;
 pub use credential_rotation::CredentialAuditSink;
-pub use credential_rotation::CredentialAuditSinkError;
-pub use credential_rotation::CredentialBundleParseError;
 pub use credential_rotation::CredentialBundleParser;
 pub use credential_rotation::CredentialDescriptor;
 pub use credential_rotation::CredentialId;
-pub use credential_rotation::CredentialRotationError;
 pub use credential_rotation::CredentialRotationManager;
 pub use credential_rotation::CredentialRotationSnapshot;
 pub use credential_rotation::CredentialVerification;
 pub use credential_rotation::CredentialVerificationSource;
 pub use credential_rotation::RetiringCredentialSnapshot;
 pub use credential_rotation::ValidatedCredential;
+pub use error::AuthFailureKind;
+pub use error::AuthOperation;
+pub use error::AuthServiceError;
+pub use error::AuthServiceResult;
 pub use layered_authorization::project_authorization_error;
 pub use layered_authorization::project_policy_decision;
 pub use maintenance::LoadedMaintenancePolicy;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceAuthorizationContext; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenanceAuthorizationContext;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceAuthorizationError; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenanceAuthorizationError;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceAuthorizationGrant; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenanceAuthorizationGrant;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceAuthorizer; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenanceAuthorizer;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceCapability; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenanceCapability;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenancePolicy; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenancePolicy;
-pub use maintenance::MaintenancePolicyError;
 pub use maintenance::MaintenancePolicyReference;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenancePrincipalBinding; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenancePrincipalBinding;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceRequestClass; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenanceRequestClass;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceResourceBudget; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenanceResourceBudget;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceRole; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenanceRole;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MaintenanceRoleGrant; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MaintenanceRoleGrant;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION; removal is intended for a future 2.0 boundary and remains subject to compatibility, migration, and release gates"
-)]
-pub use maintenance::MAINTENANCE_POLICY_SCHEMA_VERSION;
 pub use permission::Permission;
 pub use remoting_auth_context::RemotingAuthContext;
 pub use rocketmq_observability::metrics::auth::AuthMetricSample;

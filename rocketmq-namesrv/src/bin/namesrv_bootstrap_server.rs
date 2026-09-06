@@ -53,9 +53,9 @@ use rocketmq_runtime::ServiceLifecycleState;
 use rocketmq_runtime::ShutdownReason;
 use rocketmq_security_api::SecurityBootstrap;
 use rocketmq_security_api::SecurityBootstrapConfig;
-use rocketmq_security_api::SecurityBootstrapError;
 use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityContractViolation;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TlsMode;
 use rocketmq_transport::api::TransportClientConfig;
@@ -339,7 +339,12 @@ fn validate_namesrv_security(
     let has_public_listener = listeners.iter().any(|listener| !listener.ip().is_loopback());
     let outcome = match security_bootstrap.validate(&listeners) {
         Ok(outcome) => outcome,
-        Err(SecurityBootstrapError::DevelopmentListenerNotLoopback) => {
+        Err(error)
+            if error
+                .source()
+                .and_then(|source| source.downcast_ref::<SecurityContractViolation>())
+                .is_some_and(|violation| *violation == SecurityContractViolation::DevelopmentListenerNotLoopback) =>
+        {
             bail!("development-insecure NameServer listeners must be loopback-only");
         }
         Err(error) => return Err(error.into()),

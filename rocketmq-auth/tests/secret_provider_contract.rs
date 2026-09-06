@@ -14,6 +14,9 @@
 
 use std::sync::Arc;
 
+use rocketmq_auth::AuthFailureKind;
+use rocketmq_auth::AuthOperation;
+use rocketmq_auth::AuthServiceError;
 use rocketmq_auth::EncryptedFileSecretProvider;
 use rocketmq_auth::EnvironmentSecretProvider;
 use rocketmq_auth::SecretProviderRegistry;
@@ -21,10 +24,10 @@ use rocketmq_security_api::SecretAccess;
 use rocketmq_security_api::SecretMaterial;
 use rocketmq_security_api::SecretName;
 use rocketmq_security_api::SecretProvider;
-use rocketmq_security_api::SecretProviderError;
 use rocketmq_security_api::SecretProviderId;
 #[cfg(unix)]
 use rocketmq_security_api::SecretVersion;
+use rocketmq_security_api::SecurityProviderFailure;
 
 fn provider_id(value: &str) -> SecretProviderId {
     SecretProviderId::new(value).unwrap()
@@ -38,6 +41,11 @@ fn material(value: &[u8]) -> SecretMaterial {
     SecretMaterial::new(value.to_vec()).unwrap()
 }
 
+fn assert_auth_error(error: AuthServiceError, kind: AuthFailureKind) {
+    assert_eq!(error.operation(), AuthOperation::LoadSecret);
+    assert_eq!(error.kind(), kind);
+}
+
 #[test]
 fn registry_requires_exact_explicit_provider() {
     let id = provider_id("environment-local");
@@ -46,17 +54,14 @@ fn registry_requires_exact_explicit_provider() {
     );
     let mut registry = SecretProviderRegistry::new();
 
-    assert_eq!(
-        registry.provider(&id).err(),
-        Some(SecretProviderError::ProviderNotRegistered)
+    assert_auth_error(
+        registry.provider(&id).err().expect("unregistered provider must fail"),
+        AuthFailureKind::NotFound,
     );
     registry.register(provider.clone()).unwrap();
     assert_eq!(registry.len(), 1);
     assert_eq!(registry.provider(&id).unwrap().id(), &id);
-    assert_eq!(
-        registry.register(provider).unwrap_err(),
-        SecretProviderError::DuplicateProvider
-    );
+    assert_auth_error(registry.register(provider).unwrap_err(), AuthFailureKind::Conflict);
 }
 
 #[test]
@@ -73,14 +78,15 @@ fn environment_adapter_uses_only_mapped_names_and_is_read_only() {
     assert!(!value.material().is_empty());
     assert_eq!(value.version(), None);
     assert_eq!(
-        provider.read(&secret_name("unmapped-name")).unwrap_err(),
-        SecretProviderError::NotFound
+        provider.read(&secret_name("unmapped-name")).unwrap_err().kind(),
+        SecurityProviderFailure::NotFound
     );
     assert_eq!(
         provider
             .write(&mapped_name, material(b"must-be-dropped"), None)
-            .unwrap_err(),
-        SecretProviderError::ReadOnly
+            .unwrap_err()
+            .kind(),
+        SecurityProviderFailure::Unsupported
     );
     let debug = format!("{provider:?}");
     assert!(!debug.contains("PATH"));
@@ -92,7 +98,7 @@ fn encrypted_file_adapter_fails_closed_without_acl_verification() {
     let directory = tempfile::tempdir().unwrap();
     let error = EncryptedFileSecretProvider::new(provider_id("encrypted-local"), directory.path(), material(&[3; 32]))
         .unwrap_err();
-    assert_eq!(error, SecretProviderError::UnsupportedPlatform);
+    assert_auth_error(error, AuthFailureKind::Unsupported);
 }
 
 #[cfg(unix)]
@@ -120,8 +126,9 @@ fn encrypted_file_adapter_enforces_permissions_encryption_atomicity_and_versions
     assert_eq!(
         provider
             .write(&name, material(b"stale-update"), Some(first_version))
-            .unwrap_err(),
-        SecretProviderError::VersionConflict
+            .unwrap_err()
+            .kind(),
+        SecurityProviderFailure::Conflict
     );
 
     let secret_directory = root.join(name.as_str());
@@ -152,7 +159,10 @@ fn encrypted_file_adapter_enforces_permissions_encryption_atomicity_and_versions
     *tampered.last_mut().unwrap() ^= 1;
     fs::write(latest, tampered).unwrap();
     fs::set_permissions(latest, fs::Permissions::from_mode(0o400)).unwrap();
-    assert_eq!(provider.read(&name).unwrap_err(), SecretProviderError::InvalidEnvelope);
+    assert_eq!(
+        provider.read(&name).unwrap_err().kind(),
+        SecurityProviderFailure::InvalidData
+    );
 }
 
 #[cfg(unix)]
@@ -165,8 +175,8 @@ fn encrypted_file_adapter_rejects_broad_root_permissions() {
     let root = directory.path().join("insecure");
     fs::create_dir(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(
+    assert_auth_error(
         EncryptedFileSecretProvider::new(provider_id("encrypted-local"), root, material(&[4; 32])).unwrap_err(),
-        SecretProviderError::InsecurePermissions
+        AuthFailureKind::InvalidConfiguration,
     );
 }

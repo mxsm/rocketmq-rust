@@ -41,8 +41,8 @@ use crate::authorization::model::acl::Acl;
 use crate::authorization::model::environment::Environment;
 use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
-use crate::authorization::provider::AuthorizationError;
-use crate::authorization::provider::AuthorizationResult;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 /// ACL Authorization Handler.
 ///
@@ -256,13 +256,13 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
     fn handle<'a>(
         &'a self,
         context: &'a DefaultAuthorizationContext,
-    ) -> Pin<Box<dyn Future<Output = AuthorizationResult<AuthorizationDecision>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = AuthServiceResult<AuthorizationDecision>> + Send + 'a>> {
         Box::pin(async move {
             // Step 1: Extract subject from context
             let subject_binding = context.subject();
             let subject_wrapper = subject_binding
                 .as_ref()
-                .ok_or_else(|| AuthorizationError::InvalidContext("subject is missing".to_owned()))?;
+                .ok_or_else(|| AuthServiceError::invalid_context("subject is missing".to_owned()))?;
 
             // Create a User subject for ACL lookup (required by metadata provider trait)
             let subject = SubjectLookup {

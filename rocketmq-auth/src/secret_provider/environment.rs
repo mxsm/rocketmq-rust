@@ -21,11 +21,18 @@ use rocketmq_security_api::SecretName;
 use rocketmq_security_api::SecretPersistence;
 use rocketmq_security_api::SecretProvider;
 use rocketmq_security_api::SecretProviderCapabilities;
-use rocketmq_security_api::SecretProviderError;
 use rocketmq_security_api::SecretProviderId;
 use rocketmq_security_api::SecretVersion;
 use rocketmq_security_api::SecretVersioning;
+use rocketmq_security_api::SecurityOperation;
+use rocketmq_security_api::SecurityProviderError;
+use rocketmq_security_api::SecurityProviderFailure;
 use rocketmq_security_api::VersionedSecret;
+
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 /// Read-only development adapter that maps logical names to an explicit environment allowlist.
 pub struct EnvironmentSecretProvider {
@@ -38,19 +45,25 @@ impl EnvironmentSecretProvider {
     ///
     /// # Errors
     ///
-    /// Returns [`SecretProviderError::InvalidConfiguration`] for invalid or duplicate mappings.
+    /// Returns a redacted authentication-service error for invalid or duplicate mappings.
     pub fn new(
         id: SecretProviderId,
         mappings: impl IntoIterator<Item = (SecretName, String)>,
-    ) -> Result<Self, SecretProviderError> {
+    ) -> AuthServiceResult<Self> {
         let mut variables = BTreeMap::new();
         for (name, variable) in mappings {
             if variable.is_empty() || variable.contains(['\0', '=']) || variables.insert(name, variable).is_some() {
-                return Err(SecretProviderError::InvalidConfiguration);
+                return Err(AuthServiceError::new(
+                    AuthOperation::LoadSecret,
+                    AuthFailureKind::InvalidConfiguration,
+                ));
             }
         }
         if variables.is_empty() {
-            return Err(SecretProviderError::InvalidConfiguration);
+            return Err(AuthServiceError::new(
+                AuthOperation::LoadSecret,
+                AuthFailureKind::InvalidConfiguration,
+            ));
         }
         Ok(Self { id, variables })
     }
@@ -78,10 +91,32 @@ impl SecretProvider for EnvironmentSecretProvider {
         )
     }
 
-    fn read(&self, name: &SecretName) -> Result<VersionedSecret, SecretProviderError> {
-        let variable = self.variables.get(name).ok_or(SecretProviderError::NotFound)?;
-        let value = std::env::var(variable).map_err(|_| SecretProviderError::NotFound)?;
-        let material = SecretMaterial::new(value.into_bytes()).map_err(|_| SecretProviderError::InvalidMaterial)?;
+    fn read(&self, name: &SecretName) -> Result<VersionedSecret, SecurityProviderError> {
+        let variable = self.variables.get(name).ok_or_else(|| {
+            SecurityProviderError::new(SecurityProviderFailure::NotFound, SecurityOperation::ReadSecret)
+        })?;
+        let value = match std::env::var(variable) {
+            Ok(value) => value,
+            Err(std::env::VarError::NotPresent) => {
+                return Err(SecurityProviderError::new(
+                    SecurityProviderFailure::NotFound,
+                    SecurityOperation::ReadSecret,
+                ));
+            }
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(SecurityProviderError::new(
+                    SecurityProviderFailure::InvalidData,
+                    SecurityOperation::ReadSecret,
+                ));
+            }
+        };
+        let material = SecretMaterial::new(value.into_bytes()).map_err(|source| {
+            SecurityProviderError::caused_by(
+                SecurityProviderFailure::InvalidData,
+                SecurityOperation::ReadSecret,
+                source,
+            )
+        })?;
         Ok(VersionedSecret::new(material, None))
     }
 
@@ -90,7 +125,10 @@ impl SecretProvider for EnvironmentSecretProvider {
         _name: &SecretName,
         _material: SecretMaterial,
         _expected_version: Option<SecretVersion>,
-    ) -> Result<SecretVersion, SecretProviderError> {
-        Err(SecretProviderError::ReadOnly)
+    ) -> Result<SecretVersion, SecurityProviderError> {
+        Err(SecurityProviderError::new(
+            SecurityProviderFailure::Unsupported,
+            SecurityOperation::WriteSecret,
+        ))
     }
 }

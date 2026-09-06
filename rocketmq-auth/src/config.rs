@@ -19,8 +19,11 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::authentication::acl_signer::SignatureAlgorithm;
-use crate::maintenance::MaintenancePolicyError;
 use crate::maintenance::MaintenancePolicyReference;
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -215,21 +218,23 @@ impl AuthConfig {
     ///
     /// Returns a typed reference error when maintenance is enabled without
     /// authentication, authorization, or a complete path/version/SHA pin.
-    pub fn maintenance_policy_reference(&self) -> Result<Option<MaintenancePolicyReference>, MaintenancePolicyError> {
+    pub fn maintenance_policy_reference(&self) -> AuthServiceResult<Option<MaintenancePolicyReference>> {
         if !self.maintenance_enabled {
             return Ok(None);
         }
         if !self.authentication_enabled || !self.authorization_enabled {
-            return Err(MaintenancePolicyError::InvalidReference(
-                "maintenance requires both authentication and authorization".to_string(),
+            return Err(AuthServiceError::new(
+                AuthOperation::MaintainService,
+                AuthFailureKind::InvalidConfiguration,
             ));
         }
         if self.maintenance_policy_path.trim().is_empty()
             || self.maintenance_policy_version == 0
             || self.maintenance_policy_sha256.trim().is_empty()
         {
-            return Err(MaintenancePolicyError::InvalidReference(
-                "maintenance policy path, version, and SHA-256 are required".to_string(),
+            return Err(AuthServiceError::new(
+                AuthOperation::MaintainService,
+                AuthFailureKind::InvalidConfiguration,
             ));
         }
         Ok(Some(MaintenancePolicyReference {

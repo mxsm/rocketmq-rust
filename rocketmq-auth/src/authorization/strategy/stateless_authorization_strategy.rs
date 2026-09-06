@@ -26,9 +26,9 @@ use crate::authorization::context::default_authorization_context::DefaultAuthori
 use crate::authorization::strategy::abstract_authorization_strategy::AbstractAuthorizationStrategy;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationFuture;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
-use crate::authorization::strategy::abstract_authorization_strategy::StrategyResult;
 use crate::authorization::strategy::evaluate_base_authorization;
 use crate::config::AuthConfig;
+use crate::AuthServiceResult;
 
 /// Stateless authorization strategy.
 ///
@@ -99,7 +99,10 @@ impl StatelessAuthorizationStrategy {
     /// let config = AuthConfig::default();
     /// let strategy = StatelessAuthorizationStrategy::new(config, None)?;
     /// ```
-    pub fn new(auth_config: AuthConfig, metadata_service: Option<Box<dyn Any + Send + Sync>>) -> StrategyResult<Self> {
+    pub fn new(
+        auth_config: AuthConfig,
+        metadata_service: Option<Box<dyn Any + Send + Sync>>,
+    ) -> AuthServiceResult<Self> {
         let base = AbstractAuthorizationStrategy::new(auth_config, metadata_service)?;
         debug!("StatelessAuthorizationStrategy initialized");
         Ok(Self { base })
@@ -124,7 +127,7 @@ impl AuthorizationStrategy for StatelessAuthorizationStrategy {
     /// # Returns
     ///
     /// * `Ok(AuthorizationDecision)` for a final allow or deny
-    /// * `Err(AuthorizationError)` if evaluation cannot make a decision
+    /// * `Err(AuthServiceError)` if evaluation cannot make a decision
     ///
     /// # Examples
     ///

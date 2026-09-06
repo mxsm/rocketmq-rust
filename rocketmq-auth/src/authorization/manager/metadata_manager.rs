@@ -53,14 +53,12 @@ use crate::authorization::model::acl::Acl;
 use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
 use crate::authorization::model::resource::Resource;
-use crate::authorization::provider::AuthorizationError;
 use crate::config::AuthConfig;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 use crate::ProviderRegistry;
 use rocketmq_error::AuthError;
 use rocketmq_error::RocketMQError;
-
-/// Result type for metadata manager operations.
-pub type ManagerResult<T> = Result<T, AuthorizationError>;
 
 /// Authorization metadata manager.
 ///
@@ -137,10 +135,15 @@ impl AuthorizationMetadataManager {
     ///
     /// # Errors
     ///
-    /// Returns `AuthorizationError::ConfigurationError` if provider initialization fails
-    pub fn new(config: AuthConfig) -> ManagerResult<Self> {
-        let registry = ProviderRegistry::local(&config)
-            .map_err(|error| AuthorizationError::ConfigurationError(error.to_string()))?;
+    /// Returns `AuthFailureKind::InvalidConfiguration` if provider initialization fails
+    pub fn new(config: AuthConfig) -> AuthServiceResult<Self> {
+        let registry = ProviderRegistry::local(&config).map_err(|error| {
+            AuthServiceError::with_source(
+                crate::AuthOperation::Initialize,
+                crate::AuthFailureKind::InvalidConfiguration,
+                error,
+            )
+        })?;
         let authentication_provider: Arc<dyn AuthenticationMetadataProvider> =
             registry.authentication_metadata_provider();
         Ok(Self::with_providers(
@@ -174,10 +177,10 @@ impl AuthorizationMetadataManager {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::InvalidContext` if ACL validation fails
-    /// - `AuthorizationError::InvalidContext` if ACL already exists (and merge fails)
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::NotFound` if subject doesn't exist
+    /// - `AuthFailureKind::InvalidInput` if ACL validation fails
+    /// - `AuthFailureKind::InvalidInput` if ACL already exists (and merge fails)
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
     ///
     /// # Examples
@@ -186,7 +189,7 @@ impl AuthorizationMetadataManager {
     /// let acl = Acl::of("user:alice", SubjectType::User, policy);
     /// manager.create_acl(acl).await?;
     /// ```
-    pub async fn create_acl(&self, mut acl: Acl) -> ManagerResult<()> {
+    pub async fn create_acl(&self, mut acl: Acl) -> AuthServiceResult<()> {
         // 1. Validate ACL
         self.validate_acl(&acl)?;
 
@@ -236,9 +239,9 @@ impl AuthorizationMetadataManager {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::InvalidContext` if ACL validation fails
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::NotFound` if subject doesn't exist
+    /// - `AuthFailureKind::InvalidInput` if ACL validation fails
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
     ///
     /// # Examples
@@ -248,7 +251,7 @@ impl AuthorizationMetadataManager {
     /// acl.add_policy(new_policy);
     /// manager.update_acl(acl).await?;
     /// ```
-    pub async fn update_acl(&self, mut acl: Acl) -> ManagerResult<()> {
+    pub async fn update_acl(&self, mut acl: Acl) -> AuthServiceResult<()> {
         // 1. Validate ACL
         self.validate_acl(&acl)?;
 
@@ -294,10 +297,10 @@ impl AuthorizationMetadataManager {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::NotFound` if subject doesn't exist
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
-    pub async fn delete_acl<S: Subject + Send + Sync>(&self, subject: &S) -> ManagerResult<()> {
+    pub async fn delete_acl<S: Subject + Send + Sync>(&self, subject: &S) -> AuthServiceResult<()> {
         self.delete_acl_with_filter(subject, None, None).await
     }
 
@@ -316,9 +319,9 @@ impl AuthorizationMetadataManager {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::InvalidContext` if ACL doesn't exist
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::NotFound` if subject doesn't exist
+    /// - `AuthFailureKind::InvalidInput` if ACL doesn't exist
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
     ///
     /// # Examples
@@ -339,7 +342,7 @@ impl AuthorizationMetadataManager {
         subject: &S,
         policy_type: Option<PolicyType>,
         resource: Option<&Resource>,
-    ) -> ManagerResult<()> {
+    ) -> AuthServiceResult<()> {
         // 1. Verify subject exists
         self.verify_subject_by_ref(subject).await?;
 
@@ -348,7 +351,7 @@ impl AuthorizationMetadataManager {
 
         // 3. Get existing ACL
         let mut acl = self.authorization_provider.get_acl(subject).await?.ok_or_else(|| {
-            AuthorizationError::InvalidContext(format!(
+            AuthServiceError::invalid_context(format!(
                 "The ACL for subject '{}' does not exist",
                 subject.subject_key()
             ))
@@ -393,8 +396,8 @@ impl AuthorizationMetadataManager {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::SubjectNotFound` if subject doesn't exist
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::NotFound` if subject doesn't exist
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
     ///
     /// # Examples
@@ -405,7 +408,7 @@ impl AuthorizationMetadataManager {
     ///     println!("Found ACL with {} policies", acl.policies().len());
     /// }
     /// ```
-    pub async fn get_acl<S: Subject + Send + Sync>(&self, subject: &S) -> ManagerResult<Option<Acl>> {
+    pub async fn get_acl<S: Subject + Send + Sync>(&self, subject: &S) -> AuthServiceResult<Option<Acl>> {
         // 1. Verify subject exists
         self.verify_subject_by_ref(subject).await?;
 
@@ -426,7 +429,7 @@ impl AuthorizationMetadataManager {
     ///
     /// # Errors
     ///
-    /// - `AuthorizationError::StorageReadFailed` or `AuthorizationError::StorageWriteFailed` if
+    /// - `AuthFailureKind::Unavailable` if
     ///   storage operation fails
     ///
     /// # Examples
@@ -445,7 +448,7 @@ impl AuthorizationMetadataManager {
         &self,
         subject_filter: Option<&str>,
         resource_filter: Option<&str>,
-    ) -> ManagerResult<Vec<Acl>> {
+    ) -> AuthServiceResult<Vec<Acl>> {
         self.authorization_provider
             .list_acl(subject_filter, resource_filter)
             .await
@@ -464,13 +467,13 @@ impl AuthorizationMetadataManager {
     /// - Subject type is not None/Unknown
     /// - Policies list is not empty
     /// - Each policy is valid
-    fn validate_acl(&self, acl: &Acl) -> ManagerResult<()> {
+    fn validate_acl(&self, acl: &Acl) -> AuthServiceResult<()> {
         // Validate subject type (currently only User is valid)
         // SubjectType doesn't have Unknown variant, so validation is simplified
 
         // Validate policies exist
         if acl.policies().is_empty() {
-            return Err(AuthorizationError::InvalidContext(
+            return Err(AuthServiceError::invalid_context(
                 "The policies list is empty".to_string(),
             ));
         }
@@ -488,10 +491,10 @@ impl AuthorizationMetadataManager {
     /// Checks:
     /// - Policy entries list is not empty
     /// - Each entry is valid
-    fn validate_policy(&self, policy: &Policy) -> ManagerResult<()> {
+    fn validate_policy(&self, policy: &Policy) -> AuthServiceResult<()> {
         // Validate entries exist
         if policy.entries().is_empty() {
-            return Err(AuthorizationError::InvalidContext(
+            return Err(AuthServiceError::invalid_context(
                 "Policy entries list is empty".to_string(),
             ));
         }
@@ -509,11 +512,11 @@ impl AuthorizationMetadataManager {
     /// Checks:
     /// - Resources list is not empty
     /// - Actions list is not empty
-    fn validate_policy_entry(&self, entry: &PolicyEntry) -> ManagerResult<()> {
+    fn validate_policy_entry(&self, entry: &PolicyEntry) -> AuthServiceResult<()> {
         // PolicyEntry has a single resource (not a list)
         // Validate actions list is not empty
         if entry.actions().is_empty() {
-            return Err(AuthorizationError::InvalidContext(
+            return Err(AuthServiceError::invalid_context(
                 "PolicyEntry actions list is empty".to_string(),
             ));
         }
@@ -525,7 +528,7 @@ impl AuthorizationMetadataManager {
     ///
     /// For USER subjects, checks with authentication provider (when available).
     /// For other subject types, assumes existence.
-    async fn verify_subject_exists(&self, acl: &Acl) -> ManagerResult<()> {
+    async fn verify_subject_exists(&self, acl: &Acl) -> AuthServiceResult<()> {
         if acl.subject_type() == SubjectType::User {
             self.verify_user_subject_key(acl.subject_key()).await?;
         }
@@ -535,16 +538,16 @@ impl AuthorizationMetadataManager {
     /// Verify that a subject exists by reference.
     ///
     /// Similar to verify_subject_exists but works with Subject trait references.
-    async fn verify_subject_by_ref<S: Subject + Send + Sync>(&self, subject: &S) -> ManagerResult<()> {
+    async fn verify_subject_by_ref<S: Subject + Send + Sync>(&self, subject: &S) -> AuthServiceResult<()> {
         if subject.subject_type() == SubjectType::User {
             self.verify_user_subject_key(subject.subject_key()).await?;
         }
         Ok(())
     }
 
-    async fn verify_user_subject_key(&self, subject_key: &str) -> ManagerResult<()> {
+    async fn verify_user_subject_key(&self, subject_key: &str) -> AuthServiceResult<()> {
         let provider = self.authentication_provider.as_ref().ok_or_else(|| {
-            AuthorizationError::NotInitialized("The authenticationMetadataProvider is not configured.".to_string())
+            AuthServiceError::not_initialized("The authenticationMetadataProvider is not configured.")
         })?;
         let username = subject_key
             .split_once(':')
@@ -552,18 +555,15 @@ impl AuthorizationMetadataManager {
             .unwrap_or(subject_key)
             .trim();
         if username.is_empty() {
-            return Err(AuthorizationError::SubjectNotFound(subject_key.to_string()));
+            return Err(AuthServiceError::subject_not_found(subject_key));
         }
 
         match provider.get_user(username).await {
             Ok(_) => Ok(()),
-            Err(RocketMQError::Authentication(AuthError::UserNotFound(_))) => Err(AuthorizationError::SubjectNotFound(
+            Err(RocketMQError::Authentication(AuthError::UserNotFound(_))) => Err(AuthServiceError::subject_not_found(
                 format!("The subject of {subject_key} is not exist."),
             )),
-            Err(error) => Err(AuthorizationError::StorageReadFailed {
-                path: "auth.authentication.users".to_string(),
-                reason: error.to_string(),
-            }),
+            Err(error) => Err(AuthServiceError::storage_read_failed(error)),
         }
     }
 }

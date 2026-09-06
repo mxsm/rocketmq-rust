@@ -27,10 +27,14 @@ use rocketmq_security_api::SecretMaterial;
 use sha2::Digest;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
-use thiserror::Error;
 
 use state_file::BootstrapStateRecord;
 use state_file::BootstrapStateStore;
+
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 const MINIMUM_BOOTSTRAP_PROOF_BYTES: usize = 32;
 
@@ -48,20 +52,20 @@ impl BootstrapGrant {
     ///
     /// # Errors
     ///
-    /// Returns [`BootstrapError::InvalidConfiguration`] for invalid bindings, timestamps, or
-    /// proof material shorter than 32 bytes.
+    /// Returns a redacted authentication-service error for invalid bindings, timestamps, or proof
+    /// material shorter than 32 bytes.
     pub fn new(
         cluster_id: impl Into<CheetahString>,
         listener: impl Into<CheetahString>,
         expires_at: SystemTime,
         proof: SecretMaterial,
-    ) -> Result<Self, BootstrapError> {
+    ) -> AuthServiceResult<Self> {
         let cluster_id = cluster_id.into();
         let listener = listener.into();
         validate_binding(&cluster_id)?;
         validate_binding(&listener)?;
         if proof.len() < MINIMUM_BOOTSTRAP_PROOF_BYTES {
-            return Err(BootstrapError::InvalidConfiguration);
+            return Err(bootstrap_error(AuthFailureKind::InvalidInput));
         }
         let expires_at_unix_seconds = unix_seconds(expires_at)?;
         let proof_digest = Sha256::digest(proof.expose_secret()).into();
@@ -113,13 +117,13 @@ impl BootstrapAdminIdentity {
     ///
     /// # Errors
     ///
-    /// Returns [`BootstrapError::InvalidConfiguration`] for an invalid principal or all-zero
+    /// Returns a redacted authentication-service error for an invalid principal or all-zero
     /// certificate fingerprint.
-    pub fn new(principal_id: impl Into<CheetahString>, certificate_sha256: [u8; 32]) -> Result<Self, BootstrapError> {
+    pub fn new(principal_id: impl Into<CheetahString>, certificate_sha256: [u8; 32]) -> AuthServiceResult<Self> {
         let principal_id = principal_id.into();
         validate_binding(&principal_id)?;
         if certificate_sha256.iter().all(|byte| *byte == 0) {
-            return Err(BootstrapError::InvalidConfiguration);
+            return Err(bootstrap_error(AuthFailureKind::InvalidInput));
         }
         Ok(Self {
             principal_id,
@@ -158,11 +162,8 @@ impl BootstrapTransportContext {
     ///
     /// # Errors
     ///
-    /// Returns [`BootstrapError::InvalidConfiguration`] for invalid bindings.
-    pub fn new(
-        cluster_id: impl Into<CheetahString>,
-        listener: impl Into<CheetahString>,
-    ) -> Result<Self, BootstrapError> {
+    /// Returns a redacted authentication-service error for invalid bindings.
+    pub fn new(cluster_id: impl Into<CheetahString>, listener: impl Into<CheetahString>) -> AuthServiceResult<Self> {
         let cluster_id = cluster_id.into();
         let listener = listener.into();
         validate_binding(&cluster_id)?;
@@ -207,18 +208,9 @@ impl fmt::Debug for BootstrapEnrollmentRequest {
     }
 }
 
-/// Opaque provisioning failure returned by the injected first-admin store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum BootstrapAdminProvisioningError {
-    #[error("administrator identity was rejected")]
-    Rejected,
-    #[error("administrator identity store is unavailable")]
-    Unavailable,
-}
-
 /// Injection boundary that must atomically reject creation when an administrator already exists.
 pub trait BootstrapAdminProvisioner: Send + Sync {
-    fn create_first_admin(&self, identity: &BootstrapAdminIdentity) -> Result<(), BootstrapAdminProvisioningError>;
+    fn create_first_admin(&self, identity: &BootstrapAdminIdentity) -> AuthServiceResult<()>;
 }
 
 /// Persisted lifecycle of a one-time bootstrap grant.
@@ -246,33 +238,6 @@ impl BootstrapEnrollmentResult {
     }
 }
 
-/// Stable, redacted bootstrap failures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum BootstrapError {
-    #[error("bootstrap configuration is invalid")]
-    InvalidConfiguration,
-    #[error("bootstrap state is unavailable")]
-    StateUnavailable,
-    #[error("bootstrap state permissions are not owner-only")]
-    InsecurePermissions,
-    #[error("bootstrap persistence is unsupported on this platform")]
-    UnsupportedPlatform,
-    #[error("bootstrap proof is invalid")]
-    InvalidProof,
-    #[error("bootstrap grant has expired")]
-    Expired,
-    #[error("bootstrap request binding does not match the grant")]
-    BindingMismatch,
-    #[error("bootstrap requires a verified TLS listener")]
-    TlsRequired,
-    #[error("bootstrap grant has already been claimed")]
-    AlreadyClaimed,
-    #[error("bootstrap grant has already been consumed")]
-    AlreadyConsumed,
-    #[error("first administrator provisioning failed")]
-    AdminProvisioningFailed,
-}
-
 /// Persistent, fail-closed one-time bootstrap coordinator.
 pub struct OneTimeBootstrap {
     grant: BootstrapGrant,
@@ -285,8 +250,9 @@ impl OneTimeBootstrap {
     ///
     /// # Errors
     ///
-    /// Returns a redacted [`BootstrapError`] when state cannot be validated or persisted safely.
-    pub fn open(grant: BootstrapGrant, state_path: impl Into<PathBuf>) -> Result<Self, BootstrapError> {
+    /// Returns a redacted authentication-service error when state cannot be validated or persisted
+    /// safely.
+    pub fn open(grant: BootstrapGrant, state_path: impl Into<PathBuf>) -> AuthServiceResult<Self> {
         let initial = BootstrapStateRecord::available(&grant);
         let (store, state) = BootstrapStateStore::open(state_path.into(), initial)?;
         Ok(Self {
@@ -296,14 +262,14 @@ impl OneTimeBootstrap {
         })
     }
 
-    pub fn status(&self) -> Result<BootstrapStatus, BootstrapError> {
+    pub fn status(&self) -> AuthServiceResult<BootstrapStatus> {
         self.state
             .lock()
             .map(|state| state.status())
-            .map_err(|_| BootstrapError::StateUnavailable)
+            .map_err(|_| bootstrap_error(AuthFailureKind::Unavailable))
     }
 
-    pub fn is_open(&self, now: SystemTime) -> Result<bool, BootstrapError> {
+    pub fn is_open(&self, now: SystemTime) -> AuthServiceResult<bool> {
         let now = unix_seconds(now)?;
         Ok(self.status()? == BootstrapStatus::Available
             && now < self.grant.expires_at_unix_seconds
@@ -315,46 +281,51 @@ impl OneTimeBootstrap {
     ///
     /// # Errors
     ///
-    /// Returns a redacted [`BootstrapError`] for transport, proof, expiry, replay, persistence, or
-    /// provisioning failures.
+    /// Returns a redacted authentication-service error for transport, proof, expiry, replay,
+    /// persistence, or provisioning failures.
     pub fn enroll(
         &self,
         request: BootstrapEnrollmentRequest,
         now: SystemTime,
         provisioner: &dyn BootstrapAdminProvisioner,
-    ) -> Result<BootstrapEnrollmentResult, BootstrapError> {
-        let mut state = self.state.lock().map_err(|_| BootstrapError::StateUnavailable)?;
+    ) -> AuthServiceResult<BootstrapEnrollmentResult> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| bootstrap_error(AuthFailureKind::Unavailable))?;
         match state.status() {
-            BootstrapStatus::Claimed => return Err(BootstrapError::AlreadyClaimed),
-            BootstrapStatus::Consumed => return Err(BootstrapError::AlreadyConsumed),
+            BootstrapStatus::Claimed | BootstrapStatus::Consumed => {
+                return Err(bootstrap_error(AuthFailureKind::Conflict));
+            }
             BootstrapStatus::Available => {}
         }
         let now = unix_seconds(now)?;
         if now >= self.grant.expires_at_unix_seconds {
-            return Err(BootstrapError::Expired);
+            return Err(bootstrap_error(AuthFailureKind::Expired));
         }
         if !request.transport.verified_tls {
-            return Err(BootstrapError::TlsRequired);
+            return Err(bootstrap_error(AuthFailureKind::Unauthenticated));
         }
         if request.transport.cluster_id != self.grant.cluster_id || request.transport.listener != self.grant.listener {
-            return Err(BootstrapError::BindingMismatch);
+            return Err(bootstrap_error(AuthFailureKind::Unauthenticated));
         }
         let presented_digest: [u8; 32] = Sha256::digest(request.proof.expose_secret()).into();
         if self.grant.proof_digest.ct_eq(&presented_digest).unwrap_u8() != 1 {
-            return Err(BootstrapError::InvalidProof);
+            return Err(bootstrap_error(AuthFailureKind::Unauthenticated));
         }
 
         let claimed = state.claimed(&request.identity);
         self.store.claim(&claimed)?;
         *state = claimed.clone();
         drop(state);
-        provisioner
-            .create_first_admin(&request.identity)
-            .map_err(|_| BootstrapError::AdminProvisioningFailed)?;
+        provisioner.create_first_admin(&request.identity)?;
 
         let consumed = claimed.consumed(&request.identity);
         self.store.consume(&consumed)?;
-        let mut state = self.state.lock().map_err(|_| BootstrapError::StateUnavailable)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| bootstrap_error(AuthFailureKind::Unavailable))?;
         *state = consumed;
         Ok(BootstrapEnrollmentResult {
             principal_id: request.identity.principal_id,
@@ -373,18 +344,24 @@ impl fmt::Debug for OneTimeBootstrap {
     }
 }
 
-fn validate_binding(value: &str) -> Result<(), BootstrapError> {
+fn validate_binding(value: &str) -> AuthServiceResult<()> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.len() > 256 || trimmed.chars().any(char::is_control) {
-        return Err(BootstrapError::InvalidConfiguration);
+        return Err(bootstrap_error(AuthFailureKind::InvalidInput));
     }
     Ok(())
 }
 
-fn unix_seconds(time: SystemTime) -> Result<u64, BootstrapError> {
+fn unix_seconds(time: SystemTime) -> AuthServiceResult<u64> {
     time.duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .map_err(|_| BootstrapError::InvalidConfiguration)
+        .map_err(|source| {
+            AuthServiceError::with_source(AuthOperation::Bootstrap, AuthFailureKind::InvalidInput, source)
+        })
+}
+
+fn bootstrap_error(kind: AuthFailureKind) -> AuthServiceError {
+    AuthServiceError::new(AuthOperation::Bootstrap, kind)
 }
 
 #[cfg(test)]
@@ -400,10 +377,9 @@ mod tests {
     #[test]
     fn grant_rejects_short_proof_and_redacts_digest() {
         let expires = SystemTime::now() + Duration::from_secs(60);
-        assert_eq!(
-            BootstrapGrant::new("cluster", "127.0.0.1:9876", expires, material(b"short")).unwrap_err(),
-            BootstrapError::InvalidConfiguration
-        );
+        let error = BootstrapGrant::new("cluster", "127.0.0.1:9876", expires, material(b"short")).unwrap_err();
+        assert_eq!(error.operation(), AuthOperation::Bootstrap);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidInput);
         let grant = BootstrapGrant::new("cluster", "127.0.0.1:9876", expires, material(&[7; 32])).unwrap();
         let debug = format!("{grant:?}");
         assert!(debug.contains("[REDACTED]"));

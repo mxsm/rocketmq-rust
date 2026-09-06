@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
+use std::io;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -20,16 +22,17 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use rocketmq_auth::AuthFailureKind;
+use rocketmq_auth::AuthOperation;
+use rocketmq_auth::AuthServiceError;
+use rocketmq_auth::AuthServiceResult;
 use rocketmq_auth::BreakGlassReason;
 use rocketmq_auth::CredentialAuditAction;
 use rocketmq_auth::CredentialAuditEvent;
 use rocketmq_auth::CredentialAuditOutcome;
 use rocketmq_auth::CredentialAuditSink;
-use rocketmq_auth::CredentialAuditSinkError;
-use rocketmq_auth::CredentialBundleParseError;
 use rocketmq_auth::CredentialBundleParser;
 use rocketmq_auth::CredentialId;
-use rocketmq_auth::CredentialRotationError;
 use rocketmq_auth::CredentialRotationManager;
 use rocketmq_auth::CredentialVerificationSource;
 use rocketmq_auth::ValidatedCredential;
@@ -39,10 +42,12 @@ use rocketmq_security_api::SecretName;
 use rocketmq_security_api::SecretPersistence;
 use rocketmq_security_api::SecretProvider;
 use rocketmq_security_api::SecretProviderCapabilities;
-use rocketmq_security_api::SecretProviderError;
 use rocketmq_security_api::SecretProviderId;
 use rocketmq_security_api::SecretVersion;
 use rocketmq_security_api::SecretVersioning;
+use rocketmq_security_api::SecurityOperation;
+use rocketmq_security_api::SecurityProviderError;
+use rocketmq_security_api::SecurityProviderFailure;
 use rocketmq_security_api::VersionedSecret;
 
 const ACTIVE_PROOF: [u8; 32] = [0x11; 32];
@@ -82,12 +87,25 @@ impl RecordingAudit {
 }
 
 impl CredentialAuditSink for RecordingAudit {
-    fn record(&self, event: &CredentialAuditEvent) -> Result<(), CredentialAuditSinkError> {
+    fn record(&self, event: &CredentialAuditEvent) -> AuthServiceResult<()> {
         if self.fail.load(Ordering::SeqCst) {
-            return Err(CredentialAuditSinkError::Unavailable);
+            return Err(AuthServiceError::new(
+                AuthOperation::Audit,
+                AuthFailureKind::Unavailable,
+            ));
         }
         self.events.lock().unwrap().push(event.clone());
         Ok(())
+    }
+}
+
+fn assert_rotation_error<T>(result: AuthServiceResult<T>, kind: AuthFailureKind) {
+    match result {
+        Ok(_) => panic!("expected credential rotation failure"),
+        Err(error) => {
+            assert_eq!(error.operation(), AuthOperation::RotateCredential);
+            assert_eq!(error.kind(), kind);
+        }
     }
 }
 
@@ -115,7 +133,12 @@ fn overlap_switch_and_finalize_revoke_the_old_credential() {
     assert_eq!(initial.generation(), 1);
 
     let overlap_until = now + Duration::from_secs(30);
-    assert_eq!(manager.start_rotation(credential(0x22, now), overlap_until, now), Ok(2));
+    assert_eq!(
+        manager
+            .start_rotation(credential(0x22, now), overlap_until, now)
+            .unwrap(),
+        2
+    );
     assert_eq!(
         manager
             .verify(&candidate_id, material(&CANDIDATE_PROOF), now)
@@ -130,14 +153,14 @@ fn overlap_switch_and_finalize_revoke_the_old_credential() {
             .source(),
         CredentialVerificationSource::Retiring
     );
-    assert_eq!(
+    assert_rotation_error(
         manager.finalize_rotation(now + Duration::from_secs(29)),
-        Err(CredentialRotationError::OverlapStillActive)
+        AuthFailureKind::Conflict,
     );
-    assert_eq!(manager.finalize_rotation(overlap_until), Ok(3));
-    assert_eq!(
+    assert_eq!(manager.finalize_rotation(overlap_until).unwrap(), 3);
+    assert_rotation_error(
         manager.verify(&active_id, material(&ACTIVE_PROOF), overlap_until),
-        Err(CredentialRotationError::CredentialRevoked)
+        AuthFailureKind::Unauthenticated,
     );
     assert_eq!(manager.snapshot().active().id(), &candidate_id);
     assert_eq!(manager.snapshot().revoked(), &[active_id]);
@@ -162,16 +185,16 @@ fn rollback_restores_only_unrevoked_last_known_good() {
     manager
         .start_rotation(credential(0x22, now), now + Duration::from_secs(30), now)
         .unwrap();
-    assert_eq!(manager.rollback(now + Duration::from_secs(5)), Ok(3));
+    assert_eq!(manager.rollback(now + Duration::from_secs(5)).unwrap(), 3);
     assert_eq!(manager.snapshot().active().id(), &active_id);
     assert_eq!(manager.snapshot().revoked(), std::slice::from_ref(&candidate_id));
-    assert_eq!(
+    assert_rotation_error(
         manager.verify(&candidate_id, material(&CANDIDATE_PROOF), now),
-        Err(CredentialRotationError::CredentialRevoked)
+        AuthFailureKind::Unauthenticated,
     );
-    assert_eq!(
+    assert_rotation_error(
         manager.start_rotation(credential(0x22, now), now + Duration::from_secs(30), now),
-        Err(CredentialRotationError::InvalidCredential)
+        AuthFailureKind::InvalidInput,
     );
     assert_eq!(
         audit.events().last().unwrap().action(),
@@ -186,38 +209,40 @@ fn break_glass_is_bounded_disabled_by_default_and_audit_first() {
     let manager = manager(now, audit.clone());
     let break_glass_id = CredentialId::new("kid-99").unwrap();
 
-    assert_eq!(
+    assert_rotation_error(
         manager.verify(&break_glass_id, material(&BREAK_GLASS_PROOF), now),
-        Err(CredentialRotationError::BreakGlassDisabled)
+        AuthFailureKind::Conflict,
     );
-    assert_eq!(
+    assert_rotation_error(
         manager.enable_break_glass(
             BreakGlassReason::IdentityProviderOutage,
             now + Duration::from_secs(301),
             now,
         ),
-        Err(CredentialRotationError::InvalidBreakGlassWindow)
+        AuthFailureKind::InvalidInput,
     );
 
     audit.set_fail(true);
-    assert_eq!(
+    assert_rotation_error(
         manager.enable_break_glass(
             BreakGlassReason::IdentityProviderOutage,
             now + Duration::from_secs(60),
             now,
         ),
-        Err(CredentialRotationError::AuditUnavailable)
+        AuthFailureKind::Internal,
     );
     assert_eq!(manager.snapshot().generation(), 1);
 
     audit.set_fail(false);
     assert_eq!(
-        manager.enable_break_glass(
-            BreakGlassReason::IdentityProviderOutage,
-            now + Duration::from_secs(60),
-            now,
-        ),
-        Ok(2)
+        manager
+            .enable_break_glass(
+                BreakGlassReason::IdentityProviderOutage,
+                now + Duration::from_secs(60),
+                now,
+            )
+            .unwrap(),
+        2
     );
     assert_eq!(
         manager
@@ -226,18 +251,18 @@ fn break_glass_is_bounded_disabled_by_default_and_audit_first() {
             .source(),
         CredentialVerificationSource::BreakGlass
     );
-    assert_eq!(
+    assert_rotation_error(
         manager.verify(
             &break_glass_id,
             material(&BREAK_GLASS_PROOF),
             now + Duration::from_secs(60),
         ),
-        Err(CredentialRotationError::CredentialExpired)
+        AuthFailureKind::Expired,
     );
-    assert_eq!(manager.disable_break_glass(), Ok(3));
-    assert_eq!(
+    assert_eq!(manager.disable_break_glass().unwrap(), 3);
+    assert_rotation_error(
         manager.verify(&break_glass_id, material(&BREAK_GLASS_PROOF), now),
-        Err(CredentialRotationError::BreakGlassDisabled)
+        AuthFailureKind::Conflict,
     );
     assert_eq!(
         audit
@@ -272,9 +297,13 @@ impl SecretProvider for StaticProvider {
         )
     }
 
-    fn read(&self, _name: &SecretName) -> Result<VersionedSecret, SecretProviderError> {
+    fn read(&self, _name: &SecretName) -> Result<VersionedSecret, SecurityProviderError> {
         if self.fail {
-            return Err(SecretProviderError::Unavailable);
+            return Err(SecurityProviderError::caused_by(
+                SecurityProviderFailure::Unavailable,
+                SecurityOperation::ReadSecret,
+                io::Error::other("password=secret\r\n/private/provider/path"),
+            ));
         }
         Ok(VersionedSecret::new(material(&self.bundle), Some(self.version)))
     }
@@ -284,8 +313,11 @@ impl SecretProvider for StaticProvider {
         _name: &SecretName,
         _material: SecretMaterial,
         _expected_version: Option<SecretVersion>,
-    ) -> Result<SecretVersion, SecretProviderError> {
-        Err(SecretProviderError::ReadOnly)
+    ) -> Result<SecretVersion, SecurityProviderError> {
+        Err(SecurityProviderError::new(
+            SecurityProviderFailure::Unsupported,
+            SecurityOperation::WriteSecret,
+        ))
     }
 }
 
@@ -299,13 +331,16 @@ impl CredentialBundleParser for TestBundleParser {
         &self,
         material: SecretMaterial,
         provider_version: Option<SecretVersion>,
-    ) -> Result<ValidatedCredential, CredentialBundleParseError> {
+    ) -> AuthServiceResult<ValidatedCredential> {
         let seed = *material
             .expose_secret()
             .first()
-            .ok_or(CredentialBundleParseError::InvalidBundle)?;
+            .ok_or_else(|| AuthServiceError::new(AuthOperation::RotateCredential, AuthFailureKind::InvalidData))?;
         if seed == 0 || material.len() < 32 {
-            return Err(CredentialBundleParseError::InvalidBundle);
+            return Err(AuthServiceError::new(
+                AuthOperation::RotateCredential,
+                AuthFailureKind::InvalidData,
+            ));
         }
         let version = if self.force_version_mismatch {
             Some(SecretVersion::new(999))
@@ -313,14 +348,18 @@ impl CredentialBundleParser for TestBundleParser {
             provider_version
         };
         ValidatedCredential::new(
-            CredentialId::new(format!("kid-{seed:02x}")).map_err(|_| CredentialBundleParseError::InvalidBundle)?,
+            CredentialId::new(format!("kid-{seed:02x}")).map_err(|source| {
+                AuthServiceError::with_source(AuthOperation::RotateCredential, AuthFailureKind::InvalidData, source)
+            })?,
             [seed; 32],
             self.now - Duration::from_secs(60),
             self.now + Duration::from_secs(3600),
             material,
             version,
         )
-        .map_err(|_| CredentialBundleParseError::InvalidBundle)
+        .map_err(|source| {
+            AuthServiceError::with_source(AuthOperation::RotateCredential, AuthFailureKind::InvalidData, source)
+        })
     }
 }
 
@@ -340,9 +379,9 @@ fn provider_reload_is_single_bundle_and_invalid_candidates_preserve_snapshot() {
         now,
         force_version_mismatch: false,
     };
-    assert_eq!(
+    assert_rotation_error(
         manager.reload_from_provider(&invalid, &name, &parser, now + Duration::from_secs(30), now),
-        Err(CredentialRotationError::InvalidBundle)
+        AuthFailureKind::InvalidData,
     );
     assert_eq!(manager.snapshot().generation(), 1);
     assert_eq!(
@@ -356,10 +395,17 @@ fn provider_reload_is_single_bundle_and_invalid_candidates_preserve_snapshot() {
         version: SecretVersion::new(2),
         fail: true,
     };
-    assert_eq!(
-        manager.reload_from_provider(&unavailable, &name, &parser, now + Duration::from_secs(30), now,),
-        Err(CredentialRotationError::ProviderUnavailable)
-    );
+    let error = manager
+        .reload_from_provider(&unavailable, &name, &parser, now + Duration::from_secs(30), now)
+        .unwrap_err();
+    assert_eq!(error.operation(), AuthOperation::RotateCredential);
+    assert_eq!(error.kind(), AuthFailureKind::Unavailable);
+    assert!(error.source_present());
+    assert!(!error.to_string().contains("password=secret"));
+    assert!(!format!("{error:?}").contains("private/provider/path"));
+    assert!(Error::source(&error)
+        .and_then(|source| source.downcast_ref::<SecurityProviderError>())
+        .is_some());
     assert_eq!(manager.snapshot().generation(), 1);
 
     let valid = StaticProvider {
@@ -372,15 +418,17 @@ fn provider_reload_is_single_bundle_and_invalid_candidates_preserve_snapshot() {
         now,
         force_version_mismatch: true,
     };
-    assert_eq!(
-        manager.reload_from_provider(&valid, &name, &mismatched_parser, now + Duration::from_secs(30), now,),
-        Err(CredentialRotationError::InvalidBundle)
+    assert_rotation_error(
+        manager.reload_from_provider(&valid, &name, &mismatched_parser, now + Duration::from_secs(30), now),
+        AuthFailureKind::InvalidData,
     );
     assert_eq!(manager.snapshot().generation(), 1);
 
     assert_eq!(
-        manager.reload_from_provider(&valid, &name, &parser, now + Duration::from_secs(30), now),
-        Ok(2)
+        manager
+            .reload_from_provider(&valid, &name, &parser, now + Duration::from_secs(30), now)
+            .unwrap(),
+        2
     );
     assert_eq!(manager.snapshot().active().id().as_str(), "kid-22");
     assert_eq!(
@@ -423,7 +471,10 @@ fn concurrent_readers_observe_only_complete_old_or_new_snapshots() {
                 verification.source(),
                 CredentialVerificationSource::Active | CredentialVerificationSource::Retiring
             )),
-            Err(error) => assert_eq!(error, CredentialRotationError::CredentialNotAccepted),
+            Err(error) => {
+                assert_eq!(error.operation(), AuthOperation::RotateCredential);
+                assert_eq!(error.kind(), AuthFailureKind::Unauthenticated);
+            }
         }
     }
 }
@@ -445,7 +496,11 @@ fn debug_and_errors_never_expose_proof_material() {
     assert!(debug.contains("[REDACTED]"));
     assert!(!debug.contains(&hex::encode(proof)));
     assert!(!debug.contains(&hex::encode([0x44; 32])));
-    assert!(!CredentialRotationError::InvalidProof.to_string().contains("5a"));
+    assert!(
+        !AuthServiceError::new(AuthOperation::RotateCredential, AuthFailureKind::Unauthenticated)
+            .to_string()
+            .contains("5a")
+    );
 
     let audit = Arc::new(RecordingAudit::default());
     let manager = manager(now, audit.clone());

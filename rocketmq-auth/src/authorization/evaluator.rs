@@ -53,12 +53,9 @@
 //! ```
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
-use crate::authorization::provider::AuthorizationError;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
+use crate::AuthServiceResult;
 use rocketmq_security_api::AuthorizationDecision;
-
-/// Authorization evaluator result type
-pub type EvaluatorResult<T> = Result<T, AuthorizationError>;
 
 /// Authorization evaluator - main entry point for authorization decisions
 ///
@@ -146,7 +143,7 @@ where
     /// # Returns
     ///
     /// * `Ok(AuthorizationDecision)` - The aggregate allow/deny decision
-    /// * `Err(AuthorizationError)` - Evaluation failed before reaching a decision
+    /// * `Err(AuthServiceError)` - Evaluation failed before reaching a decision
     ///
     /// # Behavior
     ///
@@ -171,13 +168,13 @@ where
     ///
     /// # Errors
     ///
-    /// Returns `AuthorizationError` if:
+    /// Returns `AuthServiceError` if:
     /// - Subject does not have permission for the requested action
     /// - Policy evaluation fails
     /// - Resource or subject not found
     /// - Source IP not allowed
     /// - Decision is DENY
-    pub async fn evaluate(&self, contexts: &[DefaultAuthorizationContext]) -> EvaluatorResult<AuthorizationDecision> {
+    pub async fn evaluate(&self, contexts: &[DefaultAuthorizationContext]) -> AuthServiceResult<AuthorizationDecision> {
         // Early return on empty input
         if contexts.is_empty() {
             return Ok(AuthorizationDecision::Allow);
@@ -224,7 +221,7 @@ mod tests {
         fn evaluate<'a>(&'a self, _context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a> {
             Box::pin(async move {
                 if self.should_fail {
-                    Err(AuthorizationError::InvalidContext("mock failure".to_owned()))
+                    Err(crate::AuthServiceError::invalid_context("mock failure".to_owned()))
                 } else {
                     Ok(self.decision)
                 }

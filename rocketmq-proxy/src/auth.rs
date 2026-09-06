@@ -22,13 +22,17 @@ use cheetah_string::CheetahString;
 use rocketmq_auth::Acl;
 #[cfg(feature = "cluster-mode")]
 use rocketmq_auth::AclClientRpcHook;
+#[cfg(test)]
+use rocketmq_auth::AuthFailureKind;
 use rocketmq_auth::AuthMetricsSnapshot;
+#[cfg(test)]
+use rocketmq_auth::AuthOperation;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
+use rocketmq_auth::AuthServiceError;
 use rocketmq_auth::AuthenticationContextBuilder;
 use rocketmq_auth::AuthenticationMetadataProvider;
 use rocketmq_auth::AuthenticationProvider;
-use rocketmq_auth::AuthorizationError;
 use rocketmq_auth::AuthorizationMetadataProvider;
 use rocketmq_auth::AuthorizationProvider;
 use rocketmq_auth::DefaultAuthenticationContext;
@@ -790,7 +794,7 @@ fn metadata_string<T>(request: &Request<T>, key: &'static str) -> Option<String>
         .map(str::to_owned)
 }
 
-fn map_authorization_error(error: AuthorizationError) -> ProxyError {
+fn map_authorization_error(error: AuthServiceError) -> ProxyError {
     ProxyError::from(RocketMQError::from(error))
 }
 
@@ -804,13 +808,7 @@ fn require_authorization_allow(decision: AuthorizationDecision) -> ProxyResult<(
 }
 
 pub fn is_auth_error(error: &RocketMQError) -> bool {
-    matches!(
-        error,
-        RocketMQError::Authentication(_)
-            | RocketMQError::AuthenticationSource { .. }
-            | RocketMQError::BrokerPermissionDenied { .. }
-            | RocketMQError::AuthConfigInvalid { .. }
-    )
+    error.descriptor().component() == rocketmq_error::ComponentId::AUTH
 }
 
 fn parse_whitelist(entries: &[String]) -> HashSet<String> {
@@ -1269,27 +1267,23 @@ mod tests {
             ProxyError::RocketMQ(RocketMQError::BrokerPermissionDenied { .. })
         ));
 
-        let invalid = map_authorization_error(AuthorizationError::InvalidContext("missing resource".to_string()));
-        assert!(matches!(
-            invalid,
-            ProxyError::RocketMQ(RocketMQError::IllegalArgument(_))
+        let invalid = map_authorization_error(AuthServiceError::new(
+            AuthOperation::BuildContext,
+            AuthFailureKind::InvalidInput,
         ));
+        assert_eq!(invalid.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
 
-        let config = map_authorization_error(AuthorizationError::ConfigurationError("missing provider".to_string()));
-        assert!(matches!(
-            config,
-            ProxyError::RocketMQ(RocketMQError::AuthConfigInvalid {
-                key: "auth.authorization",
-                ..
-            })
+        let config = map_authorization_error(AuthServiceError::new(
+            AuthOperation::Initialize,
+            AuthFailureKind::InvalidConfiguration,
         ));
+        assert_eq!(config.descriptor(), &rocketmq_error::AUTH_CONFIGURATION_INVALID);
 
-        let internal =
-            map_authorization_error(AuthorizationError::PolicyEvaluationFailed("invalid policy".to_string()));
-        assert!(matches!(
-            internal,
-            ProxyError::RocketMQ(RocketMQError::Authentication(AuthError::ContextCreationError(_)))
+        let internal = map_authorization_error(AuthServiceError::new(
+            AuthOperation::Authorize,
+            AuthFailureKind::Internal,
         ));
+        assert_eq!(internal.descriptor(), &rocketmq_error::AUTH_OPERATION_FAILED);
     }
 
     #[tokio::test]

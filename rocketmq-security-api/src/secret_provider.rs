@@ -17,8 +17,11 @@
 use std::fmt;
 
 use cheetah_string::CheetahString;
-use thiserror::Error;
 use zeroize::Zeroize;
+
+use crate::SecurityContractViolation;
+use crate::SecurityIdentifierRule;
+use crate::SecurityProviderError;
 
 /// Stable identifier for an explicitly registered secret provider.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -26,7 +29,12 @@ pub struct SecretProviderId(CheetahString);
 
 impl SecretProviderId {
     /// Validates and creates a provider identifier.
-    pub fn new(value: impl Into<CheetahString>) -> Result<Self, SecretIdentifierError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityContractViolation::InvalidIdentifier`] when the value
+    /// violates the closed identifier grammar.
+    pub fn new(value: impl Into<CheetahString>) -> Result<Self, SecurityContractViolation> {
         let value = value.into();
         validate_identifier(&value)?;
         Ok(Self(value))
@@ -50,7 +58,12 @@ pub struct SecretName(CheetahString);
 
 impl SecretName {
     /// Validates and creates a secret name.
-    pub fn new(value: impl Into<CheetahString>) -> Result<Self, SecretIdentifierError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityContractViolation::InvalidIdentifier`] when the value
+    /// violates the closed identifier grammar.
+    pub fn new(value: impl Into<CheetahString>) -> Result<Self, SecurityContractViolation> {
         let value = value.into();
         validate_identifier(&value)?;
         Ok(Self(value))
@@ -68,26 +81,16 @@ impl fmt::Debug for SecretName {
     }
 }
 
-/// Validation failure for provider identifiers and logical secret names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum SecretIdentifierError {
-    #[error("secret identifier is empty")]
-    /// Represents the empty case.
-    Empty,
-    #[error("secret identifier exceeds 128 bytes")]
-    /// Represents the too long case.
-    TooLong,
-    #[error("secret identifier contains unsupported characters")]
-    /// Represents the unsupported character case.
-    UnsupportedCharacter,
-}
-
-fn validate_identifier(value: &str) -> Result<(), SecretIdentifierError> {
+fn validate_identifier(value: &str) -> Result<(), SecurityContractViolation> {
     if value.is_empty() {
-        return Err(SecretIdentifierError::Empty);
+        return Err(SecurityContractViolation::InvalidIdentifier {
+            rule: SecurityIdentifierRule::NotEmpty,
+        });
     }
     if value.len() > 128 {
-        return Err(SecretIdentifierError::TooLong);
+        return Err(SecurityContractViolation::InvalidIdentifier {
+            rule: SecurityIdentifierRule::MaximumLength,
+        });
     }
     if !value
         .bytes()
@@ -96,7 +99,9 @@ fn validate_identifier(value: &str) -> Result<(), SecretIdentifierError> {
         || value == ".."
         || value.starts_with('.')
     {
-        return Err(SecretIdentifierError::UnsupportedCharacter);
+        return Err(SecurityContractViolation::InvalidIdentifier {
+            rule: SecurityIdentifierRule::CanonicalCharacters,
+        });
     }
     Ok(())
 }
@@ -106,9 +111,14 @@ pub struct SecretMaterial(Vec<u8>);
 
 impl SecretMaterial {
     /// Creates non-empty secret material.
-    pub fn new(value: Vec<u8>) -> Result<Self, SecretMaterialError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityContractViolation::EmptySecretMaterial`] when the
+    /// supplied material is empty.
+    pub fn new(value: Vec<u8>) -> Result<Self, SecurityContractViolation> {
         if value.is_empty() {
-            return Err(SecretMaterialError::Empty);
+            return Err(SecurityContractViolation::EmptySecretMaterial);
         }
         Ok(Self(value))
     }
@@ -145,14 +155,6 @@ impl Drop for SecretMaterial {
     fn drop(&mut self) {
         self.zeroize();
     }
-}
-
-/// Failure to construct valid secret material.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum SecretMaterialError {
-    #[error("secret material is empty")]
-    /// Represents the empty case.
-    Empty,
 }
 
 /// Version assigned by a provider supporting optimistic updates.
@@ -271,44 +273,6 @@ impl SecretProviderCapabilities {
     }
 }
 
-/// Fail-closed error surface shared by provider implementations and registries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum SecretProviderError {
-    #[error("secret provider is not registered")]
-    /// Represents the provider not registered case.
-    ProviderNotRegistered,
-    #[error("secret provider is already registered")]
-    /// Represents the duplicate provider case.
-    DuplicateProvider,
-    #[error("secret material was not found")]
-    /// Represents the not found case.
-    NotFound,
-    #[error("secret provider is read-only")]
-    /// Represents the read only case.
-    ReadOnly,
-    #[error("secret material is invalid")]
-    /// Represents the invalid material case.
-    InvalidMaterial,
-    #[error("secret provider configuration is invalid")]
-    /// Represents the invalid configuration case.
-    InvalidConfiguration,
-    #[error("secret storage permissions are not owner-only")]
-    /// Represents the insecure permissions case.
-    InsecurePermissions,
-    #[error("secret version conflict")]
-    /// Represents the version conflict case.
-    VersionConflict,
-    #[error("secret envelope is invalid or authentication failed")]
-    /// Represents the invalid envelope case.
-    InvalidEnvelope,
-    #[error("secret provider is unavailable")]
-    /// Represents the unavailable case.
-    Unavailable,
-    #[error("secret provider is unsupported on this platform")]
-    /// Represents the unsupported platform case.
-    UnsupportedPlatform,
-}
-
 /// Synchronous, runtime-neutral boundary implemented by injected providers.
 pub trait SecretProvider: Send + Sync {
     /// Returns the id.
@@ -321,21 +285,21 @@ pub trait SecretProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns a redacted [`SecretProviderError`] when the material cannot be obtained safely.
-    fn read(&self, name: &SecretName) -> Result<VersionedSecret, SecretProviderError>;
+    /// Returns a redacted [`SecurityProviderError`] when the material cannot be obtained safely.
+    fn read(&self, name: &SecretName) -> Result<VersionedSecret, SecurityProviderError>;
 
     /// Creates or atomically updates a secret. `None` is create-only; an existing secret requires
     /// its current version to prevent lost updates.
     ///
     /// # Errors
     ///
-    /// Returns a redacted [`SecretProviderError`] when persistence or version validation fails.
+    /// Returns a redacted [`SecurityProviderError`] when persistence or version validation fails.
     fn write(
         &self,
         name: &SecretName,
         material: SecretMaterial,
         expected_version: Option<SecretVersion>,
-    ) -> Result<SecretVersion, SecretProviderError>;
+    ) -> Result<SecretVersion, SecurityProviderError>;
 }
 
 #[cfg(test)]

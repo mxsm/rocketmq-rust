@@ -33,8 +33,10 @@ use rocketmq_security_api::RequestContext;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::SecurityBootstrapProfile;
+use rocketmq_security_api::SecurityContractViolation;
+use rocketmq_security_api::SecurityOperation;
+use rocketmq_security_api::SecurityProviderError;
 use rocketmq_security_api::SecurityRequestView;
-use rocketmq_security_api::SigningError;
 
 fn empty_fields() -> &'static HashMap<CheetahString, CheetahString> {
     static EMPTY: OnceLock<HashMap<CheetahString, CheetahString>> = OnceLock::new();
@@ -189,11 +191,14 @@ impl TransportSecurity {
         Ok(evaluate_request(policy.as_ref(), &context))
     }
 
-    pub fn sign(&self, command: &mut RemotingCommand, peer: Option<&PeerInfo>) -> Result<(), SigningError> {
+    pub fn sign(&self, command: &mut RemotingCommand, peer: Option<&PeerInfo>) -> Result<(), SecurityProviderError> {
         let Some(signer) = &self.signer else {
             return match self.profile {
                 SecurityBootstrapProfile::DevelopmentInsecureLoopback => Ok(()),
-                SecurityBootstrapProfile::SecureEnforced => Err(SigningError::CredentialsUnavailable),
+                SecurityBootstrapProfile::SecureEnforced => Err(SecurityProviderError::contract(
+                    SecurityOperation::SignRequest,
+                    SecurityContractViolation::SigningProviderRequired,
+                )),
             };
         };
         let signature = signer.sign(request_view(command, peer))?;

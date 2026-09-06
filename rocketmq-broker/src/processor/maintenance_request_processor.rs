@@ -139,9 +139,7 @@ impl MaintenanceRequestProcessor {
         original_code: i32,
     ) -> RocketMQResult<MaintenanceAuthorizationGrant> {
         if !self.broker_config.maintenance_enabled {
-            return Err(RocketMQError::authentication_failed(
-                "Broker maintenance API is disabled",
-            ));
+            return Err(maintenance_permission_denied());
         }
         let mut authoritative_command = request.command().clone();
         authoritative_command.set_code_mut(original_code);
@@ -178,11 +176,7 @@ impl MaintenanceRequestProcessor {
             .map_err(|source| RocketMQError::request_header_source("decode privileged maintenance header", source))?;
         header.validate().map_err(RocketMQError::request_header_error)?;
         if header.policy_version != self.authorizer.policy().policy_version {
-            return Err(RocketMQError::authentication_failed(format!(
-                "maintenance policy version {} does not match loaded version {}",
-                header.policy_version,
-                self.authorizer.policy().policy_version
-            )));
+            return Err(maintenance_permission_denied());
         }
         self.authorizer
             .authorize(
@@ -197,7 +191,7 @@ impl MaintenanceRequestProcessor {
                 }),
                 rocketmq_runtime::common::time_utils::current_millis(),
             )
-            .map_err(|source| RocketMQError::authentication_source("authorize privileged maintenance request", source))
+            .map_err(|_denial| maintenance_permission_denied())
     }
 
     async fn capabilities(&self, grant: &MaintenanceAuthorizationGrant) -> RocketMQResult<RemotingCommand> {
@@ -312,6 +306,12 @@ impl MaintenanceRequestProcessor {
                 Ok(checkpoint_restore_rejection_response(&self.command_factory, rejection))
             }
         }
+    }
+}
+
+fn maintenance_permission_denied() -> RocketMQError {
+    RocketMQError::BrokerPermissionDenied {
+        operation: "privileged maintenance".to_owned(),
     }
 }
 
