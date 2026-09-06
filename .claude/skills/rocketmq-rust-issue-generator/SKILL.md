@@ -7,6 +7,8 @@ description: Use when the user asks to create, draft, prepare, or publish a GitH
 
 Generate GitHub issue drafts from the repository's real issue forms. Template-driven — do not output a fixed canonical body unless the selected form has those fields.
 
+When the repository owner or maintainer wants to prepare issues for new contributors to claim, also use [rocketmq-rust-good-first-issue](../rocketmq-rust-good-first-issue/SKILL.md) for concrete file checklists, newcomer labels, and optional per-crate sub-issues.
+
 ## When to Use
 
 - User asks to create, draft, or publish a GitHub issue for rocketmq-rust
