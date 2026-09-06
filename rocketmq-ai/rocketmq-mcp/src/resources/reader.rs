@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolRejection;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::ResourceContents;
 use rmcp::ErrorData;
@@ -31,7 +33,7 @@ use crate::tools::config_tools::GetTopicConfigArgs;
 use crate::tools::consumer_tools::GetConsumerProgressArgs;
 use crate::tools::consumer_tools::ListConsumerGroupsArgs;
 use crate::tools::consumer_tools::QueryConsumerLagArgs;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::topic_tools::DescribeTopicArgs;
 use crate::tools::topic_tools::GetTopicStatsArgs;
 use crate::tools::topic_tools::ListTopicsArgs;
@@ -55,18 +57,16 @@ where
     .with_mime_type(JSON_MIME_TYPE)]))
 }
 
-async fn resource_payload<Q>(query: &Q, uri: &RocketmqResourceUri) -> Result<Value, ToolExecutionError>
+async fn resource_payload<Q>(query: &Q, uri: &RocketmqResourceUri) -> Result<Value, ToolFailure>
 where
     Q: ReadOnlyQuery,
 {
     let cluster = uri.cluster().unwrap_or_default().to_string();
     match &uri.kind {
-        ResourceKind::Capabilities => Err(ToolExecutionError::Internal(
-            "capability resources are rendered by the authenticated protocol handler".to_string(),
-        )),
-        ResourceKind::SystemRuntimeV1 | ResourceKind::SystemObservabilityV1 => Err(ToolExecutionError::Internal(
-            "system resources are rendered by the authenticated protocol handler".to_string(),
-        )),
+        ResourceKind::Capabilities => Err(ToolFailure::Operational(ToolExecutionError::Internal(None))),
+        ResourceKind::SystemRuntimeV1 | ResourceKind::SystemObservabilityV1 => {
+            Err(ToolFailure::Operational(ToolExecutionError::Internal(None)))
+        }
         ResourceKind::Overview => {
             let output = query
                 .cluster_overview(ClusterOverviewArgs {
@@ -121,10 +121,7 @@ where
                 })
                 .await?;
             if output.data.brokers.is_empty() {
-                return Err(ToolExecutionError::InvalidArguments(format!(
-                    "broker not found in cluster {}: {broker}",
-                    cluster
-                )));
+                return Err(ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }));
             }
             Ok(live_payload(uri, "broker", output, |data| json!(data)))
         }
@@ -228,10 +225,19 @@ fn live_payload<T>(
     Value::Object(payload)
 }
 
-fn resource_error(error: ToolExecutionError) -> ErrorData {
+fn resource_error(error: ToolFailure) -> ErrorData {
+    let code = error.code();
     match error {
-        ToolExecutionError::InvalidArguments(_) => ErrorData::resource_not_found("resource not found", None),
-        ToolExecutionError::TimedOut { timeout_ms } => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::AliasInputBoundExceeded)
+        | ToolFailure::Rejected(ToolRejection::AliasCapacityExceeded)
+        | ToolFailure::Rejected(ToolRejection::AliasCollisionExhausted) => ErrorData::internal_error(
+            "RocketMQ resource is unavailable",
+            Some(json!({ "code": code, "retryable": false })),
+        ),
+        ToolFailure::Rejected(ToolRejection::InvalidArguments { .. }) => {
+            ErrorData::resource_not_found("resource not found", None)
+        }
+        ToolFailure::Rejected(ToolRejection::TimedOut { timeout_ms }) => ErrorData::internal_error(
             "live RocketMQ resource query timed out",
             Some(json!({
                 "code": "resource_query_timeout",
@@ -239,39 +245,40 @@ fn resource_error(error: ToolExecutionError) -> ErrorData {
                 "timeout_ms": timeout_ms,
             })),
         ),
-        ToolExecutionError::Cancelled => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::Cancelled) => ErrorData::internal_error(
             "live RocketMQ resource query was cancelled",
             Some(json!({ "code": "resource_query_cancelled", "retryable": true })),
         ),
-        ToolExecutionError::PermissionDenied(_) => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::PermissionDenied) => ErrorData::internal_error(
             "RocketMQ resource is unavailable",
             Some(json!({ "code": "permission_denied", "retryable": false })),
         ),
-        ToolExecutionError::UnauthorizedScope(_) => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::UnauthorizedScope) => ErrorData::internal_error(
             "RocketMQ resource is unavailable",
             Some(json!({ "code": "unauthorized_scope", "retryable": false })),
         ),
-        ToolExecutionError::TenantMismatch(_) => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::TenantMismatch) => ErrorData::internal_error(
             "RocketMQ resource is unavailable",
             Some(json!({ "code": "tenant_mismatch", "retryable": false })),
         ),
-        ToolExecutionError::ClusterNotAllowed(_) => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::ClusterNotAllowed) => ErrorData::internal_error(
             "RocketMQ resource is unavailable",
             Some(json!({ "code": "cluster_not_allowed", "retryable": false })),
         ),
-        ToolExecutionError::RateLimited(_) => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::RateLimited) => ErrorData::internal_error(
             "rate limit exceeded for RocketMQ resource",
             Some(json!({ "code": "resource_rate_limited", "retryable": true })),
         ),
-        ToolExecutionError::Backend(_) => ErrorData::internal_error(
+        ToolFailure::Operational(ToolExecutionError::Backend(_)) => ErrorData::internal_error(
             "live RocketMQ resource query failed",
             Some(json!({ "code": "source_unavailable", "retryable": true })),
         ),
-        ToolExecutionError::OutputTooLarge { .. } => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::OutputTooLarge { .. }) => ErrorData::internal_error(
             "live RocketMQ resource query output is too large",
             Some(json!({ "code": "output_too_large", "retryable": false })),
         ),
-        ToolExecutionError::ChangePlanningDisabled(_) | ToolExecutionError::Internal(_) => ErrorData::internal_error(
+        ToolFailure::Rejected(ToolRejection::ChangePlanningDisabled)
+        | ToolFailure::Operational(ToolExecutionError::Internal(_)) => ErrorData::internal_error(
             "live RocketMQ resource query failed",
             Some(json!({ "code": "resource_query_failed", "retryable": false })),
         ),
@@ -307,12 +314,11 @@ mod tests {
         async fn cluster_overview(
             &self,
             args: ClusterOverviewArgs,
-        ) -> Result<QueryResult<crate::tools::cluster_tools::ClusterOverviewOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<crate::tools::cluster_tools::ClusterOverviewOutput>, ToolFailure> {
             if args.cluster != "local-dev" {
-                return Err(ToolExecutionError::InvalidArguments(format!(
-                    "unknown cluster: {}",
-                    args.cluster
-                )));
+                return Err(ToolFailure::Rejected(
+                    crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
+                ));
             }
             Ok(QueryResult::bypass(
                 crate::tools::cluster_tools::ClusterOverviewOutput {
@@ -326,22 +332,18 @@ mod tests {
             ))
         }
 
-        async fn list_topics(
-            &self,
-            _args: ListTopicsArgs,
-        ) -> Result<QueryResult<ListTopicsOutput>, ToolExecutionError> {
+        async fn list_topics(&self, _args: ListTopicsArgs) -> Result<QueryResult<ListTopicsOutput>, ToolFailure> {
             unimplemented!("not needed by reader tests")
         }
 
         async fn describe_topic(
             &self,
             args: DescribeTopicArgs,
-        ) -> Result<QueryResult<DescribeTopicOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<DescribeTopicOutput>, ToolFailure> {
             if args.topic != "orders" {
-                return Err(ToolExecutionError::InvalidArguments(format!(
-                    "topic not found: {}",
-                    args.topic
-                )));
+                return Err(ToolFailure::Rejected(
+                    crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
+                ));
             }
             Ok(QueryResult::bypass(DescribeTopicOutput {
                 cluster: args.cluster,
@@ -359,7 +361,7 @@ mod tests {
         async fn query_topic_route(
             &self,
             args: QueryTopicRouteArgs,
-        ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<QueryTopicRouteOutput>, ToolFailure> {
             Ok(QueryResult::bypass(QueryTopicRouteOutput {
                 cluster: args.cluster,
                 namesrv_addr: "hidden".to_string(),
@@ -375,14 +377,14 @@ mod tests {
         async fn topic_stats(
             &self,
             args: GetTopicStatsArgs,
-        ) -> Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<crate::tools::topic_tools::GetTopicStatsOutput>, ToolFailure> {
             if args.cluster != "local-dev"
                 || args.topic != "orders"
                 || args.page.limit != Some(2)
                 || args.page.cursor.as_deref() != Some("topic-page")
             {
-                return Err(ToolExecutionError::InvalidArguments(
-                    "unexpected topic-statistics mapping".to_string(),
+                return Err(ToolFailure::Rejected(
+                    crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
                 ));
             }
             Ok(QueryResult::bypass(crate::tools::topic_tools::GetTopicStatsOutput {
@@ -399,10 +401,10 @@ mod tests {
         async fn topic_config(
             &self,
             args: GetTopicConfigArgs,
-        ) -> Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure> {
             if args.cluster != "local-dev" || args.topic != "orders" {
-                return Err(ToolExecutionError::InvalidArguments(
-                    "unexpected topic-configuration mapping".to_string(),
+                return Err(ToolFailure::Rejected(
+                    crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
                 ));
             }
             Ok(QueryResult::bypass(crate::tools::config_tools::GetTopicConfigOutput {
@@ -417,7 +419,7 @@ mod tests {
         async fn list_consumer_groups(
             &self,
             args: ListConsumerGroupsArgs,
-        ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<ListConsumerGroupsOutput>, ToolFailure> {
             let items = (args.filter.as_deref().is_none() || args.filter.as_deref() == Some("order-service"))
                 .then(|| ConsumerGroupSummary {
                     group: "order-service".to_string(),
@@ -448,7 +450,7 @@ mod tests {
         async fn query_consumer_lag(
             &self,
             args: QueryConsumerLagArgs,
-        ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<QueryConsumerLagOutput>, ToolFailure> {
             Ok(QueryResult::bypass(QueryConsumerLagOutput {
                 cluster: args.cluster,
                 namesrv_addr: "hidden".to_string(),
@@ -466,14 +468,14 @@ mod tests {
         async fn consumer_progress(
             &self,
             args: GetConsumerProgressArgs,
-        ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<crate::tools::consumer_tools::GetConsumerProgressOutput>, ToolFailure> {
             if args.cluster != "local-dev"
                 || args.consumer_group != "order-service"
                 || args.page.limit != Some(3)
                 || args.page.cursor.as_deref() != Some("progress-page")
             {
-                return Err(ToolExecutionError::InvalidArguments(
-                    "unexpected consumer-progress mapping".to_string(),
+                return Err(ToolFailure::Rejected(
+                    crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
                 ));
             }
             Ok(QueryResult::bypass(
@@ -497,7 +499,7 @@ mod tests {
         async fn describe_broker(
             &self,
             args: DescribeBrokerArgs,
-        ) -> Result<QueryResult<DescribeBrokerOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<DescribeBrokerOutput>, ToolFailure> {
             let brokers = (args.broker_name == "broker-a")
                 .then(|| broker_summary(&args.cluster, &args.broker_name))
                 .into_iter()
@@ -514,10 +516,10 @@ mod tests {
         async fn broker_diagnostics(
             &self,
             args: BrokerDiagnosticsArgs,
-        ) -> Result<QueryResult<crate::tools::broker_tools::BrokerDiagnosticsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<crate::tools::broker_tools::BrokerDiagnosticsOutput>, ToolFailure> {
             if args.cluster != "local-dev" || args.broker_name != "broker-a" {
-                return Err(ToolExecutionError::InvalidArguments(
-                    "unexpected broker-diagnostics mapping".to_string(),
+                return Err(ToolFailure::Rejected(
+                    crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
                 ));
             }
             Ok(QueryResult::bypass(
@@ -535,10 +537,10 @@ mod tests {
         async fn broker_config_summary(
             &self,
             args: BrokerConfigSummaryArgs,
-        ) -> Result<QueryResult<crate::tools::config_tools::BrokerConfigSummaryOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<crate::tools::config_tools::BrokerConfigSummaryOutput>, ToolFailure> {
             if args.cluster != "local-dev" || args.broker_name != "broker-a" {
-                return Err(ToolExecutionError::InvalidArguments(
-                    "unexpected broker-configuration mapping".to_string(),
+                return Err(ToolFailure::Rejected(
+                    crate::tools::executor::ToolRejection::InvalidArguments { _source: None },
                 ));
             }
             Ok(QueryResult::bypass(
@@ -553,7 +555,7 @@ mod tests {
         async fn diagnose_consumer_lag(
             &self,
             _args: DiagnoseConsumerLagArgs,
-        ) -> Result<QueryResult<DiagnosisReport>, ToolExecutionError> {
+        ) -> Result<QueryResult<DiagnosisReport>, ToolFailure> {
             unimplemented!("not needed by reader tests")
         }
     }
@@ -691,11 +693,15 @@ mod tests {
 
     #[test]
     fn resource_errors_distinguish_permission_timeout_and_backend_failure() {
-        let permission = resource_error(ToolExecutionError::PermissionDenied(
-            "missing scope for token=secret at 127.0.0.1:9876".to_string(),
+        let permission = resource_error(ToolFailure::Rejected(
+            crate::tools::executor::ToolRejection::PermissionDenied,
         ));
-        let timeout = resource_error(ToolExecutionError::TimedOut { timeout_ms: 5000 });
-        let backend = resource_error(ToolExecutionError::backend("nameserver unavailable secret_key=hidden"));
+        let timeout = resource_error(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut {
+            timeout_ms: 5000,
+        }));
+        let backend = resource_error(ToolFailure::Operational(
+            crate::tools::executor::ToolExecutionError::Backend(None),
+        ));
 
         assert_eq!(permission.data.as_ref().unwrap()["code"], "permission_denied");
         assert_eq!(timeout.data.as_ref().unwrap()["code"], "resource_query_timeout");

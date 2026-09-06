@@ -52,12 +52,43 @@ struct AliasIdentity {
     parts: Vec<String>,
 }
 
-#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IdentifierAliasError {
-    #[error("identifier alias input exceeds the process safety bound")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IdentifierAliasRejection {
     InputBoundExceeded,
-    #[error("identifier alias capacity is unavailable")]
-    CapacityUnavailable,
+    CapacityExceeded,
+    CollisionExhausted,
+}
+
+#[derive(Debug)]
+pub(crate) enum IdentifierAliasFailure {
+    Rejected(IdentifierAliasRejection),
+    Operational(crate::McpError),
+}
+
+impl From<IdentifierAliasRejection> for IdentifierAliasFailure {
+    fn from(rejection: IdentifierAliasRejection) -> Self {
+        Self::Rejected(rejection)
+    }
+}
+
+#[derive(thiserror::Error)]
+#[error("identifier alias state is unavailable")]
+struct AliasStateError(#[source] std::sync::PoisonError<()>);
+
+impl std::fmt::Debug for AliasStateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for IdentifierAliasRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InputBoundExceeded => write!(f, "identifier alias input exceeds the process safety bound"),
+            Self::CapacityExceeded => write!(f, "identifier alias capacity is exhausted"),
+            Self::CollisionExhausted => write!(f, "identifier alias collision attempts are exhausted"),
+        }
+    }
 }
 
 impl std::fmt::Debug for IdentifierAliaser {
@@ -83,42 +114,43 @@ impl Default for IdentifierAliaser {
 }
 
 impl IdentifierAliaser {
-    pub(crate) fn client_alias(&self, client_id: &str, client_addr: &str) -> Result<String, IdentifierAliasError> {
+    pub(crate) fn client_alias(&self, client_id: &str, client_addr: &str) -> Result<String, IdentifierAliasFailure> {
         self.alias("client", &[client_id, client_addr])
     }
 
-    pub(crate) fn message_alias(&self, message_id: &str) -> Result<String, IdentifierAliasError> {
+    pub(crate) fn message_alias(&self, message_id: &str) -> Result<String, IdentifierAliasFailure> {
         self.alias("message", &[message_id])
     }
 
-    pub(crate) fn unique_message_alias(&self, message_id: &str) -> Result<String, IdentifierAliasError> {
+    pub(crate) fn unique_message_alias(&self, message_id: &str) -> Result<String, IdentifierAliasFailure> {
         self.alias("unique-message", &[message_id])
     }
 
-    fn alias(&self, domain: &'static str, parts: &[&str]) -> Result<String, IdentifierAliasError> {
+    fn alias(&self, domain: &'static str, parts: &[&str]) -> Result<String, IdentifierAliasFailure> {
         let input_bytes = parts
             .iter()
             .try_fold(0usize, |total, part| total.checked_add(part.len()))
-            .ok_or(IdentifierAliasError::InputBoundExceeded)?;
+            .ok_or(IdentifierAliasRejection::InputBoundExceeded)?;
         if parts.is_empty() || parts.len() > MAX_ALIAS_PARTS || input_bytes > self.keys.max_input_bytes {
-            return Err(IdentifierAliasError::InputBoundExceeded);
+            return Err(IdentifierAliasRejection::InputBoundExceeded.into());
         }
         let identity = AliasIdentity {
             domain,
             parts: parts.iter().map(|part| (*part).to_string()).collect(),
         };
-        let mut state = self
-            .keys
-            .state
-            .lock()
-            .map_err(|_| IdentifierAliasError::CapacityUnavailable)?;
+        let mut state = self.keys.state.lock().map_err(|poison| {
+            drop(poison.into_inner());
+            IdentifierAliasFailure::Operational(crate::McpError::from_source(AliasStateError(
+                std::sync::PoisonError::new(()),
+            )))
+        })?;
         for attempt in 0..MAX_COLLISION_ATTEMPTS {
             let candidate = self.candidate(domain, parts, attempt);
             match state.identities_by_alias.get(&candidate) {
                 Some(existing) if existing == &identity => return Ok(candidate),
                 Some(_) => continue,
                 None if state.identities_by_alias.len() >= self.keys.max_identities => {
-                    return Err(IdentifierAliasError::CapacityUnavailable);
+                    return Err(IdentifierAliasRejection::CapacityExceeded.into());
                 }
                 None => {
                     state.identities_by_alias.insert(candidate.clone(), identity);
@@ -126,7 +158,7 @@ impl IdentifierAliaser {
                 }
             }
         }
-        Err(IdentifierAliasError::CapacityUnavailable)
+        Err(IdentifierAliasRejection::CollisionExhausted.into())
     }
 
     fn candidate(&self, domain: &'static str, parts: &[&str], attempt: u16) -> String {
@@ -200,14 +232,40 @@ mod tests {
     fn capacity_and_input_bounds_fail_without_exposing_input() {
         let capacity = IdentifierAliaser::with_test_limits(1, 16, 0);
         capacity.message_alias("first").unwrap();
-        assert_eq!(
+        assert!(matches!(
             capacity.message_alias("second-secret").unwrap_err(),
-            IdentifierAliasError::CapacityUnavailable
-        );
+            IdentifierAliasFailure::Rejected(IdentifierAliasRejection::CapacityExceeded)
+        ));
 
         let bounded = IdentifierAliaser::with_test_limits(2, 4, 0);
         let error = bounded.message_alias("raw-secret").unwrap_err();
-        assert_eq!(error, IdentifierAliasError::InputBoundExceeded);
-        assert!(!error.to_string().contains("raw-secret"));
+        assert!(matches!(
+            error,
+            IdentifierAliasFailure::Rejected(IdentifierAliasRejection::InputBoundExceeded)
+        ));
+        assert!(!format!("{error:?}").contains("raw-secret"));
+    }
+
+    #[test]
+    fn collision_exhaustion_is_distinct_from_poisoned_state() {
+        use std::error::Error;
+        let aliases = IdentifierAliaser::with_test_limits(8, 128, MAX_COLLISION_ATTEMPTS);
+        aliases.message_alias("first").unwrap();
+        assert!(matches!(
+            aliases.message_alias("second"),
+            Err(IdentifierAliasFailure::Rejected(
+                IdentifierAliasRejection::CollisionExhausted
+            ))
+        ));
+        let _ = std::panic::catch_unwind(|| {
+            let _state = aliases.keys.state.lock().unwrap();
+            panic!("poison private alias state");
+        });
+        let Err(IdentifierAliasFailure::Operational(error)) = aliases.message_alias("first") else {
+            panic!("expected poisoned state to be operational");
+        };
+        let source = error.source().unwrap().downcast_ref::<AliasStateError>().unwrap();
+        assert!(source.source().unwrap().is::<std::sync::PoisonError<()>>());
+        assert_eq!(format!("{source:?}"), "identifier alias state is unavailable");
     }
 }

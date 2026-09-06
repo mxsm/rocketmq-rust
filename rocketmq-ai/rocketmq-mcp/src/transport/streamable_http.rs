@@ -47,12 +47,12 @@ use rocketmq_transport::api::TlsServerRuntime;
 const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub async fn serve_typed(app: McpApp) -> Result<(), McpError> {
-    serve_typed_with_shutdown(
+pub async fn serve(app: McpApp) -> crate::error::McpResult<()> {
+    serve_with_shutdown(
         app,
         async {
-            if let Err(error) = rocketmq_runtime::wait_for_signal_result().await {
-                tracing::warn!(error = %error, "failed to listen for MCP process termination signal");
+            if rocketmq_runtime::wait_for_signal_result().await.is_err() {
+                tracing::warn!("failed to listen for MCP process termination signal");
             }
         },
         None,
@@ -60,13 +60,13 @@ pub async fn serve_typed(app: McpApp) -> Result<(), McpError> {
     .await
 }
 
-pub async fn serve_typed_with_lifecycle(app: McpApp, lifecycle: ServiceLifecycle) -> Result<(), McpError> {
+pub async fn serve_with_lifecycle(app: McpApp, lifecycle: ServiceLifecycle) -> crate::error::McpResult<()> {
     let shutdown_lifecycle = lifecycle.clone();
-    serve_typed_with_shutdown(
+    serve_with_shutdown(
         app,
         async move {
-            if let Err(error) = shutdown_lifecycle.wait_for_shutdown_signal().await {
-                tracing::warn!(error = %error, "MCP signal observation failed");
+            if shutdown_lifecycle.wait_for_shutdown_signal().await.is_err() {
+                tracing::warn!("MCP signal observation failed");
                 shutdown_lifecycle.mark_failed();
                 shutdown_lifecycle.request_shutdown(ShutdownReason::Internal);
             }
@@ -76,11 +76,11 @@ pub async fn serve_typed_with_lifecycle(app: McpApp, lifecycle: ServiceLifecycle
     .await
 }
 
-async fn serve_typed_with_shutdown<F>(
+async fn serve_with_shutdown<F>(
     app: McpApp,
     shutdown: F,
     lifecycle: Option<ServiceLifecycle>,
-) -> Result<(), McpError>
+) -> crate::error::McpResult<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
@@ -94,7 +94,7 @@ where
             .await
             .map_err(|source| McpError::infrastructure("initialize MCP HTTPS listener", source))?;
     if tls_runtime.active_generation() == 0 {
-        return Err(McpError::InvalidConfig(
+        return Err(McpError::invalid_config(
             "MCP HTTPS listener has no verified certificate generation".to_string(),
         ));
     }
@@ -105,10 +105,7 @@ where
     let endpoint = app.config().server.http.endpoint.clone();
     let cancellation_token = CancellationToken::new();
     let auth_state = auth_state(&app)?;
-    auth_state
-        .warm_up()
-        .await
-        .map_err(|source| McpError::infrastructure("initialize MCP JWKS verifier", source))?;
+    auth_state.warm_up().await?;
     let router = build_router_with_auth(app, cancellation_token.clone(), auth_state);
 
     tracing::info!(
@@ -118,9 +115,7 @@ where
         "rocketmq-mcp streamable HTTPS transport listening"
     );
     if let Some(lifecycle) = lifecycle.as_ref() {
-        lifecycle
-            .mark_ready()
-            .map_err(|error| McpError::InvalidConfig(format!("failed to publish MCP readiness: {error}")))?;
+        lifecycle.mark_ready().map_err(McpError::from_source)?;
         rocketmq_observability::metrics::runtime::record_lifecycle(
             rocketmq_runtime::RuntimeComponent::Mcp,
             rocketmq_observability::metrics::runtime::RuntimeLifecycleState::Ready,
@@ -138,19 +133,13 @@ where
     Ok(())
 }
 
-#[deprecated(since = "1.0.0", note = "use serve_typed")]
-pub async fn serve(app: McpApp) -> anyhow::Result<()> {
-    serve_typed(app).await.map_err(anyhow::Error::new)
-}
-
-pub fn build_router_typed(app: McpApp, cancellation_token: CancellationToken) -> Result<Router, McpError> {
+pub fn build_router(app: McpApp, cancellation_token: CancellationToken) -> crate::error::McpResult<Router> {
     let auth_state = auth_state(&app)?;
     Ok(build_router_with_auth(app, cancellation_token, auth_state))
 }
 
-fn auth_state(app: &McpApp) -> Result<HttpAuthState, McpError> {
+fn auth_state(app: &McpApp) -> crate::error::McpResult<HttpAuthState> {
     HttpAuthState::from_http_config(&app.config().server.http, app.guard().clone())
-        .map_err(|source| McpError::infrastructure("configure MCP HTTP authentication", source))
 }
 
 fn build_router_with_auth(app: McpApp, cancellation_token: CancellationToken, auth_state: HttpAuthState) -> Router {
@@ -177,11 +166,6 @@ fn build_router_with_auth(app: McpApp, cancellation_token: CancellationToken, au
             HTTP_REQUEST_TIMEOUT,
         ))
         .layer(RequestBodyLimitLayer::new(MAX_HTTP_BODY_BYTES))
-}
-
-#[deprecated(since = "1.0.0", note = "use build_router_typed")]
-pub fn build_router(app: McpApp, cancellation_token: CancellationToken) -> anyhow::Result<Router> {
-    build_router_typed(app, cancellation_token).map_err(anyhow::Error::new)
 }
 
 fn protected_resource_metadata(http_config: &HttpConfig) -> serde_json::Value {
@@ -233,7 +217,7 @@ fn streamable_server_config(
     server_config
 }
 
-fn parse_bind_addr(bind: &str) -> Result<SocketAddr, McpError> {
+fn parse_bind_addr(bind: &str) -> crate::error::McpResult<SocketAddr> {
     bind.parse::<SocketAddr>()
         .map_err(|source| McpError::infrastructure("parse server.http.bind socket address", source))
 }
@@ -285,8 +269,8 @@ impl Listener for HttpsListener {
         loop {
             let (stream, remote_addr) = match self.tcp.accept().await {
                 Ok(accepted) => accepted,
-                Err(error) => {
-                    tracing::warn!(%error, "failed to accept MCP HTTPS TCP connection");
+                Err(_) => {
+                    tracing::warn!("failed to accept MCP HTTPS TCP connection");
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 }
@@ -367,7 +351,7 @@ mod tests {
             rocketmq_observability::TelemetryHandle::noop(),
         )
         .unwrap();
-        let router = build_router_typed(app.clone(), CancellationToken::new()).unwrap();
+        let router = build_router(app.clone(), CancellationToken::new()).unwrap();
 
         let metadata = router
             .clone()

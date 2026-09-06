@@ -101,9 +101,8 @@ pub fn manifest_for(
 }
 
 pub fn read_result(uri: &str, manifest: CapabilityManifest) -> Result<ReadResourceResult, rmcp::ErrorData> {
-    let text = serde_json::to_string_pretty(&manifest).map_err(|error| {
-        rmcp::ErrorData::internal_error(format!("failed to encode capability manifest: {error}"), None)
-    })?;
+    let text = serde_json::to_string_pretty(&manifest)
+        .map_err(|source| crate::McpError::from_source(source).into_error_data())?;
     Ok(ReadResourceResult::new(vec![
         ResourceContents::text(text, uri).with_mime_type(JSON_MIME_TYPE)
     ]))

@@ -32,7 +32,7 @@ use tracing::Instrument;
 use crate::adapter::query_facade::ReadOnlyQuery;
 use crate::guard::context::RequestContext;
 use crate::guard::Guard;
-use crate::guard::GuardError;
+use crate::guard::GuardRejection;
 use crate::model::contract::QueryResult;
 use crate::model::contract::ToolResponse;
 use crate::resources::uri::ResourceKind;
@@ -54,133 +54,203 @@ use crate::tools::output_policy;
 use crate::tools::proxy_tools;
 use crate::tools::topic_tools;
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum ToolExecutionError {
-    #[error("invalid arguments: {0}")]
-    InvalidArguments(String),
-
-    #[error("backend error: {0}")]
-    Backend(String),
-
-    #[error("permission denied: {0}")]
-    PermissionDenied(String),
-
-    #[error("permission denied: {0}")]
-    UnauthorizedScope(String),
-
-    #[error("permission denied: {0}")]
-    TenantMismatch(String),
-
-    #[error("permission denied: {0}")]
-    ClusterNotAllowed(String),
-
-    #[error("rate limit exceeded: {0}")]
-    RateLimited(String),
-
-    #[error("change planning disabled: {0}")]
-    ChangePlanningDisabled(String),
-
-    #[error("internal error: {0}")]
-    Internal(String),
-
-    #[error("structured output is {actual_bytes} bytes; maximum is {max_bytes} bytes")]
-    OutputTooLarge { actual_bytes: usize, max_bytes: usize },
-
-    #[error("query workflow timed out after {timeout_ms} ms")]
-    TimedOut { timeout_ms: u64 },
-
-    #[error("query workflow was cancelled")]
-    Cancelled,
+#[derive(Clone)]
+pub(crate) enum ToolFailure {
+    Rejected(ToolRejection),
+    Operational(ToolExecutionError),
 }
 
-impl ToolExecutionError {
-    pub(crate) fn backend(error: impl ToString) -> Self {
-        Self::Backend(error.to_string())
+#[derive(Clone, Debug)]
+pub(crate) enum ToolRejection {
+    InvalidArguments {
+        _source: Option<std::sync::Arc<crate::McpError>>,
+    },
+    PermissionDenied,
+    UnauthorizedScope,
+    TenantMismatch,
+    ClusterNotAllowed,
+    RateLimited,
+    ChangePlanningDisabled,
+    OutputTooLarge {
+        actual_bytes: usize,
+        max_bytes: usize,
+    },
+    TimedOut {
+        timeout_ms: u64,
+    },
+    Cancelled,
+    AliasInputBoundExceeded,
+    AliasCapacityExceeded,
+    AliasCollisionExhausted,
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub(crate) enum ToolExecutionError {
+    #[error("RocketMQ source is unavailable")]
+    Backend(#[source] Option<std::sync::Arc<crate::McpError>>),
+    #[error("MCP request failed internally")]
+    Internal(#[source] Option<std::sync::Arc<crate::McpError>>),
+}
+
+impl std::fmt::Display for ToolFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.public_message())
+    }
+}
+
+impl std::fmt::Debug for ToolFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl ToolFailure {
+    pub(crate) fn invalid_arguments(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Rejected(ToolRejection::InvalidArguments {
+            _source: Some(std::sync::Arc::new(crate::McpError::from_source(error))),
+        })
+    }
+    pub(crate) fn backend(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Operational(ToolExecutionError::Backend(Some(std::sync::Arc::new(
+            crate::McpError::from_source(error),
+        ))))
     }
 
-    pub(crate) fn internal(error: impl ToString) -> Self {
-        Self::Internal(error.to_string())
+    pub(crate) fn internal(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Operational(ToolExecutionError::Internal(Some(std::sync::Arc::new(
+            crate::McpError::from_source(error),
+        ))))
     }
 
     pub(crate) fn code(&self) -> &'static str {
         match self {
-            Self::InvalidArguments(_) => "invalid_arguments",
-            Self::Backend(_) => "source_unavailable",
-            Self::PermissionDenied(_) => "permission_denied",
-            Self::UnauthorizedScope(_) => "unauthorized_scope",
-            Self::TenantMismatch(_) => "tenant_mismatch",
-            Self::ClusterNotAllowed(_) => "cluster_not_allowed",
-            Self::RateLimited(_) => "rate_limited",
-            Self::ChangePlanningDisabled(_) => "change_planning_disabled",
-            Self::Internal(_) => "internal_error",
-            Self::OutputTooLarge { .. } => "output_too_large",
-            Self::TimedOut { .. } => "backend_timeout",
-            Self::Cancelled => "cancelled",
+            Self::Rejected(ToolRejection::InvalidArguments { .. }) => "invalid_arguments",
+            Self::Operational(ToolExecutionError::Backend(_)) => "source_unavailable",
+            Self::Rejected(ToolRejection::PermissionDenied) => "permission_denied",
+            Self::Rejected(ToolRejection::UnauthorizedScope) => "unauthorized_scope",
+            Self::Rejected(ToolRejection::TenantMismatch) => "tenant_mismatch",
+            Self::Rejected(ToolRejection::ClusterNotAllowed) => "cluster_not_allowed",
+            Self::Rejected(ToolRejection::RateLimited) => "rate_limited",
+            Self::Rejected(ToolRejection::ChangePlanningDisabled) => "change_planning_disabled",
+            Self::Operational(ToolExecutionError::Internal(_)) => "internal_error",
+            Self::Rejected(ToolRejection::OutputTooLarge { .. }) => "output_too_large",
+            Self::Rejected(ToolRejection::TimedOut { .. }) => "backend_timeout",
+            Self::Rejected(ToolRejection::Cancelled) => "cancelled",
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded) => "identifier_input_bound_exceeded",
+            Self::Rejected(ToolRejection::AliasCapacityExceeded) => "identifier_capacity_exceeded",
+            Self::Rejected(ToolRejection::AliasCollisionExhausted) => "identifier_collision_exhausted",
         }
     }
 
     fn retryable(&self) -> bool {
-        matches!(self, Self::Backend(_) | Self::RateLimited(_) | Self::TimedOut { .. })
+        matches!(
+            self,
+            Self::Operational(ToolExecutionError::Backend(_))
+                | Self::Rejected(ToolRejection::RateLimited)
+                | Self::Rejected(ToolRejection::TimedOut { .. })
+        )
     }
 
     fn suggestions(&self) -> Vec<&'static str> {
         match self {
-            Self::InvalidArguments(_) => vec!["Correct the arguments using the Tool input schema and retry."],
-            Self::Backend(_) => vec!["Retry after verifying the selected cluster and RocketMQ availability."],
-            Self::PermissionDenied(_) => vec!["Use a principal or profile authorized for this Tool."],
-            Self::UnauthorizedScope(_) => vec!["Request the required OAuth scope and retry."],
-            Self::TenantMismatch(_) => vec!["Use credentials issued for the selected cluster tenant."],
-            Self::ClusterNotAllowed(_) => vec!["Select a cluster present in the caller allow-list."],
-            Self::RateLimited(_) => vec!["Retry after the rate-limit window resets."],
-            Self::ChangePlanningDisabled(_) => {
+            Self::Rejected(ToolRejection::InvalidArguments { .. }) => {
+                vec!["Correct the arguments using the Tool input schema and retry."]
+            }
+            Self::Operational(ToolExecutionError::Backend(_)) => {
+                vec!["Retry after verifying the selected cluster and RocketMQ availability."]
+            }
+            Self::Rejected(ToolRejection::PermissionDenied) => {
+                vec!["Use a principal or profile authorized for this Tool."]
+            }
+            Self::Rejected(ToolRejection::UnauthorizedScope) => vec!["Request the required OAuth scope and retry."],
+            Self::Rejected(ToolRejection::TenantMismatch) => {
+                vec!["Use credentials issued for the selected cluster tenant."]
+            }
+            Self::Rejected(ToolRejection::ClusterNotAllowed) => {
+                vec!["Select a cluster present in the caller allow-list."]
+            }
+            Self::Rejected(ToolRejection::RateLimited) => vec!["Retry after the rate-limit window resets."],
+            Self::Rejected(ToolRejection::ChangePlanningDisabled) => {
                 vec!["Enable change planning explicitly and use an operator-authorized profile."]
             }
-            Self::Internal(_) => vec!["Report the request identifier to the server operator."],
-            Self::OutputTooLarge { .. } => vec!["Reduce the page limit or narrow the query filter."],
-            Self::TimedOut { .. } => vec!["Retry after checking RocketMQ availability or narrow the workflow scope."],
-            Self::Cancelled => vec!["Retry the request if the cancellation was not intentional."],
+            Self::Operational(ToolExecutionError::Internal(_)) => {
+                vec!["Report the request identifier to the server operator."]
+            }
+            Self::Rejected(ToolRejection::OutputTooLarge { .. }) => {
+                vec!["Reduce the page limit or narrow the query filter."]
+            }
+            Self::Rejected(ToolRejection::TimedOut { .. }) => {
+                vec!["Retry after checking RocketMQ availability or narrow the workflow scope."]
+            }
+            Self::Rejected(ToolRejection::Cancelled) => {
+                vec!["Retry the request if the cancellation was not intentional."]
+            }
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded)
+            | Self::Rejected(ToolRejection::AliasCapacityExceeded)
+            | Self::Rejected(ToolRejection::AliasCollisionExhausted) => {
+                vec!["Report the request identifier to the server operator."]
+            }
         }
     }
 
     fn metric_kind(&self) -> McpErrorKind {
         match self {
-            Self::InvalidArguments(_) => McpErrorKind::InvalidRequest,
-            Self::PermissionDenied(_)
-            | Self::UnauthorizedScope(_)
-            | Self::TenantMismatch(_)
-            | Self::ClusterNotAllowed(_)
-            | Self::ChangePlanningDisabled(_) => McpErrorKind::PermissionDenied,
-            Self::RateLimited(_) => McpErrorKind::RateLimited,
-            Self::Backend(_) | Self::TimedOut { .. } => McpErrorKind::SourceUnavailable,
-            Self::OutputTooLarge { .. } => McpErrorKind::OutputTooLarge,
-            Self::Internal(_) | Self::Cancelled => McpErrorKind::Internal,
+            Self::Rejected(ToolRejection::InvalidArguments { .. }) => McpErrorKind::InvalidRequest,
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded)
+            | Self::Rejected(ToolRejection::AliasCapacityExceeded)
+            | Self::Rejected(ToolRejection::AliasCollisionExhausted) => McpErrorKind::SourceUnavailable,
+            Self::Rejected(ToolRejection::PermissionDenied)
+            | Self::Rejected(ToolRejection::UnauthorizedScope)
+            | Self::Rejected(ToolRejection::TenantMismatch)
+            | Self::Rejected(ToolRejection::ClusterNotAllowed)
+            | Self::Rejected(ToolRejection::ChangePlanningDisabled) => McpErrorKind::PermissionDenied,
+            Self::Rejected(ToolRejection::RateLimited) => McpErrorKind::RateLimited,
+            Self::Operational(ToolExecutionError::Backend(_)) | Self::Rejected(ToolRejection::TimedOut { .. }) => {
+                McpErrorKind::SourceUnavailable
+            }
+            Self::Rejected(ToolRejection::OutputTooLarge { .. }) => McpErrorKind::OutputTooLarge,
+            Self::Operational(ToolExecutionError::Internal(_)) | Self::Rejected(ToolRejection::Cancelled) => {
+                McpErrorKind::Internal
+            }
         }
     }
 
     fn public_message(&self) -> String {
         match self {
-            Self::InvalidArguments(message) => format!("invalid arguments: {message}"),
-            Self::Backend(_) => "RocketMQ source is unavailable".to_string(),
-            Self::PermissionDenied(_) => "permission denied for this Tool".to_string(),
-            Self::UnauthorizedScope(_) => "permission denied: required OAuth scope is unavailable".to_string(),
-            Self::TenantMismatch(_) => "permission denied: tenant boundary mismatch".to_string(),
-            Self::ClusterNotAllowed(_) => "permission denied: cluster is not allowed".to_string(),
-            Self::RateLimited(_) => "rate limit exceeded for this Tool".to_string(),
-            Self::ChangePlanningDisabled(_) => "change planning disabled by server policy".to_string(),
-            Self::Internal(_) => "MCP request failed internally".to_string(),
-            Self::OutputTooLarge {
+            Self::Rejected(ToolRejection::InvalidArguments { .. }) => "invalid arguments".to_string(),
+            Self::Operational(ToolExecutionError::Backend(_)) => "RocketMQ source is unavailable".to_string(),
+            Self::Rejected(ToolRejection::PermissionDenied) => "permission denied for this Tool".to_string(),
+            Self::Rejected(ToolRejection::UnauthorizedScope) => {
+                "permission denied: required OAuth scope is unavailable".to_string()
+            }
+            Self::Rejected(ToolRejection::TenantMismatch) => "permission denied: tenant boundary mismatch".to_string(),
+            Self::Rejected(ToolRejection::ClusterNotAllowed) => "permission denied: cluster is not allowed".to_string(),
+            Self::Rejected(ToolRejection::RateLimited) => "rate limit exceeded for this Tool".to_string(),
+            Self::Rejected(ToolRejection::ChangePlanningDisabled) => {
+                "change planning disabled by server policy".to_string()
+            }
+            Self::Operational(ToolExecutionError::Internal(_)) => "MCP request failed internally".to_string(),
+            Self::Rejected(ToolRejection::OutputTooLarge {
                 actual_bytes,
                 max_bytes,
-            } => format!("tool output is {actual_bytes} bytes; maximum is {max_bytes} bytes"),
-            Self::TimedOut { timeout_ms } => {
+            }) => format!("tool output is {actual_bytes} bytes; maximum is {max_bytes} bytes"),
+            Self::Rejected(ToolRejection::TimedOut { timeout_ms }) => {
                 format!("RocketMQ source timed out after {timeout_ms} ms")
             }
-            Self::Cancelled => "RocketMQ source query was cancelled".to_string(),
+            Self::Rejected(ToolRejection::Cancelled) => "RocketMQ source query was cancelled".to_string(),
+            Self::Rejected(ToolRejection::AliasInputBoundExceeded) => "identifier safety bound exceeded".to_string(),
+            Self::Rejected(ToolRejection::AliasCapacityExceeded) => "identifier capacity exhausted".to_string(),
+            Self::Rejected(ToolRejection::AliasCollisionExhausted) => {
+                "identifier collision attempts exhausted".to_string()
+            }
         }
     }
 
     fn has_private_detail(&self) -> bool {
-        matches!(self, Self::Backend(_) | Self::Internal(_))
+        matches!(
+            self,
+            Self::Operational(ToolExecutionError::Backend(_)) | Self::Operational(ToolExecutionError::Internal(_))
+        )
     }
 }
 
@@ -246,16 +316,16 @@ struct ToolErrorContent<'a> {
     suggestions: Vec<&'static str>,
 }
 
-impl From<GuardError> for ToolExecutionError {
-    fn from(error: GuardError) -> Self {
+impl From<GuardRejection> for ToolFailure {
+    fn from(error: GuardRejection) -> Self {
         match error {
-            GuardError::InvalidArgument(message) => Self::InvalidArguments(message),
-            GuardError::PermissionDenied(message) => Self::PermissionDenied(message),
-            GuardError::UnauthorizedScope(message) => Self::UnauthorizedScope(message),
-            GuardError::TenantMismatch(message) => Self::TenantMismatch(message),
-            GuardError::ClusterNotAllowed(message) => Self::ClusterNotAllowed(message),
-            GuardError::RateLimited(message) => Self::RateLimited(message),
-            GuardError::ChangePlanningDisabled(message) => Self::ChangePlanningDisabled(message),
+            GuardRejection::InvalidArgument => Self::Rejected(ToolRejection::InvalidArguments { _source: None }),
+            GuardRejection::PermissionDenied => Self::Rejected(ToolRejection::PermissionDenied),
+            GuardRejection::UnauthorizedScope => Self::Rejected(ToolRejection::UnauthorizedScope),
+            GuardRejection::TenantMismatch => Self::Rejected(ToolRejection::TenantMismatch),
+            GuardRejection::ClusterNotAllowed => Self::Rejected(ToolRejection::ClusterNotAllowed),
+            GuardRejection::RateLimited => Self::Rejected(ToolRejection::RateLimited),
+            GuardRejection::ChangePlanningDisabled => Self::Rejected(ToolRejection::ChangePlanningDisabled),
         }
     }
 }
@@ -330,7 +400,7 @@ where
                     "unknown_tool",
                     McpErrorKind::InvalidRequest,
                 );
-                return Err(ErrorData::invalid_params(format!("unknown tool: {tool_name}"), None));
+                return Err(ErrorData::invalid_params("unknown tool", None));
             }
         };
         let descriptor = tool_id.descriptor();
@@ -978,22 +1048,21 @@ where
     }
 }
 
-fn decode_args<T>(arguments: JsonObject) -> Result<T, ToolExecutionError>
+fn decode_args<T>(arguments: JsonObject) -> Result<T, ToolFailure>
 where
     T: DeserializeOwned,
 {
-    serde_json::from_value(Value::Object(arguments))
-        .map_err(|error| ToolExecutionError::InvalidArguments(error.to_string()))
+    serde_json::from_value(Value::Object(arguments)).map_err(ToolFailure::invalid_arguments)
 }
 
-fn validate_input(descriptor: &ToolDescriptor, arguments: &JsonObject) -> Result<(), ToolExecutionError> {
+fn validate_input(descriptor: &ToolDescriptor, arguments: &JsonObject) -> Result<(), ToolFailure> {
     let definition = descriptor.id.definition();
     validate_schema(
         definition.input_schema.as_ref(),
         &Value::Object(arguments.clone()),
         "input",
     )
-    .map_err(ToolExecutionError::InvalidArguments)
+    .map_err(|_| ToolFailure::Rejected(crate::tools::executor::ToolRejection::InvalidArguments { _source: None }))
 }
 
 fn success_result<T>(
@@ -1003,7 +1072,7 @@ fn success_result<T>(
     summary: String,
     output: QueryResult<T>,
     resource: RocketmqResourceUri,
-) -> Result<CallToolResult, ToolExecutionError>
+) -> Result<CallToolResult, ToolFailure>
 where
     T: Serialize,
 {
@@ -1017,7 +1086,7 @@ fn success_unlinked_result<T>(
     cluster: String,
     summary: String,
     output: QueryResult<T>,
-) -> Result<CallToolResult, ToolExecutionError>
+) -> Result<CallToolResult, ToolFailure>
 where
     T: Serialize,
 {
@@ -1032,7 +1101,7 @@ fn success_live_result<T>(
     cluster: String,
     summary: String,
     output: T,
-) -> Result<CallToolResult, ToolExecutionError>
+) -> Result<CallToolResult, ToolFailure>
 where
     T: Serialize,
 {
@@ -1049,7 +1118,7 @@ fn render_success<T>(
     mut summary: String,
     envelope: ToolResponse<T>,
     resource: Option<RocketmqResourceUri>,
-) -> Result<CallToolResult, ToolExecutionError>
+) -> Result<CallToolResult, ToolFailure>
 where
     T: Serialize,
 {
@@ -1065,7 +1134,7 @@ where
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let mut structured = serde_json::to_value(envelope).map_err(ToolExecutionError::internal)?;
+    let mut structured = serde_json::to_value(envelope).map_err(ToolFailure::internal)?;
     if !sensitive_values.is_empty() {
         summary = redact_sensitive_summary(summary, &sensitive_values);
         redact_exact_string_fields(&mut structured, &sensitive_values);
@@ -1075,9 +1144,10 @@ where
     let output_schema = definition
         .output_schema
         .as_ref()
-        .ok_or_else(|| ToolExecutionError::Internal("Tool output schema is missing".to_string()))?;
-    validate_schema(output_schema.as_ref(), &structured, "output").map_err(ToolExecutionError::internal)?;
-    let json_text = serde_json::to_string(&structured).map_err(ToolExecutionError::internal)?;
+        .ok_or_else(|| ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Internal(None)))?;
+    validate_schema(output_schema.as_ref(), &structured, "output")
+        .map_err(|_| ToolFailure::Operational(crate::tools::executor::ToolExecutionError::Internal(None)))?;
+    let json_text = serde_json::to_string(&structured).map_err(ToolFailure::internal)?;
     let mut content = vec![ContentBlock::text(summary), ContentBlock::text(json_text)];
     if let Some(resource) = resource.filter(|_| resource_can_link) {
         content.push(resource_link(resource));
@@ -1152,35 +1222,23 @@ fn resource_link(uri: RocketmqResourceUri) -> ContentBlock {
     ContentBlock::resource_link(resource)
 }
 
-fn validate_schema(schema: &JsonObject, value: &Value, label: &str) -> Result<(), String> {
+fn validate_schema(schema: &JsonObject, value: &Value, _label: &str) -> Result<(), ()> {
     let schema = Value::Object(schema.clone());
-    let validator = jsonschema::validator_for(&schema).map_err(|error| format!("invalid {label} schema: {error}"))?;
-    let errors = validator
-        .iter_errors(value)
-        .take(3)
-        .map(|error| format!("{}: {error}", error.instance_path()))
-        .collect::<Vec<_>>();
-    if errors.is_empty() {
+    let validator = jsonschema::validator_for(&schema).map_err(|_| ())?;
+    if validator.is_valid(value) {
         Ok(())
     } else {
-        Err(format!("{label} does not match schema: {}", errors.join("; ")))
+        Err(())
     }
 }
 
-fn error_result(
-    operation: &'static str,
-    tool_name: &str,
-    request_id: &str,
-    error: ToolExecutionError,
-) -> CallToolResult {
+fn error_result(operation: &'static str, tool_name: &str, request_id: &str, error: ToolFailure) -> CallToolResult {
     rocketmq_observability::metrics::mcp::record_error(McpOperationKind::Tool, operation, error.metric_kind());
     if error.has_private_detail() {
-        let detail = crate::guard::sanitizer::sanitize_text(&error.to_string());
         tracing::warn!(
             correlation_id = request_id,
             tool = operation,
             code = error.code(),
-            detail = %detail,
             "MCP Tool execution failed"
         );
     }
@@ -1413,8 +1471,8 @@ fn summary_change_plan(output: &change_tools::ChangePlan) -> String {
 }
 
 #[cfg(feature = "change-planning")]
-fn canonical_current_state<T: Serialize>(current: &QueryResult<T>) -> Result<Value, ToolExecutionError> {
-    let mut state = serde_json::to_value(&current.data).map_err(ToolExecutionError::internal)?;
+fn canonical_current_state<T: Serialize>(current: &QueryResult<T>) -> Result<Value, ToolFailure> {
+    let mut state = serde_json::to_value(&current.data).map_err(ToolFailure::internal)?;
     remove_transient_state_fields(&mut state);
     Ok(state)
 }
@@ -1438,8 +1496,31 @@ mod tests {
     use crate::config::SecurityConfig;
     use crate::guard::audit::AuditStatus;
     use crate::guard::Guard;
+    use std::error::Error;
 
     use super::*;
+
+    #[test]
+    fn backend_and_argument_sources_remain_typed_while_all_projections_are_fixed() {
+        for error in [
+            ToolFailure::backend(std::io::Error::other("raw-backend-token /private/path tenant-cluster")),
+            ToolFailure::invalid_arguments(std::io::Error::other("raw-tool-argument")),
+        ] {
+            let source = match &error {
+                ToolFailure::Operational(operational) => operational.source().unwrap().source().unwrap(),
+                ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: Some(source) }) => {
+                    source.source().unwrap()
+                }
+                _ => panic!("expected a retained source"),
+            };
+            assert!(source.is::<std::io::Error>());
+            for projection in [error.to_string(), format!("{error:?}"), error.public_message()] {
+                assert!(!projection.contains("raw-"));
+                assert!(!projection.contains("private/path"));
+                assert!(!projection.contains("tenant-cluster"));
+            }
+        }
+    }
 
     #[derive(Clone)]
     struct FakeAdapter {
@@ -1451,10 +1532,10 @@ mod tests {
         async fn cluster_overview(
             &self,
             args: cluster_tools::ClusterOverviewArgs,
-        ) -> Result<QueryResult<cluster_tools::ClusterOverviewOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<cluster_tools::ClusterOverviewOutput>, ToolFailure> {
             if self.fail {
-                return Err(ToolExecutionError::backend(
-                    "nameserver 10.24.7.9:9876 unavailable token=super-secret",
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
                 ));
             }
             let mut result = QueryResult::bypass(cluster_tools::ClusterOverviewOutput {
@@ -1481,7 +1562,7 @@ mod tests {
         async fn list_topics(
             &self,
             args: topic_tools::ListTopicsArgs,
-        ) -> Result<QueryResult<topic_tools::ListTopicsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<topic_tools::ListTopicsOutput>, ToolFailure> {
             Ok(QueryResult::bypass(topic_tools::ListTopicsOutput {
                 cluster: args.cluster.unwrap_or_else(|| "local-dev".to_string()),
                 namesrv_addr: "127.0.0.1:9876".to_string(),
@@ -1499,45 +1580,45 @@ mod tests {
         async fn describe_topic(
             &self,
             _args: topic_tools::DescribeTopicArgs,
-        ) -> Result<QueryResult<topic_tools::DescribeTopicOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<topic_tools::DescribeTopicOutput>, ToolFailure> {
             unimplemented!("not needed by this test")
         }
 
         async fn query_topic_route(
             &self,
             _args: topic_tools::QueryTopicRouteArgs,
-        ) -> Result<QueryResult<topic_tools::QueryTopicRouteOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<topic_tools::QueryTopicRouteOutput>, ToolFailure> {
             unimplemented!("not needed by this test")
         }
 
         async fn list_consumer_groups(
             &self,
             _args: consumer_tools::ListConsumerGroupsArgs,
-        ) -> Result<QueryResult<consumer_tools::ListConsumerGroupsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<consumer_tools::ListConsumerGroupsOutput>, ToolFailure> {
             unimplemented!("not needed by this test")
         }
 
         async fn query_consumer_lag(
             &self,
             _args: consumer_tools::QueryConsumerLagArgs,
-        ) -> Result<QueryResult<consumer_tools::QueryConsumerLagOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<consumer_tools::QueryConsumerLagOutput>, ToolFailure> {
             unimplemented!("not needed by this test")
         }
 
         async fn describe_broker(
             &self,
             _args: broker_tools::DescribeBrokerArgs,
-        ) -> Result<QueryResult<broker_tools::DescribeBrokerOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<broker_tools::DescribeBrokerOutput>, ToolFailure> {
             unimplemented!("not needed by this test")
         }
 
         async fn broker_diagnostics(
             &self,
             args: broker_tools::BrokerDiagnosticsArgs,
-        ) -> Result<QueryResult<broker_tools::BrokerDiagnosticsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<broker_tools::BrokerDiagnosticsOutput>, ToolFailure> {
             if self.fail {
-                return Err(ToolExecutionError::backend(
-                    "private-proxy-endpoint.example:18081 token=super-secret",
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
                 ));
             }
             Ok(QueryResult::bypass(broker_tools::BrokerDiagnosticsOutput {
@@ -1553,7 +1634,7 @@ mod tests {
         async fn broker_config_summary(
             &self,
             args: config_tools::BrokerConfigSummaryArgs,
-        ) -> Result<QueryResult<config_tools::BrokerConfigSummaryOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<config_tools::BrokerConfigSummaryOutput>, ToolFailure> {
             Ok(QueryResult::bypass(config_tools::BrokerConfigSummaryOutput {
                 cluster: args.cluster,
                 broker_name: args.broker_name,
@@ -1564,7 +1645,7 @@ mod tests {
         async fn broker_log_filter_state(
             &self,
             args: config_tools::BrokerLogFilterStateArgs,
-        ) -> Result<QueryResult<config_tools::BrokerLogFilterStateOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<config_tools::BrokerLogFilterStateOutput>, ToolFailure> {
             Ok(QueryResult::bypass(config_tools::BrokerLogFilterStateOutput {
                 cluster: args.cluster,
                 broker_name: args.broker_name,
@@ -1576,10 +1657,10 @@ mod tests {
         async fn proxy_drain_state(
             &self,
             args: proxy_tools::ProxyDrainStateArgs,
-        ) -> Result<QueryResult<proxy_tools::ProxyDrainStateOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<proxy_tools::ProxyDrainStateOutput>, ToolFailure> {
             if self.fail {
-                return Err(ToolExecutionError::backend(
-                    "private-proxy-endpoint.example:18081 token=super-secret",
+                return Err(ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
                 ));
             }
             Ok(QueryResult::bypass(proxy_tools::ProxyDrainStateOutput {
@@ -1608,7 +1689,7 @@ mod tests {
         async fn list_consumer_connections(
             &self,
             args: connection_tools::ListConsumerConnectionsArgs,
-        ) -> Result<QueryResult<connection_tools::ListConsumerConnectionsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<connection_tools::ListConsumerConnectionsOutput>, ToolFailure> {
             let oversized = args.consumer_group == "oversized";
             let items = oversized
                 .then(|| connection_tools::ConnectionRow {
@@ -1638,7 +1719,7 @@ mod tests {
         async fn list_producer_connections(
             &self,
             args: connection_tools::ListProducerConnectionsArgs,
-        ) -> Result<QueryResult<connection_tools::ListProducerConnectionsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<connection_tools::ListProducerConnectionsOutput>, ToolFailure> {
             let oversized = args.producer_group == "oversized";
             let items = oversized
                 .then(|| connection_tools::ConnectionRow {
@@ -1669,7 +1750,7 @@ mod tests {
         async fn message_metadata(
             &self,
             args: message_tools::MessageMetadataArgs,
-        ) -> Result<QueryResult<message_tools::MessageMetadataOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<message_tools::MessageMetadataOutput>, ToolFailure> {
             let topic = if args.message_id == "oversized" {
                 "x".repeat(2 * 1024 * 1024)
             } else {
@@ -1695,7 +1776,7 @@ mod tests {
         async fn topic_config_state(
             &self,
             args: config_tools::TopicConfigStateArgs,
-        ) -> Result<QueryResult<config_tools::TopicConfigStateOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<config_tools::TopicConfigStateOutput>, ToolFailure> {
             let brokers = (args.topic == "oversized")
                 .then(|| config_tools::TopicConfigStateRow {
                     broker_name: "x".repeat(2 * 1024 * 1024),
@@ -1716,7 +1797,7 @@ mod tests {
         async fn consumer_group_config_state(
             &self,
             args: config_tools::ConsumerGroupConfigStateArgs,
-        ) -> Result<QueryResult<config_tools::ConsumerGroupConfigStateOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<config_tools::ConsumerGroupConfigStateOutput>, ToolFailure> {
             let brokers = (args.group == "oversized")
                 .then(|| config_tools::ConsumerGroupConfigStateRow {
                     broker_name: "x".repeat(2 * 1024 * 1024),
@@ -1745,7 +1826,7 @@ mod tests {
         async fn topic_stats(
             &self,
             args: topic_tools::GetTopicStatsArgs,
-        ) -> Result<QueryResult<topic_tools::GetTopicStatsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<topic_tools::GetTopicStatsOutput>, ToolFailure> {
             let broker_name = if args.topic == "oversized" {
                 "x".repeat(2 * 1024 * 1024)
             } else {
@@ -1779,7 +1860,7 @@ mod tests {
         async fn topic_config(
             &self,
             args: config_tools::GetTopicConfigArgs,
-        ) -> Result<QueryResult<config_tools::GetTopicConfigOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<config_tools::GetTopicConfigOutput>, ToolFailure> {
             let broker_name = if args.topic == "oversized" {
                 "x".repeat(2 * 1024 * 1024)
             } else {
@@ -1805,7 +1886,7 @@ mod tests {
         async fn consumer_group_details(
             &self,
             args: consumer_tools::GetConsumerGroupDetailsArgs,
-        ) -> Result<QueryResult<consumer_tools::GetConsumerGroupDetailsOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<consumer_tools::GetConsumerGroupDetailsOutput>, ToolFailure> {
             let broker_name = if args.consumer_group == "oversized" {
                 "x".repeat(2 * 1024 * 1024)
             } else {
@@ -1840,7 +1921,7 @@ mod tests {
         async fn consumer_progress(
             &self,
             args: consumer_tools::GetConsumerProgressArgs,
-        ) -> Result<QueryResult<consumer_tools::GetConsumerProgressOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<consumer_tools::GetConsumerProgressOutput>, ToolFailure> {
             let broker_name = if args.consumer_group == "oversized" {
                 "x".repeat(2 * 1024 * 1024)
             } else {
@@ -1882,7 +1963,7 @@ mod tests {
         async fn ha_status(
             &self,
             args: infrastructure_tools::GetHaStatusArgs,
-        ) -> Result<QueryResult<infrastructure_tools::GetHaStatusOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<infrastructure_tools::GetHaStatusOutput>, ToolFailure> {
             let brokers = if args.broker_names == ["bounded"] {
                 bounded_ha_brokers()
             } else {
@@ -1898,7 +1979,7 @@ mod tests {
         async fn controller_metadata(
             &self,
             args: infrastructure_tools::GetControllerMetadataArgs,
-        ) -> Result<QueryResult<infrastructure_tools::GetControllerMetadataOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<infrastructure_tools::GetControllerMetadataOutput>, ToolFailure> {
             Ok(QueryResult::bypass(infrastructure_tools::GetControllerMetadataOutput {
                 cluster: args.cluster,
                 controllers: Vec::new(),
@@ -1908,7 +1989,7 @@ mod tests {
         async fn nameserver_config_summary(
             &self,
             args: infrastructure_tools::GetNameserverConfigSummaryArgs,
-        ) -> Result<QueryResult<infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolExecutionError> {
+        ) -> Result<QueryResult<infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure> {
             Ok(QueryResult::bypass(
                 infrastructure_tools::GetNameserverConfigSummaryOutput {
                     cluster: args.cluster,
@@ -1921,7 +2002,7 @@ mod tests {
         async fn diagnose_consumer_lag(
             &self,
             _args: diagnosis_tools::DiagnoseConsumerLagArgs,
-        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolExecutionError> {
+        ) -> Result<QueryResult<crate::model::diagnosis::DiagnosisReport>, ToolFailure> {
             unimplemented!("not needed by this test")
         }
     }
@@ -2089,11 +2170,12 @@ mod tests {
             },
             test_guard("diagnose"),
         )
-        .call(CallToolRequestParams::new("unknown_tool"))
+        .call(CallToolRequestParams::new("unknown-tool-secret-token-sentinel"))
         .await
         .unwrap_err();
 
         assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(err.message, "unknown tool");
     }
 
     #[tokio::test]

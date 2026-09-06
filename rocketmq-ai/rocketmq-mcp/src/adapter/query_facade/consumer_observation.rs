@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolRejection;
 use std::time::Duration;
 
 use super::normalized_identifier;
@@ -30,7 +31,7 @@ use crate::tools::consumer_tools::GetConsumerGroupDetailsArgs;
 use crate::tools::consumer_tools::GetConsumerGroupDetailsOutput;
 use crate::tools::consumer_tools::GetConsumerProgressArgs;
 use crate::tools::consumer_tools::GetConsumerProgressOutput;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 
 impl<F> QueryFacade<F>
 where
@@ -39,7 +40,7 @@ where
     pub(crate) async fn consumer_group_details(
         &self,
         mut args: GetConsumerGroupDetailsArgs,
-    ) -> Result<QueryResult<GetConsumerGroupDetailsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<GetConsumerGroupDetailsOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
         let cluster = self.resolve_required_cluster(&args.cluster)?;
@@ -54,7 +55,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move { session.consumer_group_details(&args.consumer_group).await })
@@ -68,7 +69,7 @@ where
     pub(crate) async fn consumer_progress(
         &self,
         mut args: GetConsumerProgressArgs,
-    ) -> Result<QueryResult<GetConsumerProgressOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<GetConsumerProgressOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.consumer_group = normalized_identifier("consumer_group", &args.consumer_group)?;
         let cluster = self.resolve_required_cluster(&args.cluster)?;
@@ -163,7 +164,7 @@ mod tests {
     impl AdminSessionFactory for Factory {
         type Session = Session;
 
-        async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError> {
+        async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure> {
             self.counters.starts.fetch_add(1, Ordering::SeqCst);
             Ok(Session {
                 cluster,
@@ -180,22 +181,22 @@ mod tests {
     }
 
     impl AdminSession for Session {
-        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
+        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             Ok(QueryPayload::complete(Vec::new()))
         }
 
-        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolFailure> {
             Ok(Vec::new())
         }
 
-        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
+        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolFailure> {
             Ok(SessionTopicRoute {
                 brokers: Vec::new(),
                 queues: Vec::new(),
             })
         }
 
-        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
             Ok(QueryPayload::complete(Vec::new()))
         }
 
@@ -203,7 +204,7 @@ mod tests {
             &mut self,
             _topic: &str,
             _consumer_group: &str,
-        ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConsumerLag>, ToolFailure> {
             Ok(QueryPayload::complete(SessionConsumerLag {
                 queues: Vec::new(),
                 total_lag: 0,
@@ -215,7 +216,7 @@ mod tests {
         async fn consumer_group_details(
             &mut self,
             consumer_group: &str,
-        ) -> Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolFailure> {
             self.counters.details.fetch_add(1, Ordering::SeqCst);
             Ok(QueryPayload::complete(GetConsumerGroupDetailsOutput {
                 cluster: self.cluster.name.clone(),
@@ -246,7 +247,7 @@ mod tests {
         async fn consumer_progress(
             &mut self,
             _consumer_group: &str,
-        ) -> Result<QueryPayload<SessionConsumerProgress>, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConsumerProgress>, ToolFailure> {
             self.counters.progress.fetch_add(1, Ordering::SeqCst);
             self.counters.progress_entered.store(true, Ordering::SeqCst);
             if self.hang_progress {
@@ -280,11 +281,11 @@ mod tests {
         async fn probe_broker_runtime_target(
             &mut self,
             _broker_name: &str,
-        ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
+        ) -> Result<BrokerRuntimeTargetStatus, ToolFailure> {
             Ok(BrokerRuntimeTargetStatus::NotFound)
         }
 
-        async fn shutdown(self) -> Result<(), ToolExecutionError> {
+        async fn shutdown(self) -> Result<(), ToolFailure> {
             self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -419,7 +420,10 @@ mod tests {
             }
         }
         cancellation.cancel();
-        assert!(matches!(query.await, Err(ToolExecutionError::Cancelled)));
+        assert!(matches!(
+            query.await,
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled))
+        ));
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
 
         let factory = Factory {
@@ -431,7 +435,9 @@ mod tests {
         let facade = QueryFacade::with_factory_and_control(config(), factory, control);
         assert!(matches!(
             facade.consumer_progress(progress_args("group-a", 1, None)).await,
-            Err(ToolExecutionError::TimedOut { timeout_ms: 10 })
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut {
+                timeout_ms: 10
+            }))
         ));
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
     }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolRejection;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -22,7 +23,7 @@ use rmcp::model::ResourceContents;
 use rmcp::ErrorData;
 use serde_json::Value;
 
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::output_policy;
 
 const REDACTED: &str = "[REDACTED]";
@@ -107,9 +108,8 @@ pub fn process_read_resource_result(
 ) -> Result<ReadResourceResult, ErrorData> {
     for content in &mut result.contents {
         if let ResourceContents::TextResourceContents { text, .. } = content {
-            let mut value: Value = serde_json::from_str(text).map_err(|error| {
-                ErrorData::internal_error(format!("resource output is not valid JSON: {error}"), None)
-            })?;
+            let mut value: Value =
+                serde_json::from_str(text).map_err(|source| crate::McpError::from_source(source).into_error_data())?;
             if let Value::Object(object) = &mut value {
                 object.insert("request_id".to_string(), Value::String(request_id.to_string()));
                 object.insert("correlation_id".to_string(), Value::String(request_id.to_string()));
@@ -118,20 +118,19 @@ pub fn process_read_resource_result(
                 sanitize_value(&mut value);
             }
             let value = output_policy::apply(value).map_err(|error| output_policy_error(error, request_id))?;
-            *text = serde_json::to_string(&value).map_err(|error| {
-                ErrorData::internal_error(format!("failed to encode resource output: {error}"), None)
-            })?;
+            *text = serde_json::to_string(&value)
+                .map_err(|source| crate::McpError::from_source(source).into_error_data())?;
         }
     }
     Ok(result)
 }
 
-fn output_policy_error(error: ToolExecutionError, request_id: &str) -> ErrorData {
+fn output_policy_error(error: ToolFailure, request_id: &str) -> ErrorData {
     match error {
-        ToolExecutionError::OutputTooLarge {
+        ToolFailure::Rejected(ToolRejection::OutputTooLarge {
             actual_bytes,
             max_bytes,
-        } => ErrorData::internal_error(
+        }) => ErrorData::internal_error(
             "resource output exceeds the configured byte budget",
             Some(serde_json::json!({
                 "code": "output_too_large",

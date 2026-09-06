@@ -18,7 +18,7 @@ use crate::app::McpApp;
 use crate::error::McpError;
 use crate::protocol::server::RocketmqMcpServer;
 
-pub async fn serve_typed(app: McpApp) -> Result<(), McpError> {
+pub async fn serve(app: McpApp) -> crate::error::McpResult<()> {
     let server = RocketmqMcpServer::new(app);
     let service = server
         .serve(rmcp::transport::stdio())
@@ -42,10 +42,10 @@ pub async fn serve_typed(app: McpApp) -> Result<(), McpError> {
 /// Returns an infrastructure error when the stdio service cannot start, the lifecycle signal
 /// cannot be observed, the service task fails, or transport cleanup exceeds the shared shutdown
 /// deadline.
-pub async fn serve_typed_with_lifecycle(
+pub async fn serve_with_lifecycle(
     app: McpApp,
     lifecycle: rocketmq_runtime::ServiceLifecycle,
-) -> Result<(), McpError> {
+) -> crate::error::McpResult<()> {
     let server = RocketmqMcpServer::new(app);
     let startup = server.serve(rmcp::transport::stdio());
     tokio::pin!(startup);
@@ -83,9 +83,4 @@ pub async fn serve_typed_with_lifecycle(
             source,
         )),
     }
-}
-
-#[deprecated(since = "1.0.0", note = "use serve_typed")]
-pub async fn serve(app: McpApp) -> anyhow::Result<()> {
-    serve_typed(app).await.map_err(anyhow::Error::new)
 }

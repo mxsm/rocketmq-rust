@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolExecutionError;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -65,7 +66,7 @@ use crate::tools::consumer_tools::ConsumerProgressQueueRow;
 use crate::tools::consumer_tools::ConsumerProgressState;
 use crate::tools::consumer_tools::GetConsumerGroupDetailsOutput;
 use crate::tools::consumer_tools::QueueLag;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::proxy_tools::ProxyDrainStateOutput;
 use crate::tools::topic_tools::TopicRouteBroker;
 use crate::tools::topic_tools::TopicRouteQueue;
@@ -166,47 +167,34 @@ pub(crate) struct SessionMessageMetadata {
 }
 
 pub(crate) trait AdminSession: Send {
-    fn broker_rows(
-        &mut self,
-    ) -> impl Future<Output = Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError>> + Send;
+    fn broker_rows(&mut self) -> impl Future<Output = Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure>> + Send;
 
-    fn topic_inventory(&mut self) -> impl Future<Output = Result<Vec<String>, ToolExecutionError>> + Send;
+    fn topic_inventory(&mut self) -> impl Future<Output = Result<Vec<String>, ToolFailure>> + Send;
 
-    fn topic_route(
-        &mut self,
-        topic: &str,
-    ) -> impl Future<Output = Result<SessionTopicRoute, ToolExecutionError>> + Send;
+    fn topic_route(&mut self, topic: &str) -> impl Future<Output = Result<SessionTopicRoute, ToolFailure>> + Send;
 
     fn topic_stats(
         &mut self,
         _topic: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionTopicStats>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Topic statistics are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<SessionTopicStats>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn topic_config(
         &mut self,
         _topic: &str,
-    ) -> impl Future<Output = Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError>>
-           + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Topic configuration is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn consumer_groups(
         &mut self,
-    ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure>> + Send;
 
     fn consumer_group_inventory(
         &mut self,
-    ) -> impl Future<Output = Result<QueryPayload<Vec<String>>, ToolExecutionError>> + Send {
+    ) -> impl Future<Output = Result<QueryPayload<Vec<String>>, ToolFailure>> + Send {
         async {
             self.consumer_groups().await.map(|groups| {
                 groups.map(|groups| {
@@ -222,7 +210,7 @@ pub(crate) trait AdminSession: Send {
     fn consumer_groups_exact(
         &mut self,
         groups: &[String],
-    ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError>> + Send {
+    ) -> impl Future<Output = Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure>> + Send {
         async move {
             self.consumer_groups().await.map(|result| {
                 result.map(|summaries| {
@@ -239,137 +227,93 @@ pub(crate) trait AdminSession: Send {
         &mut self,
         topic: &str,
         consumer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionConsumerLag>, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<QueryPayload<SessionConsumerLag>, ToolFailure>> + Send;
 
     fn consumer_group_details(
         &mut self,
         _consumer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "consumer group details are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn consumer_progress(
         &mut self,
         _consumer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionConsumerProgress>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "consumer progress is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<SessionConsumerProgress>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn probe_broker_runtime_target(
         &mut self,
         broker_name: &str,
-    ) -> impl Future<Output = Result<BrokerRuntimeTargetStatus, ToolExecutionError>> + Send;
+    ) -> impl Future<Output = Result<BrokerRuntimeTargetStatus, ToolFailure>> + Send;
 
     fn broker_diagnostics(
         &mut self,
         _broker_name: &str,
-    ) -> impl Future<Output = Result<QueryPayload<BrokerDiagnosticsOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "exact Broker diagnostics are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<BrokerDiagnosticsOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn broker_config_summary(
         &mut self,
         _broker_name: &str,
-    ) -> impl Future<Output = Result<QueryPayload<BrokerConfigSummaryOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "exact Broker configuration is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<BrokerConfigSummaryOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn broker_log_filter_state(
         &mut self,
         _broker_name: &str,
         _logger: &str,
-    ) -> impl Future<Output = Result<QueryPayload<BrokerLogFilterStateOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "exact Broker log-filter state is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<BrokerLogFilterStateOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn proxy_drain_state(
         &mut self,
         _proxy_name: &str,
         _proxy_endpoint: &str,
-    ) -> impl Future<Output = Result<QueryPayload<ProxyDrainStateOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Proxy drain state is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<ProxyDrainStateOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn consumer_connections(
         &mut self,
         _consumer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "consumer connection observations are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn producer_connections(
         &mut self,
         _topic: &str,
         _producer_group: &str,
-    ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "producer connection observations are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<SessionConnections>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn message_metadata(
         &mut self,
         _message_id: &str,
-    ) -> impl Future<Output = Result<SessionMessageMetadata, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "message metadata is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<SessionMessageMetadata, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn topic_config_state(
         &mut self,
         _topic: &str,
         _broker_names: &[String],
-    ) -> impl Future<Output = Result<QueryPayload<TopicConfigStateOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Topic configuration state is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<TopicConfigStateOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn consumer_group_config_state(
         &mut self,
         _group: &str,
         _broker_names: &[String],
-    ) -> impl Future<Output = Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolExecutionError>> + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Consumer Group configuration state is unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolFailure>> + Send {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn ha_status(
@@ -377,30 +321,18 @@ pub(crate) trait AdminSession: Send {
         _broker_names: &[String],
         _include_sync_state: bool,
         _controller_names: &[String],
-    ) -> impl Future<
-        Output = Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolExecutionError>,
-    > + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "HA observations are unavailable".to_string(),
-            ))
-        }
+    ) -> impl Future<Output = Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure>> + Send
+    {
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn controller_metadata(
         &mut self,
         _controller_names: &[String],
     ) -> impl Future<
-        Output = Result<
-            QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>,
-            ToolExecutionError,
-        >,
+        Output = Result<QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure>,
     > + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "Controller metadata is unavailable".to_string(),
-            ))
-        }
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
     fn nameserver_config_summary(
@@ -408,24 +340,19 @@ pub(crate) trait AdminSession: Send {
     ) -> impl Future<
         Output = Result<
             QueryPayload<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>,
-            ToolExecutionError,
+            ToolFailure,
         >,
     > + Send {
-        async {
-            Err(ToolExecutionError::Backend(
-                "NameServer configuration is unavailable".to_string(),
-            ))
-        }
+        async { Err(ToolFailure::Operational(ToolExecutionError::Backend(None))) }
     }
 
-    fn shutdown(self) -> impl Future<Output = Result<(), ToolExecutionError>> + Send;
+    fn shutdown(self) -> impl Future<Output = Result<(), ToolFailure>> + Send;
 }
 
 pub(crate) trait AdminSessionFactory: Clone + Send + Sync + 'static {
     type Session: AdminSession;
 
-    fn start(&self, cluster: ResolvedCluster)
-        -> impl Future<Output = Result<Self::Session, ToolExecutionError>> + Send;
+    fn start(&self, cluster: ResolvedCluster) -> impl Future<Output = Result<Self::Session, ToolFailure>> + Send;
 }
 
 #[derive(Clone)]
@@ -464,7 +391,7 @@ impl AdminCoreSessionFactory {
 impl AdminSessionFactory for AdminCoreSessionFactory {
     type Session = AdminCoreSession;
 
-    async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError> {
+    async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(factory) = &self.test_session_factory {
             return Ok(AdminCoreSession {
@@ -479,7 +406,7 @@ impl AdminSessionFactory for AdminCoreSessionFactory {
         if let Some(credentials) = cluster.credentials.clone() {
             builder = builder.credentials(credentials);
         }
-        let admin = builder.build_with_guard().await.map_err(ToolExecutionError::backend)?;
+        let admin = builder.build_with_guard().await.map_err(ToolFailure::backend)?;
         Ok(AdminCoreSession {
             cluster,
             admin: Some(admin),
@@ -497,30 +424,30 @@ pub(crate) struct AdminCoreSession {
 }
 
 impl AdminCoreSession {
-    fn admin_mut(&mut self) -> Result<&mut ReadAdminGuard, ToolExecutionError> {
+    fn admin_mut(&mut self) -> Result<&mut ReadAdminGuard, ToolFailure> {
         self.admin
             .as_mut()
-            .ok_or_else(|| ToolExecutionError::internal("admin session is already shut down"))
+            .ok_or_else(|| ToolFailure::Operational(ToolExecutionError::Internal(None)))
     }
 }
 
 impl AdminSession for AdminCoreSession {
-    async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
+    async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.broker_rows().await;
         }
-        let request = ListBrokersRequest::try_new(self.cluster.rocketmq_cluster_name.clone())
-            .map_err(ToolExecutionError::backend)?;
+        let request =
+            ListBrokersRequest::try_new(self.cluster.rocketmq_cluster_name.clone()).map_err(ToolFailure::backend)?;
         let result = self
             .admin_mut()?
             .list_brokers_with_evidence(&request)
             .await
-            .map_err(ToolExecutionError::backend)?;
+            .map_err(ToolFailure::backend)?;
         Ok(QueryPayload::from_admin(result).map(|result| result.brokers.iter().map(map_broker_summary).collect()))
     }
 
-    async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+    async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.topic_inventory().await;
@@ -530,22 +457,22 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .get_topic_inventory(&request)
             .await
-            .map_err(ToolExecutionError::backend)?;
+            .map_err(ToolFailure::backend)?;
         Ok(result.topics)
     }
 
-    async fn topic_route(&mut self, topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
+    async fn topic_route(&mut self, topic: &str) -> Result<SessionTopicRoute, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.topic_route(topic).await;
         }
-        let request = GetTopicRouteRequest::try_new(topic).map_err(ToolExecutionError::backend)?;
+        let request = GetTopicRouteRequest::try_new(topic).map_err(ToolFailure::backend)?;
         let route = self
             .admin_mut()?
             .get_topic_route(&request)
             .await
-            .map_err(ToolExecutionError::backend)?
-            .ok_or_else(|| ToolExecutionError::Backend(format!("topic route not found: {topic}")))?;
+            .map_err(ToolFailure::backend)?
+            .ok_or_else(|| ToolFailure::Operational(ToolExecutionError::Backend(None)))?;
         let mut brokers = route
             .brokers
             .iter()
@@ -577,7 +504,7 @@ impl AdminSession for AdminCoreSession {
         Ok(SessionTopicRoute { brokers, queues })
     }
 
-    async fn topic_stats(&mut self, topic: &str) -> Result<QueryPayload<SessionTopicStats>, ToolExecutionError> {
+    async fn topic_stats(&mut self, topic: &str) -> Result<QueryPayload<SessionTopicStats>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.topic_stats(topic).await;
@@ -588,7 +515,7 @@ impl AdminSession for AdminCoreSession {
     async fn topic_config(
         &mut self,
         topic: &str,
-    ) -> Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.topic_config(topic).await;
@@ -599,14 +526,14 @@ impl AdminSession for AdminCoreSession {
     async fn consumer_group_details(
         &mut self,
         consumer_group: &str,
-    ) -> Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<GetConsumerGroupDetailsOutput>, ToolFailure> {
         self.query_consumer_group_details_observation(consumer_group).await
     }
 
     async fn consumer_progress(
         &mut self,
         consumer_group: &str,
-    ) -> Result<QueryPayload<SessionConsumerProgress>, ToolExecutionError> {
+    ) -> Result<QueryPayload<SessionConsumerProgress>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.consumer_progress(consumer_group).await;
@@ -614,7 +541,7 @@ impl AdminSession for AdminCoreSession {
         self.query_consumer_progress_observation(consumer_group).await
     }
 
-    async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+    async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.consumer_groups().await;
@@ -623,7 +550,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .list_consumer_groups_with_evidence(&ListConsumerGroupsRequest)
             .await
-            .map_err(ToolExecutionError::backend)?;
+            .map_err(ToolFailure::backend)?;
         Ok(QueryPayload::from_admin(result).map(|result| {
             result
                 .groups
@@ -641,7 +568,7 @@ impl AdminSession for AdminCoreSession {
         }))
     }
 
-    async fn consumer_group_inventory(&mut self) -> Result<QueryPayload<Vec<String>>, ToolExecutionError> {
+    async fn consumer_group_inventory(&mut self) -> Result<QueryPayload<Vec<String>>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.consumer_group_inventory().await;
@@ -650,25 +577,25 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .list_consumer_group_inventory_with_evidence(&ListConsumerGroupsRequest)
             .await
-            .map_err(ToolExecutionError::backend)?;
+            .map_err(ToolFailure::backend)?;
         Ok(QueryPayload::from_admin(result).map(|result| result.groups))
     }
 
     async fn consumer_groups_exact(
         &mut self,
         groups: &[String],
-    ) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+    ) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.consumer_groups_exact(groups).await;
         }
-        let request = ExactConsumerGroupEnrichmentRequest::try_new(groups.iter().cloned())
-            .map_err(ToolExecutionError::backend)?;
+        let request =
+            ExactConsumerGroupEnrichmentRequest::try_new(groups.iter().cloned()).map_err(ToolFailure::backend)?;
         let result = self
             .admin_mut()?
             .enrich_consumer_groups_exact_with_evidence(&request)
             .await
-            .map_err(ToolExecutionError::backend)?;
+            .map_err(ToolFailure::backend)?;
         Ok(QueryPayload::from_admin(result).map(|result| {
             result
                 .groups
@@ -690,18 +617,17 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         topic: &str,
         consumer_group: &str,
-    ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
+    ) -> Result<QueryPayload<SessionConsumerLag>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.consumer_lag(topic, consumer_group).await;
         }
-        let request =
-            QueryConsumerLagRequest::try_new(topic, consumer_group, false).map_err(ToolExecutionError::backend)?;
+        let request = QueryConsumerLagRequest::try_new(topic, consumer_group, false).map_err(ToolFailure::backend)?;
         let result = self
             .admin_mut()?
             .query_consumer_lag_with_evidence(&request)
             .await
-            .map_err(ToolExecutionError::backend)?;
+            .map_err(ToolFailure::backend)?;
         Ok(QueryPayload::from_admin(result).map(|result| {
             let mut queues = result
                 .rows
@@ -735,7 +661,7 @@ impl AdminSession for AdminCoreSession {
     async fn probe_broker_runtime_target(
         &mut self,
         broker_name: &str,
-    ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
+    ) -> Result<BrokerRuntimeTargetStatus, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.probe_broker_runtime_target(broker_name).await;
@@ -744,17 +670,17 @@ impl AdminSession for AdminCoreSession {
             self.cluster.rocketmq_cluster_name.clone(),
             broker_name.to_string(),
         )
-        .map_err(ToolExecutionError::backend)?;
+        .map_err(ToolFailure::backend)?;
         self.admin_mut()?
             .probe_broker_runtime_target(&request)
             .await
-            .map_err(ToolExecutionError::backend)
+            .map_err(ToolFailure::backend)
     }
 
     async fn broker_diagnostics(
         &mut self,
         broker_name: &str,
-    ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.broker_diagnostics(broker_name).await;
@@ -782,7 +708,7 @@ impl AdminSession for AdminCoreSession {
     async fn broker_config_summary(
         &mut self,
         broker_name: &str,
-    ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.broker_config_summary(broker_name).await;
@@ -818,7 +744,7 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         broker_name: &str,
         logger: &str,
-    ) -> Result<QueryPayload<BrokerLogFilterStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<BrokerLogFilterStateOutput>, ToolFailure> {
         let request = QueryBrokerLogFilterStateTargetRequest::try_new(
             self.cluster.rocketmq_cluster_name.clone(),
             broker_name,
@@ -883,7 +809,7 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         proxy_name: &str,
         proxy_endpoint: &str,
-    ) -> Result<QueryPayload<ProxyDrainStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<ProxyDrainStateOutput>, ToolFailure> {
         let request = QueryProxyDrainStateRequest {
             proxy_addr: proxy_endpoint.to_string(),
         };
@@ -891,7 +817,7 @@ impl AdminSession for AdminCoreSession {
             .admin_mut()?
             .query_drain_state(&request)
             .await
-            .map_err(|_| ToolExecutionError::Backend("Proxy drain source is unavailable".to_string()))?;
+            .map_err(ToolFailure::backend)?;
         let (operation_id, warnings) = bounded_proxy_operation_id(state.operation_id);
         let output = ProxyDrainStateOutput {
             cluster: self.cluster.name.clone(),
@@ -930,7 +856,7 @@ impl AdminSession for AdminCoreSession {
     async fn consumer_connections(
         &mut self,
         consumer_group: &str,
-    ) -> Result<QueryPayload<SessionConnections>, ToolExecutionError> {
+    ) -> Result<QueryPayload<SessionConnections>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.consumer_connections(consumer_group).await;
@@ -941,12 +867,12 @@ impl AdminSession for AdminCoreSession {
             consumer_group,
             MAX_CONNECTIONS,
         )
-        .map_err(|_| ToolExecutionError::InvalidArguments("invalid consumer connection selector".to_string()))?;
+        .map_err(ToolFailure::invalid_arguments)?;
         let result = self
             .admin_mut()?
             .query_consumer_connections_with_evidence(&request)
             .await
-            .map_err(|_| ToolExecutionError::Backend("consumer connection source is unavailable".to_string()))?;
+            .map_err(ToolFailure::backend)?;
         Ok(QueryPayload::from_admin(result).map(|result| SessionConnections {
             rows: result
                 .connections
@@ -969,7 +895,7 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         topic: &str,
         producer_group: &str,
-    ) -> Result<QueryPayload<SessionConnections>, ToolExecutionError> {
+    ) -> Result<QueryPayload<SessionConnections>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.producer_connections(topic, producer_group).await;
@@ -981,12 +907,12 @@ impl AdminSession for AdminCoreSession {
             producer_group,
             MAX_CONNECTIONS,
         )
-        .map_err(|_| ToolExecutionError::InvalidArguments("invalid producer connection selector".to_string()))?;
+        .map_err(ToolFailure::invalid_arguments)?;
         let result = self
             .admin_mut()?
             .query_topic_producer_connections_with_evidence(&request)
             .await
-            .map_err(|_| ToolExecutionError::Backend("producer connection source is unavailable".to_string()))?;
+            .map_err(ToolFailure::backend)?;
         Ok(QueryPayload::from_admin(result).map(|result| SessionConnections {
             rows: result
                 .connections
@@ -1005,16 +931,16 @@ impl AdminSession for AdminCoreSession {
         }))
     }
 
-    async fn message_metadata(&mut self, message_id: &str) -> Result<SessionMessageMetadata, ToolExecutionError> {
+    async fn message_metadata(&mut self, message_id: &str) -> Result<SessionMessageMetadata, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.message_metadata(message_id).await;
         }
         let request = MessageMetadataRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), message_id)
-            .map_err(|_| ToolExecutionError::InvalidArguments("invalid message identifier".to_string()))?;
+            .map_err(ToolFailure::invalid_arguments)?;
         let metadata = MessageMetadataQueryAdmin::query_message_metadata(self.admin_mut()?.inner_mut(), &request)
             .await
-            .map_err(|_| ToolExecutionError::Backend("message metadata source is unavailable".to_string()))?;
+            .map_err(ToolFailure::backend)?;
         Ok(SessionMessageMetadata {
             message_id: metadata.message_id,
             unique_message_id: metadata.unique_message_id,
@@ -1035,7 +961,7 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         topic: &str,
         broker_names: &[String],
-    ) -> Result<QueryPayload<TopicConfigStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<TopicConfigStateOutput>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.topic_config_state(topic, broker_names).await;
@@ -1045,12 +971,12 @@ impl AdminSession for AdminCoreSession {
             topic,
             broker_names.iter().cloned(),
         )
-        .map_err(|_| ToolExecutionError::InvalidArguments("invalid Topic configuration selector".to_string()))?;
+        .map_err(ToolFailure::invalid_arguments)?;
         let result = self
             .admin_mut()?
             .query_topic_config_state(&request)
             .await
-            .map_err(|_| ToolExecutionError::Backend("Topic configuration state source is unavailable".to_string()))?;
+            .map_err(ToolFailure::backend)?;
         let cluster = self.cluster.name.clone();
         Ok(QueryPayload::from_admin(result).map(|result| TopicConfigStateOutput {
             cluster,
@@ -1073,7 +999,7 @@ impl AdminSession for AdminCoreSession {
         &mut self,
         group: &str,
         broker_names: &[String],
-    ) -> Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<ConsumerGroupConfigStateOutput>, ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = &mut self.test_session {
             return session.consumer_group_config_state(group, broker_names).await;
@@ -1083,16 +1009,12 @@ impl AdminSession for AdminCoreSession {
             group,
             broker_names.iter().cloned(),
         )
-        .map_err(|_| {
-            ToolExecutionError::InvalidArguments("invalid Consumer Group configuration selector".to_string())
-        })?;
+        .map_err(ToolFailure::invalid_arguments)?;
         let result = self
             .admin_mut()?
             .query_consumer_group_config_state(&request)
             .await
-            .map_err(|_| {
-                ToolExecutionError::Backend("Consumer Group configuration state source is unavailable".to_string())
-            })?;
+            .map_err(ToolFailure::backend)?;
         let cluster = self.cluster.name.clone();
         Ok(
             QueryPayload::from_admin(result).map(|result| ConsumerGroupConfigStateOutput {
@@ -1126,7 +1048,7 @@ impl AdminSession for AdminCoreSession {
         broker_names: &[String],
         include_sync_state: bool,
         controller_names: &[String],
-    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetHaStatusOutput>, ToolFailure> {
         self.query_ha_status_observation(broker_names, include_sync_state, controller_names)
             .await
     }
@@ -1134,18 +1056,17 @@ impl AdminSession for AdminCoreSession {
     async fn controller_metadata(
         &mut self,
         controller_names: &[String],
-    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetControllerMetadataOutput>, ToolFailure> {
         self.query_controller_metadata_observation(controller_names).await
     }
 
     async fn nameserver_config_summary(
         &mut self,
-    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolExecutionError>
-    {
+    ) -> Result<QueryPayload<crate::tools::infrastructure_tools::GetNameserverConfigSummaryOutput>, ToolFailure> {
         self.query_nameserver_config_summary_observation().await
     }
 
-    async fn shutdown(mut self) -> Result<(), ToolExecutionError> {
+    async fn shutdown(mut self) -> Result<(), ToolFailure> {
         #[cfg(all(test, feature = "streamable-http", feature = "stdio"))]
         if let Some(session) = self.test_session.take() {
             return session.shutdown().await;
@@ -1243,12 +1164,12 @@ mod protocol_test_support {
     }
 
     impl AdminSession for ProtocolTestSession {
-        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
+        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             self.counters.broker_queries.fetch_add(1, Ordering::SeqCst);
             Ok(QueryPayload::complete(Vec::new()))
         }
 
-        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolFailure> {
             self.counters.topic_inventory_queries.fetch_add(1, Ordering::SeqCst);
             if let Some(gate) = &self.gate {
                 gate.wait().await;
@@ -1256,14 +1177,14 @@ mod protocol_test_support {
             Ok(vec!["payments".to_string(), "orders".to_string()])
         }
 
-        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
+        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolFailure> {
             Ok(SessionTopicRoute {
                 brokers: Vec::new(),
                 queues: Vec::new(),
             })
         }
 
-        async fn topic_stats(&mut self, _topic: &str) -> Result<QueryPayload<SessionTopicStats>, ToolExecutionError> {
+        async fn topic_stats(&mut self, _topic: &str) -> Result<QueryPayload<SessionTopicStats>, ToolFailure> {
             self.counters.topic_stats_queries.fetch_add(1, Ordering::SeqCst);
             Ok(QueryPayload::complete(SessionTopicStats {
                 total_message_count: 60,
@@ -1285,7 +1206,7 @@ mod protocol_test_support {
         async fn topic_config(
             &mut self,
             topic: &str,
-        ) -> Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<crate::tools::config_tools::GetTopicConfigOutput>, ToolFailure> {
             self.counters.topic_config_queries.fetch_add(1, Ordering::SeqCst);
             Ok(QueryPayload::complete(
                 crate::tools::config_tools::GetTopicConfigOutput {
@@ -1298,7 +1219,7 @@ mod protocol_test_support {
             ))
         }
 
-        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
             Ok(QueryPayload::complete(Vec::new()))
         }
 
@@ -1306,7 +1227,7 @@ mod protocol_test_support {
             &mut self,
             _topic: &str,
             _consumer_group: &str,
-        ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConsumerLag>, ToolFailure> {
             Ok(QueryPayload::complete(SessionConsumerLag {
                 queues: Vec::new(),
                 total_lag: 0,
@@ -1318,7 +1239,7 @@ mod protocol_test_support {
         async fn consumer_progress(
             &mut self,
             _consumer_group: &str,
-        ) -> Result<QueryPayload<SessionConsumerProgress>, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConsumerProgress>, ToolFailure> {
             self.counters.consumer_progress_queries.fetch_add(1, Ordering::SeqCst);
             Ok(QueryPayload::complete(SessionConsumerProgress {
                 state: ConsumerProgressState::Observed,
@@ -1348,14 +1269,14 @@ mod protocol_test_support {
         async fn probe_broker_runtime_target(
             &mut self,
             _broker_name: &str,
-        ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
+        ) -> Result<BrokerRuntimeTargetStatus, ToolFailure> {
             Ok(BrokerRuntimeTargetStatus::NotFound)
         }
 
         async fn broker_diagnostics(
             &mut self,
             broker_name: &str,
-        ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<BrokerDiagnosticsOutput>, ToolFailure> {
             self.counters.broker_diagnostics_queries.fetch_add(1, Ordering::SeqCst);
             Ok(QueryPayload::complete(BrokerDiagnosticsOutput {
                 cluster: "local-dev".to_string(),
@@ -1370,7 +1291,7 @@ mod protocol_test_support {
         async fn broker_config_summary(
             &mut self,
             broker_name: &str,
-        ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<BrokerConfigSummaryOutput>, ToolFailure> {
             self.counters
                 .broker_config_summary_queries
                 .fetch_add(1, Ordering::SeqCst);
@@ -1381,7 +1302,7 @@ mod protocol_test_support {
             }))
         }
 
-        async fn shutdown(self) -> Result<(), ToolExecutionError> {
+        async fn shutdown(self) -> Result<(), ToolFailure> {
             self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -1414,14 +1335,10 @@ fn map_broker_summary(row: &rocketmq_admin_core::core::broker::BrokerSummary) ->
     }
 }
 
-fn map_logical_admin_error(error: rocketmq_admin_core::core::AdminError) -> ToolExecutionError {
+fn map_logical_admin_error(error: rocketmq_admin_core::core::AdminError) -> ToolFailure {
     match error {
-        rocketmq_admin_core::core::AdminError::InvalidArgument { field, reason } => {
-            ToolExecutionError::InvalidArguments(format!("{field}: {reason}"))
-        }
-        rocketmq_admin_core::core::AdminError::NotFound { resource, name } => {
-            ToolExecutionError::InvalidArguments(format!("{resource} not found: {name}"))
-        }
-        _ => ToolExecutionError::Backend("RocketMQ logical target source is unavailable".to_string()),
+        error @ (rocketmq_admin_core::core::AdminError::InvalidArgument { .. }
+        | rocketmq_admin_core::core::AdminError::NotFound { .. }) => ToolFailure::invalid_arguments(error),
+        error => ToolFailure::backend(error),
     }
 }

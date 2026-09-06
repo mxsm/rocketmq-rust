@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolRejection;
 use rocketmq_admin_core::core::topic_observation::QueryTopicConfigRequest;
 use rocketmq_admin_core::core::topic_observation::QueryTopicStatsRequest;
 use rocketmq_admin_core::core::topic_observation::TopicConfigDifferenceField as AdminDifference;
@@ -27,17 +28,17 @@ use crate::model::contract::QueryPayload;
 use crate::tools::config_tools::GetTopicConfigOutput;
 use crate::tools::config_tools::TopicConfigDifferenceField;
 use crate::tools::config_tools::TopicConfigObservationRow;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::topic_tools::TopicStatsQueueRow;
 
 impl AdminCoreSession {
     pub(super) async fn query_topic_stats_observation(
         &mut self,
         topic: &str,
-    ) -> Result<QueryPayload<SessionTopicStats>, ToolExecutionError> {
+    ) -> Result<QueryPayload<SessionTopicStats>, ToolFailure> {
         let request =
             QueryTopicStatsRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), topic, MAX_TOPIC_STATS_ROWS)
-                .map_err(|_| ToolExecutionError::InvalidArguments("invalid Topic statistics selector".to_string()))?;
+                .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
         let result = self
             .admin_mut()?
             .query_topic_stats(&request)
@@ -65,9 +66,9 @@ impl AdminCoreSession {
     pub(super) async fn query_topic_config_observation(
         &mut self,
         topic: &str,
-    ) -> Result<QueryPayload<GetTopicConfigOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<GetTopicConfigOutput>, ToolFailure> {
         let request = QueryTopicConfigRequest::try_new(self.cluster.rocketmq_cluster_name.clone(), topic)
-            .map_err(|_| ToolExecutionError::InvalidArguments("invalid Topic configuration selector".to_string()))?;
+            .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
         let result = self
             .admin_mut()?
             .query_topic_config(&request)

@@ -358,18 +358,25 @@ impl<T> ToolResponse<T> {
     }
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum PaginationError {
-    #[error("limit must be between 1 and {MAX_PAGE_LIMIT}")]
+#[derive(Debug, PartialEq, Eq)]
+pub enum PaginationRejection {
     InvalidLimit,
-    #[error("cursor is invalid or was created by an incompatible server version")]
     InvalidCursor,
 }
 
-pub fn paginate<T>(items: Vec<T>, request: &PageRequest) -> Result<Page<T>, PaginationError> {
+impl std::fmt::Display for PaginationRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidLimit => write!(f, "limit must be between 1 and {MAX_PAGE_LIMIT}"),
+            Self::InvalidCursor => write!(f, "cursor is invalid or was created by an incompatible server version"),
+        }
+    }
+}
+
+pub fn paginate<T>(items: Vec<T>, request: &PageRequest) -> Result<Page<T>, PaginationRejection> {
     let limit = request.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
     if !(1..=MAX_PAGE_LIMIT).contains(&limit) {
-        return Err(PaginationError::InvalidLimit);
+        return Err(PaginationRejection::InvalidLimit);
     }
 
     let offset = request
@@ -380,7 +387,7 @@ pub fn paginate<T>(items: Vec<T>, request: &PageRequest) -> Result<Page<T>, Pagi
         .unwrap_or_default();
     let total_count = items.len();
     if offset > total_count {
-        return Err(PaginationError::InvalidCursor);
+        return Err(PaginationRejection::InvalidCursor);
     }
 
     let end = offset.saturating_add(limit as usize).min(total_count);
@@ -411,12 +418,12 @@ fn encode_cursor(offset: usize) -> String {
     format!("rmq-v1-{offset:x}")
 }
 
-fn decode_cursor(cursor: &str) -> Result<usize, PaginationError> {
+fn decode_cursor(cursor: &str) -> Result<usize, PaginationRejection> {
     let offset = cursor
         .strip_prefix("rmq-v1-")
         .filter(|value| !value.is_empty())
-        .ok_or(PaginationError::InvalidCursor)?;
-    usize::from_str_radix(offset, 16).map_err(|_| PaginationError::InvalidCursor)
+        .ok_or(PaginationRejection::InvalidCursor)?;
+    usize::from_str_radix(offset, 16).map_err(|_| PaginationRejection::InvalidCursor)
 }
 
 fn safe_logical_target(target: &str) -> String {
@@ -526,7 +533,7 @@ mod tests {
                     cursor: None,
                 },
             ),
-            Err(PaginationError::InvalidLimit)
+            Err(PaginationRejection::InvalidLimit)
         );
         assert_eq!(
             paginate::<u8>(
@@ -536,7 +543,7 @@ mod tests {
                     cursor: Some("2".to_string()),
                 },
             ),
-            Err(PaginationError::InvalidCursor)
+            Err(PaginationRejection::InvalidCursor)
         );
     }
 

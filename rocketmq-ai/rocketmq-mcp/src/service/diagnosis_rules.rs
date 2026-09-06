@@ -107,12 +107,14 @@ mod tests {
         let report = evaluate(
             &args,
             ConsumerLagEvidence {
-                lag: Err(crate::tools::executor::ToolExecutionError::TimedOut { timeout_ms: 5_000 }),
-                topic: Err(crate::tools::executor::ToolExecutionError::backend(
-                    "topic route unavailable",
+                lag: Err(crate::tools::executor::ToolFailure::Rejected(
+                    crate::tools::executor::ToolRejection::TimedOut { timeout_ms: 5_000 },
                 )),
-                route: Err(crate::tools::executor::ToolExecutionError::backend(
-                    "topic route unavailable",
+                topic: Err(crate::tools::executor::ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
+                )),
+                route: Err(crate::tools::executor::ToolFailure::Operational(
+                    crate::tools::executor::ToolExecutionError::Backend(None),
                 )),
                 broker: None,
             },

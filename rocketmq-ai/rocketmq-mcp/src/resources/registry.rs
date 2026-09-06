@@ -23,7 +23,6 @@ use crate::config::McpConfig;
 use crate::model::contract::paginate;
 use crate::model::contract::PageRequest;
 use crate::resources::cursor::DiscoveryCursorCodec;
-use crate::resources::cursor::DiscoveryCursorError;
 use crate::resources::cursor::DiscoverySurface;
 use crate::resources::uri::ResourceKind;
 use crate::resources::uri::RocketmqResourceUri;
@@ -43,7 +42,7 @@ impl std::fmt::Debug for ResourceRegistry {
 }
 
 impl ResourceRegistry {
-    pub(crate) fn new() -> Result<Self, DiscoveryCursorError> {
+    pub(crate) fn new() -> crate::McpResult<Self> {
         Ok(Self {
             cursors: DiscoveryCursorCodec::new()?,
         })
@@ -269,7 +268,7 @@ fn discovery_page<T>(
             cursors
                 .open(surface, cursor, canonical_auth_claims)
                 .map(|offset| format!("rmq-v1-{offset:x}"))
-                .map_err(|_| invalid_discovery_cursor())
+                .map_err(discovery_cursor_failure)
         })
         .transpose()?;
     let mut page = paginate(
@@ -286,7 +285,7 @@ fn discovery_page<T>(
             let offset = decode_internal_cursor(&cursor)?;
             cursors
                 .seal(surface, offset, canonical_auth_claims)
-                .map_err(|_| ErrorData::internal_error("failed to create discovery cursor", None))
+                .map_err(crate::McpError::into_error_data)
         })
         .transpose()?;
     Ok(page)
@@ -296,10 +295,11 @@ fn decode_internal_cursor(cursor: &str) -> Result<usize, ErrorData> {
     let offset = cursor
         .strip_prefix("rmq-v1-")
         .filter(|offset| !offset.is_empty())
-        .ok_or_else(invalid_discovery_cursor)?;
-    let parsed = usize::from_str_radix(offset, 16).map_err(|_| invalid_discovery_cursor())?;
+        .ok_or_else(|| ErrorData::internal_error("MCP operation failed", None))?;
+    let parsed =
+        usize::from_str_radix(offset, 16).map_err(|source| crate::McpError::from_source(source).into_error_data())?;
     if format!("{parsed:x}") != offset {
-        return Err(invalid_discovery_cursor());
+        return Err(ErrorData::internal_error("MCP operation failed", None));
     }
     Ok(parsed)
 }
@@ -308,8 +308,30 @@ fn invalid_discovery_cursor() -> ErrorData {
     ErrorData::invalid_params("invalid discovery cursor", None)
 }
 
+fn discovery_cursor_failure(failure: crate::resources::cursor::DiscoveryCursorFailure) -> ErrorData {
+    match failure {
+        crate::resources::cursor::DiscoveryCursorFailure::Invalid => invalid_discovery_cursor(),
+        crate::resources::cursor::DiscoveryCursorFailure::Operational(error) => error.into_error_data(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cursor_rejections_and_operational_failures_have_distinct_protocol_codes() {
+        use crate::resources::cursor::DiscoveryCursorFailure;
+        let rejected = super::discovery_cursor_failure(DiscoveryCursorFailure::Invalid);
+        let operational = super::discovery_cursor_failure(DiscoveryCursorFailure::Operational(
+            crate::McpError::from_source(std::io::Error::other("private-cursor-sentinel")),
+        ));
+        assert_eq!(rejected.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(operational.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert!(!format!("{operational:?}").contains("private-cursor-sentinel"));
+        assert_eq!(
+            super::decode_internal_cursor("broken").unwrap_err().code,
+            rmcp::model::ErrorCode::INTERNAL_ERROR
+        );
+    }
     use super::*;
 
     #[test]

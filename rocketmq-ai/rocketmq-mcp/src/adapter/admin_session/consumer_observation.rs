@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolRejection;
 use rocketmq_admin_core::core::consumer_observation as admin;
 use rocketmq_admin_core::core::consumer_observation::ConsumerObservationQueryAdmin;
 
@@ -22,18 +23,18 @@ use crate::model::contract::observed_at;
 use crate::model::contract::observed_at_from_millis;
 use crate::model::contract::QueryPayload;
 use crate::tools::consumer_tools as tool;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 
 impl AdminCoreSession {
     pub(super) async fn query_consumer_group_details_observation(
         &mut self,
         consumer_group: &str,
-    ) -> Result<QueryPayload<tool::GetConsumerGroupDetailsOutput>, ToolExecutionError> {
+    ) -> Result<QueryPayload<tool::GetConsumerGroupDetailsOutput>, ToolFailure> {
         let request = admin::QueryConsumerGroupDetailsRequest::try_new(
             self.cluster.rocketmq_cluster_name.clone(),
             consumer_group,
         )
-        .map_err(|_| ToolExecutionError::InvalidArguments("invalid consumer group selector".to_string()))?;
+        .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
         let result = self
             .admin_mut()?
             .query_consumer_group_details(&request)
@@ -100,13 +101,13 @@ impl AdminCoreSession {
     pub(super) async fn query_consumer_progress_observation(
         &mut self,
         consumer_group: &str,
-    ) -> Result<QueryPayload<SessionConsumerProgress>, ToolExecutionError> {
+    ) -> Result<QueryPayload<SessionConsumerProgress>, ToolFailure> {
         let request = admin::QueryConsumerProgressRequest::try_new(
             self.cluster.rocketmq_cluster_name.clone(),
             consumer_group,
             admin::MAX_CONSUMER_PROGRESS_ROWS,
         )
-        .map_err(|_| ToolExecutionError::InvalidArguments("invalid consumer progress selector".to_string()))?;
+        .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
         let result = self
             .admin_mut()?
             .query_consumer_progress(&request)

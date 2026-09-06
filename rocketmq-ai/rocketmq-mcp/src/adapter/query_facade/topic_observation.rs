@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolRejection;
 use std::time::Duration;
 
 use super::normalized_identifier;
@@ -28,7 +29,7 @@ use crate::infrastructure::snapshot::SnapshotWeight;
 use crate::model::contract::QueryResult;
 use crate::tools::config_tools::GetTopicConfigArgs;
 use crate::tools::config_tools::GetTopicConfigOutput;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::topic_tools::GetTopicStatsArgs;
 use crate::tools::topic_tools::GetTopicStatsOutput;
 
@@ -39,7 +40,7 @@ where
     pub(crate) async fn topic_stats(
         &self,
         mut args: GetTopicStatsArgs,
-    ) -> Result<QueryResult<GetTopicStatsOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<GetTopicStatsOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.topic = normalized_identifier("topic", &args.topic)?;
         let cluster = self.resolve_required_cluster(&args.cluster)?;
@@ -85,7 +86,7 @@ where
     pub(crate) async fn topic_config(
         &self,
         mut args: GetTopicConfigArgs,
-    ) -> Result<QueryResult<GetTopicConfigOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<GetTopicConfigOutput>, ToolFailure> {
         args.cluster = normalized_logical_identifier("cluster", &args.cluster)?;
         args.topic = normalized_identifier("topic", &args.topic)?;
         let cluster = self.resolve_required_cluster(&args.cluster)?;
@@ -96,7 +97,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move { session.topic_config(&args.topic).await })
@@ -157,7 +158,7 @@ mod tests {
     impl AdminSessionFactory for Factory {
         type Session = Session;
 
-        async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError> {
+        async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure> {
             self.counters.starts.fetch_add(1, Ordering::SeqCst);
             Ok(Session {
                 cluster,
@@ -178,22 +179,22 @@ mod tests {
     }
 
     impl AdminSession for Session {
-        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
+        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             Ok(QueryPayload::complete(Vec::new()))
         }
 
-        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolFailure> {
             Ok(Vec::new())
         }
 
-        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
+        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolFailure> {
             Ok(SessionTopicRoute {
                 brokers: Vec::new(),
                 queues: Vec::new(),
             })
         }
 
-        async fn topic_stats(&mut self, _topic: &str) -> Result<QueryPayload<SessionTopicStats>, ToolExecutionError> {
+        async fn topic_stats(&mut self, _topic: &str) -> Result<QueryPayload<SessionTopicStats>, ToolFailure> {
             self.counters.stats.fetch_add(1, Ordering::SeqCst);
             self.counters.stats_entered.store(true, Ordering::SeqCst);
             if self.hang_stats {
@@ -231,10 +232,7 @@ mod tests {
             })
         }
 
-        async fn topic_config(
-            &mut self,
-            topic: &str,
-        ) -> Result<QueryPayload<GetTopicConfigOutput>, ToolExecutionError> {
+        async fn topic_config(&mut self, topic: &str) -> Result<QueryPayload<GetTopicConfigOutput>, ToolFailure> {
             self.counters.configs.fetch_add(1, Ordering::SeqCst);
             if self.hang_config {
                 std::future::pending::<()>().await;
@@ -271,7 +269,7 @@ mod tests {
             })
         }
 
-        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
             Ok(QueryPayload::complete(Vec::new()))
         }
 
@@ -279,7 +277,7 @@ mod tests {
             &mut self,
             _topic: &str,
             _consumer_group: &str,
-        ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConsumerLag>, ToolFailure> {
             Ok(QueryPayload::complete(SessionConsumerLag {
                 queues: Vec::new(),
                 total_lag: 0,
@@ -291,11 +289,11 @@ mod tests {
         async fn probe_broker_runtime_target(
             &mut self,
             _broker_name: &str,
-        ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
+        ) -> Result<BrokerRuntimeTargetStatus, ToolFailure> {
             Ok(BrokerRuntimeTargetStatus::NotFound)
         }
 
-        async fn shutdown(self) -> Result<(), ToolExecutionError> {
+        async fn shutdown(self) -> Result<(), ToolFailure> {
             self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -423,7 +421,10 @@ mod tests {
         }
         assert!(counters.stats_entered.load(Ordering::SeqCst));
         cancellation.cancel();
-        assert!(matches!(task.await.unwrap(), Err(ToolExecutionError::Cancelled)));
+        assert!(matches!(
+            task.await.unwrap(),
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::Cancelled))
+        ));
         assert_eq!(counters.shutdowns.load(Ordering::SeqCst), 1);
     }
 
@@ -438,7 +439,9 @@ mod tests {
         let stats_facade = QueryFacade::with_factory_and_control(config(), stats_factory, control);
         assert!(matches!(
             stats_facade.topic_stats(stats_args("orders", 1, None)).await,
-            Err(ToolExecutionError::TimedOut { timeout_ms: 10 })
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut {
+                timeout_ms: 10
+            }))
         ));
         assert_eq!(stats_counters.shutdowns.load(Ordering::SeqCst), 1);
 
@@ -456,7 +459,9 @@ mod tests {
                     topic: "orders".to_string(),
                 })
                 .await,
-            Err(ToolExecutionError::TimedOut { timeout_ms: 10 })
+            Err(ToolFailure::Rejected(crate::tools::executor::ToolRejection::TimedOut {
+                timeout_ms: 10
+            }))
         ));
         assert_eq!(config_counters.shutdowns.load(Ordering::SeqCst), 1);
     }

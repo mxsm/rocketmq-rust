@@ -25,7 +25,7 @@ use rmcp::ErrorData;
 use crate::config::McpConfig;
 use crate::model::identifier;
 use crate::prompts::registry;
-use crate::prompts::registry::PromptRegistryError;
+
 use crate::prompts::template::PromptArgumentKind;
 use crate::prompts::template::PromptTemplate;
 use crate::prompts::template::PromptTemplateArgument;
@@ -189,7 +189,7 @@ fn prompt_unavailable() -> ErrorData {
     )
 }
 
-fn registry_error(error: PromptRegistryError) -> ErrorData {
+fn registry_error(error: crate::McpError) -> ErrorData {
     ErrorData::internal_error(error.to_string(), None)
 }
 

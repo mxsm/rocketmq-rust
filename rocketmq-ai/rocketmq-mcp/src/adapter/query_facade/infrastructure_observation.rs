@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::tools::executor::ToolRejection;
 use std::time::Duration;
 
 use rocketmq_admin_core::core::infrastructure_observation::QueryControllerMetadataRequest;
@@ -22,7 +23,7 @@ use super::AdminSession;
 use super::AdminSessionFactory;
 use super::QueryFacade;
 use crate::model::contract::QueryResult;
-use crate::tools::executor::ToolExecutionError;
+use crate::tools::executor::ToolFailure;
 use crate::tools::infrastructure_tools::GetControllerMetadataArgs;
 use crate::tools::infrastructure_tools::GetControllerMetadataOutput;
 use crate::tools::infrastructure_tools::GetHaStatusArgs;
@@ -34,17 +35,14 @@ impl<F> QueryFacade<F>
 where
     F: AdminSessionFactory,
 {
-    pub(crate) async fn ha_status(
-        &self,
-        args: GetHaStatusArgs,
-    ) -> Result<QueryResult<GetHaStatusOutput>, ToolExecutionError> {
+    pub(crate) async fn ha_status(&self, args: GetHaStatusArgs) -> Result<QueryResult<GetHaStatusOutput>, ToolFailure> {
         let request = QueryHaStatusRequest::try_new(
             args.cluster,
             args.broker_names,
             args.include_sync_state,
             args.controller_names,
         )
-        .map_err(|_| ToolExecutionError::InvalidArguments("invalid HA observation selectors".to_string()))?;
+        .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
         let cluster = self.resolve_required_cluster(&request.cluster)?;
         let key = self.cache_key(
             "ha_status",
@@ -62,7 +60,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move {
@@ -84,9 +82,9 @@ where
     pub(crate) async fn controller_metadata(
         &self,
         args: GetControllerMetadataArgs,
-    ) -> Result<QueryResult<GetControllerMetadataOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<GetControllerMetadataOutput>, ToolFailure> {
         let request = QueryControllerMetadataRequest::try_new(args.cluster, args.controller_names)
-            .map_err(|_| ToolExecutionError::InvalidArguments("invalid Controller selectors".to_string()))?;
+            .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
         let cluster = self.resolve_required_cluster(&request.cluster)?;
         let key = self.cache_key(
             "controller_metadata",
@@ -99,7 +97,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move { session.controller_metadata(&request.controller_names).await })
@@ -113,9 +111,9 @@ where
     pub(crate) async fn nameserver_config_summary(
         &self,
         args: GetNameserverConfigSummaryArgs,
-    ) -> Result<QueryResult<GetNameserverConfigSummaryOutput>, ToolExecutionError> {
+    ) -> Result<QueryResult<GetNameserverConfigSummaryOutput>, ToolFailure> {
         let request = QueryNameserverConfigSummaryRequest::try_new(args.cluster)
-            .map_err(|_| ToolExecutionError::InvalidArguments("invalid cluster selector".to_string()))?;
+            .map_err(|_| ToolFailure::Rejected(ToolRejection::InvalidArguments { _source: None }))?;
         let cluster = self.resolve_required_cluster(&request.cluster)?;
         let key = self.cache_key("nameserver_config_summary", &cluster.name, "");
         let ttl = Duration::from_millis(self.config.cache.broker_metrics_ttl_ms);
@@ -124,7 +122,7 @@ where
                 key,
                 ttl,
                 &self.control.cancellation,
-                || ToolExecutionError::Cancelled,
+                || ToolFailure::Rejected(ToolRejection::Cancelled),
                 || async {
                     self.run_workflow(cluster, move |session, _| {
                         Box::pin(async move { session.nameserver_config_summary().await })
@@ -181,7 +179,7 @@ mod tests {
     impl AdminSessionFactory for Factory {
         type Session = Session;
 
-        async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolExecutionError> {
+        async fn start(&self, cluster: ResolvedCluster) -> Result<Self::Session, ToolFailure> {
             self.counters.starts.fetch_add(1, Ordering::SeqCst);
             Ok(Session {
                 cluster,
@@ -196,22 +194,22 @@ mod tests {
     }
 
     impl AdminSession for Session {
-        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolExecutionError> {
+        async fn broker_rows(&mut self) -> Result<QueryPayload<Vec<BrokerSummary>>, ToolFailure> {
             Ok(QueryPayload::complete(Vec::new()))
         }
 
-        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolExecutionError> {
+        async fn topic_inventory(&mut self) -> Result<Vec<String>, ToolFailure> {
             Ok(Vec::new())
         }
 
-        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolExecutionError> {
+        async fn topic_route(&mut self, _topic: &str) -> Result<SessionTopicRoute, ToolFailure> {
             Ok(SessionTopicRoute {
                 brokers: Vec::new(),
                 queues: Vec::new(),
             })
         }
 
-        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolExecutionError> {
+        async fn consumer_groups(&mut self) -> Result<QueryPayload<Vec<ConsumerGroupSummary>>, ToolFailure> {
             Ok(QueryPayload::complete(Vec::new()))
         }
 
@@ -219,7 +217,7 @@ mod tests {
             &mut self,
             _topic: &str,
             _consumer_group: &str,
-        ) -> Result<QueryPayload<SessionConsumerLag>, ToolExecutionError> {
+        ) -> Result<QueryPayload<SessionConsumerLag>, ToolFailure> {
             Ok(QueryPayload::complete(SessionConsumerLag {
                 queues: Vec::new(),
                 total_lag: 0,
@@ -231,7 +229,7 @@ mod tests {
         async fn probe_broker_runtime_target(
             &mut self,
             _broker_name: &str,
-        ) -> Result<BrokerRuntimeTargetStatus, ToolExecutionError> {
+        ) -> Result<BrokerRuntimeTargetStatus, ToolFailure> {
             Ok(BrokerRuntimeTargetStatus::NotFound)
         }
 
@@ -240,7 +238,7 @@ mod tests {
             broker_names: &[String],
             _include_sync_state: bool,
             _controller_names: &[String],
-        ) -> Result<QueryPayload<GetHaStatusOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<GetHaStatusOutput>, ToolFailure> {
             self.counters.ha.fetch_add(1, Ordering::SeqCst);
             let brokers = if broker_names == ["bounded"] {
                 bounded_ha_brokers()
@@ -271,7 +269,7 @@ mod tests {
         async fn controller_metadata(
             &mut self,
             _controller_names: &[String],
-        ) -> Result<QueryPayload<GetControllerMetadataOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<GetControllerMetadataOutput>, ToolFailure> {
             self.counters.controller.fetch_add(1, Ordering::SeqCst);
             let controllers = self
                 .counters
@@ -297,7 +295,7 @@ mod tests {
 
         async fn nameserver_config_summary(
             &mut self,
-        ) -> Result<QueryPayload<GetNameserverConfigSummaryOutput>, ToolExecutionError> {
+        ) -> Result<QueryPayload<GetNameserverConfigSummaryOutput>, ToolFailure> {
             self.counters.nameserver.fetch_add(1, Ordering::SeqCst);
             let nameservers = self
                 .counters
@@ -316,7 +314,7 @@ mod tests {
             }))
         }
 
-        async fn shutdown(self) -> Result<(), ToolExecutionError> {
+        async fn shutdown(self) -> Result<(), ToolFailure> {
             self.counters.shutdowns.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }

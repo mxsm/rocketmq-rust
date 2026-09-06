@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::{McpError, McpResult};
 use arc_swap::ArcSwap;
 use jsonwebtoken::Algorithm;
 use jsonwebtoken::DecodingKey;
@@ -30,7 +31,7 @@ const MAX_JWKS_KEYS: usize = 64;
 const JWKS_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub trait JwksSource: Send + Sync {
-    fn fetch(&self) -> impl Future<Output = Result<Vec<u8>, JwksError>> + Send;
+    fn fetch(&self) -> impl Future<Output = McpResult<Vec<u8>>> + Send;
 }
 
 #[derive(Clone)]
@@ -40,22 +41,22 @@ pub struct HttpJwksSource {
 }
 
 impl HttpJwksSource {
-    pub fn new(url: impl Into<Arc<str>>, ca_path: Option<&Path>) -> Result<Self, JwksError> {
+    pub fn new(url: impl Into<Arc<str>>, ca_path: Option<&Path>) -> McpResult<Self> {
         let mut builder = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .timeout(JWKS_FETCH_TIMEOUT);
         if let Some(ca_path) = ca_path {
-            let pem = std::fs::read(ca_path).map_err(|_| JwksError::InvalidCa)?;
-            let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|_| JwksError::InvalidCa)?;
+            let pem = std::fs::read(ca_path).map_err(McpError::from_source)?;
+            let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(McpError::from_source)?;
             if certificates.is_empty() {
-                return Err(JwksError::InvalidCa);
+                return Err(JwksError::InvalidCa.into());
             }
             for certificate in certificates {
                 builder = builder.add_root_certificate(certificate);
             }
         }
-        let client = builder.build().map_err(|_| JwksError::Unavailable)?;
+        let client = builder.build().map_err(McpError::from_source)?;
         Ok(Self {
             client,
             url: url.into(),
@@ -64,26 +65,26 @@ impl HttpJwksSource {
 }
 
 impl JwksSource for HttpJwksSource {
-    async fn fetch(&self) -> Result<Vec<u8>, JwksError> {
+    async fn fetch(&self) -> McpResult<Vec<u8>> {
         let mut response = self
             .client
             .get(self.url.as_ref())
             .send()
             .await
-            .map_err(|_| JwksError::Unavailable)?
+            .map_err(McpError::from_source)?
             .error_for_status()
-            .map_err(|_| JwksError::Unavailable)?;
+            .map_err(McpError::from_source)?;
         if response
             .content_length()
             .is_some_and(|length| length > MAX_JWKS_BYTES as u64)
         {
-            return Err(JwksError::DocumentTooLarge);
+            return Err(JwksError::DocumentTooLarge.into());
         }
         let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| JwksError::Unavailable)? {
+        while let Some(chunk) = response.chunk().await.map_err(McpError::from_source)? {
             let next_len = body.len().checked_add(chunk.len()).ok_or(JwksError::DocumentTooLarge)?;
             if next_len > MAX_JWKS_BYTES {
-                return Err(JwksError::DocumentTooLarge);
+                return Err(JwksError::DocumentTooLarge.into());
             }
             body.extend_from_slice(&chunk);
         }
@@ -136,24 +137,30 @@ where
         }
     }
 
-    pub async fn warm_up(&self) -> Result<(), JwksError> {
+    pub async fn warm_up(&self) -> McpResult<()> {
         let observed_generation = self.active.load().generation;
         self.refresh(observed_generation).await?;
         if self.active.load().generation == 0 {
-            return Err(JwksError::Unavailable);
+            return Err(JwksError::Unavailable.into());
         }
         Ok(())
     }
 
-    pub async fn decoding_key(&self, token: &str) -> Result<Arc<DecodingKey>, JwksError> {
-        let header = jsonwebtoken::decode_header(token).map_err(|_| JwksError::RejectedToken)?;
+    pub(crate) async fn decoding_key(
+        &self,
+        token: &str,
+    ) -> McpResult<Result<Arc<DecodingKey>, super::http_auth::HttpAuthRejection>> {
+        use super::http_auth::HttpAuthRejection;
+        let header = match jsonwebtoken::decode_header(token) {
+            Ok(header) => header,
+            Err(source) => return Ok(Err(HttpAuthRejection::invalid_token(source))),
+        };
         if header.alg != Algorithm::RS256 {
-            return Err(JwksError::RejectedToken);
+            return Ok(Err(HttpAuthRejection::unauthorized()));
         }
-        let kid = header
-            .kid
-            .filter(|kid| valid_kid(kid))
-            .ok_or(JwksError::RejectedToken)?;
+        let Some(kid) = header.kid.filter(|kid| valid_kid(kid)) else {
+            return Ok(Err(HttpAuthRejection::unauthorized()));
+        };
 
         let snapshot = self.active.load_full();
         let should_refresh = snapshot.generation == 0
@@ -161,30 +168,31 @@ where
             || !snapshot.keys.contains_key(&kid);
         if should_refresh {
             let refresh_result = self.refresh(snapshot.generation).await;
-            if refresh_result.is_err() {
+            if let Err(error) = refresh_result {
                 let active = self.active.load_full();
                 if active.generation == 0
                     || active.loaded_at.elapsed() > self.max_stale
                     || !active.keys.contains_key(&kid)
                 {
-                    return Err(JwksError::RejectedToken);
+                    return Err(error);
                 }
             }
         }
 
-        self.active
+        Ok(self
+            .active
             .load()
             .keys
             .get(&kid)
             .cloned()
-            .ok_or(JwksError::RejectedToken)
+            .ok_or(HttpAuthRejection::unauthorized()))
     }
 
     pub fn active_generation(&self) -> u64 {
         self.active.load().generation
     }
 
-    async fn refresh(&self, observed_generation: u64) -> Result<(), JwksError> {
+    async fn refresh(&self, observed_generation: u64) -> McpResult<()> {
         let _writer = self.refresh_writer.lock().await;
         if self.active.load().generation != observed_generation {
             return Ok(());
@@ -236,13 +244,13 @@ struct RawJwk {
     e: String,
 }
 
-fn parse_jwks(bytes: &[u8]) -> Result<BTreeMap<String, Arc<DecodingKey>>, JwksError> {
+fn parse_jwks(bytes: &[u8]) -> McpResult<BTreeMap<String, Arc<DecodingKey>>> {
     if bytes.len() > MAX_JWKS_BYTES {
-        return Err(JwksError::DocumentTooLarge);
+        return Err(JwksError::DocumentTooLarge.into());
     }
-    let document: RawJwks = serde_json::from_slice(bytes).map_err(|_| JwksError::InvalidDocument)?;
+    let document: RawJwks = serde_json::from_slice(bytes).map_err(McpError::from_source)?;
     if document.keys.is_empty() || document.keys.len() > MAX_JWKS_KEYS {
-        return Err(JwksError::InvalidDocument);
+        return Err(JwksError::InvalidDocument.into());
     }
     let mut keys = BTreeMap::new();
     for jwk in document.keys {
@@ -255,11 +263,11 @@ fn parse_jwks(bytes: &[u8]) -> Result<BTreeMap<String, Arc<DecodingKey>>, JwksEr
                 .as_ref()
                 .is_some_and(|operations| !operations.iter().any(|operation| operation == "verify"))
         {
-            return Err(JwksError::InvalidDocument);
+            return Err(JwksError::InvalidDocument.into());
         }
-        let key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(|_| JwksError::InvalidDocument)?;
+        let key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e).map_err(McpError::from_source)?;
         if keys.insert(jwk.kid, Arc::new(key)).is_some() {
-            return Err(JwksError::InvalidDocument);
+            return Err(JwksError::InvalidDocument.into());
         }
     }
     Ok(keys)
@@ -270,19 +278,23 @@ fn valid_kid(kid: &str) -> bool {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum JwksError {
+enum JwksError {
     #[error("JWKS endpoint is unavailable")]
     Unavailable,
     #[error("JWKS document exceeds the configured size limit")]
     DocumentTooLarge,
     #[error("JWKS document is invalid")]
     InvalidDocument,
-    #[error("JWT was rejected")]
-    RejectedToken,
     #[error("JWKS generation is exhausted")]
     GenerationExhausted,
     #[error("JWKS CA bundle is invalid")]
     InvalidCa,
+}
+
+impl From<JwksError> for McpError {
+    fn from(source: JwksError) -> Self {
+        Self::from_source(source)
+    }
 }
 
 #[cfg(test)]
@@ -296,10 +308,10 @@ mod tests {
     #[test]
     fn parser_rejects_symmetric_algorithm_and_duplicate_kids() {
         let symmetric = br#"{"keys":[{"kty":"oct","kid":"one","alg":"HS256","k":"c2VjcmV0"}]}"#;
-        assert!(matches!(parse_jwks(symmetric), Err(JwksError::InvalidDocument)));
+        assert!(parse_jwks(symmetric).is_err());
 
         let duplicate = jwks_document(&["one", "one"]);
-        assert!(matches!(parse_jwks(&duplicate), Err(JwksError::InvalidDocument)));
+        assert!(parse_jwks(&duplicate).is_err());
     }
 
     #[test]
@@ -314,10 +326,7 @@ mod tests {
 
         let invalid_path = temp_dir.path().join("invalid-ca.pem");
         std::fs::write(&invalid_path, b"not a certificate").unwrap();
-        assert!(matches!(
-            HttpJwksSource::new("https://issuer.example.test/jwks", Some(&invalid_path)),
-            Err(JwksError::InvalidCa)
-        ));
+        assert!(HttpJwksSource::new("https://issuer.example.test/jwks", Some(&invalid_path)).is_err());
     }
 
     #[tokio::test]
@@ -325,18 +334,30 @@ mod tests {
         let source = Arc::new(QueueSource::new([
             Ok(jwks_document(&["one"])),
             Ok(jwks_document(&["two"])),
-            Err(JwksError::Unavailable),
+            Err(JwksError::Unavailable.into()),
         ]));
         let verifier = JwksVerifier::new(source, Duration::from_secs(60), Duration::from_secs(60));
 
         verifier.warm_up().await.unwrap();
         assert_eq!(verifier.active_generation(), 1);
-        assert!(verifier.decoding_key(&token_header("one", "RS256")).await.is_ok());
-        assert!(verifier.decoding_key(&token_header("two", "RS256")).await.is_ok());
+        assert!(verifier
+            .decoding_key(&token_header("one", "RS256"))
+            .await
+            .unwrap()
+            .is_ok());
+        assert!(verifier
+            .decoding_key(&token_header("two", "RS256"))
+            .await
+            .unwrap()
+            .is_ok());
         assert_eq!(verifier.active_generation(), 2);
         assert!(verifier.decoding_key(&token_header("one", "RS256")).await.is_err());
         assert_eq!(verifier.active_generation(), 2);
-        assert!(verifier.decoding_key(&token_header("two", "RS256")).await.is_ok());
+        assert!(verifier
+            .decoding_key(&token_header("two", "RS256"))
+            .await
+            .unwrap()
+            .is_ok());
     }
 
     #[tokio::test]
@@ -345,8 +366,16 @@ mod tests {
         let verifier = JwksVerifier::new(source, Duration::from_secs(60), Duration::from_secs(60));
         verifier.warm_up().await.unwrap();
 
-        assert!(verifier.decoding_key(&token_header("one", "HS256")).await.is_err());
-        assert!(verifier.decoding_key("eyJhbGciOiJSUzI1NiJ9.e30.invalid").await.is_err());
+        assert!(verifier
+            .decoding_key(&token_header("one", "HS256"))
+            .await
+            .unwrap()
+            .is_err());
+        assert!(verifier
+            .decoding_key("eyJhbGciOiJSUzI1NiJ9.e30.invalid")
+            .await
+            .unwrap()
+            .is_err());
     }
 
     #[test]
@@ -385,11 +414,11 @@ mod tests {
     }
 
     struct QueueSource {
-        responses: Mutex<VecDeque<Result<Vec<u8>, JwksError>>>,
+        responses: Mutex<VecDeque<McpResult<Vec<u8>>>>,
     }
 
     impl QueueSource {
-        fn new(responses: impl IntoIterator<Item = Result<Vec<u8>, JwksError>>) -> Self {
+        fn new(responses: impl IntoIterator<Item = McpResult<Vec<u8>>>) -> Self {
             Self {
                 responses: Mutex::new(responses.into_iter().collect()),
             }
@@ -397,12 +426,12 @@ mod tests {
     }
 
     impl JwksSource for QueueSource {
-        async fn fetch(&self) -> Result<Vec<u8>, JwksError> {
+        async fn fetch(&self) -> McpResult<Vec<u8>> {
             self.responses
                 .lock()
                 .await
                 .pop_front()
-                .unwrap_or(Err(JwksError::Unavailable))
+                .unwrap_or_else(|| Err(JwksError::Unavailable.into()))
         }
     }
 }

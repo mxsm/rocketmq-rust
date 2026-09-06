@@ -43,7 +43,7 @@ use crate::adapter::admin_session::AdminCoreSessionFactory;
 use crate::adapter::query_facade::QueryFacade;
 use crate::app::McpApp;
 use crate::guard::context::RequestContext as AccessContext;
-use crate::guard::GuardError;
+use crate::guard::GuardRejection;
 use crate::prompts;
 use crate::resources;
 use crate::tools;
@@ -142,12 +142,8 @@ impl ServerHandler for RocketmqMcpServer {
     ) -> Result<InitializeResult, ErrorData> {
         if request.protocol_version != ProtocolVersion::V_2025_11_25 {
             return Err(ErrorData::invalid_params(
-                format!(
-                    "unsupported MCP protocol version {}; rocketmq-mcp requires 2025-11-25",
-                    request.protocol_version
-                ),
+                "unsupported MCP protocol version; rocketmq-mcp requires 2025-11-25",
                 Some(json!({
-                    "requested": request.protocol_version,
                     "supported": ["2025-11-25"],
                 })),
             ));
@@ -383,7 +379,7 @@ fn request_id_string(request_id: &rmcp::model::RequestId) -> String {
     }
 }
 
-fn resource_guard_error(error: GuardError, correlation_id: &str) -> ErrorData {
+fn resource_guard_error(error: GuardRejection, correlation_id: &str) -> ErrorData {
     let _ = error;
     resource_unavailable(correlation_id)
 }
@@ -399,15 +395,15 @@ fn resource_unavailable(correlation_id: &str) -> ErrorData {
     )
 }
 
-fn guard_error_metric_kind(error: &GuardError) -> McpErrorKind {
+fn guard_error_metric_kind(error: &GuardRejection) -> McpErrorKind {
     match error {
-        GuardError::InvalidArgument(_) => McpErrorKind::InvalidRequest,
-        GuardError::RateLimited(_) => McpErrorKind::RateLimited,
-        GuardError::PermissionDenied(_)
-        | GuardError::UnauthorizedScope(_)
-        | GuardError::TenantMismatch(_)
-        | GuardError::ClusterNotAllowed(_)
-        | GuardError::ChangePlanningDisabled(_) => McpErrorKind::PermissionDenied,
+        GuardRejection::InvalidArgument => McpErrorKind::InvalidRequest,
+        GuardRejection::RateLimited => McpErrorKind::RateLimited,
+        GuardRejection::PermissionDenied
+        | GuardRejection::UnauthorizedScope
+        | GuardRejection::TenantMismatch
+        | GuardRejection::ClusterNotAllowed
+        | GuardRejection::ChangePlanningDisabled => McpErrorKind::PermissionDenied,
     }
 }
 
@@ -502,10 +498,7 @@ mod tests {
 
     #[test]
     fn resource_guard_errors_are_stable_correlated_and_sanitized() {
-        let error = resource_guard_error(
-            GuardError::TenantMismatch("secret tenant details".to_string()),
-            "request-7",
-        );
+        let error = resource_guard_error(GuardRejection::TenantMismatch, "request-7");
         let data = error.data.as_ref().unwrap();
 
         assert_eq!(data["code"], "resource_unavailable");
