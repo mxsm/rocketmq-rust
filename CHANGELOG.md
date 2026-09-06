@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **docs(store):** Add the missing Apache 2.0 header to the store context compile-test fixture ([#10069](https://github.com/mxsm/rocketmq-rust/issues/10069)).
 - **docs(namesrv):** Add the missing Apache 2.0 header to `broker_addr_info.rs` ([#10059](https://github.com/mxsm/rocketmq-rust/issues/10059))
 - **docs:** Add missing Apache 2.0 headers to the observability broker metrics example and configuration resolution tests ([#10060](https://github.com/mxsm/rocketmq-rust/issues/10060)).
 - **fix(sre-ui):** Pin TypeScript to 5.9.3 so clean installs satisfy the OpenAPI generator and ESLint peer dependencies ([#10033](https://github.com/mxsm/rocketmq-rust/issues/10033))
