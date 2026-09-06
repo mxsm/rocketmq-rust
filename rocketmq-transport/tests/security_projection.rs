@@ -18,7 +18,9 @@ use cheetah_string::CheetahString;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthenticatedRequestContext;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
+use rocketmq_security_api::AuthorizationDenial;
+use rocketmq_security_api::LayerFailureKind;
 use rocketmq_security_api::OutboundSigner;
 use rocketmq_security_api::PeerInfo;
 use rocketmq_security_api::Principal;
@@ -33,10 +35,10 @@ use rocketmq_transport::api::TransportSecurity;
 struct AllowPolicy;
 
 impl RequestPolicy for AllowPolicy {
-    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> Decision {
+    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
         assert_eq!(context.request().code(), 105);
         assert_eq!(context.resource().name(), "TopicA");
-        Decision::Allow
+        AuthorizationDecision::Allow
     }
 }
 
@@ -70,7 +72,7 @@ fn command_projection_borrows_canonical_values_and_injected_ports() {
             Resource::topic("TopicA"),
             Action::Publish,
         ),
-        Decision::Allow
+        Ok(AuthorizationDecision::Allow)
     );
     security.sign(&mut command, Some(&peer)).unwrap();
     assert_eq!(command.code(), 105);
@@ -82,10 +84,10 @@ fn command_projection_borrows_canonical_values_and_injected_ports() {
 fn missing_principal_is_fail_closed_without_an_auth_provider_dependency() {
     let command = RemotingCommand::create_remoting_command(105);
     let security = TransportSecurity::secure_enforced(Some(Arc::new(AllowPolicy)), None);
-    assert!(matches!(
+    assert_eq!(
         security.authorize(&command, None, None, Resource::topic("TopicA"), Action::Publish,),
-        Decision::Deny { .. }
-    ));
+        Ok(AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown))
+    );
 }
 
 #[test]
@@ -93,7 +95,7 @@ fn secure_transport_never_downgrades_when_policy_or_signer_is_missing() {
     let mut command = RemotingCommand::create_remoting_command(105);
     let security = TransportSecurity::secure_enforced(None, None);
 
-    assert!(matches!(
+    assert_eq!(
         security.authorize(
             &command,
             None,
@@ -101,8 +103,8 @@ fn secure_transport_never_downgrades_when_policy_or_signer_is_missing() {
             Resource::topic("TopicA"),
             Action::Publish,
         ),
-        Decision::Deny { .. }
-    ));
+        Err(LayerFailureKind::Unavailable)
+    );
     assert!(matches!(
         security.sign(&mut command, None),
         Err(SigningError::CredentialsUnavailable)
@@ -116,7 +118,7 @@ fn development_transport_keeps_explicit_loopback_compatibility_behavior() {
 
     assert_eq!(
         security.authorize(&command, None, None, Resource::topic("TopicA"), Action::Publish,),
-        Decision::Allow
+        Ok(AuthorizationDecision::Allow)
     );
     security
         .sign(&mut command, None)

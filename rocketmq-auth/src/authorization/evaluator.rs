@@ -46,12 +46,16 @@
 //! let evaluator = AuthorizationEvaluator::new(strategy);
 //!
 //! let contexts = vec![/* authorization contexts */];
-//! evaluator.evaluate(&contexts)?;
+//! match evaluator.evaluate(&contexts).await? {
+//!     AuthorizationDecision::Allow => proceed(),
+//!     AuthorizationDecision::Deny(reason) => reject(reason),
+//! }
 //! ```
 
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::authorization::provider::AuthorizationError;
 use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
+use rocketmq_security_api::AuthorizationDecision;
 
 /// Authorization evaluator result type
 pub type EvaluatorResult<T> = Result<T, AuthorizationError>;
@@ -69,7 +73,7 @@ pub type EvaluatorResult<T> = Result<T, AuthorizationError>;
 ///
 /// # Behavior
 ///
-/// - **Empty input**: Returns `Ok(())` immediately without evaluation
+/// - **Empty input**: Returns `Allow` immediately without evaluation
 /// - **Strategy delegation**: Delegates each context to the configured strategy
 /// - **Error propagation**: First authorization failure aborts evaluation
 ///
@@ -81,12 +85,18 @@ pub type EvaluatorResult<T> = Result<T, AuthorizationError>;
 /// let evaluator = AuthorizationEvaluator::new(strategy);
 ///
 /// let context = DefaultAuthorizationContext::of(subject, resource, action, source_ip);
-/// evaluator.evaluate(&[context])?;
+/// match evaluator.evaluate(&[context]).await? {
+///     AuthorizationDecision::Allow => proceed(),
+///     AuthorizationDecision::Deny(reason) => reject(reason),
+/// }
 ///
 /// // With stateful (cached) strategy
 /// let strategy = StatefulAuthorizationStrategy::new(config, None);
 /// let evaluator = AuthorizationEvaluator::new(strategy);
-/// evaluator.evaluate(&contexts)?;
+/// match evaluator.evaluate(&contexts).await? {
+///     AuthorizationDecision::Allow => proceed(),
+///     AuthorizationDecision::Deny(reason) => reject(reason),
+/// }
 /// ```
 pub struct AuthorizationEvaluator<S>
 where
@@ -135,12 +145,12 @@ where
     ///
     /// # Returns
     ///
-    /// * `Ok(())` - All contexts passed authorization
-    /// * `Err(AuthorizationError)` - At least one context failed authorization
+    /// * `Ok(AuthorizationDecision)` - The aggregate allow/deny decision
+    /// * `Err(AuthorizationError)` - Evaluation failed before reaching a decision
     ///
     /// # Behavior
     ///
-    /// - Empty slice: Returns `Ok(())` immediately
+    /// - Empty slice: Returns `Allow` immediately
     /// - Non-empty: Evaluates each context sequentially
     /// - Early termination: Stops at first authorization failure
     ///
@@ -152,8 +162,11 @@ where
     ///     DefaultAuthorizationContext::of(subject2, resource2, action2, source_ip2),
     /// ];
     ///
-    /// // All contexts must pass for Ok(())
-    /// evaluator.evaluate(&contexts)?;
+    /// // All contexts must produce `AuthorizationDecision::Allow` for aggregate allow.
+    /// match evaluator.evaluate(&contexts).await? {
+    ///     AuthorizationDecision::Allow => proceed(),
+    ///     AuthorizationDecision::Deny(reason) => reject(reason),
+    /// }
     /// ```
     ///
     /// # Errors
@@ -164,18 +177,21 @@ where
     /// - Resource or subject not found
     /// - Source IP not allowed
     /// - Decision is DENY
-    pub async fn evaluate(&self, contexts: &[DefaultAuthorizationContext]) -> EvaluatorResult<()> {
+    pub async fn evaluate(&self, contexts: &[DefaultAuthorizationContext]) -> EvaluatorResult<AuthorizationDecision> {
         // Early return on empty input
         if contexts.is_empty() {
-            return Ok(());
+            return Ok(AuthorizationDecision::Allow);
         }
 
         // Evaluate each context through the strategy
         for context in contexts {
-            self.authorization_strategy.evaluate(context).await?;
+            match self.authorization_strategy.evaluate(context).await? {
+                AuthorizationDecision::Allow => {}
+                decision @ AuthorizationDecision::Deny(_) => return Ok(decision),
+            }
         }
 
-        Ok(())
+        Ok(AuthorizationDecision::Allow)
     }
 
     /// Get a reference to the underlying authorization strategy
@@ -193,25 +209,24 @@ where
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_security_api::AuthorizationDenial;
+
     use super::*;
     use crate::authorization::strategy::abstract_authorization_strategy::AuthorizationFuture;
 
     // Mock strategy for testing
     struct MockStrategy {
         should_fail: bool,
+        decision: AuthorizationDecision,
     }
 
     impl AuthorizationStrategy for MockStrategy {
         fn evaluate<'a>(&'a self, _context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a> {
             Box::pin(async move {
                 if self.should_fail {
-                    Err(AuthorizationError::PermissionDenied {
-                        subject: "test".to_string(),
-                        resource: "test".to_string(),
-                        reason: "mock failure".to_string(),
-                    })
+                    Err(AuthorizationError::InvalidContext("mock failure".to_owned()))
                 } else {
-                    Ok(())
+                    Ok(self.decision)
                 }
             })
         }
@@ -219,26 +234,35 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluator_empty_contexts() {
-        let strategy = MockStrategy { should_fail: false };
+        let strategy = MockStrategy {
+            should_fail: false,
+            decision: AuthorizationDecision::Allow,
+        };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
         let result = evaluator.evaluate(&[]).await;
-        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AuthorizationDecision::Allow);
     }
 
     #[tokio::test]
     async fn test_evaluator_success() {
-        let strategy = MockStrategy { should_fail: false };
+        let strategy = MockStrategy {
+            should_fail: false,
+            decision: AuthorizationDecision::Allow,
+        };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
         let context = DefaultAuthorizationContext::default();
         let result = evaluator.evaluate(&[context]).await;
-        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AuthorizationDecision::Allow);
     }
 
     #[tokio::test]
     async fn test_evaluator_failure() {
-        let strategy = MockStrategy { should_fail: true };
+        let strategy = MockStrategy {
+            should_fail: true,
+            decision: AuthorizationDecision::Allow,
+        };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
         let context = DefaultAuthorizationContext::default();
@@ -248,7 +272,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluator_multiple_contexts_success() {
-        let strategy = MockStrategy { should_fail: false };
+        let strategy = MockStrategy {
+            should_fail: false,
+            decision: AuthorizationDecision::Allow,
+        };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
         let contexts = vec![
@@ -257,12 +284,15 @@ mod tests {
             DefaultAuthorizationContext::default(),
         ];
         let result = evaluator.evaluate(&contexts).await;
-        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), AuthorizationDecision::Allow);
     }
 
     #[tokio::test]
     async fn test_evaluator_multiple_contexts_one_failure() {
-        let strategy = MockStrategy { should_fail: true };
+        let strategy = MockStrategy {
+            should_fail: true,
+            decision: AuthorizationDecision::Allow,
+        };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
         let contexts = vec![
@@ -273,9 +303,27 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[tokio::test]
+    async fn test_evaluator_stops_at_denial() {
+        let strategy = MockStrategy {
+            should_fail: false,
+            decision: AuthorizationDecision::Deny(AuthorizationDenial::PolicyNotApplicable),
+        };
+        let evaluator = AuthorizationEvaluator::new(strategy);
+
+        let result = evaluator.evaluate(&[DefaultAuthorizationContext::default()]).await;
+        assert_eq!(
+            result.unwrap(),
+            AuthorizationDecision::Deny(AuthorizationDenial::PolicyNotApplicable)
+        );
+    }
+
     #[test]
     fn test_evaluator_get_strategy() {
-        let strategy = MockStrategy { should_fail: false };
+        let strategy = MockStrategy {
+            should_fail: false,
+            decision: AuthorizationDecision::Allow,
+        };
         let evaluator = AuthorizationEvaluator::new(strategy);
 
         let _strategy_ref = evaluator.strategy();

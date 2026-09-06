@@ -14,14 +14,35 @@
 
 //! Runtime-neutral contracts for staged authorization.
 
-use crate::Decision;
 use crate::SecurityRequestView;
 
-/// Stable, non-sensitive reason used when the layered pipeline rejects a request.
+/// Final authorization decision returned by a policy layer.
+#[must_use = "authorization decisions must be checked; Ok(Deny(_)) rejects the operation"]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorizationDecision {
+    /// The operation is authorized.
+    Allow,
+    /// The operation is rejected for a closed, non-sensitive reason.
+    Deny(AuthorizationDenial),
+}
+
+/// Closed, non-sensitive reasons for rejecting an authorization request.
 ///
-/// Layer implementations must not substitute credential, signature, token, header,
-/// or body data into this value.
-pub const LAYERED_AUTHORIZATION_DENIED_REASON: &str = "authorization denied";
+/// Resource, subject, credential, policy, and request values deliberately do
+/// not appear in this contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorizationDenial {
+    /// The subject cannot be authorized without exposing whether it exists.
+    SubjectUnknown,
+    /// The resource cannot be authorized without exposing whether it exists.
+    ResourceUnknown,
+    /// The evaluated policy does not grant the requested operation.
+    PermissionDenied,
+    /// No applicable policy grants the requested operation.
+    PolicyNotApplicable,
+    /// A maintenance restriction rejects the requested operation.
+    MaintenanceRestricted,
+}
 
 /// The coarse ingress decision made before authentication or detailed policy evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,9 +55,8 @@ pub enum IngressDecision {
 
 /// The result of a detailed authorization policy evaluation.
 ///
-/// `Abstain` is intentionally local to the layered contract. It is not a
-/// variant of the legacy public [`Decision`] type and is resolved only by
-/// [`combine_layered_authorization`].
+/// `Abstain` is intentionally local to the layered contract and is resolved
+/// only by [`combine_layered_authorization`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailedDecision {
     /// The detailed policy allows the request.
@@ -63,17 +83,17 @@ pub enum LayerFailureKind {
 pub enum LayerRequirement {
     /// A detailed decision must be present; `Abstain` is a denial.
     Required,
-    /// An explicit compatibility boundary permits `Abstain`.
+    /// An explicitly optional detailed layer permits `Abstain`.
     ///
-    /// This variant is only for a deliberately disabled compatibility layer. It
-    /// must not be used to convert an unavailable layer or any other failure
-    /// into an allow.
+    /// This variant is only for a deliberately disabled optional layer. It must
+    /// not convert an unavailable layer or any other failure into an allow.
     Optional,
 }
 
 /// The result returned by one authorization layer.
 ///
-/// Every [`Err`] value is denied by [`combine_layered_authorization`].
+/// [`combine_layered_authorization`] preserves every [`Err`] value for the
+/// owning boundary to project while remaining fail closed.
 pub type LayerEvaluation<T> = Result<T, LayerFailureKind>;
 
 /// A coarse ingress policy that can inspect a request without authenticating it.
@@ -88,29 +108,31 @@ pub trait IngressPolicy: Send + Sync {
 /// Combines coarse ingress and detailed authorization under fail-closed semantics.
 ///
 /// A coarse deny is sticky and does not invoke `detailed`. An ingress failure, a
-/// detailed failure, or a detailed deny always produces the fixed public denial.
-/// A detailed abstention is allowed only at an explicit [`LayerRequirement::Optional`]
-/// compatibility boundary; required authorization fails closed.
+/// detailed failure, or a detailed deny never produces an allow. Failures remain
+/// typed [`Err`] values for the owning boundary to project. A detailed abstention
+/// is allowed only for an explicit [`LayerRequirement::Optional`]; required
+/// authorization resolves it to [`AuthorizationDenial::PolicyNotApplicable`].
 pub fn combine_layered_authorization<F>(
     ingress: LayerEvaluation<IngressDecision>,
     requirement: LayerRequirement,
     detailed: F,
-) -> Decision
+) -> LayerEvaluation<AuthorizationDecision>
 where
     F: FnOnce() -> LayerEvaluation<DetailedDecision>,
 {
     match ingress {
         Ok(IngressDecision::AllowToContinue) => match detailed() {
-            Ok(DetailedDecision::Allow) => Decision::Allow,
-            Ok(DetailedDecision::Abstain) if requirement == LayerRequirement::Optional => Decision::Allow,
-            Ok(DetailedDecision::Deny | DetailedDecision::Abstain) | Err(_) => layered_deny(),
+            Ok(DetailedDecision::Allow) => Ok(AuthorizationDecision::Allow),
+            Ok(DetailedDecision::Deny) => Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)),
+            Ok(DetailedDecision::Abstain) if requirement == LayerRequirement::Optional => {
+                Ok(AuthorizationDecision::Allow)
+            }
+            Ok(DetailedDecision::Abstain) => Ok(AuthorizationDecision::Deny(AuthorizationDenial::PolicyNotApplicable)),
+            Err(failure) => Err(failure),
         },
-        Ok(IngressDecision::Deny) | Err(_) => layered_deny(),
+        Ok(IngressDecision::Deny) => Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)),
+        Err(failure) => Err(failure),
     }
-}
-
-fn layered_deny() -> Decision {
-    Decision::deny(LAYERED_AUTHORIZATION_DENIED_REASON)
 }
 
 #[cfg(test)]
@@ -119,8 +141,8 @@ mod tests {
 
     use super::*;
 
-    fn is_allow(decision: Decision) -> bool {
-        matches!(decision, Decision::Allow)
+    fn is_allow(decision: LayerEvaluation<AuthorizationDecision>) -> bool {
+        matches!(decision, Ok(AuthorizationDecision::Allow))
     }
 
     #[test]
@@ -162,41 +184,71 @@ mod tests {
             Ok(DetailedDecision::Allow)
         });
 
-        assert!(matches!(result, Decision::Deny { .. }));
+        assert_eq!(
+            result,
+            Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied))
+        );
         assert!(!detailed_called.get());
     }
 
     #[test]
-    fn every_layer_failure_is_denied() {
+    fn every_layer_failure_is_preserved() {
         for failure in [
             LayerFailureKind::Unavailable,
             LayerFailureKind::Error,
             LayerFailureKind::Timeout,
         ] {
-            assert!(matches!(
+            assert_eq!(
                 combine_layered_authorization(Err(failure), LayerRequirement::Optional, || {
                     Ok(DetailedDecision::Allow)
                 }),
-                Decision::Deny { .. }
-            ));
-            assert!(matches!(
+                Err(failure)
+            );
+            assert_eq!(
                 combine_layered_authorization(
                     Ok(IngressDecision::AllowToContinue),
                     LayerRequirement::Optional,
                     || Err(failure),
                 ),
-                Decision::Deny { .. }
-            ));
+                Err(failure)
+            );
         }
     }
 
     #[test]
-    fn denial_reason_is_fixed_and_redaction_safe() {
-        let result =
+    fn detailed_deny_and_required_abstention_have_closed_reasons() {
+        let denied =
             combine_layered_authorization(Ok(IngressDecision::AllowToContinue), LayerRequirement::Required, || {
                 Ok(DetailedDecision::Deny)
             });
+        let abstained =
+            combine_layered_authorization(Ok(IngressDecision::AllowToContinue), LayerRequirement::Required, || {
+                Ok(DetailedDecision::Abstain)
+            });
 
-        assert_eq!(result, Decision::deny(LAYERED_AUTHORIZATION_DENIED_REASON));
+        assert_eq!(
+            denied,
+            Ok(AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied))
+        );
+        assert_eq!(
+            abstained,
+            Ok(AuthorizationDecision::Deny(AuthorizationDenial::PolicyNotApplicable))
+        );
+    }
+
+    #[test]
+    fn every_denial_reason_is_closed_and_value_free() {
+        let reasons = [
+            AuthorizationDenial::SubjectUnknown,
+            AuthorizationDenial::ResourceUnknown,
+            AuthorizationDenial::PermissionDenied,
+            AuthorizationDenial::PolicyNotApplicable,
+            AuthorizationDenial::MaintenanceRestricted,
+        ];
+
+        for reason in reasons {
+            let decision = AuthorizationDecision::Deny(reason);
+            assert_eq!(decision, AuthorizationDecision::Deny(reason));
+        }
     }
 }

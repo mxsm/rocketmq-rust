@@ -67,7 +67,10 @@ use crate::config::AuthConfig;
 ///
 /// // Each evaluation queries the provider directly
 /// let context = DefaultAuthorizationContext::of(subject, resource, action, ip);
-/// strategy.evaluate(&context)?;
+/// match strategy.evaluate(&context).await? {
+///     AuthorizationDecision::Allow => proceed(),
+///     AuthorizationDecision::Deny(reason) => reject(reason),
+/// }
 /// ```
 pub struct StatelessAuthorizationStrategy {
     /// Base authorization strategy implementation
@@ -120,22 +123,22 @@ impl AuthorizationStrategy for StatelessAuthorizationStrategy {
     ///
     /// # Returns
     ///
-    /// * `Ok(())` if authorization is granted
-    /// * `Err(AuthorizationError)` if authorization is denied
+    /// * `Ok(AuthorizationDecision)` for a final allow or deny
+    /// * `Err(AuthorizationError)` if evaluation cannot make a decision
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// let strategy = StatelessAuthorizationStrategy::new(config, None)?;
     /// let context = DefaultAuthorizationContext::of(subject, resource, action, ip);
-    /// strategy.evaluate(&context)?;
+    /// match strategy.evaluate(&context).await? {
+    ///     AuthorizationDecision::Allow => proceed(),
+    ///     AuthorizationDecision::Deny(reason) => reject(reason),
+    /// }
     /// ```
     fn evaluate<'a>(&'a self, context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a> {
         Box::pin(async move {
-            debug!(
-                "Stateless authorization evaluation for subject: {:?}",
-                context.subject().map(|s| s.subject_key())
-            );
+            debug!("Stateless authorization evaluation started");
             evaluate_base_authorization(&self.base, context).await
         })
     }
@@ -216,7 +219,8 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn evaluate_inside_current_thread_runtime_without_nested_block_on_panic() {
-        let config = create_test_config();
+        let mut config = create_test_config();
+        config.authorization_enabled = false;
         let strategy = StatelessAuthorizationStrategy::new(config, None).unwrap();
         let context = DefaultAuthorizationContext::default();
         assert!(strategy.evaluate(&context).await.is_ok());

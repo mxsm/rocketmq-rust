@@ -20,6 +20,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use super::admission_response;
+use super::authorization_denied_response;
 use super::deadline_response;
 use super::AuthorizedCommandDispatcher;
 use super::AuthorizedDispatchSession;
@@ -49,12 +50,13 @@ use crate::error::TransportError;
 use crate::runtime::processor::RequestProcessor;
 use crate::session_executor::SessionDispatchAttempt;
 use crate::session_view::EmbeddedSessionRecord;
+#[cfg(test)]
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_security_api::Action;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::ResourceKind;
@@ -184,19 +186,16 @@ where
                     let _ = terminal_sender.complete(Err(EmbeddedDispatchError::response_construction(error)));
                 }
             }
-        } else if let Decision::Deny { reason } = self.boundary.security.authorize_embedded_for_dispatch(
-            builder.command(),
-            &principal_for_security,
-            Resource::new(ResourceKind::Other, original.original_code().to_string()),
-            Action::Manage,
+        } else if !matches!(
+            self.boundary.security.authorize_embedded_for_dispatch(
+                builder.command(),
+                &principal_for_security,
+                Resource::new(ResourceKind::Other, original.original_code().to_string()),
+                Action::Manage,
+            ),
+            Ok(AuthorizationDecision::Allow)
         ) {
-            match RemotingResponse::command(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    reason.to_string(),
-                )
-                .set_opaque(original.original_opaque()),
-            ) {
+            match RemotingResponse::command(authorization_denied_response().set_opaque(original.original_opaque())) {
                 Ok(response) => {
                     complete_candidate(
                         self.core.explicit_processor(),

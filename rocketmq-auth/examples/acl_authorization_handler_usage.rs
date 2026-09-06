@@ -22,6 +22,7 @@ use std::sync::Arc;
 use rocketmq_auth::Acl;
 use rocketmq_auth::AclAuthorizationHandler;
 use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthorizationDecision;
 use rocketmq_auth::AuthorizationHandlerChain;
 use rocketmq_auth::AuthorizationMetadataProvider;
 use rocketmq_auth::DefaultAuthorizationContext;
@@ -108,8 +109,11 @@ async fn main() -> Result<()> {
         "192.168.1.100",
     );
     match chain.handle(&context1).await {
-        Ok(()) => println!("      ✅ Authorization GRANTED\n"),
-        Err(e) => println!("      ❌ Authorization DENIED: {}\n", e),
+        Ok(AuthorizationDecision::Allow) => println!("      ✅ Authorization GRANTED\n"),
+        Ok(AuthorizationDecision::Deny(denial)) => {
+            println!("      ❌ Authorization DENIED: {:?}\n", denial)
+        }
+        Err(e) => println!("      ⚠️ Authorization evaluation FAILED: {}\n", e),
     }
 
     // Scenario 2: Alice subscribes to "orders" - Should FAIL (no SUB permission)
@@ -122,8 +126,11 @@ async fn main() -> Result<()> {
         "192.168.1.100",
     );
     match chain.handle(&context2).await {
-        Ok(()) => println!("      ✅ Authorization GRANTED\n"),
-        Err(e) => println!("      ❌ Authorization DENIED: {}\n", e),
+        Ok(AuthorizationDecision::Allow) => println!("      ✅ Authorization GRANTED\n"),
+        Ok(AuthorizationDecision::Deny(denial)) => {
+            println!("      ❌ Authorization DENIED: {:?}\n", denial)
+        }
+        Err(e) => println!("      ⚠️ Authorization evaluation FAILED: {}\n", e),
     }
 
     // Scenario 3: Bob accesses "secrets" - Should FAIL (DENY policy)
@@ -131,8 +138,11 @@ async fn main() -> Result<()> {
     let context3 =
         DefaultAuthorizationContext::of("bob", SubjectType::User, bob_resource.clone(), Action::Pub, "10.0.0.50");
     match chain.handle(&context3).await {
-        Ok(()) => println!("      ✅ Authorization GRANTED\n"),
-        Err(e) => println!("      ❌ Authorization DENIED: {}\n", e),
+        Ok(AuthorizationDecision::Allow) => println!("      ✅ Authorization GRANTED\n"),
+        Ok(AuthorizationDecision::Deny(denial)) => {
+            println!("      ❌ Authorization DENIED: {:?}\n", denial)
+        }
+        Err(e) => println!("      ⚠️ Authorization evaluation FAILED: {}\n", e),
     }
 
     // Scenario 4: Charlie subscribes to "notifications" - Should SUCCEED
@@ -145,8 +155,11 @@ async fn main() -> Result<()> {
         "172.16.0.10",
     );
     match chain.handle(&context4).await {
-        Ok(()) => println!("      ✅ Authorization GRANTED\n"),
-        Err(e) => println!("      ❌ Authorization DENIED: {}\n", e),
+        Ok(AuthorizationDecision::Allow) => println!("      ✅ Authorization GRANTED\n"),
+        Ok(AuthorizationDecision::Deny(denial)) => {
+            println!("      ❌ Authorization DENIED: {:?}\n", denial)
+        }
+        Err(e) => println!("      ⚠️ Authorization evaluation FAILED: {}\n", e),
     }
 
     // Scenario 5: Unknown user "dave" - Should FAIL (no ACL)
@@ -159,8 +172,11 @@ async fn main() -> Result<()> {
         "203.0.113.42",
     );
     match chain.handle(&context5).await {
-        Ok(()) => println!("      ✅ Authorization GRANTED\n"),
-        Err(e) => println!("      ❌ Authorization DENIED: {}\n", e),
+        Ok(AuthorizationDecision::Allow) => println!("      ✅ Authorization GRANTED\n"),
+        Ok(AuthorizationDecision::Deny(denial)) => {
+            println!("      ❌ Authorization DENIED: {:?}\n", denial)
+        }
+        Err(e) => println!("      ⚠️ Authorization evaluation FAILED: {}\n", e),
     }
 
     println!("=== Example completed successfully ===");

@@ -31,6 +31,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_security_api::combine_layered_authorization;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::DetailedDecision;
 use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::LayerRequirement;
@@ -217,9 +218,9 @@ impl NameServerRequestProcessor {
             }
             None => Ok(DetailedDecision::Abstain),
         };
-        if matches!(
+        if !matches!(
             combine_layered_authorization(Ok(IngressDecision::AllowToContinue), detailed_requirement, || detailed,),
-            rocketmq_security_api::Decision::Deny { .. }
+            Ok(AuthorizationDecision::Allow)
         ) {
             tracing::warn!(
                 remote_endpoint = %auth_context.source_ip().unwrap_or("embedded"),
@@ -227,8 +228,9 @@ impl NameServerRequestProcessor {
                 reason_code = "protocol-auth-denied",
                 "NameServer request denied"
             );
-            let error =
-                RocketMQError::authentication_failed("NameServer request authentication or authorization failed");
+            let error = RocketMQError::BrokerPermissionDenied {
+                operation: "authorize".to_owned(),
+            };
             self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
             self.metrics.record_request(
                 metric_class,

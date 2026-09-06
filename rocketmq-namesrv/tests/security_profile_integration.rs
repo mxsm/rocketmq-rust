@@ -19,7 +19,7 @@ use rocketmq_namesrv::security::NameServerTransportPolicy;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Action;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::Resource;
 use rocketmq_security_api::ResourceKind;
@@ -62,13 +62,13 @@ fn secure_transport_policy_covers_all_nameserver_codes_and_denies_unknown_codes(
         let command = RemotingCommand::create_remoting_command(request_code.to_i32());
         assert_eq!(
             security.authorize(&command, None, Some(&principal), resource.clone(), Action::Manage),
-            Decision::Allow
+            Ok(AuthorizationDecision::Allow)
         );
     }
 
     let command = RemotingCommand::create_remoting_command(RequestCode::SendMessage.to_i32());
     assert!(matches!(
         security.authorize(&command, None, Some(&principal), resource, Action::Manage),
-        Decision::Deny { .. }
+        Ok(AuthorizationDecision::Deny(_))
     ));
 }

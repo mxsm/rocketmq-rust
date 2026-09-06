@@ -14,6 +14,7 @@
 
 use super::harness::*;
 use crate::telemetry::TransportTelemetry;
+use rocketmq_error::AUTH_PERMISSION_DENIED;
 #[tokio::test]
 async fn pre_admission_deadline_and_admission_rejection_record_one_terminal_span_without_processor_clone() {
     let limits = AdmissionLimits {
@@ -172,6 +173,14 @@ async fn authorization_denial_records_one_terminal_span_without_clone_hook_or_pr
 
     assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
     assert_eq!(response.opaque(), 811);
+    assert_eq!(
+        response.remark().map(|remark| remark.as_str()),
+        Some(AUTH_PERMISSION_DENIED.public_message())
+    );
+    assert!(response.is_response_type());
+    assert!(!response.is_oneway_rpc());
+    assert!(response.body().is_none());
+    assert!(response.ext_fields().is_none());
     assert_eq!(state.clones.load(Ordering::SeqCst), 0);
     assert_eq!(state.processes.load(Ordering::SeqCst), 0);
     assert_eq!(state.events.lock().expect("event lock").as_slice(), ["ordering"]);

@@ -2640,6 +2640,7 @@ mod tests {
     use rocketmq_auth::User;
     use rocketmq_auth::UserStatus;
     use rocketmq_auth::UserType;
+    use rocketmq_error::AuthError;
     use rocketmq_error::RocketMQError;
     use rocketmq_model::common::boundary_type::BoundaryType;
     use rocketmq_model::common::entity::ClientGroup;
@@ -2700,7 +2701,7 @@ mod tests {
     use rocketmq_runtime::ServiceLifecycleConfig;
     use rocketmq_security_api::Action;
     use rocketmq_security_api::AuthenticatedRequestContext;
-    use rocketmq_security_api::Decision;
+    use rocketmq_security_api::AuthorizationDecision;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::RequestPolicy;
     use rocketmq_transport::api::AdmissionController;
@@ -3133,6 +3134,36 @@ mod tests {
     }
 
     #[test]
+    fn local_authorization_operational_failures_keep_r16_and_fixed_output() {
+        let sentinel = "password=plain-text\r\nlocal-path=C:\\private\\authorization-policy";
+        let errors = [
+            RocketMQError::Authentication(AuthError::ContextCreationError(sentinel.to_owned())),
+            RocketMQError::authentication_source("evaluate authorization provider", std::io::Error::other(sentinel)),
+        ];
+
+        for error in errors {
+            let response = super::proxy_operation_error_response(
+                &super::application_remoting_command_factory(),
+                83,
+                "authorize local request",
+                ProxyError::RocketMQ(error),
+            );
+
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+            assert_eq!(response.opaque(), 83);
+            assert_eq!(
+                response.remark().map(CheetahString::as_str),
+                Some("Authentication operation failed")
+            );
+            assert!(response.is_response_type());
+            assert!(response.body().is_none());
+            assert!(response.ext_fields().is_none_or(HashMap::is_empty));
+            assert!(!response.remark().expect("fixed remark").contains("password"));
+            assert!(!response.remark().expect("fixed remark").contains("local-path"));
+        }
+    }
+
+    #[test]
     fn normalized_broker_failures_keep_proxy_r1_and_fixed_catalog_messages() {
         let cases = [
             (ResponseCode::NoPermission, "Broker denied the Proxy operation"),
@@ -3336,8 +3367,8 @@ mod tests {
     struct AllowEmbeddedProxyPolicy;
 
     impl RequestPolicy for AllowEmbeddedProxyPolicy {
-        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
-            Decision::Allow
+        fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
+            AuthorizationDecision::Allow
         }
     }
 

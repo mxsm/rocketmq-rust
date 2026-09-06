@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_security_api::AuthenticatedRequestContext;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
+use rocketmq_security_api::AuthorizationDenial;
 use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::IngressPolicy;
 use rocketmq_security_api::LayerEvaluation;
@@ -134,10 +135,10 @@ impl IngressPolicy for NameServerTransportPolicy {
 }
 
 impl RequestPolicy for NameServerTransportPolicy {
-    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> Decision {
+    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
         match classify_namesrv_request(RequestCode::from(context.request().code())) {
-            Some(_) => Decision::Allow,
-            None => Decision::deny("request code is not part of the NameServer protocol surface"),
+            Some(_) => AuthorizationDecision::Allow,
+            None => AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied),
         }
     }
 }

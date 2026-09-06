@@ -61,6 +61,7 @@ use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::Action;
+use rocketmq_security_api::AuthorizationDecision;
 use tonic::Request;
 #[cfg(feature = "cluster-mode")]
 use tracing::warn;
@@ -379,10 +380,12 @@ impl ProxyAuthRuntime {
                 builder = builder.channel_id(channel_id.to_owned());
             }
 
-            self.authorization_provider
+            let decision = self
+                .authorization_provider
                 .authorize(&builder.build())
                 .await
                 .map_err(map_authorization_error)?;
+            require_authorization_allow(decision)?;
         }
 
         Ok(())
@@ -477,10 +480,12 @@ impl ProxyAuthRuntime {
                     self.sync_acl_metadata(subject_key).await?;
                 }
             }
-            self.authorization_provider
+            let decision = self
+                .authorization_provider
                 .authorize(&context)
                 .await
                 .map_err(map_authorization_error)?;
+            require_authorization_allow(decision)?;
         }
         Ok(())
     }
@@ -789,15 +794,22 @@ fn map_authorization_error(error: AuthorizationError) -> ProxyError {
     ProxyError::from(RocketMQError::from(error))
 }
 
+fn require_authorization_allow(decision: AuthorizationDecision) -> ProxyResult<()> {
+    match decision {
+        AuthorizationDecision::Allow => Ok(()),
+        AuthorizationDecision::Deny(_) => Err(ProxyError::from(RocketMQError::BrokerPermissionDenied {
+            operation: "authorize".to_owned(),
+        })),
+    }
+}
+
 pub fn is_auth_error(error: &RocketMQError) -> bool {
     matches!(
         error,
-        RocketMQError::Authentication(
-            AuthError::AuthenticationFailed(_)
-                | AuthError::InvalidCredential(_)
-                | AuthError::UserNotFound(_)
-                | AuthError::InvalidSignature(_)
-        ) | RocketMQError::BrokerPermissionDenied { .. }
+        RocketMQError::Authentication(_)
+            | RocketMQError::AuthenticationSource { .. }
+            | RocketMQError::BrokerPermissionDenied { .. }
+            | RocketMQError::AuthConfigInvalid { .. }
     )
 }
 
@@ -1248,11 +1260,10 @@ mod tests {
 
     #[test]
     fn map_authorization_error_preserves_proxy_error_category() {
-        let denied = map_authorization_error(AuthorizationError::PermissionDenied {
-            subject: "User:alice".to_string(),
-            resource: "Topic:test".to_string(),
-            reason: "denied".to_string(),
-        });
+        let denied = require_authorization_allow(AuthorizationDecision::Deny(
+            rocketmq_security_api::AuthorizationDenial::PermissionDenied,
+        ))
+        .expect_err("deny must fail closed at the Proxy boundary");
         assert!(matches!(
             denied,
             ProxyError::RocketMQ(RocketMQError::BrokerPermissionDenied { .. })
@@ -1277,7 +1288,7 @@ mod tests {
             map_authorization_error(AuthorizationError::PolicyEvaluationFailed("invalid policy".to_string()));
         assert!(matches!(
             internal,
-            ProxyError::RocketMQ(RocketMQError::Authentication(AuthError::AuthorizationFailed(_)))
+            ProxyError::RocketMQ(RocketMQError::Authentication(AuthError::ContextCreationError(_)))
         ));
     }
 

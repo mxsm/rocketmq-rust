@@ -15,8 +15,25 @@
 use std::net::SocketAddr;
 
 use crate::runtime::RPCHook;
+use rocketmq_error::AUTH_PERMISSION_DENIED;
 
 use super::*;
+
+fn assert_safe_authorization_denial(plan: &RemotingResponse) {
+    let head = plan.test_head();
+    assert_eq!(plan.response_code(), ResponseCode::NoPermission.to_i32());
+    assert_eq!(head.opaque(), 811);
+    assert_eq!(
+        head.remark().map(|remark| remark.as_str()),
+        Some(AUTH_PERMISSION_DENIED.public_message())
+    );
+    assert!(head.is_response_type());
+    assert!(!head.is_oneway_rpc());
+    assert!(head.body().is_none());
+    assert!(head.ext_fields().is_none());
+    assert_eq!(plan.body_len(), 0);
+    assert_eq!(plan.body_part_count(), 0);
+}
 
 #[derive(Default)]
 struct PrincipalPolicy {
@@ -24,13 +41,13 @@ struct PrincipalPolicy {
 }
 
 impl RequestPolicy for PrincipalPolicy {
-    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> Decision {
+    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
         self.seen.lock().expect("policy lock").push((
             context.principal().id().to_owned(),
             context.request().peer().is_none(),
             context.request().fields().get("principal").map(ToString::to_string),
         ));
-        Decision::Allow
+        AuthorizationDecision::Allow
     }
 }
 
@@ -70,11 +87,11 @@ pub(super) struct DenyPolicy {
 }
 
 impl RequestPolicy for DenyPolicy {
-    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> Decision {
+    fn evaluate_authenticated(&self, context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
         self.evaluations.fetch_add(1, Ordering::SeqCst);
         self.peerless
             .fetch_add(usize::from(context.request().peer().is_none()), Ordering::SeqCst);
-        Decision::deny("test denial")
+        AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)
     }
 }
 
@@ -104,7 +121,7 @@ async fn embedded_security_denial_is_peerless_exactly_once_and_development_exemp
     let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
         panic!("security denial must return a reply")
     };
-    assert_eq!(plan.response_code(), ResponseCode::NoPermission.to_i32());
+    assert_safe_authorization_denial(&plan);
     assert_eq!(policy.evaluations.load(Ordering::SeqCst), 1);
     assert_eq!(policy.peerless.load(Ordering::SeqCst), 1);
     assert_eq!(state.orderings.load(Ordering::SeqCst), 1);
@@ -131,7 +148,7 @@ async fn embedded_security_denial_is_peerless_exactly_once_and_development_exemp
     let EmbeddedDispatchOutcome::Reply(plan) = outcome else {
         panic!("fail-closed security must return a reply")
     };
-    assert_eq!(plan.response_code(), ResponseCode::NoPermission.to_i32());
+    assert_safe_authorization_denial(&plan);
     assert_eq!(state.clones.load(Ordering::SeqCst), 0);
     assert_eq!(state.processes.load(Ordering::SeqCst), 0);
     fixture.shutdown().await;

@@ -12,19 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Adapters from the legacy authorization model to layered decisions.
+//! Adapters from policy evaluation to layered authorization decisions.
 
 use rocketmq_error::CanonicalCondition;
 use rocketmq_security_api::DetailedDecision;
-use rocketmq_security_api::LayerEvaluation;
 use rocketmq_security_api::LayerFailureKind;
 
 use crate::authorization::enums::decision::Decision as PolicyDecision;
 use crate::authorization::provider::AuthorizationError;
 
-/// Projects a legacy policy decision into the detailed authorization contract.
+/// Projects an internal policy decision into the detailed authorization contract.
 ///
-/// The legacy policy decision remains binary. In particular, an ACL or policy
+/// The internal policy decision remains binary. In particular, an ACL or policy
 /// `Deny` can never become a layered `Abstain`.
 #[must_use]
 pub const fn project_policy_decision(decision: PolicyDecision) -> DetailedDecision {
@@ -34,7 +33,7 @@ pub const fn project_policy_decision(decision: PolicyDecision) -> DetailedDecisi
     }
 }
 
-/// Classifies a legacy authorization failure for the fail-closed layered contract.
+/// Classifies an authorization failure for the fail-closed layered contract.
 ///
 /// This classification carries no underlying error text. Callers must use the
 /// fixed denial output from `rocketmq-security-api` rather than returning the
@@ -51,30 +50,13 @@ pub fn project_authorization_error(error: &AuthorizationError) -> LayerFailureKi
             CanonicalCondition::Unavailable => LayerFailureKind::Unavailable,
             _ => LayerFailureKind::Error,
         },
-        AuthorizationError::PermissionDenied { .. }
-        | AuthorizationError::PolicyEvaluationFailed(_)
+        AuthorizationError::PolicyEvaluationFailed(_)
         | AuthorizationError::SubjectNotFound(_)
         | AuthorizationError::ResourceNotFound(_)
-        | AuthorizationError::ProviderRuntimeFailed(_)
+        | AuthorizationError::ProviderRuntimeFailed { .. }
         | AuthorizationError::StorageWriteFailed { .. }
         | AuthorizationError::SerializationFailed { .. }
         | AuthorizationError::InvalidContext(_) => LayerFailureKind::Error,
-    }
-}
-
-/// Projects a legacy authorization operation into a detailed layer result.
-///
-/// A successful operation allows the request. A legacy permission denial is a
-/// detailed denial. Every other error remains a layer failure and is never
-/// converted to `Abstain`.
-pub fn project_authorization_result(result: Result<(), AuthorizationError>) -> LayerEvaluation<DetailedDecision> {
-    match result {
-        Ok(()) => Ok(DetailedDecision::Allow),
-        Err(error @ AuthorizationError::PermissionDenied { .. }) => {
-            let _ = error;
-            Ok(DetailedDecision::Deny)
-        }
-        Err(error) => Err(project_authorization_error(&error)),
     }
 }
 
@@ -91,25 +73,14 @@ mod tests {
     }
 
     #[test]
-    fn permission_denial_is_not_an_abstention() {
-        let result = project_authorization_result(Err(AuthorizationError::PermissionDenied {
-            subject: "alice".to_owned(),
-            resource: "topic:orders".to_owned(),
-            reason: "not granted".to_owned(),
-        }));
-
-        assert_eq!(result, Ok(DetailedDecision::Deny));
-    }
-
-    #[test]
     fn unavailable_and_operational_errors_never_abstain() {
         assert_eq!(
-            project_authorization_result(Err(AuthorizationError::NotInitialized("not ready".to_owned()))),
-            Err(LayerFailureKind::Unavailable)
+            project_authorization_error(&AuthorizationError::NotInitialized("not ready".to_owned())),
+            LayerFailureKind::Unavailable
         );
         assert_eq!(
-            project_authorization_result(Err(AuthorizationError::PolicyEvaluationFailed("failed".to_owned()))),
-            Err(LayerFailureKind::Error)
+            project_authorization_error(&AuthorizationError::PolicyEvaluationFailed("failed".to_owned())),
+            LayerFailureKind::Error
         );
     }
 
@@ -120,12 +91,6 @@ mod tests {
                 rocketmq_runtime::RuntimeOperation::PersistMetadata
             ))),
             LayerFailureKind::Timeout
-        );
-        assert_eq!(
-            project_authorization_error(&AuthorizationError::MetadataIo(RuntimeError::context_unavailable(
-                rocketmq_runtime::RuntimeOperation::MetadataIo
-            ))),
-            LayerFailureKind::Unavailable
         );
         assert_eq!(
             project_authorization_error(&AuthorizationError::MetadataIo(RuntimeError::context_unavailable(

@@ -35,7 +35,7 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_security_api::AuthenticatedRequestContext;
-use rocketmq_security_api::Decision;
+use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::Principal;
 use rocketmq_security_api::RequestPolicy;
 use rocketmq_store::MessageStoreConfig;
@@ -122,8 +122,8 @@ impl RequestProcessor for ObservedAdminProcessor {
 struct AllowEmbeddedAdminPolicy;
 
 impl RequestPolicy for AllowEmbeddedAdminPolicy {
-    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> Decision {
-        Decision::Allow
+    fn evaluate_authenticated(&self, _context: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
+        AuthorizationDecision::Allow
     }
 }
 
