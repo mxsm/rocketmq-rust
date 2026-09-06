@@ -17,8 +17,9 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use crate::error::ControllerError;
-use crate::error::Result;
+use rocketmq_error::Result;
+
+use crate::error::consensus_failed;
 use crate::openraft::RaftNodeManager;
 use crate::typ::Node;
 
@@ -96,7 +97,7 @@ impl ConsensusMembershipPort for RaftNodeManager {
                 false,
             )
             .await
-            .map_err(|error| ControllerError::raft_source(format!("remove Raft learner {node_id}"), error))?;
+            .map_err(|error| consensus_failed("remove Raft learner", error))?;
         Ok(())
     }
 }

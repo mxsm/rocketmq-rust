@@ -160,6 +160,16 @@
       "reason": "The repository owner approved the unreleased E2-4 and E5-1 boundary redesign together with the exact necessary E9 deletion slice. Transport now reports physical request progress, normal source-free rejections, deterministic contracts, and canonical operational errors without a RocketMQResult compatibility projector; Client owns one deadline-, idempotency-, jitter-, and attempt-budget-aware retry policy and performs no hidden GO_AWAY replay. The Shared carrier reuses the canonical allocation directly, while the legacy Network arm, SharedRocketMQError wrapper, central ErrorKind authority, and duplicate kind accessors are deleted without a parallel taxonomy, alias, or descriptor-to-kind reconstruction. Existing RocketMQ remoting numerics and actual R1, R2, R29, and domain projections remain unchanged.",
       "approved_by": "repository-owner",
       "approved_on": "2026-09-05"
+    },
+    {
+      "id": "API-0.9-017",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_error::{controller_error::{ControllerError,ControllerResult}, unified::RocketMQError::{Controller(ControllerError),ControllerNotLeader,ControllerRaftError,ControllerConsensusTimeout,ControllerSnapshotFailed,controller_raft_error,controller_invalid_request,controller_timeout,controller_shutdown}}; rocketmq_controller::{ControllerError,Result}",
+      "replacement": "rocketmq_error::{Error,Result,SharedError,RocketMQError::Shared(SharedError)} with Controller APIs returning canonical Result directly; rocketmq_controller::event::controller_result::ControllerResult<T> remains the business response-and-events DTO",
+      "reason": "The repository owner approved the unreleased E5-2 Controller convergence. Controller operational failures now use the catalog-backed canonical Error with typed Raft, storage, runtime, configuration, persistence, and lifecycle sources; existing RocketMQResult boundaries explicitly share the same Arc allocation. The duplicate public leaf, error aliases, nested and direct mega-enum variants, and convenience constructors are removed without compatibility shims, blanket conversion, or changes to owner-controlled response state and remoting values 2007 and 2015.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-09-05"
     }
   ],
   "frozen_contracts": [

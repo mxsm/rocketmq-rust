@@ -16,13 +16,13 @@ use std::error::Error as _;
 use std::io;
 
 use rocketmq_error::AuthError;
-use rocketmq_error::ControllerError;
 use rocketmq_error::DomainError;
+use rocketmq_error::Error;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::SerializationError;
 use rocketmq_error::AUTH_CREDENTIALS_INVALID;
-use rocketmq_error::CONTROLLER_CONSENSUS_FAILED;
+use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
 use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_error::CORE_SERIALIZATION_FAILED;
 
@@ -39,9 +39,6 @@ fn assert_domain_contract(error: &dyn DomainError, expected_descriptor: &'static
 fn domain_errors_share_one_stable_metadata_contract() {
     let auth = AuthError::InvalidCredential("missing access key".to_owned());
     assert_domain_contract(&auth, &AUTH_CREDENTIALS_INVALID);
-
-    let controller = RocketMQError::Controller(ControllerError::Raft("append failed".to_owned()));
-    assert_domain_contract(&controller, &CONTROLLER_CONSENSUS_FAILED);
 
     let serialization = SerializationError::source(
         "decode command",
@@ -66,11 +63,11 @@ fn source_preserving_variants_retain_the_original_error_chain() {
         serialization.source().map(ToString::to_string).as_deref()
     );
 
-    let controller = ControllerError::runtime_source("join controller task", io::Error::other("task cancelled"));
-    assert_eq!(
-        Some("task cancelled"),
-        controller.source().map(ToString::to_string).as_deref()
-    );
+    let controller = Error::caused_by(&CONTROLLER_INTERNAL_FAILURE, io::Error::other("task cancelled"));
+    assert!(controller
+        .source()
+        .and_then(|source| source.downcast_ref::<io::Error>())
+        .is_some());
 
     let internal = RocketMQError::internal("join request worker", io::Error::other("worker cancelled"));
     assert_eq!(

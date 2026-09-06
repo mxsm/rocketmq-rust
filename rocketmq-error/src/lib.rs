@@ -49,7 +49,6 @@ mod boundary;
 mod catalog;
 mod cli;
 mod context;
-mod controller_error;
 mod descriptor;
 mod domain;
 mod error;
@@ -63,7 +62,6 @@ mod view;
 
 // Re-export new error types as primary API
 // Re-export auth error types from unified module
-// Re-export controller error types
 pub use boundary::BoundaryErrorView;
 pub use boundary::CliExitCode;
 pub use boundary::CliSpec;
@@ -81,8 +79,6 @@ pub use context::ErrorContextField;
 pub use context::FieldValueRef;
 pub use context::Sensitive;
 pub use context::REDACTED;
-pub use controller_error::ControllerError;
-pub use controller_error::ControllerResult;
 pub use descriptor::BacktracePolicy;
 pub use descriptor::ComponentId;
 pub use descriptor::ErrorClass;

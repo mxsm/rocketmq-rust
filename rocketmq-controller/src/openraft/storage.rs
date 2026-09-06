@@ -22,9 +22,12 @@ use std::path::PathBuf;
 use crate::config::ControllerConfig;
 use crate::config::ControllerConfigReader;
 use crate::config::StorageBackendType;
-use crate::error::Result;
+#[cfg(any(not(feature = "dev-single"), not(feature = "storage-rocksdb")))]
+use crate::error::configuration_invalid;
+use crate::error::controller_internal_by;
 use crate::storage::create_storage;
 use crate::storage::StorageConfig;
+use rocketmq_error::Result;
 use rocketmq_runtime::BlockingExecutor;
 
 use super::log_store::LogStore;
@@ -59,8 +62,12 @@ impl Store {
         config: ControllerConfigReader,
         backend: crate::storage::SharedStorageBackend,
     ) -> Result<Self> {
-        let log_store = LogStore::open(backend.clone()).await?;
-        let state_machine = StateMachine::open(config, backend).await?;
+        let log_store = LogStore::open(backend.clone())
+            .await
+            .map_err(|error| controller_internal_by("open OpenRaft log store", error))?;
+        let state_machine = StateMachine::open(config, backend)
+            .await
+            .map_err(|error| controller_internal_by("open OpenRaft state machine", error))?;
 
         Ok(Self {
             log_store,
@@ -81,9 +88,7 @@ fn storage_config(config: &ControllerConfig) -> Result<StorageConfig> {
             }
             #[cfg(not(feature = "dev-single"))]
             {
-                Err(crate::error::ControllerError::StorageError(
-                    "The file storage backend is restricted to the `dev-single` feature".to_string(),
-                ))
+                Err(configuration_invalid("controller.storage_backend"))
             }
         }
         StorageBackendType::RocksDB => {
@@ -95,9 +100,7 @@ fn storage_config(config: &ControllerConfig) -> Result<StorageConfig> {
             }
             #[cfg(not(feature = "storage-rocksdb"))]
             {
-                Err(crate::error::ControllerError::StorageError(
-                    "The rocksdb storage backend is not enabled for rocketmq-controller".to_string(),
-                ))
+                Err(configuration_invalid("controller.storage_backend"))
             }
         }
     }

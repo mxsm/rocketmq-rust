@@ -15,6 +15,7 @@
 //! Raft state machine implementation backed by `ReplicasInfoManager`.
 
 use std::collections::HashSet;
+use std::error::Error as StdError;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -22,8 +23,9 @@ use openraft::storage::RaftStateMachine;
 use openraft::EntryPayload;
 use openraft::OptionalSend;
 use openraft::RaftSnapshotBuilder;
+use rocketmq_error::Error;
+use rocketmq_error::PublicErrorView;
 use rocketmq_model::utils::crc32_utils::crc32;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
 use rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use rocketmq_protocol::protocol::RemotingSerializable;
@@ -50,8 +52,20 @@ use crate::typ::TypeConfig;
 
 const SNAPSHOT_FORMAT_VERSION: u16 = 1;
 
-fn storage_error(error: impl std::fmt::Display) -> std::io::Error {
-    std::io::Error::other(error.to_string())
+fn storage_error(error: impl StdError + Send + Sync + 'static) -> std::io::Error {
+    std::io::Error::other(error)
+}
+
+fn operational_error_response(error: &Error) -> ControllerResponse {
+    let view = error
+        .public_view()
+        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+    ControllerResponse::new(
+        view.projection().remoting().code.as_i32(),
+        Some(view.message().to_owned()),
+        None,
+        None,
+    )
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -271,7 +285,7 @@ impl StateMachine {
         let (events, header, body, response_code, remark) = result.into_parts();
         for event in events {
             if let Err(error) = replicas_info_manager.try_apply_event(event.as_ref()) {
-                return ControllerResponse::new(ResponseCode::SystemError.into(), Some(error.to_string()), None, None);
+                return operational_error_response(&error);
             }
         }
 
@@ -290,7 +304,7 @@ impl StateMachine {
         let (events, _header, body, response_code, remark) = result.into_parts();
         for event in events {
             if let Err(error) = replicas_info_manager.try_apply_event(event.as_ref()) {
-                return ControllerResponse::new(ResponseCode::SystemError.into(), Some(error.to_string()), None, None);
+                return operational_error_response(&error);
             }
         }
 
@@ -437,11 +451,7 @@ impl StateMachine {
     }
 
     async fn build_snapshot_data(&self) -> Result<SnapshotData, std::io::Error> {
-        let replicas_info_manager_state = self
-            .replicas_info_manager
-            .load()
-            .serialize()
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let replicas_info_manager_state = self.replicas_info_manager.load().serialize().map_err(storage_error)?;
         let last_applied = *self.last_applied.read().await;
         let last_membership = self.last_membership.read().await.clone();
 
@@ -699,6 +709,8 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::*;
     use crate::config::ControllerConfig;
     use crate::typ::BrokerIdentityInfoSnapshot;
@@ -710,6 +722,31 @@ mod tests {
             ControllerConfig::default().with_node_info(1, "127.0.0.1:39876".parse().expect("valid addr")),
         );
         StateMachine::new(config)
+    }
+
+    #[test]
+    fn storage_error_retains_the_typed_source() {
+        let error = storage_error(io::Error::new(io::ErrorKind::NotFound, "typed storage source"));
+        let source = error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("typed io source");
+
+        assert_eq!(source.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn operational_error_response_uses_fixed_controller_projection() {
+        let error = crate::error::request_invalid("apply replicated Controller event");
+        let response = operational_error_response(&error);
+
+        assert_eq!(
+            response.response_code,
+            ResponseCode::ControllerJraftInternalError.to_i32()
+        );
+        assert_eq!(response.remark.as_deref(), Some("Controller request is invalid"));
+        assert!(response.header.is_none());
+        assert!(response.body.is_none());
     }
 
     fn heartbeat_request(last_update_timestamp: u64, heartbeat_timeout_millis: u64) -> ControllerRequest {

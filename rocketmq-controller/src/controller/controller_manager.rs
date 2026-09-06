@@ -34,8 +34,8 @@ use crate::controller::broker_role_notifier::NotifyState;
 use crate::controller::broker_role_notifier::NotifyTask;
 use crate::controller::broker_role_notifier::SubmitOutcome;
 use crate::controller::Controller;
-use crate::error::ControllerError;
-use crate::error::Result;
+use crate::error::configuration_invalid;
+use crate::error::controller_internal_by;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 #[cfg(feature = "metrics")]
@@ -45,6 +45,7 @@ use crate::processor::controller_request_processor::ControllerRequestProcessor;
 use crate::security::ControllerSecurity;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
+use rocketmq_error::Result;
 use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::elect_master_response_body::ElectMasterResponseBody;
@@ -364,7 +365,7 @@ impl ControllerManager {
     ///
     /// # Errors
     ///
-    /// Returns [`ControllerError`] when configuration validation or component
+    /// Returns [`rocketmq_error::Error`] when configuration validation or component
     /// initialization fails.
     pub async fn new(
         config: ControllerConfig,
@@ -384,7 +385,7 @@ impl ControllerManager {
     ///
     /// # Errors
     ///
-    /// Returns [`ControllerError`] when configuration validation or component
+    /// Returns [`rocketmq_error::Error`] when configuration validation or component
     /// initialization fails.
     pub async fn new_with_remoting_command_factory(
         config: ControllerConfig,
@@ -410,7 +411,7 @@ impl ControllerManager {
     ///
     /// # Errors
     ///
-    /// Returns [`ControllerError`] when configuration is invalid, a required
+    /// Returns [`rocketmq_error::Error`] when configuration is invalid, a required
     /// security capability is absent, or component initialization fails.
     pub async fn new_with_security(
         config: ControllerConfig,
@@ -432,7 +433,7 @@ impl ControllerManager {
     ///
     /// # Errors
     ///
-    /// Returns [`ControllerError`] when configuration is invalid, an enabled
+    /// Returns [`rocketmq_error::Error`] when configuration is invalid, an enabled
     /// security capability is missing, or component initialization fails.
     pub async fn new_with_security_and_remoting_command_factory(
         config: ControllerConfig,
@@ -441,13 +442,13 @@ impl ControllerManager {
         security: Option<ControllerSecurity>,
         command_factory: RemotingCommandFactory,
     ) -> Result<Self> {
-        config.validate().map_err(ControllerError::ConfigError)?;
+        config
+            .validate()
+            .map_err(|_| configuration_invalid("controller.configuration"))?;
         let security_enabled =
             config.authentication_enabled || config.authorization_enabled || config.maintenance_enabled;
         if security_enabled && security.is_none() {
-            return Err(ControllerError::ConfigError(
-                "Controller security is enabled but no ControllerSecurity adapter was injected".to_string(),
-            ));
+            return Err(configuration_invalid("controller.security"));
         }
         if config.maintenance_enabled
             && security
@@ -455,9 +456,7 @@ impl ControllerManager {
                 .and_then(ControllerSecurity::maintenance_authorizer)
                 .is_none()
         {
-            return Err(ControllerError::ConfigError(
-                "Controller maintenance is enabled but no validated maintenance authorizer was injected".to_string(),
-            ));
+            return Err(configuration_invalid("controller.maintenance"));
         }
         let config = ControllerConfigHandle::new(config);
         let config_snapshot = config.snapshot();
@@ -525,7 +524,7 @@ impl ControllerManager {
             )
             .telemetry(transport_telemetry)
             .build()
-            .map_err(|error| ControllerError::runtime_error(format!("Failed to build remoting client: {error}")))?,
+            .map_err(|error| controller_internal_by("build controller remoting client", error))?,
         );
         let notify_retry_base_delay = Duration::from_millis(config.snapshot().heartbeat_interval_ms.max(100));
         let broker_role_notifier = BrokerRoleNotifier::new(

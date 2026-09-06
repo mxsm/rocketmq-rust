@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
-
 use crate::manager::ControllerManager;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 use super::ControllerRequestProcessor;
 
@@ -67,12 +66,8 @@ impl ControllerRequestProcessor {
     }
 
     fn parse_properties_from_string(body: &[u8]) -> RocketMQResult<HashMap<String, String>> {
-        let content = String::from_utf8(body.to_vec()).map_err(|error| {
-            RocketMQError::request_body_invalid(
-                "UPDATE_CONTROLLER_CONFIG",
-                format!("parse property string failed: {error}"),
-            )
-        })?;
+        let content = String::from_utf8(body.to_vec())
+            .map_err(|error| RocketMQError::request_body_source("UPDATE_CONTROLLER_CONFIG", error))?;
         let mut properties = HashMap::new();
 
         for line in content.lines() {

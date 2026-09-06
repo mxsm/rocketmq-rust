@@ -25,13 +25,13 @@ pub(super) use key::RaftRecordKey;
 pub(super) use log_repository::RaftLogRepository;
 pub(super) use state_repository::RaftStateRepository;
 
-use crate::error::ControllerError;
+use rocketmq_error::Error;
 
 #[derive(Debug)]
 struct PersistenceBackendError {
     operation: &'static str,
     key_class: &'static str,
-    source: ControllerError,
+    source: Error,
 }
 
 impl std::fmt::Display for PersistenceBackendError {
@@ -50,7 +50,7 @@ impl std::error::Error for PersistenceBackendError {
     }
 }
 
-fn backend_error(operation: &'static str, key: RaftRecordKey, error: ControllerError) -> std::io::Error {
+fn backend_error(operation: &'static str, key: RaftRecordKey, error: Error) -> std::io::Error {
     std::io::Error::other(PersistenceBackendError {
         operation,
         key_class: key.class(),

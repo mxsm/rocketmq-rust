@@ -14,6 +14,7 @@
 
 //! gRPC client implementation for OpenRaft network communication
 
+use std::error::Error as StdError;
 use std::future::Future;
 use std::time::Duration;
 
@@ -126,6 +127,13 @@ fn decode_log_id(log_id: crate::protobuf::openraft::OpenRaftLogId) -> crate::typ
     }
 }
 
+fn network_error<E>(source: &E) -> NetworkError<TypeConfig>
+where
+    E: StdError + 'static,
+{
+    NetworkError::new(source)
+}
+
 impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
     async fn append_entries(
         &mut self,
@@ -153,12 +161,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
                         }),
                         payload,
                     })
-                    .map_err(|e| {
-                        RPCError::Network(NetworkError::new(&std::io::Error::other(format!(
-                            "Failed to serialize append entry payload: {}",
-                            e
-                        ))))
-                    })
+                    .map_err(|error| RPCError::Network(network_error(&error)))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -190,9 +193,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             Err(error) => {
                 self.client = None;
                 error!("AppendEntries RPC failed: {}", error);
-                return Err(RPCError::Network(NetworkError::new(&std::io::Error::other(
-                    error.to_string(),
-                ))));
+                return Err(RPCError::Network(network_error(&error)));
             }
         };
 
@@ -224,12 +225,8 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
         );
 
         // Serialize snapshot metadata
-        let last_membership = serde_json::to_vec(&snapshot.meta.last_membership).map_err(|e| {
-            StreamingError::Network(NetworkError::new(&std::io::Error::other(format!(
-                "Failed to serialize membership: {}",
-                e
-            ))))
-        })?;
+        let last_membership = serde_json::to_vec(&snapshot.meta.last_membership)
+            .map_err(|error| StreamingError::Network(network_error(&error)))?;
 
         // Extract the bounded snapshot payload from the OpenRaft cursor.
         let snapshot_data = snapshot.snapshot.into_inner();
@@ -291,9 +288,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             Err(error) => {
                 self.client = None;
                 error!("InstallSnapshot RPC failed: {}", error);
-                return Err(StreamingError::Network(NetworkError::new(&std::io::Error::other(
-                    error.to_string(),
-                ))));
+                return Err(StreamingError::Network(network_error(&error)));
             }
         };
 
@@ -337,9 +332,7 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
             Err(error) => {
                 self.client = None;
                 error!("Vote RPC failed: {}", error);
-                return Err(RPCError::Network(NetworkError::new(&std::io::Error::other(
-                    error.to_string(),
-                ))));
+                return Err(RPCError::Network(network_error(&error)));
             }
         };
 
@@ -358,11 +351,22 @@ impl RaftNetworkV2<TypeConfig> for GrpcNetworkClient {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
     use std::net::TcpListener;
 
     use openraft::network::RPCOption;
 
     use super::*;
+
+    #[test]
+    fn network_error_retains_the_concrete_source_type() {
+        let source =
+            serde_json::from_slice::<serde_json::Value>(b"{").expect_err("invalid JSON must provide a typed source");
+        let error = network_error(&source);
+        let retained = error.source().expect("OpenRaft error source");
+
+        assert!(retained.to_string().contains("serde_json::error::Error"));
+    }
 
     #[tokio::test]
     async fn vote_rpc_failure_discards_cached_channel() {

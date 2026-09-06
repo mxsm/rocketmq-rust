@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,93 +12,74 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Integration tests for ControllerError with RocketMQError
+use std::error::Error as _;
+use std::io;
+use std::sync::Arc;
 
-use rocketmq_error::ControllerError;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::RemotingResponseCode;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::CONTROLLER_CONFIGURATION_INVALID;
+use rocketmq_error::CONTROLLER_CONSENSUS_FAILED;
+use rocketmq_error::CONTROLLER_CONSENSUS_TIMED_OUT;
+use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
+use rocketmq_error::CONTROLLER_LIFECYCLE_NOT_INITIALIZED;
+use rocketmq_error::CONTROLLER_REQUEST_INVALID;
 
 #[test]
-fn test_controller_error_into_rocketmq_error() {
-    let controller_err = ControllerError::Raft("append failed".to_owned());
-    let rocketmq_err: RocketMQError = controller_err.into();
-
-    assert!(matches!(rocketmq_err, RocketMQError::Controller(_)));
-    assert!(rocketmq_err.to_string().contains("append failed"));
-}
-
-#[test]
-fn test_controller_error_from_conversion() {
-    let controller_err = ControllerError::Timeout { timeout_ms: 5000 };
-    let rocketmq_err = RocketMQError::from(controller_err);
-
-    assert!(matches!(rocketmq_err, RocketMQError::Controller(_)));
-    assert!(rocketmq_err.to_string().contains("5000"));
-}
-
-#[test]
-fn test_controller_error_constructors() {
-    // Test Raft error constructor
-    let err = RocketMQError::controller_raft_error("consensus failed");
-    assert!(matches!(err, RocketMQError::Controller(ControllerError::Raft(_))));
-    assert!(err.to_string().contains("consensus failed"));
-
-    // Test invalid request constructor
-    let err = RocketMQError::controller_invalid_request("missing field");
-    assert!(matches!(
-        err,
-        RocketMQError::Controller(ControllerError::InvalidRequest(_))
-    ));
-
-    // Test timeout constructor
-    let err = RocketMQError::controller_timeout(3000);
-    assert!(matches!(
-        err,
-        RocketMQError::Controller(ControllerError::Timeout { timeout_ms: 3000 })
-    ));
-
-    // Test shutdown constructor
-    let err = RocketMQError::controller_shutdown();
-    assert!(matches!(err, RocketMQError::Controller(ControllerError::Shutdown)));
-}
-
-#[test]
-fn test_controller_error_result_propagation() {
-    fn returns_controller_error() -> Result<(), ControllerError> {
-        Err(ControllerError::Timeout { timeout_ms: 500 })
+fn canonical_controller_descriptors_keep_remoting_2015() {
+    for descriptor in [
+        &CONTROLLER_INTERNAL_FAILURE,
+        &CONTROLLER_REQUEST_INVALID,
+        &CONTROLLER_CONFIGURATION_INVALID,
+        &CONTROLLER_LIFECYCLE_NOT_INITIALIZED,
+        &CONTROLLER_CONSENSUS_FAILED,
+        &CONTROLLER_CONSENSUS_TIMED_OUT,
+    ] {
+        assert_eq!(
+            descriptor.projection().remoting().code,
+            RemotingResponseCode::ControllerJraftInternalError
+        );
+        assert_eq!(descriptor.projection().remoting().code.as_i32(), 2015);
     }
-
-    fn returns_rocketmq_error() -> Result<(), RocketMQError> {
-        returns_controller_error()?;
-        Ok(())
-    }
-
-    let result = returns_rocketmq_error();
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(matches!(err, RocketMQError::Controller(_)));
 }
 
 #[test]
-fn test_all_controller_error_variants_convert() {
-    use std::io;
+fn canonical_controller_error_retains_typed_source_and_fixed_public_message() {
+    let error = Error::caused_by(&CONTROLLER_CONSENSUS_FAILED, io::Error::other("private quorum detail")).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "append raft entry")
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    );
 
-    let test_cases = vec![
-        ControllerError::Io(io::Error::other("test")),
-        ControllerError::Raft("raft error".to_string()),
-        ControllerError::InvalidRequest("invalid".to_string()),
-        ControllerError::NotInitialized("not init".to_string()),
-        ControllerError::InitializationFailed,
-        ControllerError::ConfigError("config error".to_string()),
-        ControllerError::SerializationError("ser error".to_string()),
-        ControllerError::StorageError("storage error".to_string()),
-        ControllerError::Timeout { timeout_ms: 1000 },
-        ControllerError::RuntimeError("runtime error".to_string()),
-        ControllerError::runtime_source("join controller task", io::Error::other("task failed")),
-        ControllerError::Shutdown,
-    ];
+    assert!(error
+        .source()
+        .and_then(|source| source.downcast_ref::<io::Error>())
+        .is_some());
+    assert_eq!(
+        error.public_view().expect("schema-valid view").message(),
+        "Controller consensus operation failed"
+    );
+    assert!(!error.to_string().contains("private quorum detail"));
+}
 
-    for controller_err in test_cases {
-        let rocketmq_err: RocketMQError = controller_err.into();
-        assert!(matches!(rocketmq_err, RocketMQError::Controller(_)));
-    }
+#[test]
+fn shared_facade_carrier_preserves_one_canonical_controller_allocation() {
+    let canonical = Arc::new(
+        Error::new(&CONTROLLER_CONSENSUS_TIMED_OUT).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "change membership")
+                .with_u64(fields::TIMEOUT_MS, 500),
+        ),
+    );
+    let expected = Arc::clone(&canonical);
+    let facade = RocketMQError::Shared(canonical);
+    let RocketMQError::Shared(actual) = facade else {
+        panic!("canonical Controller error must use the shared facade carrier");
+    };
+
+    assert!(Arc::ptr_eq(&expected, &actual));
+    assert!(std::ptr::eq(actual.descriptor(), &CONTROLLER_CONSENSUS_TIMED_OUT));
 }

@@ -17,9 +17,14 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
@@ -284,19 +289,27 @@ fn parse_update_value<T>(key: &'static str, value: &str) -> RocketMQResult<T>
 where
     T: DeserializeOwned,
 {
-    serde_json::from_str(value).map_err(|error| RocketMQError::ConfigInvalidValue {
-        key,
-        value: value.to_string(),
-        reason: error.to_string(),
+    serde_json::from_str(value).map_err(|error| {
+        RocketMQError::Shared(Arc::new(
+            Error::caused_by(&CORE_CONFIGURATION_INVALID, error).with_context(
+                ErrorContext::new()
+                    .with_text(fields::KEY, key)
+                    .with_secret_presence(fields::VALUE_PRESENT)
+                    .with_secret_presence(fields::REASON_PRESENT),
+            ),
+        ))
     })
 }
 
-fn unknown_update_key(key: &str) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key: "property",
-        value: key.to_string(),
-        reason: "unknown controller configuration property".to_string(),
-    }
+fn unknown_update_key(_key: &str) -> RocketMQError {
+    RocketMQError::Shared(Arc::new(
+        Error::new(&CORE_CONFIGURATION_INVALID).with_context(
+            ErrorContext::new()
+                .with_text(fields::KEY, "property")
+                .with_secret_presence(fields::VALUE_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+        ),
+    ))
 }
 
 impl Default for ControllerConfig {
@@ -1183,13 +1196,13 @@ path = "/rocketmq"
         let error = config.update(properties).await.expect_err("invalid value should fail");
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
-        assert!(matches!(
-            error,
-            RocketMQError::ConfigInvalidValue {
-                key: "scanNotActiveBrokerInterval",
-                ..
-            }
-        ));
+        assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 29);
+        let RocketMQError::Shared(error) = error else {
+            panic!("configuration parse errors must use the canonical carrier");
+        };
+        assert!(std::error::Error::source(error.as_ref())
+            .and_then(|source| source.downcast_ref::<serde_json::Error>())
+            .is_some());
     }
 
     #[tokio::test]
@@ -1201,9 +1214,7 @@ path = "/rocketmq"
         let error = config.update(properties).await.expect_err("unknown key should fail");
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
-        assert!(matches!(
-            error,
-            RocketMQError::ConfigInvalidValue { key: "property", .. }
-        ));
+        assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 29);
+        assert!(matches!(error, RocketMQError::Shared(_)));
     }
 }

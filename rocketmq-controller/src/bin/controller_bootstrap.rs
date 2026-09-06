@@ -31,7 +31,12 @@ use rocketmq_controller::ControllerCli;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_controller::Node;
-use rocketmq_error::ControllerError;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::CONTROLLER_CONFIGURATION_INVALID;
+use rocketmq_error::CONTROLLER_CONSENSUS_TIMED_OUT;
+use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::common::parse_config_file;
@@ -73,6 +78,84 @@ use controller_security::build_controller_security;
 /// rocketmq-controller-rust --print-config-item
 /// ```
 const CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV: &str = "ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER";
+
+fn controller_internal(operation: &'static str) -> Error {
+    Error::new(&CONTROLLER_INTERNAL_FAILURE)
+        .with_context(ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation))
+}
+
+fn controller_internal_by(operation: &'static str, source: impl std::error::Error + Send + Sync + 'static) -> Error {
+    Error::caused_by(&CONTROLLER_INTERNAL_FAILURE, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+fn configuration_invalid(key: &'static str) -> Error {
+    Error::new(&CONTROLLER_CONFIGURATION_INVALID).with_context(
+        ErrorContext::new()
+            .with_text(fields::KEY, key)
+            .with_secret_presence(fields::REASON_PRESENT),
+    )
+}
+
+fn configuration_invalid_by(key: &'static str, source: impl std::error::Error + Send + Sync + 'static) -> Error {
+    Error::caused_by(&CONTROLLER_CONFIGURATION_INVALID, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::KEY, key)
+            .with_secret_presence(fields::REASON_PRESENT)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+fn consensus_timed_out(operation: &'static str, timeout_ms: u64) -> Error {
+    Error::new(&CONTROLLER_CONSENSUS_TIMED_OUT).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_u64(fields::TIMEOUT_MS, timeout_ms),
+    )
+}
+
+#[derive(Debug)]
+struct ControllerProcessShutdownFailure {
+    controller: Option<anyhow::Error>,
+    service_tasks_unhealthy: bool,
+}
+
+#[derive(Debug)]
+struct ControllerTelemetryShutdownFailure {
+    controller: anyhow::Error,
+    telemetry: anyhow::Error,
+}
+
+impl std::fmt::Display for ControllerTelemetryShutdownFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let _ = &self.telemetry;
+        formatter.write_str("controller and telemetry shutdown failed")
+    }
+}
+
+impl std::error::Error for ControllerTelemetryShutdownFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.controller.as_ref())
+    }
+}
+
+impl std::fmt::Display for ControllerProcessShutdownFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let _ = self.service_tasks_unhealthy;
+        formatter.write_str("controller process shutdown was unhealthy")
+    }
+}
+
+impl std::error::Error for ControllerProcessShutdownFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.controller
+            .as_deref()
+            .map(|source| source as &(dyn std::error::Error + 'static))
+    }
+}
 const LOGO: &str = r#"
         ______           _        _  ___  ________       ______          _     _____             _             _ _
         | ___ \         | |      | | |  \/  |  _  |      | ___ \        | |   /  __ \           | |           | | |
@@ -117,11 +200,10 @@ pub fn main() -> Result<()> {
     let owner = RuntimeOwner::plan(controller_runtime_config())
         .expect("controller runtime profile is internally valid")
         .build()
-        .map_err(|source| ControllerError::runtime_source("build controller runtime", source))?;
+        .map_err(|source| controller_internal_by("build controller runtime", source))?;
     let service_context = owner.root_context().component("rocketmq-controller-runtime");
-    let lifecycle = ServiceLifecycle::from_env("rocketmq-controller").map_err(|error| {
-        ControllerError::ConfigError(format!("invalid Controller lifecycle configuration: {error}"))
-    })?;
+    let lifecycle = ServiceLifecycle::from_env("rocketmq-controller")
+        .map_err(|error| configuration_invalid_by("controller.lifecycle", error))?;
 
     let run_result = owner.block_on(run(service_context, lifecycle.clone()));
     if run_result.is_err() {
@@ -132,7 +214,7 @@ pub fn main() -> Result<()> {
         .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
     let shutdown_result = owner
         .shutdown_runtime_blocking_until(shutdown_request.deadline)
-        .map_err(|source| ControllerError::runtime_source("shutdown controller runtime", source));
+        .map_err(|source| controller_internal_by("shutdown controller runtime", source));
 
     match (run_result, shutdown_result) {
         (Err(error), _) => Err(error),
@@ -144,7 +226,7 @@ pub fn main() -> Result<()> {
                     report = %report.to_json(),
                     "controller runtime shutdown report is unhealthy"
                 );
-                return Err(ControllerError::runtime_error("Controller runtime shutdown report is unhealthy").into());
+                return Err(controller_internal("shutdown controller runtime cleanly").into());
             }
             Ok(())
         }
@@ -239,9 +321,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         {
             tracing::warn!(error = %shutdown_error, "controller telemetry cleanup after lifecycle startup failure was unhealthy");
         }
-        return Err(
-            ControllerError::ConfigError(format!("failed to start Controller lifecycle boundary: {error}")).into(),
-        );
+        return Err(controller_internal_by("start controller lifecycle boundary", error).into());
     }
     if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env_with_telemetry(
         &service_context,
@@ -259,10 +339,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         {
             tracing::warn!(error = %shutdown_error, "controller telemetry cleanup after diagnostics startup failure was unhealthy");
         }
-        return Err(ControllerError::ConfigError(format!(
-            "failed to start protected Controller runtime diagnostics: {error}"
-        ))
-        .into());
+        return Err(controller_internal_by("start controller runtime diagnostics", error).into());
     }
 
     println!("{}", LOGO);
@@ -300,9 +377,14 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         .context("failed to shutdown controller telemetry bootstrap");
 
     match (controller_result, shutdown_result) {
-        (Err(controller_error), Err(telemetry_error)) => Err(controller_error).context(format!(
-            "Controller telemetry shutdown also failed: {telemetry_error:#}"
-        )),
+        (Err(controller_error), Err(telemetry_error)) => Err(controller_internal_by(
+            "shutdown controller and telemetry",
+            ControllerTelemetryShutdownFailure {
+                controller: controller_error,
+                telemetry: telemetry_error,
+            },
+        )
+        .into()),
         (Err(error), Ok(_report)) => Err(error),
         (Ok(()), Err(error)) => {
             lifecycle.mark_failed();
@@ -444,15 +526,22 @@ async fn finish_controller_process_shutdown(
     match (controller_result, service_report.is_healthy()) {
         (Ok(()), true) => Ok(()),
         (Err(controller_error), true) => Err(controller_error),
-        (Ok(()), false) => Err(ControllerError::runtime_error(format!(
-            "Controller service task shutdown was unhealthy: {}",
-            service_report.to_json()
-        ))
+        (Ok(()), false) => Err(controller_internal_by(
+            "shutdown controller process",
+            ControllerProcessShutdownFailure {
+                controller: None,
+                service_tasks_unhealthy: true,
+            },
+        )
         .into()),
-        (Err(controller_error), false) => Err(controller_error).context(format!(
-            "Controller service task shutdown was unhealthy: {}",
-            service_report.to_json()
-        )),
+        (Err(controller_error), false) => Err(controller_internal_by(
+            "shutdown controller process",
+            ControllerProcessShutdownFailure {
+                controller: Some(controller_error),
+                service_tasks_unhealthy: true,
+            },
+        )
+        .into()),
     }
 }
 
@@ -576,7 +665,7 @@ async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerMan
         .iter()
         .map(|peer| peer.id)
         .min()
-        .ok_or_else(|| ControllerError::ConfigError("Raft peer list unexpectedly became empty".to_string()))?;
+        .ok_or_else(|| configuration_invalid("controller.raft_peers"))?;
     if bootstrap_node_id != config.node_id {
         return Ok(());
     }
@@ -617,7 +706,7 @@ async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerMan
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    Err(ControllerError::Timeout { timeout_ms: 3_000 }.into())
+    Err(consensus_timed_out("initialize controller cluster", 3_000).into())
 }
 
 async fn wait_for_cluster_recovery(controller_manager: &Arc<ControllerManager>) -> Result<()> {
@@ -637,18 +726,16 @@ async fn wait_for_cluster_recovery(controller_manager: &Arc<ControllerManager>) 
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    Err(ControllerError::Timeout { timeout_ms: 30_000 }.into())
+    Err(consensus_timed_out("recover controller cluster", 30_000).into())
 }
 
 fn auto_initialize_cluster_enabled() -> Result<bool> {
     let Some(raw) = std::env::var_os(CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV) else {
         return Ok(false);
     };
-    let raw = raw.into_string().map_err(|_| {
-        ControllerError::ConfigError(format!(
-            "{CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV} must contain valid UTF-8"
-        ))
-    })?;
+    let raw = raw
+        .into_string()
+        .map_err(|_| configuration_invalid("controller.auto_initialize_cluster"))?;
     parse_auto_initialize_cluster_flag(&raw)
 }
 
@@ -656,16 +743,30 @@ fn parse_auto_initialize_cluster_flag(raw: &str) -> Result<bool> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "1" | "true" => Ok(true),
         "0" | "false" | "" => Ok(false),
-        _ => Err(ControllerError::ConfigError(format!(
-            "{CONTROLLER_AUTO_INITIALIZE_CLUSTER_ENV} must be true, false, 1, or 0"
-        ))
-        .into()),
+        _ => Err(configuration_invalid("controller.auto_initialize_cluster").into()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn telemetry_shutdown_aggregate_retains_both_typed_failures_with_fixed_display() {
+        let failure = ControllerTelemetryShutdownFailure {
+            controller: anyhow::anyhow!("private controller failure"),
+            telemetry: anyhow::anyhow!("private telemetry failure"),
+        };
+
+        assert_eq!(failure.to_string(), "controller and telemetry shutdown failed");
+        assert_eq!(failure.controller.to_string(), "private controller failure");
+        assert_eq!(failure.telemetry.to_string(), "private telemetry failure");
+        let outer = controller_internal_by("shutdown controller and telemetry", failure);
+        let retained = std::error::Error::source(&outer)
+            .and_then(|source| source.downcast_ref::<ControllerTelemetryShutdownFailure>())
+            .expect("telemetry shutdown aggregate must remain the typed source");
+        assert_eq!(retained.telemetry.to_string(), "private telemetry failure");
+    }
 
     #[test]
     fn disabled_security_bootstrap_allows_default_controller_listeners() {

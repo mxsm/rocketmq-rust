@@ -30,7 +30,8 @@ use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::error::Result;
+use crate::error::controller_internal_by;
+use rocketmq_error::Result;
 use rocketmq_runtime::BlockingExecutor;
 
 /// Storage backend configuration
@@ -114,8 +115,7 @@ pub struct StorageStats {
 pub trait StorageBackendExt: StorageBackend {
     /// Put a serializable value
     async fn put_json<T: Serialize + Send + Sync>(&self, key: &str, value: &T) -> Result<()> {
-        let data = serde_json::to_vec(value)
-            .map_err(|e| crate::error::ControllerError::serialization_source("serialize storage value", e))?;
+        let data = serde_json::to_vec(value).map_err(|e| controller_internal_by("serialize storage value", e))?;
         self.put(key, &data).await
     }
 
@@ -124,7 +124,7 @@ pub trait StorageBackendExt: StorageBackend {
         match self.get(key).await? {
             Some(data) => {
                 let value = serde_json::from_slice(&data)
-                    .map_err(|e| crate::error::ControllerError::serialization_source("deserialize storage value", e))?;
+                    .map_err(|e| controller_internal_by("deserialize storage value", e))?;
                 Ok(Some(value))
             }
             None => Ok(None),
@@ -138,9 +138,8 @@ pub trait StorageBackendExt: StorageBackend {
 
         for key in keys {
             if let Some(data) = self.get(&key).await? {
-                let value: T = serde_json::from_slice(&data).map_err(|e| {
-                    crate::error::ControllerError::serialization_source("deserialize listed storage value", e)
-                })?;
+                let value: T = serde_json::from_slice(&data)
+                    .map_err(|e| controller_internal_by("deserialize listed storage value", e))?;
                 values.push(value);
             }
         }

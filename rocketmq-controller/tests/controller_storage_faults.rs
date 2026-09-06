@@ -28,19 +28,31 @@ use openraft::RaftLogReader;
 use parking_lot::RwLock;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerConfigReader;
-use rocketmq_controller::ControllerError;
 use rocketmq_controller::ControllerRequest;
 use rocketmq_controller::EntryPayload;
 use rocketmq_controller::LogEntry;
 use rocketmq_controller::LogId;
 use rocketmq_controller::LogStore;
-use rocketmq_controller::Result;
 use rocketmq_controller::StateMachine;
 use rocketmq_controller::StorageBackend;
 use rocketmq_controller::StorageBackendType;
 use rocketmq_controller::StorageStats;
 use rocketmq_controller::TypeConfig;
 use rocketmq_controller::Vote;
+use rocketmq_error::Error;
+use rocketmq_error::Result;
+use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
+
+#[derive(Debug)]
+struct InjectedStorageFailure;
+
+impl std::fmt::Display for InjectedStorageFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("injected storage failure")
+    }
+}
+
+impl std::error::Error for InjectedStorageFailure {}
 
 #[derive(Default)]
 struct FaultInjectingBackend {
@@ -87,7 +99,7 @@ impl StorageBackend for FaultInjectingBackend {
 
     async fn batch_put(&self, items: Vec<(String, Vec<u8>)>) -> Result<()> {
         if self.reject_batch.load(Ordering::Acquire) {
-            return Err(ControllerError::StorageError("injected batch failure".to_string()));
+            return Err(Error::caused_by(&CONTROLLER_INTERNAL_FAILURE, InjectedStorageFailure));
         }
         let mut data = self.data.write();
         for (key, value) in items {
@@ -107,7 +119,7 @@ impl StorageBackend for FaultInjectingBackend {
     async fn write_batch(&self, puts: Vec<(String, Vec<u8>)>, deletes: Vec<String>) -> Result<()> {
         self.batch_writes.fetch_add(1, Ordering::AcqRel);
         if self.reject_batch.load(Ordering::Acquire) {
-            return Err(ControllerError::StorageError("injected batch failure".to_string()));
+            return Err(Error::caused_by(&CONTROLLER_INTERNAL_FAILURE, InjectedStorageFailure));
         }
         let mut data = self.data.write();
         for key in deletes {

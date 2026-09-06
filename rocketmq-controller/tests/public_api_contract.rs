@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use rocketmq_controller::ControllerConfig;
-use rocketmq_controller::ControllerError;
 use rocketmq_controller::EventType;
 use rocketmq_controller::StorageBackendType;
 
@@ -43,7 +42,6 @@ fn controller_consumers_use_root_capabilities_and_dtos() {
     }
 
     let _ = ControllerConfig::default();
-    let _: Option<ControllerError> = None;
     let _: Option<EventType> = None;
     let _: Option<StorageBackendType> = None;
 }

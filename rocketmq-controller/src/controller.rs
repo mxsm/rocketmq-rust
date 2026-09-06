@@ -232,7 +232,7 @@ pub trait Controller: Send + Sync {
     /// - Metrics collection
     ///
     /// Callers that require leadership report
-    /// [`rocketmq_error::RocketMQError::ControllerNotLeader`] when this returns
+    /// a Controller not-leader response when this returns
     /// `false`.
     fn is_leader(&self) -> bool;
 
@@ -256,9 +256,9 @@ pub trait Controller: Send + Sync {
     ///
     /// # Errors
     ///
-    /// - [`rocketmq_error::RocketMQError::ControllerNotLeader`] if called on a follower
+    /// - a Controller not-leader response if called on a follower
     /// - a canonical controller request error if validation fails
-    /// - [`rocketmq_error::RocketMQError::ControllerConsensusTimeout`] if the Raft proposal times out
+    /// - [`rocketmq_error::Error`] if the Raft proposal times out
     async fn register_broker(
         &self,
         request: &RegisterBrokerToControllerRequestHeader,

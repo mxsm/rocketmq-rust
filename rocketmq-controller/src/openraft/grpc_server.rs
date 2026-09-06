@@ -14,8 +14,11 @@
 
 //! gRPC server implementation for OpenRaft network communication
 
+use std::error::Error as StdError;
 use std::sync::Arc;
 
+use rocketmq_error::Error;
+use rocketmq_error::PublicErrorView;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
@@ -24,6 +27,8 @@ use tracing::error;
 
 use rocketmq_model::utils::crc32_utils::crc32;
 
+use crate::error::controller_internal_by;
+use crate::error::request_invalid_by;
 use crate::openraft::SNAPSHOT_CHUNK_BYTES;
 use crate::openraft::SNAPSHOT_MAX_BYTES;
 use crate::protobuf::openraft::open_raft_service_server::OpenRaftService;
@@ -36,6 +41,40 @@ use crate::protobuf::openraft::OpenRaftVote;
 use crate::protobuf::openraft::OpenRaftVoteRequest;
 use crate::protobuf::openraft::OpenRaftVoteResponse;
 use crate::typ::Raft;
+
+fn grpc_request_invalid_error(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Error {
+    request_invalid_by(operation, source)
+}
+
+fn grpc_internal_error(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Error {
+    controller_internal_by(operation, source)
+}
+
+fn invalid_argument_status(error: &Error) -> Status {
+    let view = error
+        .public_view()
+        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+    Status::invalid_argument(view.message())
+}
+
+fn internal_status(error: &Error) -> Status {
+    let view = error
+        .public_view()
+        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+    Status::internal(view.message())
+}
+
+fn request_invalid_status(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Status {
+    let error = grpc_request_invalid_error(operation, source);
+    error!(operation, error = ?error, "OpenRaft gRPC request decoding failed");
+    invalid_argument_status(&error)
+}
+
+fn operation_internal_status(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Status {
+    let error = grpc_internal_error(operation, source);
+    error!(operation, error = ?error, "OpenRaft gRPC operation failed");
+    internal_status(&error)
+}
 
 /// gRPC service implementation for OpenRaft
 pub struct GrpcRaftService {
@@ -137,10 +176,8 @@ impl SnapshotStreamAssembler {
             let meta = chunk
                 .meta
                 .ok_or_else(|| Status::invalid_argument("First snapshot chunk is missing metadata"))?;
-            let last_membership: crate::typ::StoredMembership =
-                serde_json::from_slice(&meta.last_membership).map_err(|error| {
-                    Status::invalid_argument(format!("Failed to deserialize snapshot membership: {error}"))
-                })?;
+            let last_membership: crate::typ::StoredMembership = serde_json::from_slice(&meta.last_membership)
+                .map_err(|source| request_invalid_status("decode snapshot membership", source))?;
             self.meta = Some(crate::typ::SnapshotMeta {
                 last_log_id: meta.last_log_id.map(|id| crate::typ::LogId {
                     leader_id: crate::typ::Vote::new(id.term, id.node_id).leader_id,
@@ -234,9 +271,8 @@ impl OpenRaftService for GrpcRaftService {
                 let log_id = entry
                     .log_id
                     .ok_or_else(|| Status::invalid_argument("Missing append entry log id"))?;
-                let payload: crate::typ::EntryPayload = serde_json::from_slice(&entry.payload).map_err(|e| {
-                    Status::invalid_argument(format!("Failed to deserialize append entry payload: {}", e))
-                })?;
+                let payload: crate::typ::EntryPayload = serde_json::from_slice(&entry.payload)
+                    .map_err(|source| request_invalid_status("decode append entry payload", source))?;
                 Ok(openraft::Entry {
                     log_id: crate::typ::LogId {
                         leader_id: crate::typ::Vote::new(log_id.term, log_id.node_id).leader_id,
@@ -293,7 +329,7 @@ impl OpenRaftService for GrpcRaftService {
             })),
             Err(e) => {
                 error!("AppendEntries failed: {}", e);
-                Err(Status::internal(format!("Raft error: {}", e)))
+                Err(operation_internal_status("append Raft entries", e))
             }
         }
     }
@@ -331,7 +367,7 @@ impl OpenRaftService for GrpcRaftService {
             })),
             Err(e) => {
                 error!("Vote failed: {}", e);
-                Err(Status::internal(format!("Raft error: {}", e)))
+                Err(operation_internal_status("process Raft vote", e))
             }
         }
     }
@@ -346,7 +382,8 @@ impl OpenRaftService for GrpcRaftService {
         let mut assembler = SnapshotStreamAssembler::new();
 
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| Status::internal(format!("Stream error: {}", e)))?;
+            let chunk =
+                chunk_result.map_err(|source| operation_internal_status("receive Raft snapshot stream", source))?;
             assembler.push(chunk)?;
         }
         let (vote, meta, snapshot_data) = assembler.finish()?;
@@ -374,7 +411,7 @@ impl OpenRaftService for GrpcRaftService {
             })),
             Err(e) => {
                 error!("InstallSnapshot failed: {}", e);
-                Err(Status::internal(format!("Raft error: {}", e)))
+                Err(operation_internal_status("install Raft snapshot", e))
             }
         }
     }
@@ -382,6 +419,9 @@ impl OpenRaftService for GrpcRaftService {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+    use std::io;
+
     use super::*;
     use crate::protobuf::openraft::OpenRaftSnapshotMeta;
 
@@ -404,6 +444,35 @@ mod tests {
             total_size,
             checksum,
         }
+    }
+
+    #[test]
+    fn grpc_projection_keeps_typed_sources_internal_and_public_messages_fixed() {
+        let request_error = grpc_request_invalid_error(
+            "decode test request",
+            io::Error::new(io::ErrorKind::InvalidData, "request-source-canary"),
+        );
+        assert!(request_error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .is_some());
+        let request_status = invalid_argument_status(&request_error);
+        assert_eq!(request_status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(request_status.message(), "Controller request is invalid");
+        assert!(!request_status.message().contains("request-source-canary"));
+
+        let internal_error = grpc_internal_error(
+            "run test operation",
+            io::Error::new(io::ErrorKind::BrokenPipe, "internal-source-canary"),
+        );
+        assert!(internal_error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .is_some());
+        let internal_status = internal_status(&internal_error);
+        assert_eq!(internal_status.code(), tonic::Code::Internal);
+        assert_eq!(internal_status.message(), "Controller operation failed");
+        assert!(!internal_status.message().contains("internal-source-canary"));
     }
 
     fn continuation_chunk(

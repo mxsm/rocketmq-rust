@@ -33,8 +33,7 @@ use crate::controller::membership::ConsensusMembershipPort;
 use crate::controller::membership::MembershipChangeCoordinator;
 use crate::controller::membership::MembershipChangeOutcome;
 use crate::controller::membership::MembershipChangeRequest;
-use crate::error::ControllerError;
-use crate::error::Result;
+use crate::error::consensus_failed;
 use crate::openraft::GrpcRaftService;
 use crate::openraft::NetworkFactory;
 use crate::openraft::Store;
@@ -42,6 +41,7 @@ use crate::typ::Node;
 use crate::typ::NodeId;
 use crate::typ::Raft;
 use crate::typ::RaftMetrics;
+use rocketmq_error::Result;
 
 /// OpenRaft node manager
 ///
@@ -97,7 +97,7 @@ impl RaftNodeManager {
         let raft_config = Arc::new(
             raft_config
                 .validate()
-                .map_err(|e| ControllerError::raft_source("validate Raft config", e))?,
+                .map_err(|e| consensus_failed("validate Raft config", e))?,
         );
 
         // Create Raft instance
@@ -109,7 +109,7 @@ impl RaftNodeManager {
             store.state_machine.clone(),
         )
         .await
-        .map_err(|e| ControllerError::raft_source("create Raft node", e))?;
+        .map_err(|e| consensus_failed("create Raft node", e))?;
 
         info!("Created OpenRaft node with ID: {}", node_id);
 
@@ -136,7 +136,7 @@ impl RaftNodeManager {
         self.raft
             .initialize(nodes)
             .await
-            .map_err(|e| ControllerError::raft_source("initialize Raft cluster", e))?;
+            .map_err(|e| consensus_failed("initialize Raft cluster", e))?;
 
         info!("Raft cluster initialized successfully");
         Ok(())
@@ -149,7 +149,7 @@ impl RaftNodeManager {
         self.raft
             .add_learner(node_id, node, blocking)
             .await
-            .map_err(|e| ControllerError::raft_source(format!("add Raft learner {node_id}"), e))?;
+            .map_err(|e| consensus_failed("add Raft learner", e))?;
 
         info!("Learner node {} added successfully", node_id);
         Ok(())
@@ -162,7 +162,7 @@ impl RaftNodeManager {
         self.raft
             .change_membership(members, retain)
             .await
-            .map_err(|e| ControllerError::raft_source("change Raft membership", e))?;
+            .map_err(|e| consensus_failed("change Raft membership", e))?;
 
         info!("Cluster membership changed successfully");
         Ok(())
@@ -203,10 +203,8 @@ impl RaftNodeManager {
             .trigger()
             .allow_next_revert(&node_id, allow)
             .await
-            .map_err(|e| ControllerError::raft_source(format!("send allow-next-revert request for node {node_id}"), e))?
-            .map_err(|e| {
-                ControllerError::raft_source(format!("apply allow-next-revert request for node {node_id}"), e)
-            })?;
+            .map_err(|e| consensus_failed("send allow-next-revert request", e))?
+            .map_err(|e| consensus_failed("apply allow-next-revert request", e))?;
         Ok(())
     }
 
@@ -244,7 +242,7 @@ impl RaftNodeManager {
         self.raft
             .client_write(request)
             .await
-            .map_err(|e| ControllerError::raft_source("client write", e))
+            .map_err(|e| consensus_failed("write Raft client request", e))
     }
 
     /// Confirms leadership through ReadIndex and waits until the local state machine has applied
@@ -253,7 +251,7 @@ impl RaftNodeManager {
         self.raft
             .ensure_linearizable(ReadPolicy::ReadIndex)
             .await
-            .map_err(|error| ControllerError::raft_source("linearizable ReadIndex", error))
+            .map_err(|error| consensus_failed("read linearizable Raft index", error))
     }
 
     /// Returns the raw Raft handle for internal adapters only.
@@ -300,7 +298,7 @@ impl RaftNodeManager {
         self.raft
             .shutdown()
             .await
-            .map_err(|e| ControllerError::raft_source("shutdown Raft node", e))?;
+            .map_err(|e| consensus_failed("shutdown Raft node", e))?;
 
         info!("Raft node {} shut down successfully", self.node_id);
         Ok(())

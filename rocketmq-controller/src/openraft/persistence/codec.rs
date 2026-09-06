@@ -17,11 +17,38 @@ use serde::Serialize;
 
 use super::RaftRecordKey;
 
+#[derive(Debug)]
+struct PersistenceCodecError {
+    operation: &'static str,
+    key_class: &'static str,
+    source: serde_json::Error,
+}
+
+impl std::fmt::Display for PersistenceCodecError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "controller persistence {} failed for {}",
+            self.operation, self.key_class
+        )
+    }
+}
+
+impl std::error::Error for PersistenceCodecError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 pub(in crate::openraft) fn encode_v1<T: Serialize>(key: RaftRecordKey, value: &T) -> Result<Vec<u8>, std::io::Error> {
-    serde_json::to_vec(value).map_err(|error| {
+    serde_json::to_vec(value).map_err(|source| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Controller V1 encode failed for {}: {error}", key.class()),
+            PersistenceCodecError {
+                operation: "encode",
+                key_class: key.class(),
+                source,
+            },
         )
     })
 }
@@ -30,10 +57,14 @@ pub(in crate::openraft) fn decode_v1<T: DeserializeOwned>(
     key: RaftRecordKey,
     bytes: &[u8],
 ) -> Result<T, std::io::Error> {
-    serde_json::from_slice(bytes).map_err(|error| {
+    serde_json::from_slice(bytes).map_err(|source| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Controller V1 decode failed for {}: {error}", key.class()),
+            PersistenceCodecError {
+                operation: "decode",
+                key_class: key.class(),
+                source,
+            },
         )
     })
 }

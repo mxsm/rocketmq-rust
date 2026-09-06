@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::BTreeSet;
+use std::error::Error as _;
+use std::io;
 use std::sync::Arc;
 
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -21,6 +23,12 @@ use tokio::sync::Mutex;
 
 use std::sync::Mutex as StdMutex;
 
+use rocketmq_error::Error;
+use rocketmq_error::RemotingResponseCode;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
+use rocketmq_error::CONTROLLER_REQUEST_INVALID;
+use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_security_api::MaintenanceAuthorizationContext;
 use rocketmq_security_api::MaintenanceAuthorizer;
 use rocketmq_security_api::MaintenancePolicy;
@@ -33,6 +41,7 @@ use rocketmq_security_api::MAINTENANCE_POLICY_SCHEMA_VERSION;
 
 use super::coordinator::INVALID_REQUEST_REASON_SHA256;
 use super::*;
+use crate::error::controller_internal_by;
 
 #[derive(Default)]
 struct RecordingAuditSink {
@@ -93,8 +102,9 @@ impl ConsensusMembershipPort for MockMembershipPort {
             *reads
         };
         if self.failed_reads.lock().expect("failed reads lock").contains(&attempt) {
-            return Err(ControllerError::StorageError(
-                "injected membership read failure".to_string(),
+            return Err(controller_internal_by(
+                "inject membership read failure",
+                io::Error::other("injected membership read failure"),
             ));
         }
         Ok(self.membership.lock().await.clone())
@@ -186,6 +196,13 @@ fn promote_request(operation_id: &str, node_id: u64) -> MembershipChangeRequest 
     .expect("request")
 }
 
+fn expect_shared_controller_error(error: RocketMQError) -> Arc<Error> {
+    let RocketMQError::Shared(canonical) = error else {
+        panic!("Controller failure must cross the RocketMQResult boundary as Shared");
+    };
+    canonical
+}
+
 #[tokio::test]
 async fn repeated_operation_id_replays_without_second_consensus_mutation() {
     let sink = Arc::new(RecordingAuditSink::default());
@@ -231,10 +248,47 @@ async fn reused_operation_id_with_different_payload_is_rejected_and_audited() {
         .await
         .expect_err("conflicting idempotency payload");
 
-    assert!(error.to_string().contains("different request"));
+    let canonical = expect_shared_controller_error(error);
+    let same_allocation = Arc::clone(&canonical);
+    assert!(Arc::ptr_eq(&canonical, &same_allocation));
+    assert_eq!(canonical.descriptor(), &CONTROLLER_REQUEST_INVALID);
+    assert!(canonical.source().is_none());
+    assert_eq!(
+        canonical.public_view().expect("schema-valid view").message(),
+        "Controller request is invalid"
+    );
     assert_eq!(port.mutation_count(), 1);
     let records = sink.records.lock().expect("audit lock");
     assert_eq!(records[1].decision(), "operation_id_conflict");
+}
+
+#[tokio::test]
+async fn full_idempotency_journal_preserves_the_owner_system_error_response() {
+    let sink = Arc::new(RecordingAuditSink::default());
+    let coordinator = MembershipChangeCoordinator::new(sink.clone());
+    let port = MockMembershipPort::new(BTreeSet::from([1, 2]));
+    let membership = port.current_membership().await.expect("current membership");
+    coordinator.fill_idempotency_journal_for_test(membership).await;
+
+    let error = coordinator
+        .apply(&port, &authorization(), promote_request("journal-full", 2))
+        .await
+        .expect_err("a full idempotency journal rejects new operations");
+
+    let canonical = expect_shared_controller_error(error);
+    assert_eq!(canonical.descriptor(), &CORE_INTERNAL_FAILURE);
+    assert_eq!(
+        canonical.descriptor().projection().remoting().code,
+        RemotingResponseCode::SystemError
+    );
+    assert_eq!(
+        canonical.public_view().expect("schema-valid view").message(),
+        "Internal error"
+    );
+    assert!(canonical.source().is_none());
+    assert_eq!(port.mutation_count(), 0);
+    let records = sink.records.lock().expect("audit lock");
+    assert_eq!(records[0].decision(), "idempotency_journal_full");
 }
 
 #[tokio::test]
@@ -271,7 +325,8 @@ async fn learner_must_be_caught_up_before_promotion() {
         .await
         .expect_err("learner is behind");
 
-    assert!(error.to_string().contains("committed log frontier"));
+    let canonical = expect_shared_controller_error(error);
+    assert_eq!(canonical.descriptor(), &CONTROLLER_REQUEST_INVALID);
     assert_eq!(port.mutation_count(), 0);
     assert_eq!(
         sink.records.lock().expect("audit lock")[0].decision(),
@@ -304,7 +359,8 @@ async fn deserialized_request_is_revalidated_before_mutation() {
         .await
         .expect_err("apply must revalidate deserialized DTOs");
 
-    assert!(error.to_string().contains("port must be greater than zero"));
+    let canonical = expect_shared_controller_error(error);
+    assert_eq!(canonical.descriptor(), &CONTROLLER_REQUEST_INVALID);
     assert_eq!(port.mutation_count(), 0);
     let records = sink.records.lock().expect("audit lock");
     assert_eq!(records[0].decision(), "invalid_request");
@@ -369,11 +425,27 @@ async fn initial_membership_read_failure_is_rejected_and_audited() {
     let port = MockMembershipPort::new(BTreeSet::from([1, 2]));
     port.fail_read(1);
 
-    coordinator
+    let error = coordinator
         .apply(&port, &authorization(), promote_request("read-failure", 2))
         .await
         .expect_err("initial read is injected to fail");
 
+    let canonical = expect_shared_controller_error(error);
+    let same_allocation = Arc::clone(&canonical);
+    assert!(Arc::ptr_eq(&canonical, &same_allocation));
+    assert_eq!(canonical.descriptor(), &CONTROLLER_INTERNAL_FAILURE);
+    assert_eq!(
+        canonical.descriptor().projection().remoting().code,
+        RemotingResponseCode::ControllerJraftInternalError
+    );
+    assert!(canonical
+        .source()
+        .and_then(|source| source.downcast_ref::<io::Error>())
+        .is_some());
+    assert!(canonical
+        .source()
+        .and_then(|source| source.downcast_ref::<Error>())
+        .is_none());
     assert_eq!(port.mutation_count(), 0);
     let records = sink.records.lock().expect("audit lock");
     assert_eq!(records[0].outcome(), MembershipAuditOutcome::Rejected);

@@ -19,6 +19,8 @@
 //! - Vote information storage
 //! - Log compaction and purging
 
+use std::error::Error as StdError;
+use std::fmt;
 use std::fmt::Debug;
 use std::ops::RangeBounds;
 use std::sync::Arc;
@@ -37,6 +39,36 @@ use crate::typ::LogEntry;
 use crate::typ::LogId;
 use crate::typ::TypeConfig;
 use crate::typ::Vote;
+
+#[derive(Debug, Clone)]
+struct SharedAppendSource {
+    source: Arc<std::io::Error>,
+}
+
+impl fmt::Display for SharedAppendSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Raft log append failed")
+    }
+}
+
+impl StdError for SharedAppendSource {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+fn shared_append_errors(source: std::io::Error) -> (std::io::Error, std::io::Error) {
+    let kind = source.kind();
+    let source = Arc::new(source);
+    let callback_error = std::io::Error::new(
+        kind,
+        SharedAppendSource {
+            source: Arc::clone(&source),
+        },
+    );
+    let returned_error = std::io::Error::new(kind, SharedAppendSource { source });
+    (callback_error, returned_error)
+}
 
 /// Durable Raft log view backed by the configured controller storage.
 #[derive(Clone)]
@@ -252,37 +284,38 @@ impl RaftLogStorage<TypeConfig> for LogStore {
             Some(log_id) => match log_id.index.checked_add(1) {
                 Some(index) => index,
                 None => {
-                    let error = invalid_log_data("Raft append index overflow");
-                    callback.io_completed(Err(std::io::Error::new(error.kind(), error.to_string())));
-                    return Err(error);
+                    let (callback_error, returned_error) =
+                        shared_append_errors(invalid_log_data("Raft append index overflow"));
+                    callback.io_completed(Err(callback_error));
+                    return Err(returned_error);
                 }
             },
             None => 0,
         };
         for entry in &entries {
             if entry.log_id.index != expected_index {
-                callback.io_completed(Err(invalid_log_data(format!(
-                    "Raft append is not contiguous: expected {expected_index}, found {}",
-                    entry.log_id.index
-                ))));
-                return Err(invalid_log_data(format!(
+                let (callback_error, returned_error) = shared_append_errors(invalid_log_data(format!(
                     "Raft append is not contiguous: expected {expected_index}, found {}",
                     entry.log_id.index
                 )));
+                callback.io_completed(Err(callback_error));
+                return Err(returned_error);
             }
             expected_index = match expected_index.checked_add(1) {
                 Some(index) => index,
                 None => {
-                    let error = invalid_log_data("Raft append index overflow");
-                    callback.io_completed(Err(std::io::Error::new(error.kind(), error.to_string())));
-                    return Err(error);
+                    let (callback_error, returned_error) =
+                        shared_append_errors(invalid_log_data("Raft append index overflow"));
+                    callback.io_completed(Err(callback_error));
+                    return Err(returned_error);
                 }
             };
         }
         if let Some(repository) = &self.repository {
             if let Err(error) = repository.append(&entries).await {
-                callback.io_completed(Err(std::io::Error::new(error.kind(), error.to_string())));
-                return Err(error);
+                let (callback_error, returned_error) = shared_append_errors(error);
+                callback.io_completed(Err(callback_error));
+                return Err(returned_error);
             }
         }
         for entry in entries {
@@ -368,5 +401,41 @@ impl RaftLogStorage<TypeConfig> for LogStore {
 
         *self.last_purged_log_id.write().await = Some(log_id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use super::*;
+
+    #[test]
+    fn shared_append_errors_retain_one_typed_source_allocation() {
+        let (callback_error, returned_error) = shared_append_errors(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "typed append source",
+        ));
+        let callback_source = callback_error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<SharedAppendSource>())
+            .expect("callback shared source");
+        let returned_source = returned_error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<SharedAppendSource>())
+            .expect("returned shared source");
+
+        assert!(Arc::ptr_eq(&callback_source.source, &returned_source.source));
+        assert_eq!(callback_source.to_string(), "Raft log append failed");
+        assert_eq!(returned_source.to_string(), "Raft log append failed");
+        assert_eq!(callback_error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(returned_error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            callback_source
+                .source()
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
     }
 }

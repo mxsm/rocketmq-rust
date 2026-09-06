@@ -35,10 +35,11 @@ use tokio::sync::Mutex;
 use tracing::debug;
 use tracing::info;
 
-use crate::error::ControllerError;
-use crate::error::Result;
+use crate::error::controller_internal_by;
 use crate::storage::StorageBackend;
 use crate::storage::StorageStats;
+use rocketmq_error::Error;
+use rocketmq_error::Result;
 
 const FILE_FORMAT_VERSION: u16 = 1;
 const DATA_DIRECTORY: &str = "data";
@@ -74,24 +75,18 @@ impl FileRecord {
 
     fn validate(&self) -> Result<()> {
         if self.format_version != FILE_FORMAT_VERSION {
-            return Err(integrity_error(format!(
-                "unsupported file record format version {}",
-                self.format_version
-            )));
+            return Err(integrity_error(FileIntegrityFailureKind::RecordVersion));
         }
         let actual = self.calculate_checksum()?;
         if actual != self.checksum {
-            return Err(integrity_error(format!(
-                "file record checksum mismatch: expected {}, calculated {}",
-                self.checksum, actual
-            )));
+            return Err(integrity_error(FileIntegrityFailureKind::RecordChecksum));
         }
         Ok(())
     }
 
     fn calculate_checksum(&self) -> Result<u32> {
         let bytes = serde_json::to_vec(&(self.format_version, self.generation, &self.key, &self.value))
-            .map_err(|error| ControllerError::serialization_source("serialize file record checksum payload", error))?;
+            .map_err(|error| controller_internal_by("serialize file record checksum payload", error))?;
         Ok(crc32(&bytes))
     }
 }
@@ -118,25 +113,18 @@ impl FileManifest {
 
     fn validate(&self) -> Result<()> {
         if self.format_version != FILE_FORMAT_VERSION {
-            return Err(integrity_error(format!(
-                "unsupported file manifest format version {}",
-                self.format_version
-            )));
+            return Err(integrity_error(FileIntegrityFailureKind::ManifestVersion));
         }
         let actual = self.calculate_checksum()?;
         if actual != self.checksum {
-            return Err(integrity_error(format!(
-                "file manifest checksum mismatch: expected {}, calculated {}",
-                self.checksum, actual
-            )));
+            return Err(integrity_error(FileIntegrityFailureKind::ManifestChecksum));
         }
         Ok(())
     }
 
     fn calculate_checksum(&self) -> Result<u32> {
-        let bytes = serde_json::to_vec(&(self.format_version, self.generation, &self.entries)).map_err(|error| {
-            ControllerError::serialization_source("serialize file manifest checksum payload", error)
-        })?;
+        let bytes = serde_json::to_vec(&(self.format_version, self.generation, &self.entries))
+            .map_err(|error| controller_internal_by("serialize file manifest checksum payload", error))?;
         Ok(crc32(&bytes))
     }
 }
@@ -171,10 +159,10 @@ impl FileBackend {
         let manifest_dir = path.join(MANIFEST_DIRECTORY);
         fs::create_dir_all(&data_dir)
             .await
-            .map_err(|error| ControllerError::storage_source("create file storage data directory", error))?;
+            .map_err(|error| controller_internal_by("create file storage data directory", error))?;
         fs::create_dir_all(&manifest_dir)
             .await
-            .map_err(|error| ControllerError::storage_source("create file storage manifest directory", error))?;
+            .map_err(|error| controller_internal_by("create file storage manifest directory", error))?;
         Self::remove_temporary_files(&data_dir).await?;
         Self::remove_temporary_files(&manifest_dir).await?;
 
@@ -220,17 +208,17 @@ impl FileBackend {
     async fn remove_temporary_files(directory: &Path) -> Result<()> {
         let mut entries = fs::read_dir(directory)
             .await
-            .map_err(|error| ControllerError::storage_source("scan file storage directory", error))?;
+            .map_err(|error| controller_internal_by("scan file storage directory", error))?;
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|error| ControllerError::storage_source("read file storage directory entry", error))?
+            .map_err(|error| controller_internal_by("read file storage directory entry", error))?
         {
             let path = entry.path();
             if path.extension().is_some_and(|extension| extension == "tmp") {
                 fs::remove_file(&path)
                     .await
-                    .map_err(|error| ControllerError::storage_source("remove incomplete storage file", error))?;
+                    .map_err(|error| controller_internal_by("remove incomplete storage file", error))?;
             }
         }
         Ok(())
@@ -240,11 +228,11 @@ impl FileBackend {
         let mut candidates = Vec::new();
         let mut entries = fs::read_dir(directory)
             .await
-            .map_err(|error| ControllerError::storage_source("scan file storage manifests", error))?;
+            .map_err(|error| controller_internal_by("scan file storage manifests", error))?;
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|error| ControllerError::storage_source("read file storage manifest entry", error))?
+            .map_err(|error| controller_internal_by("read file storage manifest entry", error))?
         {
             let path = entry.path();
             if path.extension().is_some_and(|extension| extension == "manifest") {
@@ -252,7 +240,7 @@ impl FileBackend {
                     .file_stem()
                     .and_then(|name| name.to_str())
                     .and_then(|name| name.parse::<u64>().ok())
-                    .ok_or_else(|| integrity_error(format!("invalid manifest filename: {}", path.display())))?;
+                    .ok_or_else(|| integrity_error(FileIntegrityFailureKind::ManifestFilename))?;
                 candidates.push((generation, path));
             }
         }
@@ -262,15 +250,12 @@ impl FileBackend {
         };
         let bytes = fs::read(&path)
             .await
-            .map_err(|error| ControllerError::storage_source("read file storage manifest", error))?;
+            .map_err(|error| controller_internal_by("read file storage manifest", error))?;
         let manifest: FileManifest = serde_json::from_slice(&bytes)
-            .map_err(|error| ControllerError::serialization_source("decode file storage manifest", error))?;
+            .map_err(|error| controller_internal_by("decode file storage manifest", error))?;
         manifest.validate()?;
         if manifest.generation != filename_generation {
-            return Err(integrity_error(format!(
-                "manifest generation {} does not match filename generation {}",
-                manifest.generation, filename_generation
-            )));
+            return Err(integrity_error(FileIntegrityFailureKind::ManifestGeneration));
         }
         Ok(Some(manifest))
     }
@@ -279,9 +264,7 @@ impl FileBackend {
         for (key, pointer) in &manifest.entries {
             let record = Self::read_record(data_dir, pointer).await?;
             if record.key != *key || record.value.is_none() || record.generation != pointer.generation {
-                return Err(integrity_error(format!(
-                    "manifest entry for key {key} does not match its record"
-                )));
+                return Err(integrity_error(FileIntegrityFailureKind::ManifestRecordMismatch));
             }
         }
         Ok(())
@@ -295,11 +278,11 @@ impl FileBackend {
             .collect::<HashSet<_>>();
         let mut entries = fs::read_dir(data_dir)
             .await
-            .map_err(|error| ControllerError::storage_source("scan file storage records", error))?;
+            .map_err(|error| controller_internal_by("scan file storage records", error))?;
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|error| ControllerError::storage_source("read file storage record entry", error))?
+            .map_err(|error| controller_internal_by("read file storage record entry", error))?
         {
             let path = entry.path();
             let is_record = path.extension().is_some_and(|extension| extension == "record");
@@ -310,7 +293,7 @@ impl FileBackend {
             if is_record && !is_referenced {
                 fs::remove_file(&path)
                     .await
-                    .map_err(|error| ControllerError::storage_source("remove uncommitted storage record", error))?;
+                    .map_err(|error| controller_internal_by("remove uncommitted storage record", error))?;
             }
         }
         Ok(())
@@ -320,9 +303,9 @@ impl FileBackend {
         let path = data_dir.join(&pointer.file_name);
         let bytes = fs::read(&path)
             .await
-            .map_err(|error| ControllerError::storage_source("read file storage record", error))?;
+            .map_err(|error| controller_internal_by("read file storage record", error))?;
         let record: FileRecord = serde_json::from_slice(&bytes)
-            .map_err(|error| ControllerError::serialization_source("decode file storage record", error))?;
+            .map_err(|error| controller_internal_by("decode file storage record", error))?;
         record.validate()?;
         Ok(record)
     }
@@ -340,22 +323,22 @@ impl FileBackend {
             .write(true)
             .open(&temp_path)
             .await
-            .map_err(|error| ControllerError::storage_source("create temporary storage file", error))?;
+            .map_err(|error| controller_internal_by("create temporary storage file", error))?;
         file.write_all(bytes)
             .await
-            .map_err(|error| ControllerError::storage_source("write temporary storage file", error))?;
+            .map_err(|error| controller_internal_by("write temporary storage file", error))?;
         file.sync_all()
             .await
-            .map_err(|error| ControllerError::storage_source("sync temporary storage file", error))?;
+            .map_err(|error| controller_internal_by("sync temporary storage file", error))?;
         drop(file);
         fs::rename(&temp_path, final_path)
             .await
-            .map_err(|error| ControllerError::storage_source("atomically publish storage file", error))
+            .map_err(|error| controller_internal_by("atomically publish storage file", error))
     }
 
     async fn write_manifest(directory: &Path, manifest: &FileManifest) -> Result<()> {
         let bytes = serde_json::to_vec(manifest)
-            .map_err(|error| ControllerError::serialization_source("encode file storage manifest", error))?;
+            .map_err(|error| controller_internal_by("encode file storage manifest", error))?;
         let path = directory.join(format!("{:020}.manifest", manifest.generation));
         Self::write_durable_temp_then_rename(&path, &bytes).await
     }
@@ -369,7 +352,7 @@ impl FileBackend {
         let generation = current
             .generation
             .checked_add(1)
-            .ok_or_else(|| integrity_error("file storage generation overflow"))?;
+            .ok_or_else(|| integrity_error(FileIntegrityFailureKind::GenerationOverflow))?;
         let mut next_index = current.index;
         let data_dir = self.data_dir();
 
@@ -381,7 +364,7 @@ impl FileBackend {
             let record = FileRecord::new(generation, key.clone(), value)?;
             let file_name = format!("{generation:020}-{ordinal:08}.record");
             let bytes = serde_json::to_vec(&record)
-                .map_err(|error| ControllerError::serialization_source("encode file storage record", error))?;
+                .map_err(|error| controller_internal_by("encode file storage record", error))?;
             Self::write_durable_temp_then_rename(&data_dir.join(&file_name), &bytes).await?;
             if record.value.is_some() {
                 next_index.insert(key, RecordPointer { generation, file_name });
@@ -414,11 +397,11 @@ impl StorageBackend for FileBackend {
         };
         let record = Self::read_record(&self.data_dir(), &pointer).await?;
         if record.key != key || record.generation != pointer.generation {
-            return Err(integrity_error(format!("record identity mismatch for key {key}")));
+            return Err(integrity_error(FileIntegrityFailureKind::RecordIdentity));
         }
         record
             .value
-            .ok_or_else(|| integrity_error(format!("manifest points to tombstone for key {key}")))
+            .ok_or_else(|| integrity_error(FileIntegrityFailureKind::ManifestTombstone))
             .map(Some)
     }
 
@@ -475,10 +458,10 @@ impl StorageBackend for FileBackend {
             .write(true)
             .open(&path)
             .await
-            .map_err(|error| ControllerError::storage_source("open current file storage manifest", error))?;
+            .map_err(|error| controller_internal_by("open current file storage manifest", error))?;
         file.sync_all()
             .await
-            .map_err(|error| ControllerError::storage_source("sync current file storage manifest", error))
+            .map_err(|error| controller_internal_by("sync current file storage manifest", error))
     }
 
     async fn stats(&self) -> Result<StorageStats> {
@@ -487,7 +470,7 @@ impl StorageBackend for FileBackend {
         for pointer in &pointers {
             total_size += fs::metadata(self.data_dir().join(&pointer.file_name))
                 .await
-                .map_err(|error| ControllerError::storage_source("read file storage record metadata", error))?
+                .map_err(|error| controller_internal_by("read file storage record metadata", error))?
                 .len();
         }
         Ok(StorageStats {
@@ -498,8 +481,35 @@ impl StorageBackend for FileBackend {
     }
 }
 
-fn integrity_error(message: impl Into<String>) -> ControllerError {
-    ControllerError::StorageError(format!("file storage integrity error: {}", message.into()))
+#[derive(Debug)]
+enum FileIntegrityFailureKind {
+    RecordVersion,
+    RecordChecksum,
+    ManifestVersion,
+    ManifestChecksum,
+    ManifestFilename,
+    ManifestGeneration,
+    ManifestRecordMismatch,
+    GenerationOverflow,
+    RecordIdentity,
+    ManifestTombstone,
+}
+
+#[derive(Debug)]
+struct FileStorageIntegrityError {
+    kind: FileIntegrityFailureKind,
+}
+
+impl std::fmt::Display for FileStorageIntegrityError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "file storage integrity check failed ({:?})", self.kind)
+    }
+}
+
+impl std::error::Error for FileStorageIntegrityError {}
+
+fn integrity_error(kind: FileIntegrityFailureKind) -> Error {
+    controller_internal_by("validate file storage integrity", FileStorageIntegrityError { kind })
 }
 
 #[cfg(test)]

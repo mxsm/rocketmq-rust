@@ -18,12 +18,13 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
 
+use rocketmq_error::Result;
 use rocketmq_security_api::MaintenanceCapability;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::error::ControllerError;
-use crate::error::Result;
+use crate::error::request_invalid;
+use crate::error::request_invalid_by;
 
 mod coordinator;
 mod raft_adapter;
@@ -58,26 +59,21 @@ impl ConsensusNode {
 
     fn validate(&self) -> Result<()> {
         if self.node_id == 0 {
-            return Err(ControllerError::InvalidRequest(
-                "consensus node id must be greater than zero".to_string(),
-            ));
+            return Err(request_invalid("validate consensus node id"));
         }
-        let rpc_addr = self.rpc_addr.parse::<SocketAddr>().map_err(|error| {
-            ControllerError::invalid_request_source("consensus node RPC address must be a socket address", error)
-        })?;
+        let rpc_addr = self
+            .rpc_addr
+            .parse::<SocketAddr>()
+            .map_err(|error| request_invalid_by("parse consensus node RPC address", error))?;
         if rpc_addr.port() == 0 {
-            return Err(ControllerError::InvalidRequest(
-                "consensus node RPC port must be greater than zero".to_string(),
-            ));
+            return Err(request_invalid("validate consensus node RPC port"));
         }
         let invalid_ip = match rpc_addr.ip() {
             std::net::IpAddr::V4(ip) => ip.is_unspecified() || ip.is_multicast() || ip.octets() == [255, 255, 255, 255],
             std::net::IpAddr::V6(ip) => ip.is_unspecified() || ip.is_multicast(),
         };
         if invalid_ip {
-            return Err(ControllerError::InvalidRequest(
-                "consensus node RPC address must be a concrete unicast address".to_string(),
-            ));
+            return Err(request_invalid("validate consensus node RPC address"));
         }
         Ok(())
     }
@@ -124,9 +120,9 @@ impl MembershipChange {
     fn validate(&self) -> Result<()> {
         match self {
             Self::AddLearner { node } => node.validate(),
-            Self::PromoteVoter { node_id } | Self::RemoveMember { node_id } if *node_id == 0 => Err(
-                ControllerError::InvalidRequest("membership target node id must be greater than zero".to_string()),
-            ),
+            Self::PromoteVoter { node_id } | Self::RemoveMember { node_id } if *node_id == 0 => {
+                Err(request_invalid("validate membership target node id"))
+            }
             Self::PromoteVoter { .. } | Self::RemoveMember { .. } => Ok(()),
         }
     }
@@ -167,15 +163,11 @@ impl MembershipChangeRequest {
 
     fn validate(&self) -> Result<()> {
         if !is_canonical_operation_id(&self.operation_id) {
-            return Err(ControllerError::InvalidRequest(
-                "membership operation id must be 1..=128 canonical ASCII characters".to_string(),
-            ));
+            return Err(request_invalid("validate membership operation id"));
         }
         self.change.validate()?;
         if self.reason.trim().is_empty() || self.reason.len() > 512 || self.reason.chars().any(char::is_control) {
-            return Err(ControllerError::InvalidRequest(
-                "membership reason must be 1..=512 printable characters".to_string(),
-            ));
+            return Err(request_invalid("validate membership reason"));
         }
         Ok(())
     }

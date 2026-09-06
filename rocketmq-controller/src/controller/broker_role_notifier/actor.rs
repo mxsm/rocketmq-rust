@@ -32,8 +32,9 @@ use tracing::warn;
 use super::NotifyKey;
 use super::NotifyState;
 use super::NotifyTask;
-use crate::error::ControllerError;
-use crate::error::Result;
+use crate::error::controller_internal;
+use crate::error::controller_internal_by;
+use rocketmq_error::Result;
 
 const DEFAULT_MAILBOX_CAPACITY: usize = 1_024;
 const MAX_NOTIFY_ATTEMPTS: u32 = 3;
@@ -363,7 +364,7 @@ impl BrokerRoleNotifier {
             .receiver
             .lock()
             .take()
-            .ok_or_else(|| ControllerError::runtime_error("Broker role notifier was already started"))?;
+            .ok_or_else(|| controller_internal("start broker role notifier twice"))?;
         {
             let mut mailbox = self.mailbox.lock();
             mailbox.started = true;
@@ -391,9 +392,7 @@ impl BrokerRoleNotifier {
                     notifier.process(task, &worker_group).await;
                 }
             })
-            .map_err(|error| {
-                ControllerError::runtime_error(format!("Failed to spawn broker role notifier task: {error}"))
-            })?;
+            .map_err(|error| controller_internal_by("spawn broker role notifier task", error))?;
         Ok(())
     }
 

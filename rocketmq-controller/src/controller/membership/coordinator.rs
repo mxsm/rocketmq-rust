@@ -20,8 +20,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::Result;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use rocketmq_security_api::MaintenanceCapability;
@@ -29,8 +34,10 @@ use sha2::Digest;
 use sha2::Sha256;
 use tokio::sync::Mutex;
 
-use crate::error::ControllerError;
-use crate::error::Result;
+use crate::error::consensus_timed_out;
+use crate::error::controller_internal;
+use crate::error::controller_internal_by;
+use crate::error::request_invalid;
 
 use super::ConsensusMembership;
 use super::ConsensusMembershipPort;
@@ -144,6 +151,20 @@ impl MembershipChangeCoordinator {
         }
     }
 
+    #[cfg(test)]
+    pub(super) async fn fill_idempotency_journal_for_test(&self, membership: ConsensusMembership) {
+        let mut operations = self.operations.lock().await;
+        for index in 0..MAX_COMPLETED_MEMBERSHIP_OPERATIONS {
+            operations.insert(
+                format!("completed-{index}"),
+                MembershipOperationState::Completed {
+                    fingerprint: [0; 32],
+                    membership: membership.clone(),
+                },
+            );
+        }
+    }
+
     pub(crate) async fn apply<P: ConsensusMembershipPort>(
         &self,
         port: &P,
@@ -151,9 +172,9 @@ impl MembershipChangeCoordinator {
         request: MembershipChangeRequest,
     ) -> RocketMQResult<MembershipChangeOutcome> {
         if let Err(error) = request.validate() {
-            return self.reject_invalid_request(authorization, &request, error.into());
+            return self.reject_invalid_request(authorization, &request, RocketMQError::Shared(Arc::new(error)));
         }
-        let fingerprint = request_fingerprint(&request)?;
+        let fingerprint = request_fingerprint(&request).map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
         self.validate_authorization(authorization, &request)?;
         let mut operations = self.operations.lock().await;
         if let Some(previous) = operations.get(request.operation_id()).cloned() {
@@ -163,10 +184,7 @@ impl MembershipChangeCoordinator {
                     &request,
                     None,
                     "operation_id_conflict",
-                    ControllerError::InvalidRequest(
-                        "membership operation id was already used for a different request".to_string(),
-                    )
-                    .into(),
+                    RocketMQError::Shared(Arc::new(request_invalid("reuse membership operation id"))),
                 );
             }
             match previous {
@@ -203,7 +221,7 @@ impl MembershipChangeCoordinator {
                                 None,
                                 MembershipAuditOutcome::Pending,
                                 "pending_state_read_failed",
-                                RocketMQError::Controller(error),
+                                RocketMQError::Shared(Arc::new(error)),
                             );
                         }
                     };
@@ -236,9 +254,7 @@ impl MembershipChangeCoordinator {
                         Some(membership.version),
                         MembershipAuditOutcome::Pending,
                         "operation_still_pending",
-                        RocketMQError::Controller(ControllerError::RuntimeError(
-                            "Controller membership operation remains pending verification".to_string(),
-                        )),
+                        RocketMQError::Shared(Arc::new(controller_internal("reconcile pending Controller membership"))),
                     );
                 }
             }
@@ -249,10 +265,12 @@ impl MembershipChangeCoordinator {
                 &request,
                 None,
                 "idempotency_journal_full",
-                RocketMQError::internal(
-                    "admit controller membership operation",
-                    std::io::Error::other("in-memory membership idempotency journal is full"),
-                ),
+                RocketMQError::Shared(Arc::new(
+                    Error::new(&CORE_INTERNAL_FAILURE).with_context(
+                        ErrorContext::new()
+                            .with_text(fields::OPERATION_DIAGNOSTIC, "admit Controller membership operation"),
+                    ),
+                )),
             );
         }
         let before = match self
@@ -267,7 +285,7 @@ impl MembershipChangeCoordinator {
                     None,
                     MembershipAuditOutcome::Rejected,
                     "membership_read_failed",
-                    RocketMQError::Controller(error),
+                    RocketMQError::Shared(Arc::new(error)),
                 );
             }
         };
@@ -277,16 +295,18 @@ impl MembershipChangeCoordinator {
                 &request,
                 Some(before.version),
                 "stale_membership_version",
-                ControllerError::InvalidRequest(format!(
-                    "expected membership version {}, observed {}",
-                    request.expected_membership_version, before.version
-                ))
-                .into(),
+                RocketMQError::Shared(Arc::new(request_invalid("validate membership version"))),
             );
         }
 
         if let Err((decision, error)) = validate_transition(&before, &request.change) {
-            return self.reject(authorization, &request, Some(before.version), decision, error.into());
+            return self.reject(
+                authorization,
+                &request,
+                Some(before.version),
+                decision,
+                RocketMQError::Shared(Arc::new(error)),
+            );
         }
 
         let desired = DesiredMembership::from_change(&request.change);
@@ -305,7 +325,7 @@ impl MembershipChangeCoordinator {
                 Some(before.version),
                 MembershipAuditOutcome::Pending,
                 "mutation_outcome_unknown",
-                RocketMQError::Controller(error),
+                RocketMQError::Shared(Arc::new(error)),
             );
         }
         let verification_started = Instant::now();
@@ -325,7 +345,7 @@ impl MembershipChangeCoordinator {
                         Some(before.version),
                         MembershipAuditOutcome::Pending,
                         "verification_read_failed",
-                        RocketMQError::Controller(error),
+                        RocketMQError::Shared(Arc::new(error)),
                     );
                 }
             };
@@ -338,7 +358,7 @@ impl MembershipChangeCoordinator {
                         Some(observed.version),
                         MembershipAuditOutcome::Pending,
                         "verification_pending",
-                        error.into(),
+                        RocketMQError::Shared(Arc::new(error)),
                     );
                 }
                 Err(_) => tokio::time::sleep(MEMBERSHIP_VERIFICATION_POLL_INTERVAL).await,
@@ -390,10 +410,7 @@ impl MembershipChangeCoordinator {
                 request,
                 None,
                 "authorization_expired",
-                RocketMQError::ControllerConsensusTimeout {
-                    operation: "authorize Controller membership",
-                    timeout_ms: 0,
-                },
+                RocketMQError::Shared(Arc::new(consensus_timed_out("authorize Controller membership", 0))),
             );
         }
         Ok(())
@@ -411,12 +428,11 @@ impl MembershipChangeCoordinator {
         let now = current_millis();
         let timeout_ms = authorization.deadline_unix_millis().saturating_sub(now);
         if timeout_ms == 0 {
-            return Err(ControllerError::Timeout { timeout_ms: 0 });
+            return Err(consensus_timed_out(operation, 0));
         }
         tokio::time::timeout(Duration::from_millis(timeout_ms), future)
             .await
-            .map_err(|_| ControllerError::Timeout { timeout_ms })?
-            .map_err(|error| ControllerError::runtime_source(operation, error))
+            .map_err(|_| consensus_timed_out(operation, timeout_ms))?
     }
 
     fn reject<T>(
@@ -504,7 +520,7 @@ impl MembershipChangeCoordinator {
 fn validate_transition(
     membership: &ConsensusMembership,
     change: &MembershipChange,
-) -> std::result::Result<(), (&'static str, ControllerError)> {
+) -> std::result::Result<(), (&'static str, Error)> {
     match change {
         MembershipChange::AddLearner { node } => {
             if membership.nodes.contains_key(&node.node_id)
@@ -513,7 +529,7 @@ fn validate_transition(
             {
                 return Err((
                     "member_already_exists",
-                    ControllerError::InvalidRequest(format!("Controller node {} already exists", node.node_id)),
+                    request_invalid("add existing Controller learner"),
                 ));
             }
         }
@@ -521,37 +537,27 @@ fn validate_transition(
             if membership.voters.contains(node_id) {
                 return Err((
                     "member_already_voter",
-                    ControllerError::InvalidRequest(format!("Controller node {node_id} is already a voter")),
+                    request_invalid("promote existing Controller voter"),
                 ));
             }
             if !membership.learners.contains(node_id) {
-                return Err((
-                    "learner_missing",
-                    ControllerError::InvalidRequest(format!("Controller learner {node_id} does not exist")),
-                ));
+                return Err(("learner_missing", request_invalid("promote missing Controller learner")));
             }
             if !membership.caught_up.contains(node_id) {
                 return Err((
                     "learner_not_caught_up",
-                    ControllerError::InvalidRequest(format!(
-                        "Controller learner {node_id} has not reached the committed log frontier"
-                    )),
+                    request_invalid("promote uncaught-up Controller learner"),
                 ));
             }
         }
         MembershipChange::RemoveMember { node_id } => {
             if !membership.voters.contains(node_id) && !membership.learners.contains(node_id) {
-                return Err((
-                    "member_missing",
-                    ControllerError::InvalidRequest(format!("Controller node {node_id} does not exist")),
-                ));
+                return Err(("member_missing", request_invalid("remove missing Controller member")));
             }
             if membership.leader_id == Some(*node_id) {
                 return Err((
                     "leader_removal_requires_transfer",
-                    ControllerError::InvalidRequest(
-                        "current Controller leader must transfer leadership before removal".to_string(),
-                    ),
+                    request_invalid("remove current Controller leader"),
                 ));
             }
             if membership.voters.contains(node_id) {
@@ -562,19 +568,14 @@ fn validate_transition(
                     .filter(|voter_id| voter_id != node_id)
                     .collect::<BTreeSet<_>>();
                 if remaining.is_empty() {
-                    return Err((
-                        "last_voter_removal",
-                        ControllerError::InvalidRequest("cannot remove the last Controller voter".to_string()),
-                    ));
+                    return Err(("last_voter_removal", request_invalid("remove last Controller voter")));
                 }
                 let required_quorum = remaining.len() / 2 + 1;
                 let caught_up_remaining = remaining.intersection(&membership.caught_up).count();
                 if caught_up_remaining < required_quorum {
                     return Err((
                         "remaining_quorum_unavailable",
-                        ControllerError::InvalidRequest(format!(
-                            "removal requires {required_quorum} caught-up remaining voters, observed {caught_up_remaining}"
-                        )),
+                        request_invalid("remove Controller voter without quorum"),
                     ));
                 }
             }
@@ -613,9 +614,7 @@ fn verify_transition(
     change: &MembershipChange,
 ) -> Result<()> {
     if after.version <= before.version {
-        return Err(ControllerError::InvalidRequest(
-            "consensus membership version did not advance".to_string(),
-        ));
+        return Err(request_invalid("verify Controller membership version"));
     }
     let target = change.target_node_id();
     let applied = match change {
@@ -628,19 +627,13 @@ fn verify_transition(
         MembershipChange::RemoveMember { .. } => !after.voters.contains(&target) && !after.learners.contains(&target),
     };
     if !applied {
-        return Err(ControllerError::InvalidRequest(
-            "consensus membership postcondition was not satisfied".to_string(),
-        ));
+        return Err(request_invalid("verify Controller membership postcondition"));
     }
     Ok(())
 }
 
-fn request_fingerprint(request: &MembershipChangeRequest) -> RocketMQResult<[u8; 32]> {
-    let encoded = serde_json::to_vec(request).map_err(|error| {
-        RocketMQError::Controller(ControllerError::serialization_source(
-            "encode membership request fingerprint",
-            error,
-        ))
-    })?;
+fn request_fingerprint(request: &MembershipChangeRequest) -> Result<[u8; 32]> {
+    let encoded = serde_json::to_vec(request)
+        .map_err(|error| controller_internal_by("encode membership request fingerprint", error))?;
     Ok(Sha256::digest(encoded).into())
 }

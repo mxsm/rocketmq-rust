@@ -17,7 +17,6 @@ use std::io;
 use rocketmq_error::AuthError;
 use rocketmq_error::BoundaryErrorView;
 use rocketmq_error::CliExitCode;
-use rocketmq_error::ControllerError;
 use rocketmq_error::DomainError;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
@@ -703,33 +702,6 @@ fn direct_cases() -> Vec<Case> {
             expected: internal("auth.configuration.reload_failed", 1),
         },
         Case {
-            label: "ControllerNotLeader",
-            error: RocketMQError::ControllerNotLeader { leader_id: Some(7) },
-            expected: precondition("controller.leadership.not_leader", 2007),
-        },
-        Case {
-            label: "ControllerRaftError",
-            error: RocketMQError::ControllerRaftError {
-                reason: "quorum lost".into(),
-            },
-            expected: internal("controller.consensus.failed", 2015),
-        },
-        Case {
-            label: "ControllerConsensusTimeout",
-            error: RocketMQError::ControllerConsensusTimeout {
-                operation: "change membership",
-                timeout_ms: 100,
-            },
-            expected: timeout("controller.consensus.timed_out", 2015),
-        },
-        Case {
-            label: "ControllerSnapshotFailed",
-            error: RocketMQError::ControllerSnapshotFailed {
-                reason: "snapshot read failed".into(),
-            },
-            expected: internal("controller.consensus.failed", 2015),
-        },
-        Case {
             label: "Io",
             error: RocketMQError::IO(io::Error::other("read failed")),
             expected: internal("core.io.failed", 1),
@@ -1113,111 +1085,6 @@ fn auth_leaves_keep_remoting_sixteen_and_split_failure_semantics() {
     assert_eq!(cases.len(), 12);
     for (label, error, expected) in cases {
         assert_auth(label, error, expected);
-    }
-}
-
-#[test]
-fn retained_controller_leaves_project_only_through_the_wrapper_with_remoting_2015() {
-    let cases = [
-        Case {
-            label: "Controller Io",
-            error: RocketMQError::Controller(ControllerError::Io(io::Error::other("read failed"))),
-            expected: internal("controller.internal.failure", 2015),
-        },
-        Case {
-            label: "Controller Raft",
-            error: RocketMQError::Controller(ControllerError::Raft("quorum lost".into())),
-            expected: internal("controller.consensus.failed", 2015),
-        },
-        Case {
-            label: "Controller RaftSource",
-            error: RocketMQError::Controller(ControllerError::raft_source(
-                "change membership",
-                io::Error::other("quorum lost"),
-            )),
-            expected: internal("controller.consensus.failed", 2015),
-        },
-        Case {
-            label: "Controller InvalidRequest",
-            error: RocketMQError::Controller(ControllerError::InvalidRequest("bad node id".into())),
-            expected: invalid("controller.request.invalid", 2015),
-        },
-        Case {
-            label: "Controller InvalidRequestSource",
-            error: RocketMQError::Controller(ControllerError::invalid_request_source(
-                "decode request",
-                io::Error::other("bad frame"),
-            )),
-            expected: invalid("controller.request.invalid", 2015),
-        },
-        Case {
-            label: "Controller NotInitialized",
-            error: RocketMQError::Controller(ControllerError::NotInitialized("raft node".into())),
-            expected: precondition("controller.lifecycle.not_initialized", 2015),
-        },
-        Case {
-            label: "Controller InitializationFailed",
-            error: RocketMQError::Controller(ControllerError::InitializationFailed),
-            expected: internal("controller.internal.failure", 2015),
-        },
-        Case {
-            label: "Controller ConfigError",
-            error: RocketMQError::Controller(ControllerError::ConfigError("bad peer".into())),
-            expected: config("controller.configuration.invalid", 2015),
-        },
-        Case {
-            label: "Controller SerializationError",
-            error: RocketMQError::Controller(ControllerError::SerializationError("encode failed".into())),
-            expected: internal("controller.internal.failure", 2015),
-        },
-        Case {
-            label: "Controller SerializationSource",
-            error: RocketMQError::Controller(ControllerError::serialization_source(
-                "encode snapshot",
-                io::Error::other("codec failed"),
-            )),
-            expected: internal("controller.internal.failure", 2015),
-        },
-        Case {
-            label: "Controller StorageError",
-            error: RocketMQError::Controller(ControllerError::StorageError("write failed".into())),
-            expected: internal("controller.internal.failure", 2015),
-        },
-        Case {
-            label: "Controller StorageSource",
-            error: RocketMQError::Controller(ControllerError::storage_source(
-                "write snapshot",
-                io::Error::other("disk failed"),
-            )),
-            expected: internal("controller.internal.failure", 2015),
-        },
-        Case {
-            label: "Controller Timeout",
-            error: RocketMQError::Controller(ControllerError::Timeout { timeout_ms: 100 }),
-            expected: timeout("controller.consensus.timed_out", 2015),
-        },
-        Case {
-            label: "Controller RuntimeError",
-            error: RocketMQError::Controller(ControllerError::RuntimeError("task failed".into())),
-            expected: internal("controller.internal.failure", 2015),
-        },
-        Case {
-            label: "Controller RuntimeSource",
-            error: RocketMQError::Controller(ControllerError::runtime_source(
-                "shutdown runtime",
-                io::Error::other("join failed"),
-            )),
-            expected: internal("controller.internal.failure", 2015),
-        },
-        Case {
-            label: "Controller Shutdown",
-            error: RocketMQError::Controller(ControllerError::Shutdown),
-            expected: internal("controller.internal.failure", 2015),
-        },
-    ];
-    assert_eq!(cases.len(), 16);
-    for case in cases {
-        assert_case(case);
     }
 }
 

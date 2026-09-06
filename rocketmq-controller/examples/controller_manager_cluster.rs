@@ -31,8 +31,10 @@ use std::time::Duration;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_controller::RaftPeer;
-use rocketmq_controller::Result;
 use rocketmq_controller::StorageBackendType;
+use rocketmq_error::Error;
+use rocketmq_error::Result;
+use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -105,7 +107,7 @@ async fn start_cluster(telemetry: rocketmq_observability::TelemetryHandle) -> Re
         // Initialize
         if !manager.initialize().await? {
             error!("Failed to initialize node {}", node_id);
-            return Err(rocketmq_controller::ControllerError::InitializationFailed);
+            return Err(Error::new(&CONTROLLER_INTERNAL_FAILURE));
         }
 
         // Start

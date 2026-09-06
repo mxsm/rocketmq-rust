@@ -13,6 +13,69 @@
 // limitations under the License.
 
 use super::*;
+use crate::error::controller_internal;
+use crate::error::controller_internal_by;
+use crate::error::not_initialized;
+use rocketmq_error::Error;
+use rocketmq_error::RocketMQError;
+
+#[derive(Debug)]
+struct ControllerStartupRollbackFailure {
+    startup: Error,
+    cleanup: Option<Error>,
+    cleanup_timed_out: bool,
+}
+
+impl std::fmt::Display for ControllerStartupRollbackFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let _ = (&self.cleanup, self.cleanup_timed_out);
+        formatter.write_str("controller startup rollback failed")
+    }
+}
+
+impl std::error::Error for ControllerStartupRollbackFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.startup)
+    }
+}
+
+#[derive(Debug)]
+enum ControllerShutdownFailure {
+    Canonical { phase: &'static str, error: Error },
+    Facade { phase: &'static str, error: RocketMQError },
+    UnhealthyReport { phase: &'static str },
+    TimedOut { phase: &'static str },
+}
+
+#[derive(Debug)]
+struct ControllerShutdownFailures {
+    failures: Vec<ControllerShutdownFailure>,
+}
+
+impl std::fmt::Display for ControllerShutdownFailures {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for failure in &self.failures {
+            let phase = match failure {
+                ControllerShutdownFailure::Canonical { phase, .. }
+                | ControllerShutdownFailure::Facade { phase, .. }
+                | ControllerShutdownFailure::UnhealthyReport { phase }
+                | ControllerShutdownFailure::TimedOut { phase } => phase,
+            };
+            let _ = phase;
+        }
+        formatter.write_str("controller shutdown completed with unhealthy phases")
+    }
+}
+
+impl std::error::Error for ControllerShutdownFailures {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.failures.iter().find_map(|failure| match failure {
+            ControllerShutdownFailure::Canonical { error, .. } => Some(error as &(dyn std::error::Error + 'static)),
+            ControllerShutdownFailure::Facade { error, .. } => Some(error as &(dyn std::error::Error + 'static)),
+            ControllerShutdownFailure::UnhealthyReport { .. } | ControllerShutdownFailure::TimedOut { .. } => None,
+        })
+    }
+}
 
 impl ControllerManager {
     pub(super) fn ensure_manager_task_group(&self) -> Result<TaskGroup> {
@@ -56,7 +119,7 @@ impl ControllerManager {
                 }
             })
             .map(|_| ())
-            .map_err(|error| ControllerError::runtime_error(format!("Failed to start broker session monitor: {error}")))
+            .map_err(|error| controller_internal_by("start broker session monitor", error))
     }
 
     async fn shutdown_manager_tasks(&self, deadline: ShutdownDeadline) -> bool {
@@ -122,7 +185,7 @@ impl ControllerManager {
     ///
     /// # Errors
     ///
-    /// Returns [`ControllerError`] if the manager is not initialized, a component
+    /// Returns [`rocketmq_error::Error`] if the manager is not initialized, a component
     /// fails to start, or one-shot resources were consumed by shutdown or rollback.
     ///
     /// Repeated calls while running are idempotent. A stopped or rolled-back
@@ -135,15 +198,11 @@ impl ControllerManager {
         }
 
         if self.lifecycle_terminated.load(Ordering::Acquire) {
-            return Err(ControllerError::runtime_error(
-                "Controller manager cannot be restarted after shutdown or a failed startup",
-            ));
+            return Err(controller_internal("restart terminated controller manager"));
         }
 
         if !self.initialized.load(Ordering::SeqCst) {
-            return Err(ControllerError::NotInitialized(
-                "Controller manager must be initialized before starting".to_string(),
-            ));
+            return Err(not_initialized("controller.manager"));
         }
 
         if self
@@ -160,11 +219,7 @@ impl ControllerManager {
         // Raft must start before broker-facing services can observe leadership.
         if let Err(e) = self.raft_controller.startup_shared().await {
             self.running.store(false, Ordering::SeqCst);
-            return Err(self
-                .cleanup_after_start_failure(ControllerError::runtime_error(format!(
-                    "Failed to start Raft controller: {e}"
-                )))
-                .await);
+            return Err(self.cleanup_after_start_failure(e).await);
         }
         info!("Raft controller started");
 
@@ -208,24 +263,22 @@ impl ControllerManager {
                     _ => {}
                 }
             }) {
-                let error =
-                    ControllerError::runtime_error(format!("Failed to spawn controller remoting server task: {error}"));
+                let error = controller_internal_by("spawn controller remoting server task", error);
                 return Err(self.cleanup_after_start_failure(error).await);
             }
             match startup_rx.await {
                 Ok(Ok(_address)) => info!("Remoting server started with ControllerRequestProcessor"),
                 Ok(Err(error)) => {
                     return Err(self
-                        .cleanup_after_start_failure(ControllerError::runtime_error(format!(
-                            "Controller remoting server failed to start: {error}"
-                        )))
+                        .cleanup_after_start_failure(controller_internal_by("start controller remoting server", error))
                         .await);
                 }
                 Err(error) => {
                     return Err(self
-                        .cleanup_after_start_failure(ControllerError::runtime_error(format!(
-                            "Controller remoting server startup acknowledgement was dropped: {error}"
-                        )))
+                        .cleanup_after_start_failure(controller_internal_by(
+                            "receive controller remoting server startup acknowledgement",
+                            error,
+                        ))
                         .await);
                 }
             }
@@ -233,7 +286,7 @@ impl ControllerManager {
 
         {
             if let Err(error) = self.remoting_client.start().await {
-                let error = ControllerError::runtime_error(format!("Failed to start remoting client: {error}"));
+                let error = controller_internal_by("start controller remoting client", error);
                 return Err(self.cleanup_after_start_failure(error).await);
             }
             info!("Remoting client started");
@@ -257,19 +310,29 @@ impl ControllerManager {
     }
 
     /// Rolls back a partial start while the caller owns `lifecycle_lock`.
-    pub(super) async fn cleanup_after_start_failure(&self, start_error: ControllerError) -> ControllerError {
+    pub(super) async fn cleanup_after_start_failure(&self, start_error: Error) -> Error {
         self.running.store(true, Ordering::Release);
         let deadline = ShutdownDeadline::after(Duration::from_secs(30));
         let cleanup = tokio::time::timeout(deadline.remaining(), self.shutdown_inner(deadline)).await;
 
         match cleanup {
             Ok(Ok(())) => start_error,
-            Ok(Err(cleanup_error)) => ControllerError::runtime_error(format!(
-                "Controller startup failed: {start_error}; startup cleanup was unhealthy: {cleanup_error}"
-            )),
-            Err(_) => ControllerError::runtime_error(format!(
-                "Controller startup failed: {start_error}; startup cleanup exhausted its absolute deadline"
-            )),
+            Ok(Err(cleanup_error)) => controller_internal_by(
+                "rollback controller startup",
+                ControllerStartupRollbackFailure {
+                    startup: start_error,
+                    cleanup: Some(cleanup_error),
+                    cleanup_timed_out: false,
+                },
+            ),
+            Err(_) => controller_internal_by(
+                "rollback controller startup",
+                ControllerStartupRollbackFailure {
+                    startup: start_error,
+                    cleanup: None,
+                    cleanup_timed_out: true,
+                },
+            ),
         }
     }
 
@@ -277,7 +340,7 @@ impl ControllerManager {
     ///
     /// # Errors
     ///
-    /// Returns [`ControllerError`] when the deadline expires or a shutdown phase fails.
+    /// Returns [`rocketmq_error::Error`] when the deadline expires or a shutdown phase fails.
     pub async fn shutdown(&self) -> Result<()> {
         self.shutdown_until(ShutdownDeadline::after(Duration::from_secs(30)))
             .await
@@ -295,9 +358,7 @@ impl ControllerManager {
         };
         match tokio::time::timeout(deadline.remaining(), shutdown).await {
             Ok(result) => result,
-            Err(_) => Err(ControllerError::runtime_error(
-                "Controller shutdown exhausted its absolute deadline",
-            )),
+            Err(_) => Err(controller_internal("shutdown controller before deadline")),
         }
     }
 
@@ -316,7 +377,10 @@ impl ControllerManager {
 
         if let Err(error) = self.stop_leadership_gate().await {
             warn!("Failed to stop leader-only scheduling during shutdown: {}", error);
-            failures.push(format!("leadership scheduling: {error}"));
+            failures.push(ControllerShutdownFailure::Canonical {
+                phase: "leadership scheduling",
+                error,
+            });
         }
         self.broker_role_notifier.close();
         if let Some(shutdown_tx) = self.remoting_server_shutdown_tx.lock().take() {
@@ -328,11 +392,13 @@ impl ControllerManager {
         } else {
             let detail = heartbeat_report.to_json();
             warn!(report = %detail, "Heartbeat manager shutdown was unhealthy");
-            failures.push(format!("heartbeat manager: {detail}"));
+            failures.push(ControllerShutdownFailure::UnhealthyReport {
+                phase: "heartbeat manager",
+            });
         }
 
         if !self.shutdown_manager_tasks(deadline).await {
-            failures.push("manager tasks did not stop cleanly".to_string());
+            failures.push(ControllerShutdownFailure::UnhealthyReport { phase: "manager tasks" });
         }
 
         if let Some(security) = &self.security {
@@ -340,11 +406,16 @@ impl ControllerManager {
                 Ok(Ok(())) => info!("Controller security adapter shut down"),
                 Ok(Err(error)) => {
                     warn!(%error, "Controller security adapter shutdown failed");
-                    failures.push(format!("security adapter: {error}"));
+                    failures.push(ControllerShutdownFailure::Facade {
+                        phase: "security adapter",
+                        error,
+                    });
                 }
                 Err(_) => {
                     warn!("Timed out waiting for Controller security adapter shutdown");
-                    failures.push("security adapter shutdown timed out".to_string());
+                    failures.push(ControllerShutdownFailure::TimedOut {
+                        phase: "security adapter",
+                    });
                 }
             }
         }
@@ -355,9 +426,11 @@ impl ControllerManager {
                 info!("Remoting client shut down");
             } else {
                 let detail = serde_json::to_string(&report)
-                    .unwrap_or_else(|error| format!("failed to serialize remoting shutdown report: {error}"));
+                    .unwrap_or_else(|_| "controller remoting shutdown report unavailable".to_owned());
                 warn!(report = %detail, "Remoting client shutdown was unhealthy");
-                failures.push(format!("remoting client: {detail}"));
+                failures.push(ControllerShutdownFailure::UnhealthyReport {
+                    phase: "remoting client",
+                });
             }
         }
 
@@ -371,11 +444,14 @@ impl ControllerManager {
             Ok(Ok(())) => info!("Raft controller shut down"),
             Ok(Err(e)) => {
                 error!("Failed to shutdown Raft: {}", e);
-                failures.push(format!("Raft: {e}"));
+                failures.push(ControllerShutdownFailure::Canonical {
+                    phase: "Raft",
+                    error: e,
+                });
             }
             Err(_) => {
                 warn!("Timed out waiting for Raft controller shutdown");
-                failures.push("Raft shutdown timed out".to_string());
+                failures.push(ControllerShutdownFailure::TimedOut { phase: "Raft" });
             }
         }
 
@@ -386,10 +462,61 @@ impl ControllerManager {
             info!("Controller manager shut down successfully");
             Ok(())
         } else {
-            Err(ControllerError::runtime_error(format!(
-                "Controller shutdown completed with unhealthy phases: {}",
-                failures.join("; ")
-            )))
+            Err(controller_internal_by(
+                "shutdown controller manager",
+                ControllerShutdownFailures { failures },
+            ))
         }
+    }
+}
+
+#[cfg(test)]
+mod aggregate_tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_aggregates_retain_secondary_errors_and_phases_without_formatting_them() {
+        let startup = ControllerStartupRollbackFailure {
+            startup: controller_internal("simulate startup failure"),
+            cleanup: Some(controller_internal("simulate cleanup failure")),
+            cleanup_timed_out: false,
+        };
+        assert!(startup.cleanup.is_some());
+        assert!(!startup.cleanup_timed_out);
+        assert_eq!(startup.to_string(), "controller startup rollback failed");
+        let outer = controller_internal_by("rollback controller startup", startup);
+        let retained_startup = std::error::Error::source(&outer)
+            .and_then(|source| source.downcast_ref::<ControllerStartupRollbackFailure>())
+            .expect("startup aggregate must remain the typed source");
+        assert!(retained_startup.cleanup.is_some());
+
+        let shutdown = ControllerShutdownFailures {
+            failures: vec![
+                ControllerShutdownFailure::Canonical {
+                    phase: "leadership",
+                    error: controller_internal("simulate leadership failure"),
+                },
+                ControllerShutdownFailure::TimedOut { phase: "Raft" },
+            ],
+        };
+        assert!(matches!(
+            shutdown.failures.as_slice(),
+            [
+                ControllerShutdownFailure::Canonical {
+                    phase: "leadership",
+                    ..
+                },
+                ControllerShutdownFailure::TimedOut { phase: "Raft" }
+            ]
+        ));
+        assert_eq!(
+            shutdown.to_string(),
+            "controller shutdown completed with unhealthy phases"
+        );
+        let outer = controller_internal_by("shutdown controller manager", shutdown);
+        let retained_shutdown = std::error::Error::source(&outer)
+            .and_then(|source| source.downcast_ref::<ControllerShutdownFailures>())
+            .expect("shutdown aggregate must remain the typed source");
+        assert_eq!(retained_shutdown.failures.len(), 2);
     }
 }

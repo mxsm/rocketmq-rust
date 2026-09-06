@@ -540,10 +540,14 @@ impl NameServerRuntime {
                     self.inner.telemetry.clone(),
                     self.inner.remoting_command_factory(),
                 )
-                .await?,
+                .await
+                .map_err(|error| RocketMQError::Shared(Arc::new(error)))?,
             );
             self.inner.install_controller_manager(Arc::clone(&controller_manager))?;
-            let initialized = controller_manager.initialize().await?;
+            let initialized = controller_manager
+                .initialize()
+                .await
+                .map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
             if !initialized {
                 return Err(namesrv_startup_failed(
                     "initialize embedded controller",
@@ -763,7 +767,10 @@ impl NameServerRuntime {
 
         #[cfg(feature = "embedded-controller")]
         if let Some(controller_manager) = self.inner.controller_manager() {
-            controller_manager.start().await?;
+            controller_manager
+                .start()
+                .await
+                .map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
         }
 
         // Transition to Running state

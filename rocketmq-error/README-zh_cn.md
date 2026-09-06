@@ -47,7 +47,7 @@ fn validate_transport_endpoint(addr: &str) -> RocketMQResult<()> {
 `Shared` variant 是唯一的规范 `SharedError` 载体，因此 descriptor 标识、上下文和
 类型化物理 source 可以跨 crate 传递而无需重建。保留的领域错误类型，
 如 `SerializationError`、`ProtocolError`、`RpcClientError`、`AuthError`、
-`ControllerError`、`ToolsError`、`FilterError`、`ObservabilityError` 和
+`ToolsError`、`FilterError`、`ObservabilityError` 和
 `UnifiedServiceError`，都可通过 `From` 转换为 `RocketMQError`。
 
 ## 规范 Descriptor
@@ -129,10 +129,11 @@ idempotency、执行进度、deadline 和 retry budget 作出决定。
 `Error` 和 `Critical`。
 
 ```rust
+use rocketmq_error::Error;
 use rocketmq_error::ErrorSeverity;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::CONTROLLER_LEADERSHIP_NOT_LEADER;
 
-let error = RocketMQError::ControllerNotLeader { leader_id: None };
+let error = Error::new(&CONTROLLER_LEADERSHIP_NOT_LEADER);
 assert_eq!(
     error.descriptor().recovery_hint(),
     rocketmq_error::RecoveryHint::RefreshLeader
@@ -167,8 +168,8 @@ assert!(error.boundary_view().context().is_empty());
 - Descriptor 和 projection 的构造保持私有；catalog 常量是只读公开值。
 - 已删除的 legacy `ErrorSpec`、recovery/observability policy 表及
   category/scope 元数据不会保留兼容别名。
-- 六个废弃 `ProtocolError` leaf、四个冲突 `ControllerError` leaf，
-  以及未使用的 required-property leaf 已删除；保留的调用方使用规范
+- 六个废弃 `ProtocolError` leaf、Controller-specific error enum 与 facade
+  variants，以及未使用的 required-property leaf 已删除；保留的调用方使用规范
   `RocketMQError` variant 和 descriptor。
 
 ## 测试

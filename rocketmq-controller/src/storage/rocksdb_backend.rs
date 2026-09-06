@@ -24,10 +24,11 @@ use rocksdb::DB;
 use tracing::debug;
 use tracing::info;
 
-use crate::error::ControllerError;
-use crate::error::Result;
+use crate::error::controller_internal_by;
 use crate::storage::StorageBackend;
 use crate::storage::StorageStats;
+use rocketmq_error::Error;
+use rocketmq_error::Result;
 
 /// RocksDB storage backend
 ///
@@ -53,7 +54,7 @@ impl RocksDBBackend {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|e| ControllerError::storage_source("create RocksDB parent directory", e))?;
+                .map_err(|e| controller_internal_by("create RocksDB parent directory", e))?;
         }
 
         // Configure RocksDB options
@@ -77,7 +78,7 @@ impl RocksDBBackend {
         let db = blocking
             .spawn_io("controller.rocksdb.open", {
                 let path = path.clone();
-                move || DB::open(&opts, &path).map_err(|e| ControllerError::storage_source("open RocksDB", e))
+                move || DB::open(&opts, &path).map_err(|e| controller_internal_by("open RocksDB", e))
             })
             .await
             .map_err(map_blocking_error)??;
@@ -115,8 +116,8 @@ impl RocksDBBackend {
     }
 }
 
-fn map_blocking_error(error: rocketmq_runtime::RuntimeError) -> ControllerError {
-    ControllerError::storage_source("RocksDB blocking task failed", error)
+fn map_blocking_error(error: rocketmq_runtime::RuntimeError) -> Error {
+    controller_internal_by("run RocksDB blocking task", error)
 }
 
 #[async_trait]
@@ -130,7 +131,7 @@ impl StorageBackend for RocksDBBackend {
 
         self.spawn_io("controller.rocksdb.put", move || {
             db.put_opt(key.as_bytes(), value, &Self::durable_write_options())
-                .map_err(|e| ControllerError::storage_source("RocksDB put failed", e))
+                .map_err(|e| controller_internal_by("put RocksDB record", e))
         })
         .await?;
 
@@ -145,7 +146,7 @@ impl StorageBackend for RocksDBBackend {
 
         self.spawn_io("controller.rocksdb.get", move || {
             db.get(key.as_bytes())
-                .map_err(|e| ControllerError::storage_source("RocksDB get failed", e))
+                .map_err(|e| controller_internal_by("get RocksDB record", e))
         })
         .await
     }
@@ -158,7 +159,7 @@ impl StorageBackend for RocksDBBackend {
 
         self.spawn_io("controller.rocksdb.delete", move || {
             db.delete_opt(key.as_bytes(), &Self::durable_write_options())
-                .map_err(|e| ControllerError::storage_source("RocksDB delete failed", e))
+                .map_err(|e| controller_internal_by("delete RocksDB record", e))
         })
         .await?;
 
@@ -185,7 +186,7 @@ impl StorageBackend for RocksDBBackend {
                         }
                     }
                     Err(e) => {
-                        return Err(ControllerError::storage_source("RocksDB iteration failed", e));
+                        return Err(controller_internal_by("iterate RocksDB records", e));
                     }
                 }
             }
@@ -208,7 +209,7 @@ impl StorageBackend for RocksDBBackend {
             }
 
             db.write_opt(batch, &Self::durable_write_options())
-                .map_err(|e| ControllerError::storage_source("RocksDB batch write failed", e))
+                .map_err(|e| controller_internal_by("write RocksDB batch", e))
         })
         .await?;
 
@@ -228,7 +229,7 @@ impl StorageBackend for RocksDBBackend {
             }
 
             db.write_opt(batch, &Self::durable_write_options())
-                .map_err(|e| ControllerError::storage_source("RocksDB batch delete failed", e))
+                .map_err(|e| controller_internal_by("delete RocksDB batch", e))
         })
         .await?;
 
@@ -247,7 +248,7 @@ impl StorageBackend for RocksDBBackend {
                 batch.put(key.as_bytes(), value);
             }
             db.write_opt(batch, &Self::durable_write_options())
-                .map_err(|error| ControllerError::storage_source("RocksDB atomic batch failed", error))
+                .map_err(|error| controller_internal_by("apply RocksDB atomic batch", error))
         })
         .await
     }
@@ -261,7 +262,7 @@ impl StorageBackend for RocksDBBackend {
         self.spawn_io("controller.rocksdb.exists", move || {
             db.get(key.as_bytes())
                 .map(|opt| opt.is_some())
-                .map_err(|e| ControllerError::storage_source("RocksDB exists check failed", e))
+                .map_err(|e| controller_internal_by("check RocksDB record existence", e))
         })
         .await
     }
@@ -281,13 +282,13 @@ impl StorageBackend for RocksDBBackend {
                         batch.delete(&key);
                     }
                     Err(e) => {
-                        return Err(ControllerError::storage_source("RocksDB iteration failed", e));
+                        return Err(controller_internal_by("iterate RocksDB records", e));
                     }
                 }
             }
 
             db.write_opt(batch, &Self::durable_write_options())
-                .map_err(|e| ControllerError::storage_source("RocksDB clear failed", e))
+                .map_err(|e| controller_internal_by("clear RocksDB records", e))
         })
         .await?;
 
@@ -301,7 +302,7 @@ impl StorageBackend for RocksDBBackend {
 
         self.spawn_io("controller.rocksdb.sync", move || {
             db.flush_wal(true)
-                .map_err(|e| ControllerError::storage_source("RocksDB WAL sync failed", e))
+                .map_err(|e| controller_internal_by("sync RocksDB WAL", e))
         })
         .await?;
 
@@ -325,7 +326,7 @@ impl StorageBackend for RocksDBBackend {
                         total_size += (key.len() + value.len()) as u64;
                     }
                     Err(e) => {
-                        return Err(ControllerError::storage_source("RocksDB iteration failed", e));
+                        return Err(controller_internal_by("iterate RocksDB records", e));
                     }
                 }
             }

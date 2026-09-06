@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::error::controller_internal;
 
 impl ControllerManager {
     pub(super) async fn start_leadership_watch_loop(self: &Arc<Self>) -> Result<()> {
@@ -40,9 +41,7 @@ impl ControllerManager {
                     }
                 }
             })
-            .map_err(|error| {
-                ControllerError::runtime_error(format!("Failed to schedule leadership watch task: {error}"))
-            })?;
+            .map_err(|error| controller_internal_by("schedule leadership watch task", error))?;
 
         *self.leadership_watch_tasks.lock() = Some(scheduled_tasks);
         Ok(())
@@ -56,9 +55,7 @@ impl ControllerManager {
     pub(super) async fn start_broker_role_notifier_and_synchronize(&self, task_group: &TaskGroup) -> Result<()> {
         let mut gate = self.leadership_gate.lock().await;
         if gate.stopping {
-            return Err(ControllerError::runtime_error(
-                "Controller leadership gate cannot be started after shutdown",
-            ));
+            return Err(controller_internal("start stopped controller leadership gate"));
         }
 
         self.broker_role_notifier.start(task_group)?;
@@ -91,18 +88,20 @@ impl ControllerManager {
 
     async fn apply_leadership_state(&self, is_leader: bool) -> Result<()> {
         if is_leader {
-            self.raft_controller.start_scheduling().await.map_err(|error| {
-                ControllerError::runtime_error(format!("Failed to start controller scheduling: {error}"))
-            })?;
+            self.raft_controller
+                .start_scheduling()
+                .await
+                .map_err(|error| controller_internal_by("start controller scheduling", error))?;
             self.broker_role_notifier.enable();
             info!(
                 "Leader-only scheduling enabled on controller {}",
                 self.config.snapshot().node_id
             );
         } else {
-            self.raft_controller.stop_scheduling().await.map_err(|error| {
-                ControllerError::runtime_error(format!("Failed to stop controller scheduling: {error}"))
-            })?;
+            self.raft_controller
+                .stop_scheduling()
+                .await
+                .map_err(|error| controller_internal_by("stop controller scheduling", error))?;
             self.broker_role_notifier.reset();
             info!(
                 "Leader-only scheduling disabled and notify dispatch state cleared on controller {}",
@@ -121,10 +120,7 @@ impl ControllerManager {
         let response_header = response
             .decode_command_custom_header::<ElectMasterResponseHeader>()
             .map_err(|error| {
-                ControllerError::serialization_source(
-                    "decode elect-master response header for broker role notify",
-                    error,
-                )
+                controller_internal_by("decode elect-master response header for broker role notify", error)
             })?;
 
         let Some(body) = response.body() else {
@@ -132,7 +128,7 @@ impl ControllerManager {
         };
 
         let response_body = ElectMasterResponseBody::decode(body).map_err(|error| {
-            ControllerError::serialization_source("decode elect-master response body for broker role notify", error)
+            controller_internal_by("decode elect-master response body for broker role notify", error)
         })?;
 
         let Some(member_group) = response_body.broker_member_group else {
@@ -166,9 +162,7 @@ impl ControllerManager {
         let master_address = response_header.master_address.clone().map(|value| value.to_string());
         let sync_state_set = SyncStateSet::with_values(response_body.sync_state_set, sync_state_set_epoch.get())
             .encode()
-            .map_err(|error| {
-                ControllerError::serialization_source("encode sync state set for broker role notify", error)
-            })?;
+            .map_err(|error| controller_internal_by("encode sync state set for broker role notify", error))?;
 
         let mut tasks = Vec::new();
         for (broker_id, broker_addr) in member_group.broker_addrs {

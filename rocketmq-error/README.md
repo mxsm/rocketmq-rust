@@ -51,7 +51,7 @@ The `Shared` variant is the sole canonical `SharedError` carrier, so descriptor
 identity, context, and a typed physical source can cross crate boundaries
 without reconstruction. Retained domain errors such as
 `SerializationError`, `ProtocolError`, `RpcClientError`, `AuthError`,
-`ControllerError`, `ToolsError`, `FilterError`, `ObservabilityError`, and
+`ToolsError`, `FilterError`, `ObservabilityError`, and
 `UnifiedServiceError` convert to `RocketMQError` through `From`.
 
 ## Canonical Descriptors
@@ -138,10 +138,11 @@ Current recovery hints are `Never`, `Backoff`, `RefreshRoute`,
 `Error`, and `Critical`.
 
 ```rust
+use rocketmq_error::Error;
 use rocketmq_error::ErrorSeverity;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::CONTROLLER_LEADERSHIP_NOT_LEADER;
 
-let error = RocketMQError::ControllerNotLeader { leader_id: None };
+let error = Error::new(&CONTROLLER_LEADERSHIP_NOT_LEADER);
 assert_eq!(
     error.descriptor().recovery_hint(),
     rocketmq_error::RecoveryHint::RefreshLeader
@@ -178,8 +179,8 @@ assert!(error.boundary_view().context().is_empty());
   read-only public values.
 - Deleted legacy `ErrorSpec`, recovery/observability policy tables, and
   category/scope metadata are not compatibility aliases.
-- The six obsolete `ProtocolError` leaves, four conflicting
-  `ControllerError` leaves, and the unused required-property leaf are removed.
+- The six obsolete `ProtocolError` leaves, the Controller-specific error enum
+  and facade variants, and the unused required-property leaf are removed.
   Retained callers use canonical `RocketMQError` variants and descriptors.
 
 ## Tests

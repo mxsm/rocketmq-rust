@@ -31,7 +31,9 @@ use std::time::Duration;
 use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_controller::RaftPeer;
-use rocketmq_controller::Result;
+use rocketmq_error::Error;
+use rocketmq_error::Result;
+use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
 use rocketmq_runtime::RuntimeContext;
 use tracing::error;
 use tracing::info;
@@ -60,7 +62,7 @@ async fn main() -> Result<()> {
     info!("Initializing ControllerManager...");
     if !manager.initialize().await? {
         error!("Failed to initialize ControllerManager");
-        return Err(rocketmq_controller::ControllerError::InitializationFailed);
+        return Err(Error::new(&CONTROLLER_INTERNAL_FAILURE));
     }
     info!(" Controller initialized successfully");
 

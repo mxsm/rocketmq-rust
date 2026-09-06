@@ -286,7 +286,7 @@ async fn enabled_security_requires_an_injected_adapter() {
         Err(error) => error,
     };
 
-    assert!(error.to_string().contains("no ControllerSecurity adapter was injected"));
+    assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_CONFIGURATION_INVALID);
 }
 
 #[tokio::test]
@@ -362,10 +362,7 @@ async fn concurrent_start_waits_for_the_single_lifecycle_transition() {
         .start()
         .await
         .expect_err("a stopped controller must not restart");
-    assert_eq!(
-        restart_error.to_string(),
-        "Runtime error: Controller manager cannot be restarted after shutdown or a failed startup"
-    );
+    assert_eq!(restart_error.descriptor(), &rocketmq_error::CONTROLLER_INTERNAL_FAILURE);
     std::mem::forget(manager);
 }
 
@@ -388,12 +385,10 @@ async fn startup_failure_cleanup_stops_owned_components() {
 
     let _lifecycle_guard = manager.lifecycle_lock.lock().await;
     let error = manager
-        .cleanup_after_start_failure(ControllerError::runtime_error(
-            "simulated failure after component startup",
-        ))
+        .cleanup_after_start_failure(crate::error::controller_internal("simulate component startup failure"))
         .await;
 
-    assert!(error.to_string().contains("simulated failure after component startup"));
+    assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_INTERNAL_FAILURE);
     assert!(!manager.is_running());
     assert_eq!(manager.heartbeat_manager.scan_task_count(), 0);
     assert!(manager.manager_task_group.lock().is_none());
@@ -428,7 +423,7 @@ async fn occupied_remoting_listener_fails_startup_and_cleans_up_owned_components
         .await
         .expect_err("occupied remoting listener must fail startup");
 
-    assert!(error.to_string().contains("Controller remoting server failed to start"));
+    assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_INTERNAL_FAILURE);
     assert!(!manager.is_running());
     assert_eq!(manager.heartbeat_manager.scan_task_count(), 0);
     assert!(manager.manager_task_group.lock().is_none());
@@ -438,10 +433,7 @@ async fn occupied_remoting_listener_fails_startup_and_cleans_up_owned_components
         .start()
         .await
         .expect_err("a failed startup must not consume the released listener on retry");
-    assert_eq!(
-        restart_error.to_string(),
-        "Runtime error: Controller manager cannot be restarted after shutdown or a failed startup"
-    );
+    assert_eq!(restart_error.descriptor(), &rocketmq_error::CONTROLLER_INTERNAL_FAILURE);
     assert!(!manager.is_running());
     manager
         .shutdown()
@@ -486,7 +478,10 @@ async fn start_without_initialize_fails() {
 
     let result = manager_arc.start().await;
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), ControllerError::NotInitialized(_)));
+    assert_eq!(
+        result.unwrap_err().descriptor(),
+        &rocketmq_error::CONTROLLER_LIFECYCLE_NOT_INITIALIZED
+    );
 
     std::mem::forget(manager_arc);
 }

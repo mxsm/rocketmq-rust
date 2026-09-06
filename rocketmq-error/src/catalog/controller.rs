@@ -73,7 +73,7 @@ define_error_catalog! {
         recovery_hint: RecoveryHint::Never,
         backtrace: BacktracePolicy::Never,
         exposure: Exposure::Generic,
-        fields: [fields::KEY, fields::REASON_PRESENT],
+        fields: [fields::KEY, fields::REASON_PRESENT, fields::SOURCE_PRESENT],
         projection: {
             remoting: RemotingResponseCode::ControllerJraftInternalError,
             grpc: {

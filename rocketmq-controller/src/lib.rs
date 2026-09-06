@@ -118,8 +118,6 @@ pub use controller::release_snapshot::ControllerReleaseSnapshot;
 pub use controller::Controller;
 pub use controller::MockController;
 pub use elect::policy::DefaultElectPolicy;
-pub use error::ControllerError;
-pub use error::Result;
 pub use event::alter_sync_state_set_event::AlterSyncStateSetEvent;
 pub use event::apply_broker_id_event::ApplyBrokerIdEvent;
 pub use event::clean_broker_data_event::CleanBrokerDataEvent;

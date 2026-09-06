@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
@@ -46,7 +47,6 @@ use crate::config::ControllerConfigReader;
 use crate::controller::open_raft_controller::OpenRaftController;
 use crate::controller::release_snapshot::ControllerReleaseSnapshot;
 use crate::controller::Controller;
-use crate::error::Result;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 use crate::metrics::controller_metrics_manager::ControllerMetricsManager;
@@ -55,6 +55,7 @@ use crate::typ::NodeId;
 use crate::ConsensusMembership;
 use crate::MembershipChangeOutcome;
 use crate::MembershipChangeRequest;
+use rocketmq_error::Result;
 
 /// Controller wrapper used by the rest of the controller stack.
 ///
@@ -156,11 +157,11 @@ impl RaftController {
         }
     }
 
-    pub(crate) async fn startup_shared(&self) -> RocketMQResult<()> {
+    pub(crate) async fn startup_shared(&self) -> Result<()> {
         self.inner.startup_shared().await
     }
 
-    pub(crate) async fn shutdown_shared(&self) -> RocketMQResult<()> {
+    pub(crate) async fn shutdown_shared(&self) -> Result<()> {
         self.inner.shutdown_shared().await
     }
 
@@ -270,11 +271,15 @@ impl RaftController {
 
 impl Controller for RaftController {
     async fn startup(&mut self) -> RocketMQResult<()> {
-        self.startup_shared().await
+        self.startup_shared()
+            .await
+            .map_err(|error| RocketMQError::Shared(Arc::new(error)))
     }
 
     async fn shutdown(&mut self) -> RocketMQResult<()> {
-        self.shutdown_shared().await
+        self.shutdown_shared()
+            .await
+            .map_err(|error| RocketMQError::Shared(Arc::new(error)))
     }
 
     async fn start_scheduling(&self) -> RocketMQResult<()> {

@@ -70,8 +70,9 @@ use tracing::warn;
 use crate::config::ControllerConfig;
 use crate::config::ControllerConfigReader;
 use crate::elect::elect_policy::ElectPolicy;
-use crate::error::ControllerError;
-use crate::error::Result;
+use crate::error::controller_internal_by;
+use crate::error::request_invalid;
+use crate::error::request_invalid_by;
 use crate::event::alter_sync_state_set_event::AlterSyncStateSetEvent;
 use crate::event::apply_broker_id_event::ApplyBrokerIdEvent;
 use crate::event::clean_broker_data_event::CleanBrokerDataEvent;
@@ -85,6 +86,8 @@ use crate::manager::broker_replica_info::BrokerReplicaInfo;
 use crate::manager::sync_state_info::SyncStateInfo;
 use crate::typ::BrokerIdentityInfoSnapshot;
 use crate::typ::BrokerLiveInfoSnapshot;
+use rocketmq_error::Error;
+use rocketmq_error::Result;
 
 /// Serialization structure for state machine persistence
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1168,13 +1171,13 @@ impl ReplicasInfoManager {
                 .collect(),
         };
 
-        serde_json::to_vec(&state).map_err(|e| ControllerError::serialization_source("serialize sync state data", e))
+        serde_json::to_vec(&state).map_err(|e| controller_internal_by("serialize sync state data", e))
     }
 
     /// Deserialize the state machine from bytes
     pub fn deserialize_from(&self, data: &[u8]) -> Result<()> {
-        let state: SerializedState = serde_json::from_slice(data)
-            .map_err(|e| ControllerError::serialization_source("deserialize sync state data", e))?;
+        let state: SerializedState =
+            serde_json::from_slice(data).map_err(|e| controller_internal_by("deserialize sync state data", e))?;
 
         self.replica_info_table.clear();
         self.sync_state_set_info_table.clear();
@@ -1229,7 +1232,7 @@ impl ReplicasInfoManager {
             .split(';')
             .map(|s| {
                 s.parse::<u64>()
-                    .map_err(|e| ControllerError::invalid_request_source("deserialize broker replica info", e))
+                    .map_err(|e| request_invalid_by("deserialize broker replica info", e))
             })
             .collect()
     }
@@ -1421,10 +1424,8 @@ impl ReplicasInfoManager {
     }
 }
 
-fn event_payload_mismatch(event_type: EventType, expected: &'static str) -> ControllerError {
-    ControllerError::InvalidRequest(format!(
-        "event type {event_type} does not contain the expected {expected} payload"
-    ))
+fn event_payload_mismatch(_event_type: EventType, _expected: &'static str) -> Error {
+    request_invalid("apply controller event payload")
 }
 
 impl ElectPolicy for ReplicasInfoManager {
@@ -1471,11 +1472,11 @@ mod tests {
             .try_apply_event(&MismatchedEvent)
             .expect_err("mismatched event payload must not be ignored");
 
-        assert!(matches!(
-            error,
-            ControllerError::InvalidRequest(message)
-                if message.contains("ApplyBrokerId") && message.contains("ApplyBrokerIdEvent")
-        ));
+        assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_REQUEST_INVALID);
+        assert_eq!(
+            error.public_view().expect("schema-valid view").message(),
+            "Controller request is invalid"
+        );
     }
 
     #[test]

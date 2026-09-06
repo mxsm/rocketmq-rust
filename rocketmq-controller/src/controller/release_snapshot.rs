@@ -21,10 +21,15 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::CONTROLLER_CONSENSUS_FAILED;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::ReleaseCheckpointRestoreVerification;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -96,7 +101,7 @@ impl ControllerReleaseSnapshotRepository {
                 publish_snapshot_object(&object_path, &payload)
             })
             .await
-            .map_err(|error| controller_snapshot_error(format!("publish snapshot task failed: {error}")))?
+            .map_err(controller_snapshot_error_by)?
     }
 
     /// Loads and verifies an immutable release snapshot without installing it.
@@ -115,7 +120,7 @@ impl ControllerReleaseSnapshotRepository {
                 read_snapshot_object(&object_path, expected_length)
             })
             .await
-            .map_err(|error| controller_snapshot_error(format!("read snapshot task failed: {error}")))??;
+            .map_err(controller_snapshot_error_by)??;
         let manifest = manifest.clone();
         self.cpu_crypto
             .spawn_until(
@@ -125,7 +130,7 @@ impl ControllerReleaseSnapshotRepository {
                 move || verify_controller_release_snapshot(&payload, &manifest),
             )
             .await
-            .map_err(|error| controller_snapshot_error(format!("verify snapshot task failed: {error}")))?
+            .map_err(controller_snapshot_error_by)?
     }
 }
 
@@ -139,41 +144,28 @@ pub fn verify_controller_release_snapshot(
     payload: &[u8],
     manifest: &ControllerReleaseSnapshotManifest,
 ) -> RocketMQResult<ReleaseCheckpointRestoreVerification> {
-    manifest.validate().map_err(controller_snapshot_error)?;
+    manifest.validate().map_err(controller_snapshot_error_by)?;
     if payload.len() as u64 != manifest.artifact.length_bytes {
-        return Err(controller_snapshot_error(format!(
-            "snapshot length {} does not match manifest length {}",
-            payload.len(),
-            manifest.artifact.length_bytes
-        )));
+        return Err(controller_snapshot_error());
     }
     let actual_sha256 = hex::encode(Sha256::digest(payload));
     if actual_sha256 != manifest.artifact.sha256 {
-        return Err(controller_snapshot_error(format!(
-            "snapshot SHA-256 {actual_sha256} does not match manifest SHA-256 {}",
-            manifest.artifact.sha256
-        )));
+        return Err(controller_snapshot_error());
     }
 
-    let identity = inspect_snapshot_payload(payload).map_err(controller_snapshot_error)?;
+    let identity = inspect_snapshot_payload(payload).map_err(controller_snapshot_error_by)?;
     let Some(last_applied) = identity.last_applied else {
-        return Err(controller_snapshot_error(
-            "snapshot payload has no last-applied Raft position",
-        ));
+        return Err(controller_snapshot_error());
     };
     if identity.snapshot_id != manifest.snapshot_id
         || last_applied.index != manifest.last_applied_index
         || last_applied.leader_id.term != manifest.last_applied_term
         || identity.voter_ids != manifest.voter_ids
     {
-        return Err(controller_snapshot_error(
-            "snapshot payload identity does not match its release manifest",
-        ));
+        return Err(controller_snapshot_error());
     }
     if !manifest.artifact.uri.ends_with(&format!("/{}", manifest.snapshot_id)) {
-        return Err(controller_snapshot_error(
-            "snapshot URI is not bound to the embedded snapshot identity",
-        ));
+        return Err(controller_snapshot_error());
     }
 
     Ok(ReleaseCheckpointRestoreVerification {
@@ -188,10 +180,26 @@ pub fn verify_controller_release_snapshot(
     })
 }
 
-pub(crate) fn controller_snapshot_error(error: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::ControllerSnapshotFailed {
-        reason: error.to_string(),
-    }
+pub(crate) fn controller_snapshot_error() -> RocketMQError {
+    RocketMQError::Shared(Arc::new(
+        Error::new(&CONTROLLER_CONSENSUS_FAILED).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "operate on controller release snapshot")
+                .with_text(fields::PHASE, "snapshot")
+                .with_secret_presence(fields::REASON_PRESENT),
+        ),
+    ))
+}
+
+pub(crate) fn controller_snapshot_error_by(source: impl std::error::Error + Send + Sync + 'static) -> RocketMQError {
+    RocketMQError::Shared(Arc::new(
+        Error::caused_by(&CONTROLLER_CONSENSUS_FAILED, source).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "operate on controller release snapshot")
+                .with_text(fields::PHASE, "snapshot")
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        ),
+    ))
 }
 
 fn authorization_deadline(authorization: &MaintenanceAuthorizationGrant) -> RocketMQResult<ShutdownDeadline> {
@@ -204,7 +212,7 @@ fn authorization_deadline(authorization: &MaintenanceAuthorizationGrant) -> Rock
         .deadline_unix_millis()
         .checked_sub(current_millis())
         .filter(|remaining| *remaining > 0)
-        .ok_or_else(|| controller_snapshot_error("release-snapshot authorization expired"))?;
+        .ok_or_else(controller_snapshot_error)?;
     Ok(ShutdownDeadline::after(Duration::from_millis(remaining)))
 }
 
@@ -214,12 +222,9 @@ fn validate_repository_request(
     node_id: u64,
     payload_length: u64,
 ) -> RocketMQResult<()> {
-    manifest.validate().map_err(controller_snapshot_error)?;
+    manifest.validate().map_err(controller_snapshot_error_by)?;
     if payload_length != manifest.artifact.length_bytes {
-        return Err(controller_snapshot_error(format!(
-            "snapshot payload length {payload_length} does not match manifest length {}",
-            manifest.artifact.length_bytes
-        )));
+        return Err(controller_snapshot_error());
     }
     let max_snapshot_bytes =
         (crate::openraft::SNAPSHOT_MAX_BYTES as u64).min(authorization.resource_budget().max_checkpoint_bytes);
@@ -234,9 +239,7 @@ fn validate_repository_request(
         manifest.artifact.sha256, manifest.snapshot_id
     );
     if manifest.artifact.uri != expected_uri {
-        return Err(controller_snapshot_error(
-            "snapshot URI does not identify this Controller's immutable artifact",
-        ));
+        return Err(controller_snapshot_error());
     }
     Ok(())
 }
@@ -248,12 +251,7 @@ fn snapshot_object_path(root: &Path, manifest: &ControllerReleaseSnapshotManifes
 
 fn publish_snapshot_object(path: &Path, payload: &[u8]) -> RocketMQResult<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            controller_snapshot_error(format!(
-                "create snapshot object directory {}: {error}",
-                parent.display()
-            ))
-        })?;
+        fs::create_dir_all(parent).map_err(controller_snapshot_error_by)?;
     }
     if path.exists() {
         return verify_existing_snapshot_object(path, payload);
@@ -266,27 +264,14 @@ fn publish_snapshot_object(path: &Path, payload: &[u8]) -> RocketMQResult<()> {
             .create_new(true)
             .write(true)
             .open(&partial_path)
-            .map_err(|error| {
-                controller_snapshot_error(format!(
-                    "create partial snapshot object {}: {error}",
-                    partial_path.display()
-                ))
-            })?;
+            .map_err(controller_snapshot_error_by)?;
         file.write_all(payload)
             .and_then(|()| file.sync_all())
-            .map_err(|error| {
-                controller_snapshot_error(format!(
-                    "persist partial snapshot object {}: {error}",
-                    partial_path.display()
-                ))
-            })?;
+            .map_err(controller_snapshot_error_by)?;
         match fs::rename(&partial_path, path) {
             Ok(()) => Ok(()),
             Err(_error) if path.exists() => verify_existing_snapshot_object(path, payload),
-            Err(error) => Err(controller_snapshot_error(format!(
-                "publish snapshot object {}: {error}",
-                path.display()
-            ))),
+            Err(error) => Err(controller_snapshot_error_by(error)),
         }
     })();
     if result.is_err() || partial_path.exists() {
@@ -296,32 +281,45 @@ fn publish_snapshot_object(path: &Path, payload: &[u8]) -> RocketMQResult<()> {
 }
 
 fn verify_existing_snapshot_object(path: &Path, payload: &[u8]) -> RocketMQResult<()> {
-    let existing = fs::read(path)
-        .map_err(|error| controller_snapshot_error(format!("read snapshot object {}: {error}", path.display())))?;
+    let existing = fs::read(path).map_err(controller_snapshot_error_by)?;
     if existing != payload {
-        return Err(controller_snapshot_error(
-            "content-addressed snapshot object already exists with different bytes",
-        ));
+        return Err(controller_snapshot_error());
     }
     Ok(())
 }
 
 fn read_snapshot_object(path: &Path, expected_length: u64) -> RocketMQResult<Vec<u8>> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| controller_snapshot_error(format!("inspect snapshot object {}: {error}", path.display())))?;
+    let metadata = fs::metadata(path).map_err(controller_snapshot_error_by)?;
     if !metadata.is_file() || metadata.len() != expected_length {
-        return Err(controller_snapshot_error(format!(
-            "snapshot object length {} does not match manifest length {expected_length}",
-            metadata.len()
-        )));
+        return Err(controller_snapshot_error());
     }
-    fs::read(path)
-        .map_err(|error| controller_snapshot_error(format!("read snapshot object {}: {error}", path.display())))
+    fs::read(path).map_err(controller_snapshot_error_by)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use super::*;
+
+    #[test]
+    fn snapshot_errors_preserve_consensus_identity_r2015_and_typed_source() {
+        let error = controller_snapshot_error_by(std::io::Error::other("private snapshot detail"));
+
+        assert_eq!(error.descriptor(), &CONTROLLER_CONSENSUS_FAILED);
+        assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 2015);
+        let RocketMQError::Shared(error) = error else {
+            panic!("snapshot errors must use the canonical carrier");
+        };
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
+        assert_eq!(
+            error.public_view().expect("schema-valid view").message(),
+            "Controller consensus operation failed"
+        );
+    }
 
     #[test]
     fn immutable_snapshot_object_is_idempotent_and_rejects_content_drift() {

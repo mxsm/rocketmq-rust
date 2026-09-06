@@ -44,8 +44,6 @@ pub use tools::ToolsError;
 
 // Re-export auth error from the auth_error module
 pub use crate::auth_error::AuthError;
-// Re-export controller error from the controller_error module
-pub use crate::controller_error::ControllerError;
 
 /// Main error type for all RocketMQ operations
 ///
@@ -105,13 +103,6 @@ pub enum RocketMQError {
     /// Authentication/authorization errors (credential validation, access control, etc.)
     #[error(transparent)]
     Authentication(#[from] AuthError),
-
-    // ============================================================================
-    // Controller Errors
-    // ============================================================================
-    /// Controller operation errors (Raft consensus, leader election, broker management, etc.)
-    #[error(transparent)]
-    Controller(#[from] ControllerError),
 
     // ============================================================================
     // Message Property Errors
@@ -538,43 +529,6 @@ pub enum RocketMQError {
     },
 
     // ============================================================================
-    // Controller/Raft Errors
-    // ============================================================================
-    /// Not the Raft leader
-    #[error("Not leader, current leader is: {}", leader_id.map(|id| id.to_string()).unwrap_or_else(|| "unknown".to_string()))]
-    /// The controller not leader value.
-    ControllerNotLeader {
-        /// The leader identifier.
-        leader_id: Option<u64>,
-    },
-
-    /// Raft consensus error
-    #[error("Raft consensus error: {reason}")]
-    /// The controller raft error value.
-    ControllerRaftError {
-        /// The reason value.
-        reason: String,
-    },
-
-    /// Consensus operation timeout
-    #[error("Consensus operation '{operation}' timed out after {timeout_ms}ms")]
-    /// The controller consensus timeout value.
-    ControllerConsensusTimeout {
-        /// The operation value.
-        operation: &'static str,
-        /// The timeout duration in milliseconds.
-        timeout_ms: u64,
-    },
-
-    /// Snapshot operation failed
-    #[error("Snapshot operation failed: {reason}")]
-    /// The controller snapshot failed value.
-    ControllerSnapshotFailed {
-        /// The reason value.
-        reason: String,
-    },
-
-    // ============================================================================
     // System Errors
     // ============================================================================
     /// IO error from std::io
@@ -642,7 +596,6 @@ impl RocketMQError {
             Self::Protocol(error) => error.descriptor(),
             Self::Rpc(error) => error.descriptor(),
             Self::Authentication(error) => error.descriptor(),
-            Self::Controller(error) => controller_descriptor(error),
             Self::InvalidProperty(_) => &PROTOCOL_MESSAGE_PROPERTY_INVALID,
             Self::BrokerNotFound { .. } => &BROKER_LOOKUP_NOT_FOUND,
             Self::BrokerRegistrationFailed { .. } => &BROKER_REGISTRATION_FAILED,
@@ -685,9 +638,6 @@ impl RocketMQError {
             Self::ConfigInvalidValue { .. } => &CORE_CONFIGURATION_INVALID,
             Self::AuthConfigInvalid { .. } => &AUTH_CONFIGURATION_INVALID,
             Self::AuthHotReloadFailed { .. } => &AUTH_CONFIGURATION_RELOAD_FAILED,
-            Self::ControllerNotLeader { .. } => &CONTROLLER_LEADERSHIP_NOT_LEADER,
-            Self::ControllerRaftError { .. } | Self::ControllerSnapshotFailed { .. } => &CONTROLLER_CONSENSUS_FAILED,
-            Self::ControllerConsensusTimeout { .. } => &CONTROLLER_CONSENSUS_TIMED_OUT,
             Self::IO(_) => &CORE_IO_FAILED,
             Self::IllegalArgument(_) => &CORE_ARGUMENT_INVALID,
             Self::Timeout { .. } => &CORE_OPERATION_TIMED_OUT,
@@ -722,7 +672,6 @@ impl RocketMQError {
             Self::Protocol(error) => error.context(),
             Self::Rpc(error) => error.context(),
             Self::Authentication(error) => error.context(),
-            Self::Controller(error) => controller_context(error),
             Self::InvalidProperty(property) => ErrorContext::new().with_text(fields::PROPERTY, property),
             Self::BrokerNotFound { name } => ErrorContext::new().with_text(fields::BROKER, name),
             Self::BrokerRegistrationFailed { name, .. } => ErrorContext::new()
@@ -837,20 +786,6 @@ impl RocketMQError {
             Self::AuthHotReloadFailed { .. } => ErrorContext::new()
                 .with_secret_presence(fields::PATH_PRESENT)
                 .with_secret_presence(fields::REASON_PRESENT),
-            Self::ControllerNotLeader { leader_id } => match leader_id {
-                Some(leader_id) => ErrorContext::new().with_u64(fields::LEADER_ID, *leader_id),
-                None => ErrorContext::new(),
-            },
-            Self::ControllerRaftError { .. } => ErrorContext::new()
-                .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
-                .with_secret_presence(fields::REASON_PRESENT),
-            Self::ControllerSnapshotFailed { .. } => ErrorContext::new()
-                .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
-                .with_text(fields::PHASE, "snapshot")
-                .with_secret_presence(fields::REASON_PRESENT),
-            Self::ControllerConsensusTimeout { operation, timeout_ms } => ErrorContext::new()
-                .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
-                .with_u64(fields::TIMEOUT_MS, *timeout_ms),
             Self::IO(_) => ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, "io")
                 .with_secret_presence(fields::SOURCE_PRESENT),
@@ -1133,34 +1068,6 @@ impl RocketMQError {
     }
 
     // ============================================================================
-    // Controller Error Constructors
-    // ============================================================================
-
-    /// Create a controller Raft error
-    #[inline]
-    pub fn controller_raft_error(reason: impl Into<String>) -> Self {
-        Self::Controller(ControllerError::Raft(reason.into()))
-    }
-
-    /// Create a controller invalid request error
-    #[inline]
-    pub fn controller_invalid_request(reason: impl Into<String>) -> Self {
-        Self::Controller(ControllerError::InvalidRequest(reason.into()))
-    }
-
-    /// Create a controller timeout error
-    #[inline]
-    pub fn controller_timeout(timeout_ms: u64) -> Self {
-        Self::Controller(ControllerError::Timeout { timeout_ms })
-    }
-
-    /// Create a controller shutdown error
-    #[inline]
-    pub fn controller_shutdown() -> Self {
-        Self::Controller(ControllerError::Shutdown)
-    }
-
-    // ============================================================================
     // Filter Error Constructors
     // ============================================================================
 
@@ -1204,74 +1111,6 @@ impl RocketMQError {
 impl From<FilterCompileError> for RocketMQError {
     fn from(error: FilterCompileError) -> Self {
         Self::Filter(FilterError::compile(error))
-    }
-}
-
-fn controller_descriptor(error: &ControllerError) -> &'static ErrorDescriptor {
-    match error {
-        ControllerError::Raft(_) | ControllerError::RaftSource { .. } => &CONTROLLER_CONSENSUS_FAILED,
-        ControllerError::InvalidRequest(_) | ControllerError::InvalidRequestSource { .. } => {
-            &CONTROLLER_REQUEST_INVALID
-        }
-        ControllerError::NotInitialized(_) => &CONTROLLER_LIFECYCLE_NOT_INITIALIZED,
-        ControllerError::ConfigError(_) => &CONTROLLER_CONFIGURATION_INVALID,
-        ControllerError::Timeout { .. } => &CONTROLLER_CONSENSUS_TIMED_OUT,
-        ControllerError::Io(_)
-        | ControllerError::InitializationFailed
-        | ControllerError::SerializationError(_)
-        | ControllerError::SerializationSource { .. }
-        | ControllerError::StorageError(_)
-        | ControllerError::StorageSource { .. }
-        | ControllerError::RuntimeError(_)
-        | ControllerError::RuntimeSource { .. }
-        | ControllerError::Shutdown => &CONTROLLER_INTERNAL_FAILURE,
-    }
-}
-
-fn controller_context(error: &ControllerError) -> ErrorContext {
-    match error {
-        ControllerError::Io(_) => ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, "io")
-            .with_secret_presence(fields::SOURCE_PRESENT),
-        ControllerError::Raft(_) => ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
-            .with_secret_presence(fields::REASON_PRESENT),
-        ControllerError::RaftSource { .. } => ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
-            .with_secret_presence(fields::REASON_PRESENT)
-            .with_secret_presence(fields::SOURCE_PRESENT),
-        ControllerError::InvalidRequest(_) => ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, "request")
-            .with_secret_presence(fields::REASON_PRESENT),
-        ControllerError::InvalidRequestSource { .. } => ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, "request")
-            .with_secret_presence(fields::REASON_PRESENT)
-            .with_secret_presence(fields::SOURCE_PRESENT),
-        ControllerError::NotInitialized(_) => ErrorContext::new()
-            .with_text(fields::COMPONENT_NAME, "controller")
-            .with_secret_presence(fields::REASON_PRESENT),
-        ControllerError::InitializationFailed => ErrorContext::new().with_text(fields::PHASE, "initialization"),
-        ControllerError::ConfigError(_) => ErrorContext::new()
-            .with_text(fields::KEY, "controller")
-            .with_secret_presence(fields::REASON_PRESENT),
-        ControllerError::SerializationError(_) => {
-            ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "serialize")
-        }
-        ControllerError::SerializationSource { .. } => ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, "serialize")
-            .with_secret_presence(fields::SOURCE_PRESENT),
-        ControllerError::StorageError(_) => ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "storage"),
-        ControllerError::StorageSource { .. } => ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, "storage")
-            .with_secret_presence(fields::SOURCE_PRESENT),
-        ControllerError::Timeout { timeout_ms } => ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, "consensus")
-            .with_u64(fields::TIMEOUT_MS, *timeout_ms),
-        ControllerError::RuntimeError(_) => ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "runtime"),
-        ControllerError::RuntimeSource { operation, .. } => ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, *operation)
-            .with_secret_presence(fields::SOURCE_PRESENT),
-        ControllerError::Shutdown => ErrorContext::new().with_text(fields::PHASE, "shutdown"),
     }
 }
 

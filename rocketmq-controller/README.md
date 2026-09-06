@@ -220,7 +220,7 @@ async fn main() -> Result<()> {
         .await?,
     );
     if !manager.clone().initialize().await? {
-        return Err(rocketmq_controller::error::ControllerError::InitializationFailed.into());
+        return Err(rocketmq_error::Error::new(&rocketmq_error::CONTROLLER_INTERNAL_FAILURE));
     }
 
     manager.clone().start().await?;

@@ -33,8 +33,12 @@ use crate::metrics::RequestHandleStatus;
 use crate::metrics::RequestType as MetricsRequestType;
 use crate::Controller;
 use cheetah_string::CheetahString;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
+use rocketmq_error::PROTOCOL_RESPONSE_FAILED;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet;
@@ -52,6 +56,16 @@ use rocketmq_transport::api::SessionView;
 use tracing::warn;
 
 const WAIT_TIMEOUT_SECONDS: u64 = 5;
+
+fn controller_response_failed(source: impl std::error::Error + Send + Sync + 'static) -> RocketMQError {
+    RocketMQError::Shared(Arc::new(
+        Error::caused_by(&PROTOCOL_RESPONSE_FAILED, source).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "controller.remoting_response")
+                .with_secret_presence(fields::REASON_PRESENT),
+        ),
+    ))
+}
 
 /// Routes Controller remoting requests without retaining the manager after shutdown.
 #[derive(Clone)]
@@ -278,7 +292,7 @@ impl ControllerRequestProcessor {
             Some(body) => RemotingResponse::bytes(response, body),
             None => RemotingResponse::command(response),
         }
-        .map_err(|error| RocketMQError::response_process_failed("controller.remoting_response", error.to_string()))?;
+        .map_err(controller_response_failed)?;
         Ok(HandlerOutcome::Reply(response))
     }
 }
@@ -296,5 +310,31 @@ impl RequestProcessor for ControllerRequestProcessor {
         let dispatch = self.handle_request(session, &channel_identity, request.command_mut());
         let response = self.complete_request(request_name, dispatch).await?;
         Self::response_outcome(response)
+    }
+}
+
+#[cfg(test)]
+mod canonical_error_tests {
+    use std::error::Error as _;
+
+    use super::*;
+
+    #[test]
+    fn response_failure_preserves_r29_fixed_text_and_typed_source() {
+        let error = controller_response_failed(std::io::Error::other("private response detail"));
+
+        assert_eq!(error.descriptor(), &PROTOCOL_RESPONSE_FAILED);
+        assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 29);
+        assert_eq!(
+            error.to_string(),
+            "protocol.response.failed: Response processing failed"
+        );
+        let RocketMQError::Shared(error) = error else {
+            panic!("response failure must use the canonical carrier");
+        };
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
     }
 }
