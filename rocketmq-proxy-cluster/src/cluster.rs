@@ -1452,6 +1452,10 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
     }
 }
 
+fn proxy_client_result<T>(result: Result<T, RocketMQError>) -> ProxyResult<T> {
+    result.map_err(ProxyError::from)
+}
+
 async fn forward_remoting_inner(
     config: &ClusterConfig,
     state: &mut ClusterWorkerState,
@@ -1467,10 +1471,11 @@ async fn forward_remoting_inner(
         .ok_or_else(|| RocketMQError::BrokerNotFound {
             name: broker_name.to_string(),
         })?;
-    client
-        .invoke_remoting(&broker_addr, request, timeout_millis.max(1))
-        .await
-        .map_err(ProxyError::from)
+    proxy_client_result(
+        client
+            .invoke_remoting(&broker_addr, request, timeout_millis.max(1))
+            .await,
+    )
 }
 
 async fn cluster_readiness_inner(config: &ClusterConfig, state: &mut ClusterWorkerState) -> ProxyResult<()> {
@@ -2340,9 +2345,7 @@ async fn fetch_topic_route(
         return Ok(route);
     }
 
-    let route = client
-        .topic_route(topic_name, config.mq_client_api_timeout_ms)
-        .await?
+    let route = proxy_client_result(client.topic_route(topic_name, config.mq_client_api_timeout_ms).await)?
         .ok_or_else(|| RocketMQError::route_not_found(topic_name.to_owned()))?;
     state.cache_route(topic_name.to_owned(), route.clone(), config.route_cache_ttl());
     Ok(route)
@@ -3168,6 +3171,63 @@ mod tests {
             .message
             .put_property(MessageConst::PROPERTY_SHARDING_KEY, "group");
         assert!(!compatible_batch_entries(&fifo));
+    }
+
+    #[test]
+    fn cluster_result_conversion_normalizes_failures_and_preserves_forwarded_commands() {
+        let error = super::proxy_client_result::<()>(Err(RocketMQError::broker_operation_failed(
+            "cluster broker request",
+            rocketmq_protocol::code::response_code::ResponseCode::TopicNotExist.to_i32(),
+            "token=secret\r\nC:\\private\\broker.log",
+        )))
+        .expect_err("Broker failure must enter the Proxy normalizer");
+        let ProxyError::BrokerResponse(error) = error else {
+            panic!("cluster Broker failure must use the canonical response carrier");
+        };
+        assert_eq!(error.descriptor(), &rocketmq_error::PROXY_BROKER_TOPIC_NOT_FOUND);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<RocketMQError>())
+            .is_some());
+        assert_eq!(
+            error.public_view().expect("public view").message(),
+            "Broker topic was not found"
+        );
+
+        let mut command =
+            rocketmq_protocol::protocol::remoting_command::RemotingCommand::create_response_command_with_code_remark(
+                rocketmq_protocol::code::response_code::ResponseCode::PolicyNotExist,
+                "upstream remark",
+            )
+            .set_opaque(47)
+            .set_version(513)
+            .set_serialize_type(rocketmq_protocol::protocol::SerializeType::ROCKETMQ)
+            .set_flag(3)
+            .set_suspended(true)
+            .set_body(vec![1_u8, 2, 3]);
+        command.add_ext_field("owner", "broker-a");
+
+        let forwarded = super::proxy_client_result(Ok::<_, RocketMQError>(command)).expect("forwarded command");
+        assert_eq!(
+            rocketmq_protocol::code::response_code::ResponseCode::from(forwarded.code()),
+            rocketmq_protocol::code::response_code::ResponseCode::PolicyNotExist
+        );
+        assert_eq!(forwarded.opaque(), 47);
+        assert_eq!(forwarded.version(), 513);
+        assert_eq!(
+            forwarded.serialize_type(),
+            rocketmq_protocol::protocol::SerializeType::ROCKETMQ
+        );
+        assert_eq!(forwarded.flag(), 3);
+        assert!(forwarded.suspended());
+        assert_eq!(forwarded.remark().map(CheetahString::as_str), Some("upstream remark"));
+        assert_eq!(forwarded.body().map(|body| body.as_ref()), Some(&[1_u8, 2, 3][..]));
+        assert_eq!(
+            forwarded
+                .ext_fields()
+                .and_then(|fields| fields.get("owner"))
+                .map(CheetahString::as_str),
+            Some("broker-a")
+        );
     }
 
     #[test]

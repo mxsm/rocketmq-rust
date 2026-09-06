@@ -598,7 +598,8 @@ def check_required_mapping_adapters() -> list[Finding]:
         ],
         PROXY_STATUS_MAPPER: [
             "ProxyErrorKind",
-            "broker_response_payload_override",
+            "ProxyError::BrokerResponse(inner)",
+            "canonical_error_grpc_mapping",
             "boundary_view().grpc()",
             "grpc_payload_to_code",
             "grpc_status_to_tonic_code",
@@ -694,8 +695,10 @@ def check_proxy_grpc_boundary() -> list[Finding]:
         return [Finding(path, 1, "proxy gRPC status mapper is missing")]
 
     forbidden = {
-        "tonic_code_from_payload_code": "proxy gRPC transport status must come from central spec, broker override, or local-only kind",
+        "tonic_code_from_payload_code": "proxy gRPC transport status must come from the central spec or a local-only kind",
         "is_topic_route_not_found_message": "RocketMQ gRPC mapping must not parse display text for topic-route errors",
+        "broker_response_payload_override": "broker response codes must be normalized once at Proxy ingress",
+        "ResponseCode::from": "Proxy status mapping must consume canonical projections instead of raw Broker response codes",
     }
     return scan_forbidden_terms([path], forbidden)
 
@@ -864,7 +867,7 @@ def check_error_descriptor_contract() -> list[Finding]:
             "BoundaryErrorView::new(self.descriptor(), self.context())",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_descriptor_catalog.rs": [
-            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 100",
+            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 108",
             "descriptor_catalog_snapshot_is_exact",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [

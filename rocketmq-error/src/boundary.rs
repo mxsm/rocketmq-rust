@@ -235,6 +235,10 @@ pub enum GrpcPayloadCode {
     TopicNotFound,
     /// Represents the consumer group not found case.
     ConsumerGroupNotFound,
+    /// Represents the offset not found case.
+    OffsetNotFound,
+    /// Represents the illegal offset case.
+    IllegalOffset,
     /// Represents the message not found case.
     MessageNotFound,
     /// Represents the message body too large case.
@@ -322,6 +326,8 @@ impl HttpStatusCode {
     pub const INTERNAL_SERVER_ERROR: Self = Self(500);
     /// The service unavailable constant.
     pub const SERVICE_UNAVAILABLE: Self = Self(503);
+    /// The not implemented constant.
+    pub const NOT_IMPLEMENTED: Self = Self(501);
     /// The gateway timeout constant.
     pub const GATEWAY_TIMEOUT: Self = Self(504);
     /// The insufficient storage constant.

@@ -2515,6 +2515,7 @@ fn proxy_operation_error_response(
     error: ProxyError,
 ) -> RemotingCommand {
     match error {
+        ProxyError::BrokerResponse(error) => descriptor_error_response(command_factory, opaque, &error),
         ProxyError::RocketMQ(error @ RocketMQError::TopicNotExist { .. })
         | ProxyError::RocketMQ(error @ RocketMQError::RouteNotFound { .. })
         | ProxyError::RocketMQ(error @ RocketMQError::SubscriptionGroupNotExist { .. })
@@ -2975,6 +2976,48 @@ mod tests {
             assert_eq!(response.code(), code);
             assert_eq!(response.remark().map(CheetahString::as_str), Some(message));
             assert!(!response.remark().expect("fixed remark").contains("secret"));
+        }
+    }
+
+    #[test]
+    fn normalized_broker_failures_keep_proxy_r1_and_fixed_catalog_messages() {
+        let cases = [
+            (ResponseCode::NoPermission, "Broker denied the Proxy operation"),
+            (ResponseCode::TopicNotExist, "Broker topic was not found"),
+            (
+                ResponseCode::SubscriptionGroupNotExist,
+                "Broker consumer group was not found",
+            ),
+            (ResponseCode::UserNotExist, "Broker resource was not found"),
+            (ResponseCode::PolicyNotExist, "Broker resource was not found"),
+            (ResponseCode::QueryNotFound, "Broker offset was not found"),
+            (ResponseCode::PullOffsetMoved, "Broker rejected an invalid offset"),
+            (
+                ResponseCode::RequestCodeNotSupported,
+                "Broker does not support the Proxy request",
+            ),
+            (ResponseCode::SystemError, "Broker response failed"),
+        ];
+
+        for (origin, expected_message) in cases {
+            let error = RocketMQError::broker_operation_failed(
+                "broker ingress",
+                origin.to_i32(),
+                "password=plain-text\r\nlocal-path=C:\\private\\data",
+            );
+            let response = super::proxy_operation_error_response(
+                &super::application_remoting_command_factory(),
+                73,
+                "execute Proxy operation",
+                ProxyError::from(error),
+            );
+
+            assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
+            assert_eq!(response.opaque(), 73);
+            assert_eq!(response.remark().map(CheetahString::as_str), Some(expected_message));
+            assert!(response.is_response_type());
+            assert!(response.body().is_none());
+            assert!(response.ext_fields().is_none_or(HashMap::is_empty));
         }
     }
 

@@ -1292,7 +1292,7 @@ async fn query_assignment(
     );
     let response = facade_embedded_response(facade, request, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
-        return Err(broker_operation_error("queryAssignment", &response).into());
+        return Err(broker_operation_error("queryAssignment", &response));
     }
 
     let Some(body) = embedded_contiguous_body(response.body())? else {
@@ -1334,7 +1334,7 @@ async fn sync_lite_subscription_via_broker(
         .set_body(body.encode()?);
     let response = client.process_embedded_response(command).await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
-        return Err(broker_operation_error("syncLiteSubscription", &response).into());
+        return Err(broker_operation_error("syncLiteSubscription", &response));
     }
     Ok(())
 }
@@ -1457,7 +1457,7 @@ async fn recall_message(
     command.make_custom_header_to_net();
     let response = facade_embedded_response(facade, command, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
-        return Err(broker_operation_error("recallMessage", &response).into());
+        return Err(broker_operation_error("recallMessage", &response));
     }
 
     let header = response
@@ -1512,7 +1512,7 @@ async fn end_transaction(
     command.make_custom_header_to_net();
     let response = facade_embedded_response(facade, command, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
-        return Err(broker_operation_error("endTransaction", &response).into());
+        return Err(broker_operation_error("endTransaction", &response));
     }
 
     Ok(EndTransactionPlan {
@@ -1725,7 +1725,7 @@ async fn forward_message_to_dead_letter_queue_via_broker(
         ))
         .await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
-        return Err(broker_operation_error("forwardMessageToDeadLetterQueue", &response).into());
+        return Err(broker_operation_error("forwardMessageToDeadLetterQueue", &response));
     }
 
     Ok(ForwardMessageToDeadLetterQueuePlan {
@@ -1816,7 +1816,7 @@ async fn update_offset_via_broker(
         ))
         .await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
-        return Err(broker_operation_error("updateOffset", &response).into());
+        return Err(broker_operation_error("updateOffset", &response));
     }
 
     Ok(UpdateOffsetPlan {
@@ -1836,7 +1836,7 @@ async fn get_offset_via_broker(
         ))
         .await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
-        return Err(broker_operation_error("getOffset", &response).into());
+        return Err(broker_operation_error("getOffset", &response));
     }
 
     let response_header = response
@@ -1917,7 +1917,7 @@ async fn query_offset_via_broker(
     };
     let response = client.process_embedded_response(command).await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
-        return Err(broker_operation_error("queryOffset", &response).into());
+        return Err(broker_operation_error("queryOffset", &response));
     }
 
     let offset = match request_code {
@@ -2133,19 +2133,19 @@ fn build_send_result(
     response: EmbeddedResponse,
 ) -> ProxyResult<SendResult> {
     let response_code = ResponseCode::from(response.response_code());
+    let send_status = match response_code {
+        ResponseCode::Success => SendStatus::SendOk,
+        ResponseCode::FlushDiskTimeout => SendStatus::FlushDiskTimeout,
+        ResponseCode::FlushSlaveTimeout => SendStatus::FlushSlaveTimeout,
+        ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
+        _ => return Err(broker_operation_error("sendMessage", &response)),
+    };
     let header = response
         .head()
         .decode_command_custom_header::<SendMessageResponseHeader>()
         .map_err(|error| ProxyError::Transport {
             message: format!("failed to decode local send response header: {error}"),
         })?;
-    let send_status = match response_code {
-        ResponseCode::Success => SendStatus::SendOk,
-        ResponseCode::FlushDiskTimeout => SendStatus::FlushDiskTimeout,
-        ResponseCode::FlushSlaveTimeout => SendStatus::FlushSlaveTimeout,
-        ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
-        _ => return Err(broker_operation_error("sendMessage", &response).into()),
-    };
 
     let mut result = SendResult::new(
         send_status,
@@ -2228,11 +2228,23 @@ fn process_pop_response(
             delivery_timestamp_ms: None,
             messages: Vec::new(),
         }),
-        _ => Err(broker_operation_error("receiveMessage", &response).into()),
+        _ => Err(broker_operation_error("receiveMessage", &response)),
     }
 }
 
 fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessagePlan> {
+    enum PullResponseOutcome {
+        Found,
+        NotFound,
+        OffsetMoved,
+    }
+
+    let outcome = match ResponseCode::from(response.response_code()) {
+        ResponseCode::Success => PullResponseOutcome::Found,
+        ResponseCode::PullNotFound | ResponseCode::PullRetryImmediately => PullResponseOutcome::NotFound,
+        ResponseCode::PullOffsetMoved => PullResponseOutcome::OffsetMoved,
+        _ => return Err(broker_operation_error("pullMessage", &response)),
+    };
     let response_header = response
         .head()
         .decode_command_custom_header::<PullMessageResponseHeader>()
@@ -2242,8 +2254,8 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
     let next_offset = response_header.next_begin_offset;
     let min_offset = response_header.min_offset;
     let max_offset = response_header.max_offset;
-    match ResponseCode::from(response.response_code()) {
-        ResponseCode::Success => {
+    match outcome {
+        PullResponseOutcome::Found => {
             let (_, body) = response.into_parts();
             Ok(PullMessagePlan {
                 status: ProxyStatusMapper::ok_payload(),
@@ -2256,7 +2268,7 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
                     .collect(),
             })
         }
-        ResponseCode::PullNotFound | ResponseCode::PullRetryImmediately => Ok(PullMessagePlan {
+        PullResponseOutcome::NotFound => Ok(PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(
                 rocketmq_proxy_core::proto::v2::Code::MessageNotFound,
                 "no message available",
@@ -2266,7 +2278,7 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
             max_offset,
             messages: Vec::new(),
         }),
-        ResponseCode::PullOffsetMoved => Ok(PullMessagePlan {
+        PullResponseOutcome::OffsetMoved => Ok(PullMessagePlan {
             status: ProxyStatusMapper::from_payload_code(
                 rocketmq_proxy_core::proto::v2::Code::IllegalOffset,
                 "pull offset is illegal",
@@ -2276,7 +2288,6 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
             max_offset,
             messages: Vec::new(),
         }),
-        _ => Err(broker_operation_error("pullMessage", &response).into()),
     }
 }
 
@@ -2570,13 +2581,13 @@ impl BrokerResponseMetadata for EmbeddedResponse {
     }
 }
 
-fn broker_operation_error(operation: &'static str, response: &impl BrokerResponseMetadata) -> RocketMQError {
-    RocketMQError::BrokerOperationFailed {
+fn broker_operation_error(operation: &'static str, response: &impl BrokerResponseMetadata) -> ProxyError {
+    ProxyError::from(RocketMQError::BrokerOperationFailed {
         operation,
         code: response.response_code(),
         message: response.response_remark().map(ToOwned::to_owned).unwrap_or_default(),
         broker_addr: None,
-    }
+    })
 }
 
 fn embedded_contiguous_body(body: &EmbeddedResponseBody) -> ProxyResult<Option<&[u8]>> {
@@ -2673,6 +2684,8 @@ mod tests {
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+    use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+    use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_proxy_core::ConsumerFilterExpression;
     use rocketmq_proxy_core::MessageQueueTarget;
@@ -2688,6 +2701,7 @@ mod tests {
     use rocketmq_proxy_core::TransactionResolution;
     use rocketmq_runtime::ShutdownDeadline;
     use rocketmq_transport::api::EmbeddedDispatchOutcome;
+    use rocketmq_transport::api::EmbeddedResponse;
     use rocketmq_transport::api::RemotingResponse;
 
     use super::broker_operation_error;
@@ -2696,10 +2710,13 @@ mod tests {
     use super::build_pull_request_header;
     use super::build_send_batch_message_request;
     use super::build_send_message_request;
+    use super::build_send_result;
     use super::compatible_batch_entries;
     use super::convert_topic_message_type;
     use super::local_long_poll_timeout;
     use super::parse_receipt_handle;
+    use super::process_pop_response;
+    use super::process_pull_response;
     use super::split_batch_send_result;
     use super::transaction_resolution_flag;
     use super::validate_local_queue_config;
@@ -2767,6 +2784,15 @@ mod tests {
         }
     }
 
+    fn embedded_response(mut command: RemotingCommand) -> EmbeddedResponse {
+        command
+            .try_make_custom_header_to_net()
+            .expect("materialize Broker response header");
+        RemotingResponse::from_command(command)
+            .expect("build embedded Broker response")
+            .into_embedded_response()
+    }
+
     #[test]
     fn topic_message_type_conversion_maps_lite_topics() {
         assert_eq!(
@@ -2780,28 +2806,152 @@ mod tests {
     }
 
     #[test]
-    fn broker_operation_error_preserves_response_metadata() {
-        let response = RemotingCommand::create_response_command_with_code_remark(
-            ResponseCode::SystemError,
-            "assignment unavailable",
-        );
+    fn broker_operation_error_is_normalized_once_and_redacts_remote_remark() {
+        const PRIVATE_REMARK: &str = "token=secret\r\nC:\\private\\broker.log";
+        let response =
+            RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemError, PRIVATE_REMARK);
 
         let error = broker_operation_error("queryAssignment", &response);
 
-        assert_eq!(error.descriptor(), &rocketmq_error::BROKER_OPERATION_FAILED);
-        match error {
+        let ProxyError::BrokerResponse(error) = error else {
+            panic!("expected normalized BrokerResponse error");
+        };
+        assert_eq!(error.descriptor(), &rocketmq_error::PROXY_BROKER_RESPONSE_FAILED);
+        let public = error.public_view().expect("valid public Broker response view");
+        assert_eq!(public.message(), "Broker response failed");
+        assert_eq!(public.fields().count(), 0);
+        assert!(!public.message().contains(PRIVATE_REMARK));
+        assert!(!error.to_string().contains(PRIVATE_REMARK));
+
+        let source = std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<RocketMQError>())
+            .expect("retain typed BrokerOperationFailed source");
+        match source {
             RocketMQError::BrokerOperationFailed {
                 operation,
                 code,
                 message,
                 broker_addr,
             } => {
-                assert_eq!(operation, "queryAssignment");
-                assert_eq!(ResponseCode::from(code), ResponseCode::SystemError);
-                assert_eq!(message, "assignment unavailable");
-                assert_eq!(broker_addr, None);
+                assert_eq!(*operation, "queryAssignment");
+                assert_eq!(ResponseCode::from(*code), ResponseCode::SystemError);
+                assert_eq!(message, PRIVATE_REMARK);
+                assert!(broker_addr.is_none());
             }
             other => panic!("expected BrokerOperationFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn headerless_broker_failures_normalize_before_business_header_decoding() {
+        let send_response = embedded_response(RemotingCommand::create_response_command_with_code_remark(
+            ResponseCode::TopicNotExist,
+            "private send failure",
+        ));
+        let send_error = build_send_result(
+            ResourceIdentity::new("", "TopicA"),
+            &CheetahString::from("broker-a"),
+            send_response,
+        )
+        .expect_err("failure response must not require a send header");
+        let ProxyError::BrokerResponse(send_error) = send_error else {
+            panic!("send failure must use the normalized Broker response");
+        };
+        assert_eq!(send_error.descriptor(), &rocketmq_error::PROXY_BROKER_TOPIC_NOT_FOUND);
+
+        let pull_response = embedded_response(RemotingCommand::create_response_command_with_code_remark(
+            ResponseCode::NoPermission,
+            "private pull failure",
+        ));
+        let pull_error =
+            process_pull_response(pull_response).expect_err("failure response must not require a pull header");
+        let ProxyError::BrokerResponse(pull_error) = pull_error else {
+            panic!("pull failure must use the normalized Broker response");
+        };
+        assert_eq!(pull_error.descriptor(), &rocketmq_error::PROXY_BROKER_PERMISSION_DENIED);
+    }
+
+    #[test]
+    fn local_send_business_response_codes_remain_send_outcomes() {
+        for (response_code, expected_status) in [
+            (ResponseCode::Success, SendStatus::SendOk),
+            (ResponseCode::FlushDiskTimeout, SendStatus::FlushDiskTimeout),
+            (ResponseCode::FlushSlaveTimeout, SendStatus::FlushSlaveTimeout),
+            (ResponseCode::SlaveNotAvailable, SendStatus::SlaveNotAvailable),
+        ] {
+            let response = embedded_response(RemotingCommand::create_response_command_with_code_and_header(
+                response_code,
+                SendMessageResponseHeader::new(CheetahString::from("message-id"), 2, 7, None, None, None),
+            ));
+
+            let result = build_send_result(
+                ResourceIdentity::new("", "TopicA"),
+                &CheetahString::from("broker-a"),
+                response,
+            )
+            .expect("business send response remains a normal outcome");
+
+            assert_eq!(result.send_status, expected_status);
+        }
+    }
+
+    #[test]
+    fn local_receive_business_response_codes_remain_receive_outcomes() {
+        for (response_code, expected_code) in [
+            (
+                ResponseCode::PullNotFound,
+                rocketmq_proxy_core::proto::v2::Code::MessageNotFound,
+            ),
+            (
+                ResponseCode::PollingFull,
+                rocketmq_proxy_core::proto::v2::Code::TooManyRequests,
+            ),
+            (
+                ResponseCode::PollingTimeout,
+                rocketmq_proxy_core::proto::v2::Code::MessageNotFound,
+            ),
+        ] {
+            let response = embedded_response(RemotingCommand::create_response_command_with_code(response_code));
+
+            let result = process_pop_response(response, "broker-a", "TopicA", false)
+                .expect("business receive response remains a normal outcome");
+
+            assert_eq!(result.status.code(), expected_code as i32);
+        }
+    }
+
+    #[test]
+    fn local_pull_business_response_codes_remain_pull_outcomes() {
+        for (response_code, expected_code) in [
+            (
+                ResponseCode::PullNotFound,
+                rocketmq_proxy_core::proto::v2::Code::MessageNotFound,
+            ),
+            (
+                ResponseCode::PullRetryImmediately,
+                rocketmq_proxy_core::proto::v2::Code::MessageNotFound,
+            ),
+            (
+                ResponseCode::PullOffsetMoved,
+                rocketmq_proxy_core::proto::v2::Code::IllegalOffset,
+            ),
+        ] {
+            let response = embedded_response(RemotingCommand::create_response_command_with_code_and_header(
+                response_code,
+                PullMessageResponseHeader {
+                    suggest_which_broker_id: 0,
+                    next_begin_offset: 7,
+                    min_offset: 1,
+                    max_offset: 11,
+                    ..Default::default()
+                },
+            ));
+
+            let result = process_pull_response(response).expect("business pull response remains a normal outcome");
+
+            assert_eq!(result.status.code(), expected_code as i32);
+            assert_eq!(result.next_offset, 7);
+            assert!(result.messages.is_empty());
         }
     }
 

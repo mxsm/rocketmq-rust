@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::GrpcPayloadCode;
 use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
 
@@ -123,6 +123,10 @@ impl ProxyStatusMapper {
                     view.message().to_owned(),
                 )
             }
+            ProxyError::BrokerResponse(inner) => (
+                Self::canonical_error_grpc_mapping(inner).payload,
+                inner.descriptor().public_message().to_owned(),
+            ),
             local => (
                 Self::local_error_grpc_mapping(
                     local
@@ -157,6 +161,7 @@ impl ProxyStatusMapper {
         let payload = Self::from_error(error);
         let tonic_code = match error {
             ProxyError::RocketMQ(inner) => Self::rocketmq_error_grpc_mapping(inner).status,
+            ProxyError::BrokerResponse(inner) => Self::canonical_error_grpc_mapping(inner).status,
             local => {
                 Self::local_error_grpc_mapping(
                     local
@@ -226,45 +231,19 @@ impl ProxyStatusMapper {
     }
 
     fn rocketmq_error_grpc_mapping(error: &RocketMQError) -> ProxyGrpcMapping {
-        Self::broker_response_payload_override(error).unwrap_or_else(|| {
-            let grpc = error.boundary_view().grpc();
-            ProxyGrpcMapping::new(
-                Self::grpc_payload_to_code(grpc.payload),
-                Self::grpc_status_to_tonic_code(grpc.status),
-            )
-        })
+        let grpc = error.boundary_view().grpc();
+        ProxyGrpcMapping::new(
+            Self::grpc_payload_to_code(grpc.payload),
+            Self::grpc_status_to_tonic_code(grpc.status),
+        )
     }
 
-    fn broker_response_payload_override(error: &RocketMQError) -> Option<ProxyGrpcMapping> {
-        match error {
-            RocketMQError::BrokerOperationFailed { code, .. } => match ResponseCode::from(*code) {
-                ResponseCode::NoPermission => {
-                    Some(ProxyGrpcMapping::new(v2::Code::Forbidden, TonicCode::PermissionDenied))
-                }
-                ResponseCode::TopicNotExist => {
-                    Some(ProxyGrpcMapping::new(v2::Code::TopicNotFound, TonicCode::NotFound))
-                }
-                ResponseCode::SubscriptionGroupNotExist => Some(ProxyGrpcMapping::new(
-                    v2::Code::ConsumerGroupNotFound,
-                    TonicCode::NotFound,
-                )),
-                ResponseCode::UserNotExist | ResponseCode::PolicyNotExist => {
-                    Some(ProxyGrpcMapping::new(v2::Code::NotFound, TonicCode::NotFound))
-                }
-                ResponseCode::QueryNotFound => {
-                    Some(ProxyGrpcMapping::new(v2::Code::OffsetNotFound, TonicCode::NotFound))
-                }
-                ResponseCode::PullOffsetMoved => Some(ProxyGrpcMapping::new(
-                    v2::Code::IllegalOffset,
-                    TonicCode::InvalidArgument,
-                )),
-                ResponseCode::RequestCodeNotSupported => {
-                    Some(ProxyGrpcMapping::new(v2::Code::Unsupported, TonicCode::Unimplemented))
-                }
-                _ => Some(ProxyGrpcMapping::new(v2::Code::InternalError, TonicCode::Internal)),
-            },
-            _ => None,
-        }
+    fn canonical_error_grpc_mapping(error: &CanonicalError) -> ProxyGrpcMapping {
+        let grpc = error.projection().grpc();
+        ProxyGrpcMapping::new(
+            Self::grpc_payload_to_code(grpc.payload),
+            Self::grpc_status_to_tonic_code(grpc.status),
+        )
     }
 
     fn grpc_payload_to_code(payload: GrpcPayloadCode) -> v2::Code {
@@ -282,6 +261,8 @@ impl ProxyStatusMapper {
             GrpcPayloadCode::ProxyTimeout => v2::Code::ProxyTimeout,
             GrpcPayloadCode::TooManyRequests => v2::Code::TooManyRequests,
             GrpcPayloadCode::Unsupported => v2::Code::Unsupported,
+            GrpcPayloadCode::OffsetNotFound => v2::Code::OffsetNotFound,
+            GrpcPayloadCode::IllegalOffset => v2::Code::IllegalOffset,
         }
     }
 
@@ -372,7 +353,7 @@ mod tests {
             (ResponseCode::UserNotExist, v2::Code::NotFound),
             (ResponseCode::PolicyNotExist, v2::Code::NotFound),
         ] {
-            let error = ProxyError::RocketMQ(RocketMQError::broker_operation_failed(
+            let error = ProxyError::from(RocketMQError::broker_operation_failed(
                 "AUTH_ADMIN",
                 response_code.to_i32(),
                 "auth failed",
@@ -388,7 +369,7 @@ mod tests {
 
     #[test]
     fn phase7_request_code_not_supported_maps_to_unsupported_and_unimplemented_transport() {
-        let error = ProxyError::RocketMQ(RocketMQError::broker_operation_failed(
+        let error = ProxyError::from(RocketMQError::broker_operation_failed(
             "REMOTING",
             ResponseCode::RequestCodeNotSupported.to_i32(),
             "request code not supported",
@@ -403,8 +384,25 @@ mod tests {
     }
 
     #[test]
-    fn broker_response_overrides_have_explicit_payload_and_tonic_status() {
+    fn normalized_broker_responses_use_descriptor_payload_and_tonic_status() {
         for (response_code, expected_grpc_code, expected_tonic_code) in [
+            (
+                ResponseCode::NoPermission,
+                v2::Code::Forbidden,
+                tonic::Code::PermissionDenied,
+            ),
+            (
+                ResponseCode::TopicNotExist,
+                v2::Code::TopicNotFound,
+                tonic::Code::NotFound,
+            ),
+            (
+                ResponseCode::SubscriptionGroupNotExist,
+                v2::Code::ConsumerGroupNotFound,
+                tonic::Code::NotFound,
+            ),
+            (ResponseCode::UserNotExist, v2::Code::NotFound, tonic::Code::NotFound),
+            (ResponseCode::PolicyNotExist, v2::Code::NotFound, tonic::Code::NotFound),
             (
                 ResponseCode::QueryNotFound,
                 v2::Code::OffsetNotFound,
@@ -420,15 +418,18 @@ mod tests {
                 v2::Code::Unsupported,
                 tonic::Code::Unimplemented,
             ),
+            (ResponseCode::SystemBusy, v2::Code::InternalError, tonic::Code::Internal),
         ] {
-            let error = ProxyError::RocketMQ(RocketMQError::broker_operation_failed(
+            let error = ProxyError::from(RocketMQError::broker_operation_failed(
                 "BROKER",
                 response_code.to_i32(),
-                "broker response override",
+                "secret broker response\r\nC:\\private\\broker.conf",
             ));
             let payload_status = ProxyStatusMapper::from_error(&error);
             assert_eq!(payload_status.code, expected_grpc_code as i32);
             assert_eq!(ProxyStatusMapper::to_tonic_status(&error).code(), expected_tonic_code);
+            assert!(!payload_status.message.contains("secret"));
+            assert!(!payload_status.message.contains("private"));
         }
     }
 
