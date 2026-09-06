@@ -45,6 +45,8 @@ use super::AdminRequestMetadata;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCasError;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigCasOutcome;
 
+const POP_PROFILE_PERSISTENCE_UNAVAILABLE_REMARK: &str = "POP consumer profile persistence is unavailable";
+
 pub(super) struct SubscriptionGroupHandler;
 
 impl SubscriptionGroupHandler {
@@ -580,14 +582,12 @@ impl SubscriptionGroupHandler {
             .delete_subscription_group_config(request_header.group_name.as_str());
 
         if let Some(processor) = broker_runtime_inner.pop_message_processor() {
-            if let Err(error) = processor
+            if processor
                 .remove_consumer_profile(request_header.group_name.clone())
                 .await
+                .is_err()
             {
-                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::ServiceNotAvailable,
-                    format!("failed to remove POP consumer profile: {error}"),
-                )));
+                return Ok(Some(pop_profile_persistence_unavailable_response()));
             }
         }
 
@@ -672,11 +672,8 @@ impl SubscriptionGroupHandler {
             .delete_subscription_group_config_list(&groups);
         if let Some(processor) = broker_runtime_inner.pop_message_processor() {
             for group in &groups {
-                if let Err(error) = processor.remove_consumer_profile(group.clone()).await {
-                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::ServiceNotAvailable,
-                        format!("failed to remove POP consumer profile for {group}: {error}"),
-                    )));
+                if processor.remove_consumer_profile(group.clone()).await.is_err() {
+                    return Ok(Some(pop_profile_persistence_unavailable_response()));
                 }
             }
         }
@@ -732,6 +729,13 @@ impl SubscriptionGroupHandler {
     }
 }
 
+fn pop_profile_persistence_unavailable_response() -> RemotingCommand {
+    RemotingCommand::create_response_command_with_code_remark(
+        ResponseCode::ServiceNotAvailable,
+        POP_PROFILE_PERSISTENCE_UNAVAILABLE_REMARK,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -782,6 +786,21 @@ mod tests {
         let mut runtime = BrokerRuntime::new(broker_config, message_store_config);
         assert!(runtime.initialize().await.is_ok());
         runtime
+    }
+
+    #[test]
+    fn pop_profile_remove_failure_uses_a_fixed_safe_r14_response() {
+        let response = pop_profile_persistence_unavailable_response();
+
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::ServiceNotAvailable);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some(POP_PROFILE_PERSISTENCE_UNAVAILABLE_REMARK)
+        );
+        assert!(!response
+            .remark()
+            .is_some_and(|remark| remark.contains("group-secret") || remark.contains("storage-secret")));
+        assert!(response.body().is_none());
     }
 
     #[tokio::test]

@@ -89,21 +89,21 @@ where
             }
         };
 
-        match self
-            .execute_notification_core(
-                &request_header,
-                effective_peer,
-                request.original_identity().original_opaque(),
-                None,
-            )
+        let opaque = request.original_identity().original_opaque();
+        let outcome = match self
+            .execute_notification_core(&request_header, effective_peer, opaque, None)
             .await
         {
+            Ok(outcome) => outcome,
+            Err(error) => return command_outcome(self.notification_error_response(&error, opaque)),
+        };
+        match outcome {
             NotificationCoreOutcome::Reply(response) => command_outcome(response),
             NotificationCoreOutcome::Ready(ready) if ready.has_msg => command_outcome(compose_notification_response(
                 &self.context.command_factory,
                 true,
                 false,
-                request.original_identity().original_opaque(),
+                opaque,
             )),
             NotificationCoreOutcome::Ready(ready) => {
                 let Some(service) = self.notification_deferred_service.get() else {

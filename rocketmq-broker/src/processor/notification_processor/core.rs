@@ -15,12 +15,18 @@
 use std::net::SocketAddr;
 
 use rand::RngExt;
+use rocketmq_error::Error;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::AUTH_PERMISSION_DENIED;
+use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::FAQUrl;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_store::BrokerReadWriteStore;
+use rocketmq_transport::api::error_response as remoting_error_response;
+use rocketmq_transport::api::RemotingErrorTarget;
 use tracing::error;
 use tracing::warn;
 
@@ -49,7 +55,7 @@ where
         effective_peer: SocketAddr,
         opaque: i32,
         frozen_filter: Option<NotificationFilterContract>,
-    ) -> NotificationCoreOutcome {
+    ) -> rocketmq_error::Result<NotificationCoreOutcome> {
         let mut response = self
             .context
             .command_factory
@@ -57,12 +63,7 @@ where
         response.set_opaque_mut(opaque);
 
         if !PermName::is_readable(self.context.policy.broker_permission.get()) {
-            response.set_code_ref(ResponseCode::NoPermission);
-            response.set_remark_mut(format!(
-                "the broker[{}] peeking message is forbidden",
-                self.context.policy.broker_ip1
-            ));
-            return NotificationCoreOutcome::Reply(response);
+            return Err(Error::new(&AUTH_PERMISSION_DENIED));
         }
 
         let Some(topic_config) = self
@@ -80,16 +81,11 @@ where
                 request_header.topic,
                 FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
             ));
-            return NotificationCoreOutcome::Reply(response);
+            return Ok(NotificationCoreOutcome::Reply(response));
         };
 
         if !PermName::is_readable(topic_config.perm) {
-            response.set_code_ref(ResponseCode::NoPermission);
-            response.set_remark_mut(format!(
-                "the topic[{}] peeking message is forbidden",
-                request_header.topic
-            ));
-            return NotificationCoreOutcome::Reply(response);
+            return Err(Error::new(&AUTH_PERMISSION_DENIED));
         }
 
         if request_header.queue_id >= topic_config.get_read_queue_nums() as i32 {
@@ -101,9 +97,7 @@ where
                 effective_peer
             );
             warn!("{}", error_info);
-            response.set_code_ref(ResponseCode::InvalidParameter);
-            response.set_remark_mut(&error_info);
-            return NotificationCoreOutcome::Reply(response);
+            return Err(Error::new(&CORE_ARGUMENT_INVALID));
         }
 
         let Some(subscription_group_config) = self
@@ -117,16 +111,11 @@ where
                 request_header.consumer_group,
                 FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
             ));
-            return NotificationCoreOutcome::Reply(response);
+            return Ok(NotificationCoreOutcome::Reply(response));
         };
 
         if !subscription_group_config.consume_enable() {
-            response.set_code_ref(ResponseCode::NoPermission);
-            response.set_remark_mut(format!(
-                "subscription group no permission, {}",
-                request_header.consumer_group
-            ));
-            return NotificationCoreOutcome::Reply(response);
+            return Err(Error::new(&AUTH_PERMISSION_DENIED));
         }
 
         let filter_contract = match frozen_filter {
@@ -144,7 +133,7 @@ where
                     );
                     response.set_code_ref(ResponseCode::SubscriptionParseFailed);
                     response.set_remark_mut("parse the consumer's subscription failed");
-                    return NotificationCoreOutcome::Reply(response);
+                    return Ok(NotificationCoreOutcome::Reply(response));
                 }
             },
         };
@@ -194,9 +183,21 @@ where
             }
         }
 
-        NotificationCoreOutcome::Ready(NotificationCoreReady {
+        Ok(NotificationCoreOutcome::Ready(NotificationCoreReady {
             has_msg,
             filter_contract,
-        })
+        }))
+    }
+
+    pub(super) fn notification_error_response(&self, error: &Error, opaque: i32) -> RemotingCommand {
+        let view = error
+            .public_view()
+            .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+        let response = self
+            .context
+            .command_factory
+            .create_java_default_error_response_command()
+            .set_opaque(opaque);
+        remoting_error_response(view, RemotingErrorTarget::Existing(response))
     }
 }

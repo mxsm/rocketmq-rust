@@ -222,6 +222,7 @@ async fn notification_core_finds_message_from_configured_retry_topic() {
     let ready = match processor
         .execute_notification_core(&core_header("topic-a", "group-a", 0), peer, 20_005, None)
         .await
+        .expect("retry-store Notification core")
     {
         NotificationCoreOutcome::Ready(ready) => ready,
         NotificationCoreOutcome::Reply(response) => {
@@ -247,6 +248,34 @@ fn assert_notification_header(
         .expect("Notification response header");
     assert_eq!(header.has_msg, has_msg);
     assert!(!header.polling_full);
+}
+
+fn assert_owner_error_response_state(
+    processor: &NotificationProcessor<BrokerMessageStore>,
+    response: &rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+    expected_code: ResponseCode,
+    expected_opaque: i32,
+    expected_remark: &'static str,
+) {
+    let owner_seed = processor
+        .context
+        .command_factory
+        .create_java_default_error_response_command()
+        .set_opaque(expected_opaque);
+    assert_eq!(response.code(), expected_code as i32);
+    assert_eq!(response.opaque(), expected_opaque);
+    assert_eq!(response.remark().map(CheetahString::as_str), Some(expected_remark));
+    assert_eq!(response.version(), owner_seed.version());
+    assert_eq!(response.serialize_type(), owner_seed.serialize_type());
+    assert_eq!(response.flag(), owner_seed.flag());
+    assert_eq!(response.ext_fields(), owner_seed.ext_fields());
+    assert_eq!(response.body(), owner_seed.body());
+    assert_eq!(
+        response.command_custom_header_ref().is_some(),
+        owner_seed.command_custom_header_ref().is_some()
+    );
+    assert_eq!(response.suspended(), owner_seed.suspended());
+    assert!(response.is_response_type());
 }
 
 #[tokio::test]
@@ -287,20 +316,22 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
     let mut denied_policy = NotificationPolicy::from_config(&denied_broker_config, BrokerPermissionState::new(0));
     denied_policy.broker_ip1 = CheetahString::from_static_str("127.0.0.1");
     let (denied, denied_bridge) = processor_with_policy(runtime.runtime_state_mut(), denied_policy);
-    let denied_response = match denied
+    let denied_error = match denied
         .execute_notification_core(&core_header("topic-a", "group-a", 0), peer, 20_001, None)
         .await
     {
-        NotificationCoreOutcome::Reply(response) => response,
-        NotificationCoreOutcome::Ready(_) => panic!("broker permission denial must be terminal"),
+        Err(error) => error,
+        Ok(_) => panic!("broker permission denial must be canonical"),
     };
-    assert_eq!(denied_response.code(), ResponseCode::NoPermission as i32);
-    assert_eq!(denied_response.opaque(), 20_001);
-    assert_eq!(
-        denied_response.remark().map(CheetahString::as_str),
-        Some("the broker[127.0.0.1] peeking message is forbidden")
+    assert_eq!(denied_error.descriptor(), &rocketmq_error::AUTH_PERMISSION_DENIED);
+    let denied_response = denied.notification_error_response(&denied_error, 20_001);
+    assert_owner_error_response_state(
+        &denied,
+        &denied_response,
+        ResponseCode::NoPermission,
+        20_001,
+        "Permission was denied",
     );
-    assert!(denied_response.body().is_none());
     drop((denied, denied_bridge));
 
     let (processor, escape_bridge) = processor(&mut runtime);
@@ -321,14 +352,13 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
                 FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
             ),
         ),
-        (
-            core_header("topic-a", "group-a", 99),
-            ResponseCode::InvalidParameter,
-            format!("queueId[99] is illegal, topic:[topic-a] topicConfig.readQueueNums:[1] consumer:[{peer}]"),
-        ),
     ];
     for (header, expected, expected_remark) in cases {
-        let response = match processor.execute_notification_core(&header, peer, 20_002, None).await {
+        let response = match processor
+            .execute_notification_core(&header, peer, 20_002, None)
+            .await
+            .expect("owner-controlled Notification validation response")
+        {
             NotificationCoreOutcome::Reply(response) => response,
             NotificationCoreOutcome::Ready(_) => panic!("Notification validation failure must be terminal"),
         };
@@ -341,24 +371,43 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
         assert!(response.body().is_none());
     }
 
+    let queue_error = match processor
+        .execute_notification_core(&core_header("topic-a", "group-a", 99), peer, 20_002, None)
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("queue validation must be canonical"),
+    };
+    assert_eq!(queue_error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+    let queue_response = processor.notification_error_response(&queue_error, 20_002);
+    assert_owner_error_response_state(
+        &processor,
+        &queue_response,
+        ResponseCode::InvalidParameter,
+        20_002,
+        "Argument is invalid",
+    );
+
     let _ = runtime
         .runtime_state_mut()
         .topic_config_manager_handle()
         .update_topic_config(TopicConfig::with_perm("topic-a", 1, 1, PermName::PERM_WRITE), 0);
-    let topic_denied = match processor
+    let topic_error = match processor
         .execute_notification_core(&core_header("topic-a", "group-a", 0), peer, 20_003, None)
         .await
     {
-        NotificationCoreOutcome::Reply(response) => response,
-        NotificationCoreOutcome::Ready(_) => panic!("unreadable topic must be terminal"),
+        Err(error) => error,
+        Ok(_) => panic!("unreadable topic must be canonical"),
     };
-    assert_eq!(topic_denied.code(), ResponseCode::NoPermission as i32);
-    assert_eq!(topic_denied.opaque(), 20_003);
-    assert_eq!(
-        topic_denied.remark().map(CheetahString::as_str),
-        Some("the topic[topic-a] peeking message is forbidden")
+    assert_eq!(topic_error.descriptor(), &rocketmq_error::AUTH_PERMISSION_DENIED);
+    let topic_denied = processor.notification_error_response(&topic_error, 20_003);
+    assert_owner_error_response_state(
+        &processor,
+        &topic_denied,
+        ResponseCode::NoPermission,
+        20_003,
+        "Permission was denied",
     );
-    assert!(topic_denied.body().is_none());
     let _ = runtime
         .runtime_state_mut()
         .topic_config_manager_handle()
@@ -370,20 +419,22 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
         .runtime_state_mut()
         .subscription_group_manager()
         .update_subscription_group_config(&mut disabled_group));
-    let group_denied = match processor
+    let group_error = match processor
         .execute_notification_core(&core_header("topic-a", "group-a", 0), peer, 20_004, None)
         .await
     {
-        NotificationCoreOutcome::Reply(response) => response,
-        NotificationCoreOutcome::Ready(_) => panic!("disabled group must be terminal"),
+        Err(error) => error,
+        Ok(_) => panic!("disabled group must be canonical"),
     };
-    assert_eq!(group_denied.code(), ResponseCode::NoPermission as i32);
-    assert_eq!(group_denied.opaque(), 20_004);
-    assert_eq!(
-        group_denied.remark().map(CheetahString::as_str),
-        Some("subscription group no permission, group-a")
+    assert_eq!(group_error.descriptor(), &rocketmq_error::AUTH_PERMISSION_DENIED);
+    let group_denied = processor.notification_error_response(&group_error, 20_004);
+    assert_owner_error_response_state(
+        &processor,
+        &group_denied,
+        ResponseCode::NoPermission,
+        20_004,
+        "Permission was denied",
     );
-    assert!(group_denied.body().is_none());
     disabled_group.set_consume_enable(true);
     assert!(runtime
         .runtime_state_mut()
@@ -415,7 +466,11 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
 
     let mut ordered = core_header("topic-a", "group-a", 0);
     ordered.order = true;
-    let ready = match processor.execute_notification_core(&ordered, peer, 20_005, None).await {
+    let ready = match processor
+        .execute_notification_core(&ordered, peer, 20_005, None)
+        .await
+        .expect("unblocked order Notification core")
+    {
         NotificationCoreOutcome::Ready(ready) => ready,
         NotificationCoreOutcome::Reply(response) => {
             panic!("unblocked order request failed with code {}", response.code())
@@ -424,7 +479,11 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
     assert!(ready.has_msg, "a missing attempt id intentionally skips order blocking");
 
     ordered.attempt_id = Some(attempt);
-    let same_attempt = match processor.execute_notification_core(&ordered, peer, 20_006, None).await {
+    let same_attempt = match processor
+        .execute_notification_core(&ordered, peer, 20_006, None)
+        .await
+        .expect("same-attempt order Notification core")
+    {
         NotificationCoreOutcome::Ready(ready) => ready,
         NotificationCoreOutcome::Reply(response) => {
             panic!("same-attempt order request failed with code {}", response.code())
@@ -433,7 +492,11 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
     assert!(same_attempt.has_msg, "the active order attempt remains readable");
 
     ordered.attempt_id = Some(CheetahString::from_static_str("attempt-2"));
-    let blocked_attempt = match processor.execute_notification_core(&ordered, peer, 20_007, None).await {
+    let blocked_attempt = match processor
+        .execute_notification_core(&ordered, peer, 20_007, None)
+        .await
+        .expect("blocked order Notification core")
+    {
         NotificationCoreOutcome::Ready(ready) => ready,
         NotificationCoreOutcome::Reply(response) => {
             panic!("blocked order request failed with code {}", response.code())
@@ -455,6 +518,7 @@ async fn notification_core_characterizes_permission_topic_group_queue_filter_and
     let response = match filtered
         .execute_notification_core(&invalid_filter, peer, 20_008, None)
         .await
+        .expect("filter parse remains an owner-controlled response")
     {
         NotificationCoreOutcome::Reply(response) => response,
         NotificationCoreOutcome::Ready(_) => panic!("enabled invalid Notification filter must be terminal"),
