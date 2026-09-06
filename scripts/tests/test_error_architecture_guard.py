@@ -201,6 +201,38 @@ class ErrorArchitectureGuardTests(unittest.TestCase):
 
         self.assertEqual([], self.guard.check_proxy_remoting_boundary())
 
+    def test_dashboard_http_boundary_rejects_dynamic_public_error_text(self):
+        unsafe_lines = (
+            "let body = self.response_message();",
+            "let message = rocketmq_response_message(error);",
+            "let message = admin_response_message(error);",
+            "let status = error.http_status();",
+            'let code = error.code().unwrap_or("ADMIN_ERROR");',
+            "let message = reason.clone();",
+            "let details = context.clone();",
+            "let message = error.to_string();",
+            "let message = self.to_string();",
+        )
+
+        for line in unsafe_lines:
+            with self.subTest(line=line):
+                self.assertIsNotNone(self.guard.dashboard_http_boundary_message(line))
+
+    def test_dashboard_http_boundary_allows_fixed_and_public_view_projection(self):
+        safe_lines = (
+            "PublicErrorView::try_new(error.descriptor(), &context)",
+            "for field in view.fields() {",
+            'DashboardHttpProjection::fixed(StatusCode::BAD_REQUEST, "VALIDATION_ERROR", "Request validation failed")',
+            "descriptor_by_code(code)",
+            "DashboardHttpProjection::unknown()",
+        )
+
+        for line in safe_lines:
+            with self.subTest(line=line):
+                self.assertIsNone(self.guard.dashboard_http_boundary_message(line))
+
+        self.assertEqual([], self.guard.check_dashboard_http_boundary())
+
 
 if __name__ == "__main__":
     unittest.main()

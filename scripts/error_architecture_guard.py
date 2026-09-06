@@ -612,13 +612,14 @@ def check_required_mapping_adapters() -> list[Finding]:
         / "src"
         / "error"
         / "dashboard_error.rs": [
-            "error.boundary_view().http().status",
-            "error.boundary_view().code().as_str()",
-            "view.message()",
-            "view.context()",
+            "PublicErrorView::try_new(error.descriptor(), &context)",
+            "for field in view.fields()",
+            "view.projection().http().status.as_u16()",
+            "DashboardErrorResponse::from(projection)",
+            "descriptor_by_code(code)",
+            "DashboardHttpProjection::unknown",
             "config_source",
             "internal_source",
-            "response_message",
         ],
         ROOT / "rocketmq-error" / "src" / "cli.rs": [
             "error.boundary_view()",
@@ -750,6 +751,26 @@ def check_proxy_remoting_boundary() -> list[Finding]:
     return findings
 
 
+DASHBOARD_HTTP_FORBIDDEN_TERMS = {
+    "self.response_message()": "dashboard HTTP responses must use the single safe projection",
+    "rocketmq_response_message": "dashboard RocketMQ responses must use PublicErrorView fields",
+    "admin_response_message": "dashboard Admin responses must not render reason, context, or Display",
+    "error.http_status()": "dashboard Admin HTTP status must not be accepted without an explicit allowlist",
+    'error.code().unwrap_or("ADMIN_ERROR")': "dashboard Admin code must not be copied from arbitrary metadata",
+    "reason.clone()": "dashboard HTTP responses must not copy dynamic Admin reason text",
+    "context.clone()": "dashboard HTTP responses must not copy dynamic Admin context text",
+    "error.to_string()": "dashboard HTTP responses must not render diagnostic Display text",
+    "self.to_string()": "dashboard HTTP responses must not render DashboardError Display text",
+}
+
+
+def dashboard_http_boundary_message(line: str) -> str | None:
+    for term, message in DASHBOARD_HTTP_FORBIDDEN_TERMS.items():
+        if term in line:
+            return message
+    return None
+
+
 def check_dashboard_http_boundary() -> list[Finding]:
     error_path = (
         ROOT
@@ -763,12 +784,10 @@ def check_dashboard_http_boundary() -> list[Finding]:
     if not error_path.exists():
         return [Finding(error_path, 1, "dashboard HTTP error mapper is missing")]
 
-    forbidden = {
-        'Self::RocketMq(_) => "ROCKETMQ_ERROR"': "dashboard RocketMQ API code must come from the canonical descriptor",
-        "Self::RocketMq(_) => StatusCode::BAD_GATEWAY": "dashboard RocketMQ HTTP status must come from the descriptor projection",
-        "ApiResponse::failure(self.code(), self.to_string())": "dashboard error body must use public/redacted response messages",
-    }
-    findings = scan_forbidden_terms([error_path], forbidden)
+    findings = []
+    for line_number, line in iter_non_test_lines(error_path):
+        if message := dashboard_http_boundary_message(line):
+            findings.append(Finding(error_path, line_number, message))
 
     backend_paths = rust_files_under("rocketmq-dashboard", "rocketmq-dashboard-web", "backend", "src")
     for path in backend_paths:
