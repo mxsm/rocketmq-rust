@@ -1,35 +1,35 @@
 error: alias_conflict must be error or prefer_canonical
-  --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:14:69
+  --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:28:69
    |
-14 |     #[header(key = "bad-policy", alias = "legacy", alias_conflict = "first", required)]
+28 |     #[header(key = "bad-policy", alias = "legacy", alias_conflict = "first", required)]
    |                                                                     ^^^^^^^
 
 error: wire key and alias must not be empty
- --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:6:20
-  |
-6 |     #[header(key = "", required)]
-  |                    ^^
+  --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:20:20
+   |
+20 |     #[header(key = "", required)]
+   |                    ^^
 
 error: wire key `same` is already used by field `duplicate_aliases`
- --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:8:36
-  |
-8 |     #[header(key = "same", alias = "same", alias = "repeat", alias = "repeat", required)]
-  |                                    ^^^^^^
+  --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:22:36
+   |
+22 |     #[header(key = "same", alias = "same", alias = "repeat", alias = "repeat", required)]
+   |                                    ^^^^^^
 
 error: wire key `repeat` is already used by field `duplicate_aliases`
- --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:8:70
-  |
-8 |     #[header(key = "same", alias = "same", alias = "repeat", alias = "repeat", required)]
-  |                                                                      ^^^^^^^^
+  --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:22:70
+   |
+22 |     #[header(key = "same", alias = "same", alias = "repeat", alias = "repeat", required)]
+   |                                                                      ^^^^^^^^
 
 error: wire key `same` is already used by field `duplicate_aliases`
-  --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:10:20
+  --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:24:20
    |
-10 |     #[header(key = "same", required)]
+24 |     #[header(key = "same", required)]
    |                    ^^^^^^
 
 error: alias_conflict requires at least one alias
-  --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:12:5
+  --> tests/ui/request_header_codec_v3/fail/invalid_keys_and_aliases.rs:26:5
    |
-12 |     #[header(key = "standalone", alias_conflict = "prefer_canonical", required)]
+26 |     #[header(key = "standalone", alias_conflict = "prefer_canonical", required)]
    |     ^

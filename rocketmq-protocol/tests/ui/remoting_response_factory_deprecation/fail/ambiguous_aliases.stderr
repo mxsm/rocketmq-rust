@@ -1,17 +1,17 @@
 error: use of deprecated associated function `rocketmq_protocol::protocol::remoting_command::legacy_api::<impl rocketmq_protocol::RemotingCommand>::create_response_command`: use create_success_response_command for SUCCESS or create_java_default_error_response_command for Java-compatible unset errors
- --> tests/ui/remoting_response_factory_deprecation/fail/ambiguous_aliases.rs:7:30
-  |
-7 |     let _ = RemotingCommand::create_response_command();
-  |                              ^^^^^^^^^^^^^^^^^^^^^^^
-  |
+  --> tests/ui/remoting_response_factory_deprecation/fail/ambiguous_aliases.rs:21:30
+   |
+21 |     let _ = RemotingCommand::create_response_command();
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^
+   |
 note: the lint level is defined here
- --> tests/ui/remoting_response_factory_deprecation/fail/ambiguous_aliases.rs:1:9
-  |
-1 | #![deny(deprecated)]
-  |         ^^^^^^^^^^
+  --> tests/ui/remoting_response_factory_deprecation/fail/ambiguous_aliases.rs:15:9
+   |
+15 | #![deny(deprecated)]
+   |         ^^^^^^^^^^
 
 error: use of deprecated associated function `rocketmq_protocol::protocol::remoting_command::legacy_api::<impl rocketmq_protocol::RemotingCommand>::create_response_command_with_header`: use create_success_response_command_with_header for SUCCESS or create_java_default_error_response_command_with_header for Java-compatible unset errors
- --> tests/ui/remoting_response_factory_deprecation/fail/ambiguous_aliases.rs:8:30
-  |
-8 |     let _ = RemotingCommand::create_response_command_with_header(GetRouteInfoRequestHeader::new("topic-a", None));
-  |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  --> tests/ui/remoting_response_factory_deprecation/fail/ambiguous_aliases.rs:22:30
+   |
+22 |     let _ = RemotingCommand::create_response_command_with_header(GetRouteInfoRequestHeader::new("topic-a", None));
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

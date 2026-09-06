@@ -1,5 +1,5 @@
 error: required cannot be used on Option<T>
- --> tests/ui/request_header_codec_v2/fail/required_option.rs:8:5
-  |
-8 |     #[required]
-  |     ^
+  --> tests/ui/request_header_codec_v2/fail/required_option.rs:22:5
+   |
+22 |     #[required]
+   |     ^

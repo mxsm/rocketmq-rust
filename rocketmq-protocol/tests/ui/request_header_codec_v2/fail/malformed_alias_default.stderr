@@ -1,23 +1,23 @@
 error: expected serde alias attribute to be a string: `alias = "..."`
- --> tests/ui/request_header_codec_v2/fail/malformed_alias_default.rs:8:21
-  |
-8 |     #[serde(alias = 7)]
-  |                     ^
+  --> tests/ui/request_header_codec_v2/fail/malformed_alias_default.rs:22:21
+   |
+22 |     #[serde(alias = 7)]
+   |                     ^
 
 error: expected string literal
- --> tests/ui/request_header_codec_v2/fail/malformed_alias_default.rs:8:21
-  |
-8 |     #[serde(alias = 7)]
-  |                     ^
+  --> tests/ui/request_header_codec_v2/fail/malformed_alias_default.rs:22:21
+   |
+22 |     #[serde(alias = 7)]
+   |                     ^
 
 error: failed to parse path: "not a valid::path"
-  --> tests/ui/request_header_codec_v2/fail/malformed_alias_default.rs:15:23
+  --> tests/ui/request_header_codec_v2/fail/malformed_alias_default.rs:29:23
    |
-15 |     #[serde(default = "not a valid::path")]
+29 |     #[serde(default = "not a valid::path")]
    |                       ^^^^^^^^^^^^^^^^^^^
 
 error: invalid serde default path: unexpected token
-  --> tests/ui/request_header_codec_v2/fail/malformed_alias_default.rs:15:23
+  --> tests/ui/request_header_codec_v2/fail/malformed_alias_default.rs:29:23
    |
-15 |     #[serde(default = "not a valid::path")]
+29 |     #[serde(default = "not a valid::path")]
    |                       ^^^^^^^^^^^^^^^^^^^

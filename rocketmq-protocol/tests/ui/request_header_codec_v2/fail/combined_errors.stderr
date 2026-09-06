@@ -1,11 +1,11 @@
 error: required cannot be used on Option<T>
- --> tests/ui/request_header_codec_v2/fail/combined_errors.rs:8:5
-  |
-8 |     #[required]
-  |     ^
+  --> tests/ui/request_header_codec_v2/fail/combined_errors.rs:22:5
+   |
+22 |     #[required]
+   |     ^
 
 error: required and serde(default) are mutually exclusive
- --> tests/ui/request_header_codec_v2/fail/combined_errors.rs:8:5
-  |
-8 |     #[required]
-  |     ^
+  --> tests/ui/request_header_codec_v2/fail/combined_errors.rs:22:5
+   |
+22 |     #[required]
+   |     ^

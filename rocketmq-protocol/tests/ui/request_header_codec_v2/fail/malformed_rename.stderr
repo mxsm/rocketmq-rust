@@ -1,11 +1,11 @@
 error: expected serde rename attribute to be a string: `rename = "..."`
- --> tests/ui/request_header_codec_v2/fail/malformed_rename.rs:8:22
-  |
-8 |     #[serde(rename = 7)]
-  |                      ^
+  --> tests/ui/request_header_codec_v2/fail/malformed_rename.rs:22:22
+   |
+22 |     #[serde(rename = 7)]
+   |                      ^
 
 error: expected string literal
- --> tests/ui/request_header_codec_v2/fail/malformed_rename.rs:8:22
-  |
-8 |     #[serde(rename = 7)]
-  |                      ^
+  --> tests/ui/request_header_codec_v2/fail/malformed_rename.rs:22:22
+   |
+22 |     #[serde(rename = 7)]
+   |                      ^

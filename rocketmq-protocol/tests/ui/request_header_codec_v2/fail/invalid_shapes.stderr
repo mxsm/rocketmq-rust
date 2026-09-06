@@ -1,17 +1,17 @@
 error: RequestHeaderCodecV2 does not support unit structs
- --> tests/ui/request_header_codec_v2/fail/invalid_shapes.rs:7:8
-  |
-7 | struct UnitHeader;
-  |        ^^^^^^^^^^
+  --> tests/ui/request_header_codec_v2/fail/invalid_shapes.rs:21:8
+   |
+21 | struct UnitHeader;
+   |        ^^^^^^^^^^
 
 error: RequestHeaderCodecV2 does not support enums
-  --> tests/ui/request_header_codec_v2/fail/invalid_shapes.rs:11:1
+  --> tests/ui/request_header_codec_v2/fail/invalid_shapes.rs:25:1
    |
-11 | enum EnumHeader {
+25 | enum EnumHeader {
    | ^^^^
 
 error: RequestHeaderCodecV2 does not support unions
-  --> tests/ui/request_header_codec_v2/fail/invalid_shapes.rs:17:1
+  --> tests/ui/request_header_codec_v2/fail/invalid_shapes.rs:31:1
    |
-17 | union UnionHeader {
+31 | union UnionHeader {
    | ^^^^^

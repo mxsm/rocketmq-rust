@@ -1,29 +1,29 @@
 error: RequestHeaderCodecV3 requires header(type_id = "...")
- --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:5:8
-  |
-5 | struct MissingTypeId {
-  |        ^^^^^^^^^^^^^
+  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:19:8
+   |
+19 | struct MissingTypeId {
+   |        ^^^^^^^^^^^^^
 
 error: lookup must be one of: auto, scan, get
-  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:11:39
+  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:25:39
    |
-11 | #[header(type_id = "Header", lookup = "indexed", crate = "rocketmq_protocol")]
+25 | #[header(type_id = "Header", lookup = "indexed", crate = "rocketmq_protocol")]
    |                                       ^^^^^^^^^
 
 error: type_id must be a stable, fully qualified Rust path with at least two segments
-  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:11:20
+  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:25:20
    |
-11 | #[header(type_id = "Header", lookup = "indexed", crate = "rocketmq_protocol")]
+25 | #[header(type_id = "Header", lookup = "indexed", crate = "rocketmq_protocol")]
    |                    ^^^^^^^^
 
 error: unsupported RequestHeaderCodecV3 container option
-  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:18:41
+  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:32:41
    |
-18 | #[header(type_id = "fixtures::Unknown", unknown, crate = "rocketmq_protocol")]
+32 | #[header(type_id = "fixtures::Unknown", unknown, crate = "rocketmq_protocol")]
    |                                         ^^^^^^^
 
 error: legacy_shim must be generated or manual
-  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:27:19
+  --> tests/ui/request_header_codec_v3/fail/invalid_container.rs:41:19
    |
-27 |     legacy_shim = "disabled",
+41 |     legacy_shim = "disabled",
    |                   ^^^^^^^^^^
