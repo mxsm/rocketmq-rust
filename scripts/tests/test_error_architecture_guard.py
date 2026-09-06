@@ -134,6 +134,39 @@ class ErrorArchitectureGuardTests(unittest.TestCase):
             )
         )
 
+    def test_client_retry_boundary_tracks_the_single_typed_policy(self):
+        self.assertEqual([], self.guard.check_client_retry_boundary())
+
+    def test_client_retry_boundary_rejects_phase_inference(self):
+        relative_paths = (
+            Path("rocketmq-client/src/common/retry_policy.rs"),
+            Path("rocketmq-client/src/producer/producer_impl/default_mq_producer_impl/retry.rs"),
+            Path("rocketmq-client/src/implementation/mq_client_api_impl/producer_retry.rs"),
+        )
+        with tempfile.TemporaryDirectory(prefix="client-retry-guard-") as directory:
+            fixture_root = Path(directory)
+            for relative_path in relative_paths:
+                fixture_path = fixture_root / relative_path
+                fixture_path.parent.mkdir(parents=True, exist_ok=True)
+                fixture_path.write_text((ROOT / relative_path).read_text(encoding="utf-8"), encoding="utf-8")
+            retry_path = fixture_root / relative_paths[0]
+            retry_path.write_text(
+                retry_path.read_text(encoding="utf-8") + "\nfn infer_stage() { let _ = fields::PHASE; }\n",
+                encoding="utf-8",
+            )
+
+            original_root = self.guard.ROOT
+            self.guard.ROOT = fixture_root
+            try:
+                findings = self.guard.check_client_retry_boundary()
+            finally:
+                self.guard.ROOT = original_root
+
+        self.assertIn(
+            "client retry decisions must use typed request stage, not PHASE context",
+            [finding.message for finding in findings],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

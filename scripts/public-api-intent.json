@@ -7599,6 +7599,60 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::request_outcome::OutboundRequestContract",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestContract",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "closed source-free contract details for outbound request selection",
+          "removal_condition": "retain while outbound request selection reports deterministic contract failures"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::request_outcome::OutboundRequestContractReason",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestContractReason",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "closed reason set for source-free outbound request contract failures",
+          "removal_condition": "retain while outbound request selection reports deterministic contract failures"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::request_outcome::OutboundRequestOutcome",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestOutcome",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "exhaustive response, normal rejection, and deterministic contract result for outbound requests",
+          "removal_condition": "retain while Transport separates normal request outcomes from operational errors"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::request_outcome::OutboundRequestRejection",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestRejection",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "typed source-free normal rejection details with physical request stage",
+          "removal_condition": "retain while Transport exposes normal outbound request rejections"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::request_outcome::OutboundRequestRejectionReason",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestRejectionReason",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "closed reason set for normal outbound request rejection",
+          "removal_condition": "retain while Transport exposes normal outbound request rejections"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::request_outcome::OutboundRequestStage",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_outcome::OutboundRequestStage",
+          "owner": "transport",
+          "path": "rocketmq-transport/src/public_api.rs",
+          "rationale": "physical outbound request progress used by the sole Client retry policy",
+          "removal_condition": "retain while retry safety depends on explicit physical request progress"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::request_processor::default_request_processor::DefaultRequestProcessor",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::request_processor::default_request_processor::DefaultRequestProcessor",
           "owner": "transport",
@@ -7718,15 +7772,6 @@
           "category": "stable",
           "declaration": "pub use crate::runtime::config::client_config::ConnectConfig",
           "identity": "rocketmq-transport/src/public_api.rs:pub use crate::runtime::config::client_config::ConnectConfig",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::runtime::config::client_config::GoAwayPolicy",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::runtime::config::client_config::GoAwayPolicy",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
           "rationale": "deliberate root entry point",
@@ -8111,7 +8156,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 210
+      "maximum_exports": 215
     }
   },
   "policy": "Every deliberate export is classified; additions and count growth fail closed.",

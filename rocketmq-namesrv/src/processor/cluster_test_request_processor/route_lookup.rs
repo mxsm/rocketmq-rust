@@ -406,7 +406,7 @@ fn route_lookup_timeout(deadline: RequestDeadline, remote_addr: &str) -> RocketM
     let context = ErrorContext::new()
         .with_u64(fields::TIMEOUT_MS, deadline.budget_millis())
         .with_text(fields::REMOTE_ADDR, remote_addr);
-    RocketMQError::Network(Arc::new(
+    RocketMQError::Shared(Arc::new(
         Error::new(&TRANSPORT_CONNECTION_TIMEOUT).with_context(context),
     ))
 }
@@ -421,7 +421,7 @@ fn route_lookup_timeout_caused_by(
         .with_u64(fields::TIMEOUT_MS, deadline.budget_millis())
         .with_text(fields::REMOTE_ADDR, remote_addr)
         .with_secret_presence(fields::SOURCE_PRESENT);
-    RocketMQError::Network(Arc::new(
+    RocketMQError::Shared(Arc::new(
         Error::caused_by(&TRANSPORT_CONNECTION_TIMEOUT, source).with_context(context),
     ))
 }
@@ -429,7 +429,7 @@ fn route_lookup_timeout_caused_by(
 #[track_caller]
 fn route_lookup_cancelled_error() -> RocketMQError {
     let context = ErrorContext::new().with_text(fields::PHASE, "closed");
-    RocketMQError::Network(Arc::new(
+    RocketMQError::Shared(Arc::new(
         Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
     ))
 }
@@ -439,7 +439,7 @@ fn route_lookup_dns_failure_from_source(source: std::io::Error) -> RocketMQError
     let context = ErrorContext::new()
         .with_secret_presence(fields::HOST_PRESENT)
         .with_secret_presence(fields::SOURCE_PRESENT);
-    RocketMQError::Network(Arc::new(
+    RocketMQError::Shared(Arc::new(
         Error::caused_by(&TRANSPORT_DNS_FAILED, source).with_context(context),
     ))
 }
@@ -460,7 +460,7 @@ fn route_lookup_shutdown_error(detail: String) -> RocketMQError {
     let context = ErrorContext::new()
         .with_text(fields::PHASE, "closed")
         .with_secret_presence(fields::SOURCE_PRESENT);
-    RocketMQError::Network(Arc::new(
+    RocketMQError::Shared(Arc::new(
         Error::caused_by(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
             RouteLookupShutdownFailure(detail),
@@ -503,8 +503,8 @@ mod tests {
         let dns = route_lookup_dns_failure_from_source(std::io::Error::other("resolver unavailable"));
         assert_eq!(dns.descriptor().code().as_str(), "transport.dns.failed");
         assert_eq!(dns.boundary_view().remoting().code.as_i32(), 2);
-        let RocketMQError::Network(canonical) = &dns else {
-            panic!("DNS failure must use the canonical Network carrier");
+        let RocketMQError::Shared(canonical) = &dns else {
+            panic!("DNS failure must use the canonical shared carrier");
         };
         let io_source = std::error::Error::source(canonical.as_ref())
             .and_then(|source| source.downcast_ref::<std::io::Error>())
@@ -523,8 +523,8 @@ mod tests {
             .expect_err("pending future must time out");
         let error =
             route_lookup_timeout_caused_by(RequestDeadline::from_timeout_millis(25), "address-server:80", elapsed);
-        let RocketMQError::Network(canonical) = error else {
-            panic!("timeout must use the canonical Network carrier");
+        let RocketMQError::Shared(canonical) = error else {
+            panic!("timeout must use the canonical shared carrier");
         };
         assert!(std::error::Error::source(canonical.as_ref())
             .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())

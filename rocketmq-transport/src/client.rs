@@ -27,6 +27,8 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
+use crate::base::pending_request_table::PendingRegistrationOutcome;
+use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
@@ -43,7 +45,6 @@ use crate::error_helpers::connection_timeout_caused_by;
 use crate::error_helpers::dns_failed;
 use crate::error_helpers::dns_failed_without_source;
 use crate::error_helpers::endpoint_invalid;
-use crate::error_helpers::network;
 use crate::error_helpers::response_timeout_caused_by_for_remote;
 use crate::error_helpers::TransportStage;
 #[cfg(feature = "socks")]
@@ -244,12 +245,12 @@ async fn connect_legacy_address_with_options_and_telemetry(
         deadline,
     )
     .await?;
-    socket_options
-        .apply(&stream)
-        .map_err(|source| network(connection_failed_for_remote(address, TransportStage::Connect, source)))?;
-    let socket_nodelay = stream
-        .nodelay()
-        .map_err(|source| network(connection_failed_for_remote(address, TransportStage::Connect, source)))?;
+    socket_options.apply(&stream).map_err(|source| {
+        rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(address, TransportStage::Connect, source))
+    })?;
+    let socket_nodelay = stream.nodelay().map_err(|source| {
+        rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(address, TransportStage::Connect, source))
+    })?;
     let local_addr = stream.local_addr()?;
     let remote_addr = stream.peer_addr()?;
     let negotiated_tls = tls_config.enable;
@@ -260,7 +261,13 @@ async fn connect_legacy_address_with_options_and_telemetry(
             let tls_stream = deadline
                 .timeout(connect_tls_stream(stream, &server_name, tls_config))
                 .await
-                .map_err(|source| network(connection_timeout_caused_by(address, deadline.budget_millis(), source)))??;
+                .map_err(|source| {
+                    rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
+                        address,
+                        deadline.budget_millis(),
+                        source,
+                    ))
+                })??;
             Connection::new_with_tls_stream_and_limits(tls_stream, frame_limits).with_telemetry(telemetry)
         }
         #[cfg(not(feature = "tls"))]
@@ -303,12 +310,12 @@ async fn connect_physical_with_options_and_telemetry(
         deadline,
     )
     .await?;
-    socket_options
-        .apply(&stream)
-        .map_err(|source| network(connection_failed_for_remote(authority, TransportStage::Connect, source)))?;
-    let socket_nodelay = stream
-        .nodelay()
-        .map_err(|source| network(connection_failed_for_remote(authority, TransportStage::Connect, source)))?;
+    socket_options.apply(&stream).map_err(|source| {
+        rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(authority, TransportStage::Connect, source))
+    })?;
+    let socket_nodelay = stream.nodelay().map_err(|source| {
+        rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(authority, TransportStage::Connect, source))
+    })?;
     let local_addr = stream.local_addr()?;
     let remote_addr = stream.peer_addr()?;
     let negotiated_tls = tls_config.enable;
@@ -319,7 +326,7 @@ async fn connect_physical_with_options_and_telemetry(
                 .timeout(connect_tls_stream(stream, tls_server_name, tls_config))
                 .await
                 .map_err(|source| {
-                    network(connection_timeout_caused_by(
+                    rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
                         authority,
                         deadline.budget_millis(),
                         source,
@@ -355,28 +362,48 @@ async fn connect_legacy_tcp(
         return crate::socks::connect_target(socks_proxy, address, None, deadline).await;
     }
     if !valid_legacy_authority(address) {
-        return Err(network(endpoint_invalid(!address.is_empty())));
+        return Err(rocketmq_error::RocketMQError::Shared(endpoint_invalid(
+            !address.is_empty(),
+        )));
     }
     if let Ok(socket_addr) = address.parse::<SocketAddr>() {
         return deadline
             .timeout(tokio::net::TcpStream::connect(socket_addr))
             .await
-            .map_err(|source| network(connection_timeout_caused_by(address, deadline.budget_millis(), source)))?
-            .map_err(|source| network(connection_failed_for_remote(address, TransportStage::Connect, source)));
+            .map_err(|source| {
+                rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
+                    address,
+                    deadline.budget_millis(),
+                    source,
+                ))
+            })?
+            .map_err(|source| {
+                rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
+                    address,
+                    TransportStage::Connect,
+                    source,
+                ))
+            });
     }
 
     let resolved = deadline
         .timeout(tokio::net::lookup_host(address))
         .await
-        .map_err(|source| network(connection_timeout_caused_by(address, deadline.budget_millis(), source)))?
-        .map_err(|source| network(dns_failed(source)))?;
+        .map_err(|source| {
+            rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
+                address,
+                deadline.budget_millis(),
+                source,
+            ))
+        })?
+        .map_err(|source| rocketmq_error::RocketMQError::Shared(dns_failed(source)))?;
     let mut last_connect_error = None;
     for socket_addr in resolved {
         match deadline.timeout(tokio::net::TcpStream::connect(socket_addr)).await {
             Ok(Ok(stream)) => return Ok(stream),
             Ok(Err(source)) => last_connect_error = Some(source),
             Err(source) => {
-                return Err(network(connection_timeout_caused_by(
+                return Err(rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
                     address,
                     deadline.budget_millis(),
                     source,
@@ -385,12 +412,12 @@ async fn connect_legacy_tcp(
         }
     }
     match last_connect_error {
-        Some(source) => Err(network(connection_failed_for_remote(
+        Some(source) => Err(rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
             address,
             TransportStage::Connect,
             source,
         ))),
-        None => Err(network(dns_failed_without_source())),
+        None => Err(rocketmq_error::RocketMQError::Shared(dns_failed_without_source())),
     }
 }
 
@@ -418,13 +445,19 @@ async fn connect_physical_tcp(
         .timeout(tokio::net::TcpStream::connect(socket_addr))
         .await
         .map_err(|source| {
-            network(connection_timeout_caused_by(
+            rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
                 authority,
                 deadline.budget_millis(),
                 source,
             ))
         })?
-        .map_err(|source| network(connection_failed_for_remote(authority, TransportStage::Connect, source)))
+        .map_err(|source| {
+            rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
+                authority,
+                TransportStage::Connect,
+                source,
+            ))
+        })
 }
 
 #[cfg(feature = "tls")]
@@ -563,7 +596,7 @@ impl OneShotTransportClient {
         let peer = PeerInfo::new(remote_addr, negotiated_tls);
         deadline.ensure_before_send()?;
         self.security.sign(&mut request, Some(&peer)).map_err(|source| {
-            network(connection_failed_for_remote(
+            rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
                 address.to_string(),
                 TransportStage::Connect,
                 source,
@@ -580,7 +613,7 @@ impl OneShotTransportClient {
                 AdmissionClass::Data,
             )
             .into_result()
-            .map_err(|_| network(admission_queue_saturated(address.to_string())))?;
+            .map_err(|_| rocketmq_error::RocketMQError::Shared(admission_queue_saturated(address.to_string())))?;
         let _inflight_permit = self
             .admission
             .try_acquire(
@@ -590,28 +623,47 @@ impl OneShotTransportClient {
                 AdmissionClass::Data,
             )
             .into_result()
-            .map_err(|_| network(admission_queue_saturated(address.to_string())))?;
+            .map_err(|_| rocketmq_error::RocketMQError::Shared(admission_queue_saturated(address.to_string())))?;
 
         let owner = self.pending.new_owner();
         let opaque = self.next_opaque.fetch_add(1, Ordering::Relaxed);
         request.set_opaque_mut(opaque);
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let guard = self
+        let guard = match self
             .pending
-            .register_for_owner_with_bytes(&owner, opaque, deadline, retained_bytes, sender)?;
+            .register_for_owner_with_bytes(&owner, opaque, deadline, retained_bytes, sender)
+        {
+            PendingRegistrationOutcome::Registered(guard) => guard,
+            PendingRegistrationOutcome::DeadlineExpired => return Err(deadline.elapsed_error()),
+            PendingRegistrationOutcome::SessionClosed => {
+                return Err(rocketmq_error::RocketMQError::Shared(
+                    connection_failed_without_source_for_remote(address.to_string(), TransportStage::Closed),
+                ));
+            }
+            PendingRegistrationOutcome::QueueSaturated => {
+                return Err(rocketmq_error::RocketMQError::Shared(admission_queue_saturated(
+                    address.to_string(),
+                )));
+            }
+            PendingRegistrationOutcome::OperationalFailure(error) => {
+                return Err(rocketmq_error::RocketMQError::Shared(error));
+            }
+        };
 
         if let Err(error) = connection
             .send_command_with_deadline(request, deadline, address.to_string())
             .await
         {
-            guard.complete(Err(error));
+            guard.complete(PendingRequestCompletion::operational(error));
             let _ = deadline.timeout(connection.shutdown()).await;
-            return receiver.await.map_err(|_| {
-                network(connection_failed_without_source_for_remote(
+            return match receiver.await {
+                Ok(completion) => pending_completion_result(completion, address, deadline),
+                Err(source) => Err(rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
                     address.to_string(),
                     TransportStage::Closed,
-                ))
-            })?;
+                    source,
+                ))),
+            };
         }
 
         match deadline.timeout(connection.receive_command()).await {
@@ -621,36 +673,50 @@ impl OneShotTransportClient {
                     .pending
                     .complete_response_for_owner(&owner, response_opaque, response)
                 {
-                    guard.complete(Err(network(connection_failed_without_source_for_remote(
-                        address.to_string(),
-                        TransportStage::Closed,
-                    ))));
+                    guard.complete(PendingRequestCompletion::OperationalFailure(
+                        connection_failed_without_source_for_remote(address.to_string(), TransportStage::Closed),
+                    ));
                 }
             }
             Ok(Some(Err(error))) => {
-                guard.complete(Err(error));
+                guard.complete(PendingRequestCompletion::operational(error));
             }
             Ok(None) => {
-                self.pending.close_owner(&owner, || {
-                    network(connection_failed_without_source_for_remote(
-                        address.to_string(),
-                        TransportStage::Closed,
-                    ))
-                });
+                self.pending
+                    .close_owner(&owner, || PendingRequestCompletion::SessionClosed);
             }
             Err(source) => {
                 let source =
                     response_timeout_caused_by_for_remote(address.to_string(), deadline.budget_millis(), source);
-                guard.expire_with_network(source);
+                guard.expire_with_error(source);
             }
         }
         let _ = deadline.timeout(connection.shutdown()).await;
-        receiver.await.map_err(|_| {
-            network(connection_failed_without_source_for_remote(
+        match receiver.await {
+            Ok(completion) => pending_completion_result(completion, address, deadline),
+            Err(source) => Err(rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
                 address.to_string(),
                 TransportStage::Closed,
+                source,
+            ))),
+        }
+    }
+}
+
+fn pending_completion_result(
+    completion: PendingRequestCompletion,
+    address: SocketAddr,
+    deadline: RequestDeadline,
+) -> RocketMQResult<RemotingCommand> {
+    match completion {
+        PendingRequestCompletion::Response(response) => Ok(response),
+        PendingRequestCompletion::DeadlineExpired => Err(deadline.elapsed_error()),
+        PendingRequestCompletion::Cancelled | PendingRequestCompletion::SessionClosed => {
+            Err(rocketmq_error::RocketMQError::Shared(
+                connection_failed_without_source_for_remote(address.to_string(), TransportStage::Closed),
             ))
-        })?
+        }
+        PendingRequestCompletion::OperationalFailure(error) => Err(rocketmq_error::RocketMQError::Shared(error)),
     }
 }
 
@@ -699,8 +765,8 @@ mod tests {
                 Ok(_) => panic!("invalid direct authority must fail before DNS or connect"),
                 Err(error) => error,
             };
-            let RocketMQError::Network(error) = error else {
-                panic!("invalid direct authority must use the canonical Network carrier")
+            let RocketMQError::Shared(error) = error else {
+                panic!("invalid direct authority must use the canonical Shared carrier")
             };
             assert_eq!(error.code(), rocketmq_error::TRANSPORT_ENDPOINT_INVALID.code());
             assert_eq!(error.context().len(), expected_context_len);
@@ -742,7 +808,7 @@ mod tests {
             let error = connect_legacy_tcp(authority, Some(&config), RequestDeadline::after(Duration::from_secs(1)))
                 .await
                 .expect_err("SOCKS host must fail before resolver selection");
-            let RocketMQError::Network(error) = error else {
+            let RocketMQError::Shared(error) = error else {
                 panic!("pre-resolver SOCKS host rejection must use Network")
             };
             assert_eq!(error.code(), rocketmq_error::TRANSPORT_ENDPOINT_INVALID.code());

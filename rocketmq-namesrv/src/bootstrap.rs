@@ -512,7 +512,7 @@ impl NameServerRuntime {
     async fn load_config(&mut self) -> RocketMQResult<()> {
         // KVConfigManager is now always initialized
         self.inner.kvconfig_manager().load().inspect_err(|error| {
-            error!(error_kind = ?error.kind(), "KV config load failed");
+            error!(error_code = %error.descriptor().code(), "KV config load failed");
         })?;
         debug!("KV configuration loaded successfully");
 
@@ -1931,7 +1931,6 @@ mod tests {
     use rocketmq_controller::Controller;
     #[cfg(feature = "embedded-controller")]
     use rocketmq_controller::ControllerConfig;
-    use rocketmq_error::ErrorKind;
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::constant::PermName;
     use rocketmq_model::common::mix_all::string_to_properties;
@@ -2533,38 +2532,38 @@ mod tests {
     }
 
     #[test]
-    fn namesrv_startup_failed_uses_service_error_kind() {
+    fn namesrv_startup_failed_uses_service_descriptor() {
         let error = namesrv_startup_failed("spawn test service", "task group closed");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
         assert!(error.to_string().contains("NameServer spawn test service"));
     }
 
     #[test]
-    fn namesrv_task_group_unavailable_uses_service_error_kind() {
+    fn namesrv_task_group_unavailable_uses_service_descriptor() {
         let error = namesrv_task_group_unavailable("spawn test service");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
         assert!(error.to_string().contains("task group is unavailable"));
     }
 
     #[test]
-    fn namesrv_runtime_state_error_uses_service_error_kind() {
+    fn namesrv_runtime_state_error_uses_service_descriptor() {
         let error = namesrv_runtime_state_error("invalid Created -> Running transition");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
         assert!(error.to_string().contains("NameServer runtime state"));
     }
 
     #[test]
-    fn invalid_runtime_transition_uses_service_error_kind() {
+    fn invalid_runtime_transition_uses_service_descriptor() {
         let bootstrap = build_default_bootstrap();
         let error = bootstrap
             .name_server_runtime
             .transition_to(RuntimeState::Running)
             .expect_err("Created -> Running should be invalid");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
         assert!(error.to_string().contains("Invalid state transition"));
     }
 

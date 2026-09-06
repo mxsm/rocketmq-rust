@@ -37,6 +37,8 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
+use crate::base::pending_request_table::PendingRegistrationOutcome;
+use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestToken;
@@ -46,7 +48,6 @@ use crate::deadline::RequestDeadline;
 use crate::error_helpers::admission_queue_saturated;
 use crate::error_helpers::connection_failed;
 use crate::error_helpers::connection_failed_without_source;
-use crate::error_helpers::network;
 use crate::error_helpers::response_timeout_caused_by;
 use crate::error_helpers::write_timeout_caused_by;
 use crate::error_helpers::TransportStage;
@@ -413,13 +414,15 @@ impl OutboundProgress {
     fn deadline_error(&self, deadline: RequestDeadline, source: tokio::time::error::Elapsed) -> RocketMQError {
         match self.0.load(Ordering::Acquire) {
             OUTBOUND_QUEUED | OUTBOUND_FAILED_BEFORE_SEND => deadline.elapsed_error(),
-            OUTBOUND_WRITING => network(write_timeout_caused_by(
+            OUTBOUND_WRITING => rocketmq_error::RocketMQError::Shared(write_timeout_caused_by(
                 TransportStage::Writing,
                 deadline.budget_millis(),
                 source,
             )),
-            OUTBOUND_SENT => network(response_timeout_caused_by(deadline.budget_millis(), source)),
-            _ => network(response_timeout_caused_by(deadline.budget_millis(), source)),
+            OUTBOUND_SENT => {
+                rocketmq_error::RocketMQError::Shared(response_timeout_caused_by(deadline.budget_millis(), source))
+            }
+            _ => rocketmq_error::RocketMQError::Shared(response_timeout_caused_by(deadline.budget_millis(), source)),
         }
     }
 }
@@ -584,7 +587,7 @@ fn complete_send_error(
 ) {
     match reservation {
         Some(ResponseReservation::Pending(reservation)) => {
-            response_table.complete_token(reservation, Err(error));
+            response_table.complete_token(reservation, PendingRequestCompletion::operational(error));
         }
         None => {}
     }
@@ -677,7 +680,9 @@ impl ChannelInner {
                         "remoting.channel.send",
                         handle_send(connection.clone(), outbound_queue_rx, response_table.clone()),
                     )
-                    .map_err(|source| network(connection_failed(TransportStage::Closed, source)))?,
+                    .map_err(|source| {
+                        rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
+                    })?,
             )
         } else {
             drop(outbound_queue_rx);
@@ -711,9 +716,8 @@ impl ChannelInner {
         }
         report.elapsed = started_at.elapsed();
         if let Some(owner) = self.pending_request_owner.as_ref() {
-            self.response_table.close_owner(owner, || {
-                network(connection_failed_without_source(TransportStage::Closed))
-            });
+            self.response_table
+                .close_owner(owner, || PendingRequestCompletion::SessionClosed);
         }
         report.log_if_unhealthy();
         report
@@ -727,9 +731,8 @@ impl Drop for ChannelInner {
             self.send_task_group.abort_task(task_id);
         }
         if let Some(owner) = self.pending_request_owner.as_ref() {
-            self.response_table.close_owner(owner, || {
-                network(connection_failed_without_source(TransportStage::Closed))
-            });
+            self.response_table
+                .close_owner(owner, || PendingRequestCompletion::SessionClosed);
         }
     }
 }
@@ -747,11 +750,9 @@ impl ChannelInner {
     }
 
     fn outbound_queue_sender(&self) -> rocketmq_error::RocketMQResult<Sender<ChannelMessage>> {
-        self.outbound_queue_tx
-            .lock()
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| network(connection_failed_without_source(TransportStage::Closed)))
+        self.outbound_queue_tx.lock().as_ref().cloned().ok_or_else(|| {
+            rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
+        })
     }
 
     // === Connection Accessors ===
@@ -866,17 +867,33 @@ impl ChannelInner {
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         let progress = Arc::new(OutboundProgress::queued());
-        let (response_tx, mut response_rx) =
-            tokio::sync::oneshot::channel::<rocketmq_error::RocketMQResult<RemotingCommand>>();
+        let (response_tx, mut response_rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
         let opaque = request.opaque();
-        let owner = self
-            .pending_request_owner
-            .as_ref()
-            .ok_or_else(|| network(connection_failed_without_source(TransportStage::Closed)))?;
+        let owner = self.pending_request_owner.as_ref().ok_or_else(|| {
+            rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
+        })?;
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
-        let guard =
-            self.response_table
-                .register_for_owner_with_bytes(owner, opaque, deadline, retained_bytes, response_tx)?;
+        let guard = match self.response_table.register_for_owner_with_bytes(
+            owner,
+            opaque,
+            deadline,
+            retained_bytes,
+            response_tx,
+        ) {
+            PendingRegistrationOutcome::Registered(guard) => guard,
+            PendingRegistrationOutcome::DeadlineExpired => return Err(deadline.elapsed_error()),
+            PendingRegistrationOutcome::SessionClosed => {
+                return Err(RocketMQError::Shared(connection_failed_without_source(
+                    TransportStage::Closed,
+                )));
+            }
+            PendingRegistrationOutcome::QueueSaturated => {
+                return Err(RocketMQError::Shared(admission_queue_saturated("channel")));
+            }
+            PendingRegistrationOutcome::OperationalFailure(error) => {
+                return Err(RocketMQError::Shared(error));
+            }
+        };
         let reservation = ResponseReservation::Pending(guard.token());
 
         deadline.ensure_before_send()?;
@@ -903,9 +920,11 @@ impl ChannelInner {
             outbound_queue_tx
                 .try_send((request, Some(reservation), Some(deadline), Some(progress.clone())))
                 .map_err(|error| match error {
-                    flume::TrySendError::Full(_) => network(admission_queue_saturated("channel")),
+                    flume::TrySendError::Full(_) => {
+                        rocketmq_error::RocketMQError::Shared(admission_queue_saturated("channel"))
+                    }
                     flume::TrySendError::Disconnected(_) => {
-                        network(connection_failed_without_source(TransportStage::Closed))
+                        rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
                     }
                 })?;
         }
@@ -913,15 +932,23 @@ impl ChannelInner {
         // Wait for response with timeout
         match deadline.timeout(&mut response_rx).await {
             Ok(result) => match result {
-                Ok(response) => response,
-                Err(source) => Err(network(connection_failed(TransportStage::Closed, source))),
+                Ok(PendingRequestCompletion::Response(response)) => Ok(response),
+                Ok(PendingRequestCompletion::DeadlineExpired) => Err(deadline.elapsed_error()),
+                Ok(PendingRequestCompletion::Cancelled | PendingRequestCompletion::SessionClosed) => Err(
+                    RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed)),
+                ),
+                Ok(PendingRequestCompletion::OperationalFailure(error)) => Err(RocketMQError::Shared(error)),
+                Err(source) => Err(rocketmq_error::RocketMQError::Shared(connection_failed(
+                    TransportStage::Closed,
+                    source,
+                ))),
             },
             Err(source) => {
                 let stage_error = progress.deadline_error(deadline, source);
                 match stage_error {
-                    RocketMQError::Network(source) => Err(guard.expire_with_network(source)),
+                    RocketMQError::Shared(source) => Err(RocketMQError::Shared(guard.expire_with_error(source))),
                     error => {
-                        guard.complete(Err(deadline.elapsed_error()));
+                        guard.complete(PendingRequestCompletion::DeadlineExpired);
                         Err(error)
                     }
                 }
@@ -970,9 +997,11 @@ impl ChannelInner {
         outbound_queue_tx
             .try_send((request, None, Some(deadline), None))
             .map_err(|error| match error {
-                flume::TrySendError::Full(_) => network(admission_queue_saturated("channel")),
+                flume::TrySendError::Full(_) => {
+                    rocketmq_error::RocketMQError::Shared(admission_queue_saturated("channel"))
+                }
                 flume::TrySendError::Disconnected(_) => {
-                    network(connection_failed_without_source(TransportStage::Closed))
+                    rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
                 }
             })
     }
@@ -1021,9 +1050,11 @@ impl ChannelInner {
         outbound_queue_tx
             .try_send((request, None, deadline, None))
             .map_err(|error| match error {
-                flume::TrySendError::Full(_) => network(admission_queue_saturated("channel")),
+                flume::TrySendError::Full(_) => {
+                    rocketmq_error::RocketMQError::Shared(admission_queue_saturated("channel"))
+                }
                 flume::TrySendError::Disconnected(_) => {
-                    network(connection_failed_without_source(TransportStage::Closed))
+                    rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
                 }
             })
     }
@@ -1079,8 +1110,8 @@ mod tests {
 
         let writing = OutboundProgress::queued();
         writing.set(OUTBOUND_WRITING);
-        let RocketMQError::Network(writing) = writing.deadline_error(deadline, elapsed_timeout_source().await) else {
-            panic!("writing timeout must be a canonical Network error");
+        let RocketMQError::Shared(writing) = writing.deadline_error(deadline, elapsed_timeout_source().await) else {
+            panic!("writing timeout must be a canonical Shared error");
         };
         assert_eq!(writing.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
         assert!(writing
@@ -1090,8 +1121,8 @@ mod tests {
 
         let sent = OutboundProgress::queued();
         sent.set(OUTBOUND_SENT);
-        let RocketMQError::Network(sent) = sent.deadline_error(deadline, elapsed_timeout_source().await) else {
-            panic!("response timeout must be a canonical Network error");
+        let RocketMQError::Shared(sent) = sent.deadline_error(deadline, elapsed_timeout_source().await) else {
+            panic!("response timeout must be a canonical Shared error");
         };
         assert_eq!(sent.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());
         assert!(sent
@@ -1169,14 +1200,14 @@ mod tests {
             test_parent("channel-close-test"),
         )
         .unwrap();
-        let guard = pending_requests
-            .register_for_owner(
-                channel_inner.pending_request_owner().unwrap(),
-                91,
-                RequestDeadline::from_timeout_millis(30_000),
-                sender,
-            )
-            .unwrap();
+        let PendingRegistrationOutcome::Registered(guard) = pending_requests.register_for_owner(
+            channel_inner.pending_request_owner().unwrap(),
+            91,
+            RequestDeadline::from_timeout_millis(30_000),
+            sender,
+        ) else {
+            panic!("pending request must be registered")
+        };
         let report = channel_inner.close_with_report(Duration::from_secs(1)).await;
 
         assert!(report.is_healthy(), "{}", report.to_json());
@@ -1185,7 +1216,7 @@ mod tests {
                 .await
                 .expect("close must complete pending requests immediately")
                 .expect("close must send a typed result"),
-            Err(RocketMQError::Network(_))
+            PendingRequestCompletion::SessionClosed
         ));
         assert!(pending_requests.is_empty());
         drop(guard);
@@ -1216,26 +1247,29 @@ mod tests {
         .unwrap();
         let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
         let (second_sender, mut second_receiver) = tokio::sync::oneshot::channel();
-        let first_guard = pending_requests
-            .register_for_owner(
-                first.pending_request_owner().unwrap(),
-                51,
-                RequestDeadline::from_timeout_millis(30_000),
-                first_sender,
-            )
-            .unwrap();
-        let second_guard = pending_requests
-            .register_for_owner(
-                second.pending_request_owner().unwrap(),
-                51,
-                RequestDeadline::from_timeout_millis(30_000),
-                second_sender,
-            )
-            .unwrap();
+        let PendingRegistrationOutcome::Registered(first_guard) = pending_requests.register_for_owner(
+            first.pending_request_owner().unwrap(),
+            51,
+            RequestDeadline::from_timeout_millis(30_000),
+            first_sender,
+        ) else {
+            panic!("first pending request must be registered")
+        };
+        let PendingRegistrationOutcome::Registered(second_guard) = pending_requests.register_for_owner(
+            second.pending_request_owner().unwrap(),
+            51,
+            RequestDeadline::from_timeout_millis(30_000),
+            second_sender,
+        ) else {
+            panic!("second pending request must be registered")
+        };
 
         first.close_with_report(Duration::from_secs(1)).await;
 
-        assert!(matches!(first_receiver.await.unwrap(), Err(RocketMQError::Network(_))));
+        assert!(matches!(
+            first_receiver.await.unwrap(),
+            PendingRequestCompletion::SessionClosed
+        ));
         assert!(second_receiver.try_recv().is_err());
         assert_eq!(pending_requests.len(), 1);
         drop((first_guard, second_guard, second));

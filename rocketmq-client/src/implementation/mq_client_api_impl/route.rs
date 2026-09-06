@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::route_error::route_lookup_error;
 use super::*;
 
 pub struct RouteClient<'a> {
@@ -68,44 +69,76 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
         allow_topic_not_exist: bool,
     ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
+        let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
+        self.get_topic_route_info_once(topic, deadline, allow_topic_not_exist)
+            .await
+            .map_err(route_lookup_error)
+    }
+
+    pub(crate) async fn get_topic_route_info_once(
+        &self,
+        topic: &str,
+        deadline: RequestDeadline,
+        allow_topic_not_exist: bool,
+    ) -> Result<Option<TopicRouteData>, RetryInput> {
         let request_header = GetRouteInfoRequestHeader {
             topic: CheetahString::from_slice(topic),
             accept_standard_json_only: None,
             topic_request_header: None,
         };
         let request = self.create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
-        let response = self.remoting_client.invoke_request(None, request, timeout_millis).await;
-        match response {
-            Ok(mut result) => {
+        let outcome = self
+            .remoting_client
+            .invoke_request_with_deadline(None, request, deadline)
+            .await
+            .map_err(RetryInput::Transport)?;
+        match outcome {
+            OutboundRequestOutcome::Response(mut result) => {
                 let code = result.code();
                 let response_code = ResponseCode::from(code);
                 match response_code {
                     ResponseCode::Success => {
                         let body = result.take_body();
                         if let Some(body_inner) = body {
-                            let route_data = TopicRouteData::decode(body_inner.as_ref())?;
+                            let route_data =
+                                TopicRouteData::decode(body_inner.as_ref()).map_err(RetryInput::BusinessError)?;
                             return Ok(Some(route_data));
                         }
                     }
                     ResponseCode::TopicNotExist => {
                         if allow_topic_not_exist {
                             warn!("get Topic [{}] RouteInfoFromNameServer is not exist value", topic);
+                            return Ok(None);
                         }
                     }
                     _ => {
-                        return Err(mq_client_err!(
+                        return Err(RetryInput::Response {
                             code,
-                            result.remark().cloned().unwrap_or_default().to_string()
-                        ))
+                            retry_after: None,
+                            terminal_error: mq_client_err!(
+                                code,
+                                result.remark().cloned().unwrap_or_default().to_string()
+                            ),
+                        });
                     }
                 }
-                Err(mq_client_err!(
+                Err(RetryInput::Response {
                     code,
-                    result.remark().cloned().unwrap_or_default().to_string()
-                ))
+                    retry_after: None,
+                    terminal_error: mq_client_err!(code, result.remark().cloned().unwrap_or_default().to_string()),
+                })
             }
-            Err(err) => Err(err),
+            OutboundRequestOutcome::Rejected(rejection) => Err(RetryInput::Rejected(rejection)),
+            OutboundRequestOutcome::Contract(contract) => Err(RetryInput::Contract(contract)),
         }
+    }
+
+    pub(crate) async fn get_default_topic_route_info_once(
+        &self,
+        deadline: RequestDeadline,
+    ) -> Result<Option<TopicRouteData>, RetryInput> {
+        self.get_topic_route_info_once(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC, deadline, false)
+            .await
     }
 
     pub fn get_name_server_address_list(&self) -> Vec<CheetahString> {

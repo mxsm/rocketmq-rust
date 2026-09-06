@@ -490,14 +490,14 @@ mod tests {
     fn static_topic_offset_mapping_missing_uses_route_inconsistent_kind() {
         let error = static_topic_offset_mapping_missing("test operation");
 
-        assert_eq!(error.kind(), rocketmq_error::ErrorKind::RouteInconsistent);
+        assert_eq!(error.descriptor(), &rocketmq_error::ROUTE_TOPIC_INCONSISTENT);
     }
 
     #[test]
     fn static_topic_offset_broker_name_missing_uses_request_header_kind() {
         let error = static_topic_offset_broker_name_missing("test operation");
 
-        assert_eq!(error.kind(), rocketmq_error::ErrorKind::RequestHeaderError);
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID);
     }
 
     #[tokio::test]

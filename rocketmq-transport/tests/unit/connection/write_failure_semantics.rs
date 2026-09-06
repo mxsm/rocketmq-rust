@@ -690,8 +690,8 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
         .await
         .expect_err("TLS sendfile preflight must fail")
         .into_error();
-    let RocketMQError::Network(source) = canonical else {
-        panic!("sendfile preflight must use the canonical Network carrier")
+    let RocketMQError::Shared(source) = canonical else {
+        panic!("sendfile preflight must use the canonical Shared carrier")
     };
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
     assert!(source.source().is_some());
@@ -1250,8 +1250,8 @@ async fn direct_facade_preserves_the_canonical_writer_error_and_typed_source() {
         .await
         .expect_err("injected direct write failure");
 
-    let RocketMQError::Network(source) = error else {
-        panic!("direct writer failure must use the canonical Network carrier")
+    let RocketMQError::Shared(source) = error else {
+        panic!("direct writer failure must use the canonical Shared carrier")
     };
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
     assert!(source
@@ -1363,8 +1363,8 @@ async fn queued_facade_preserves_the_shared_canonical_writer_source() {
         .expect_err("injected queued write failure");
     writer.await.expect("writer task must exit after poisoning");
 
-    let RocketMQError::Network(source) = error else {
-        panic!("queued writer failure must use the canonical Network carrier")
+    let RocketMQError::Shared(source) = error else {
+        panic!("queued writer failure must use the canonical Shared carrier")
     };
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
     assert!(source

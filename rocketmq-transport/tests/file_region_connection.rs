@@ -208,8 +208,8 @@ fn explicit_sendfile_on_tls_fails_before_writing_the_head() {
             )
             .await
             .expect_err("sendfile must never bypass a TLS stream");
-        let RocketMQError::Network(source) = error else {
-            panic!("sendfile preflight must use the canonical Network carrier")
+        let RocketMQError::Shared(source) = error else {
+            panic!("sendfile preflight must use the canonical Shared carrier")
         };
         assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
         assert!(std::error::Error::source(source.as_ref()).is_some());

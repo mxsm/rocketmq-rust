@@ -30,8 +30,9 @@ use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::clients::nameserver_endpoint::NameServerEndpoint;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::deadline::RequestDeadline;
+use crate::error::TransportError;
+use crate::request_outcome::OutboundRequestOutcome;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
-use crate::runtime::config::client_config::GoAwayPolicy;
 use crate::runtime::config::client_config::TransportClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
@@ -52,7 +53,6 @@ pub struct TransportClientBuilder<PR> {
     transport_security: Option<Arc<TransportSecurity>>,
     telemetry: TransportTelemetry,
     frame_limits: FrameLimits,
-    go_away_policy: GoAwayPolicy,
 }
 
 impl<PR> TransportClientBuilder<PR>
@@ -86,13 +86,6 @@ where
         Ok(self)
     }
 
-    /// Applies an explicit allowlist for one bounded `GO_AWAY` reconnect retry.
-    #[must_use]
-    pub fn go_away_policy(mut self, policy: GoAwayPolicy) -> Self {
-        self.go_away_policy = policy;
-        self
-    }
-
     /// Builds the transport client.
     ///
     /// # Errors
@@ -107,7 +100,6 @@ where
             self.service_context,
             self.telemetry,
             self.frame_limits,
-            self.go_away_policy,
         )?;
         if let Some(transport_security) = self.transport_security {
             client = client.with_transport_security(transport_security);
@@ -216,13 +208,6 @@ where
         Ok(self)
     }
 
-    /// Applies an explicit allowlist for one bounded `GO_AWAY` reconnect retry.
-    #[must_use]
-    pub fn go_away_policy(mut self, policy: GoAwayPolicy) -> Self {
-        self.transport = self.transport.go_away_policy(policy);
-        self
-    }
-
     /// Builds the nameserver-aware remoting client.
     ///
     /// # Errors
@@ -321,7 +306,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             transport_security: None,
             telemetry: TransportTelemetry::noop(),
             frame_limits: FrameLimits::java_compatibility(),
-            go_away_policy: GoAwayPolicy::default(),
         }
     }
 }
@@ -395,17 +379,19 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
 
     /// Sends one canonical request under an absolute deadline.
     ///
+    /// Normal deadline, lifecycle, admission, endpoint-availability, and
+    /// request-contract outcomes are returned as typed values.
+    ///
     /// # Errors
     ///
-    /// Returns an error when the target cannot be resolved or connected, the
-    /// deadline expires, request admission or signing fails, the writer cannot
-    /// send the command, or response correlation terminates without a response.
+    /// Returns an operational Transport failure when connection setup, request
+    /// signing, socket I/O, response correlation, or a final response hook fails.
     pub async fn request(
         &self,
         target: RequestTarget,
         request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> Result<OutboundRequestOutcome, TransportError> {
         self.request_inner(target, request, deadline).await
     }
 
@@ -425,7 +411,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         self.send_oneway_inner(target, request, deadline).await
     }
 
-    /// Send request and wait for response with timeout.
+    /// Sends a request and waits for a response under a relative timeout.
     ///
     /// # Flow
     /// ```text
@@ -434,12 +420,13 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// 3. Record latency / error metrics       (~10ns)
     /// ```
     ///
+    /// Normal deadline, lifecycle, admission, endpoint-availability, and
+    /// request-contract outcomes are returned as typed values.
+    ///
     /// # Errors
     ///
-    /// Returns `RocketMQError` for all failures:
-    /// - Client unavailable (no connection)
-    /// - Network I/O error (send/recv failure)
-    /// - Timeout (no response within deadline)
+    /// Returns an operational Transport failure when connection setup, request
+    /// signing, socket I/O, response correlation, or a final response hook fails.
     ///
     /// # Arguments
     ///
@@ -450,15 +437,27 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// # use crate::clients::TransportClient;
+    /// # use rocketmq_transport::api::OutboundRequestOutcome;
+    /// # use rocketmq_transport::clients::TransportClient;
     /// # use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-    /// # async fn example(client: &TransportClient) -> rocketmq_error::RocketMQResult<()> {
+    /// # async fn example(client: &TransportClient) -> Result<(), rocketmq_transport::api::TransportError> {
     /// let request = RemotingCommand::create_request_command(/* ... */);
-    /// let response = client.invoke_request(
+    /// let outcome = client.invoke_request(
     ///     Some(&"127.0.0.1:10911".into()),
     ///     request,
     ///     3000 // 3 second timeout
     /// ).await?;
+    /// match outcome {
+    ///     OutboundRequestOutcome::Response(response) => {
+    ///         let _ = response.code();
+    ///     }
+    ///     OutboundRequestOutcome::Rejected(rejection) => {
+    ///         let _ = (rejection.reason(), rejection.stage());
+    ///     }
+    ///     OutboundRequestOutcome::Contract(contract) => {
+    ///         let _ = (contract.reason(), contract.stage());
+    ///     }
+    /// }
     /// # Ok(())
     /// # }
     /// ```
@@ -467,7 +466,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         addr: Option<&CheetahString>,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> Result<OutboundRequestOutcome, TransportError> {
         self.invoke_request_with_deadline(addr, request, RequestDeadline::from_timeout_millis(timeout_millis))
             .await
     }

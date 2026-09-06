@@ -50,10 +50,26 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
         let request = self.create_request_command(RequestCode::GetConsumeStats, request_header);
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_consume_stats_for_mutation",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_consume_stats_for_mutation",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         bounded_consume_stats_from_response(&response)
     }
 
@@ -68,10 +84,26 @@ impl MQClientAPIImpl {
     ) -> RocketMQResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
         let topic = request_header.topic.clone();
         let request = self.create_request_command(RequestCode::GetConsumeStats, request_header);
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_consume_stats_for_supervised_mutation",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_consume_stats_for_supervised_mutation",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         supervised_consume_stats_from_response(&response, &topic, broker_name, read_queue_nums)
     }
 
@@ -90,10 +122,26 @@ impl MQClientAPIImpl {
             },
         );
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_topic_config_state_for_mutation",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_topic_config_state_for_mutation",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let state = mutation_topic_config_versioned_from_response(&response)?;
@@ -151,10 +199,26 @@ impl MQClientAPIImpl {
             )
             .set_body(body.encode()?);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "replace_topic_config_if_state",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "replace_topic_config_if_state",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         state_cas_outcome_from_response(&response, expected_state)
     }
 
@@ -173,10 +237,26 @@ impl MQClientAPIImpl {
             },
         );
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_subscription_group_config_state_for_mutation",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_subscription_group_config_state_for_mutation",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let body = response.get_body().ok_or_else(|| {
@@ -257,10 +337,26 @@ impl MQClientAPIImpl {
                 .encode()?,
             );
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "replace_subscription_group_config_if_state",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "replace_subscription_group_config_if_state",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         state_cas_outcome_from_response(&response, expected_state)
     }
 
@@ -272,10 +368,26 @@ impl MQClientAPIImpl {
     ) -> RocketMQResult<ClientBrokerMutationConfigState> {
         let request = self.create_remoting_command(RequestCode::GetBrokerMutationConfig);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_broker_mutation_config_state",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_broker_mutation_config_state",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(mq_client_err!(
                 response.code(),
@@ -328,10 +440,26 @@ impl MQClientAPIImpl {
             },
         );
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "reset_consumer_offset_if_current",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "reset_consumer_offset_if_current",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         conditional_offset_outcome_from_response(&response, expected_offset, new_offset)
     }
 
@@ -353,10 +481,26 @@ impl MQClientAPIImpl {
                 .encode()?,
             );
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_message_request_mode_for_mutation",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_message_request_mode_for_mutation",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(mq_client_err!(
                 response.code(),
@@ -411,10 +555,26 @@ impl MQClientAPIImpl {
                 .encode()?,
             );
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(&broker_addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "replace_message_request_mode_if_current",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "replace_message_request_mode_if_current",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         request_mode_cas_outcome_from_response(&response, expected, replacement)
     }
 }

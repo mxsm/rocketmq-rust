@@ -174,7 +174,7 @@ fn protocol_and_retry_responsibilities_remain_in_their_own_modules() {
 
     assert!(PRODUCER_SEND.contains("send_kernel_impl"));
     assert!(PRODUCER_RETRY.contains("send_with_retry"));
-    assert!(PRODUCER_RETRY.contains("ClientRetryDecision"));
+    assert!(PRODUCER_RETRY.contains("RetryPolicy::decide"));
     assert!(PRODUCER_TRANSACTION.contains("send_message_in_transaction"));
     assert!(PRODUCER_LIFECYCLE.contains("shutdown_with_factory"));
     for method in [

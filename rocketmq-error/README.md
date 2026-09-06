@@ -38,7 +38,7 @@ use rocketmq_error::TRANSPORT_ENDPOINT_INVALID;
 
 fn validate_transport_endpoint(addr: &str) -> RocketMQResult<()> {
     if addr.is_empty() {
-        return Err(RocketMQError::Network(Arc::new(Error::new(
+        return Err(RocketMQError::Shared(Arc::new(Error::new(
             &TRANSPORT_ENDPOINT_INVALID,
         ))));
     }
@@ -47,9 +47,9 @@ fn validate_transport_endpoint(addr: &str) -> RocketMQResult<()> {
 }
 ```
 
-The `Network` variant carries one canonical `SharedError`, so transport
-descriptor identity, context, and a typed physical source can cross crate
-boundaries without reconstruction. Retained domain errors such as
+The `Shared` variant is the sole canonical `SharedError` carrier, so descriptor
+identity, context, and a typed physical source can cross crate boundaries
+without reconstruction. Retained domain errors such as
 `SerializationError`, `ProtocolError`, `RpcClientError`, `AuthError`,
 `ControllerError`, `ToolsError`, `FilterError`, `ObservabilityError`, and
 `UnifiedServiceError` convert to `RocketMQError` through `From`.
@@ -75,9 +75,9 @@ assert_eq!(
 ```
 
 `ALL_DESCRIPTORS` is the sole catalog. `descriptor_by_code` performs exact
-lookup of canonical lowercase dotted codes. `ErrorKind` remains a structural
-typed discriminator for local exhaustive matching; it does not own a second
-metadata or policy table.
+lookup of canonical lowercase dotted codes. Stable behavior is selected
+directly from descriptors; there is no central structural error kind or reverse
+descriptor-to-kind mapping.
 
 A descriptor explicitly owns all four projections:
 

@@ -28,6 +28,7 @@ use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbea
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::{RemotingCommandDefaults, RemotingCommandFactory};
 use rocketmq_protocol::protocol::SerializeType;
+use rocketmq_transport::api::OutboundRequestOutcome;
 
 #[test]
 fn controller_manager_does_not_log_the_full_configuration() {
@@ -336,12 +337,21 @@ async fn concurrent_start_waits_for_the_single_lifecycle_transition() {
 
     let endpoint = CheetahString::from_string(remoting_addr.to_string());
     let request = RemotingCommand::create_remoting_command(-12_345).set_opaque(73);
-    let response = manager
+    let response = match manager
         .remoting_client
         .transport_client()
         .invoke_request(Some(&endpoint), request, 3_000)
         .await
-        .expect("production V2 Controller server should answer a canonical TCP request");
+    {
+        Ok(OutboundRequestOutcome::Response(response)) => response,
+        Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            panic!("production V2 Controller request was rejected: {rejection:?}")
+        }
+        Ok(OutboundRequestOutcome::Contract(contract)) => {
+            panic!("production V2 Controller request contract failed: {contract:?}")
+        }
+        Err(error) => panic!("production V2 Controller request failed: {error:?}"),
+    };
     assert_eq!(response.code(), ResponseCode::RequestCodeNotSupported as i32);
     assert_eq!(response.opaque(), 73);
     assert!(response.body().is_none());

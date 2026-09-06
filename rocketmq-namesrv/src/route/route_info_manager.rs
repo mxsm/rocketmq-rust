@@ -993,7 +993,7 @@ impl RouteInfoManager {
                             Err(error) => {
                                 warn!(
                                     remote_addr = %broker_addr,
-                                    error_kind = ?error.kind(),
+                                    error_code = %error.descriptor().code(),
                                     "minimum broker id notification failed"
                                 );
                                 false

@@ -369,7 +369,7 @@ fn parse_tlvs(input: &[u8], config: &ProxyProtocolConfig) -> RocketMQResult<BTre
 }
 
 fn protocol_error(_reason: impl Into<String>) -> RocketMQError {
-    crate::error_helpers::network(crate::error_helpers::connection_failed_without_source(
+    rocketmq_error::RocketMQError::Shared(crate::error_helpers::connection_failed_without_source(
         crate::error_helpers::TransportStage::EndpointValidation,
     ))
 }

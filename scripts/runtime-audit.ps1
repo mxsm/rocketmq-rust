@@ -1690,6 +1690,24 @@ function Get-SchedulerDisposition {
         }
     }
 
+    $boundedClientRetryPaths = @(
+        "rocketmq-client/src/producer/producer_impl/default_mq_producer_impl/retry_action.rs",
+        "rocketmq-client/src/implementation/mq_client_api_impl/producer_retry.rs",
+        "rocketmq-client/src/implementation/mq_client_api_impl/admin.rs",
+        "rocketmq-client/src/implementation/mq_admin_impl.rs"
+    )
+    $isBoundedClientRetryWait =
+        $Match.Text -match '^if ctx\.deadline\.timeout\(tokio::time::sleep\(delay\)\)\.await\.is_(ok|err)\(\) \{$' -or
+        $Match.Text -match '^if deadline\.timeout\(tokio::time::sleep\(delay\)\)\.await\.is_err\(\) \{$' -or
+        $Match.Text -match '^if tokio::time::timeout_at\(deadline\.instant\(\), tokio::time::sleep\(delay\)\)$'
+    if ($boundedClientRetryPaths -contains $path -and $isBoundedClientRetryWait) {
+        return [pscustomobject]@{
+            Disposition = "client-request-retry-backoff"
+            ActionRequired = $false
+            Reason = "Allowed request-local retry-policy wait bounded by the operation's existing absolute RequestDeadline; it creates no task or scheduler."
+        }
+    }
+
     if ($path -match "^rocketmq-client/src/consumer/") {
         return [pscustomobject]@{
             Disposition = "client-consumer-protocol-delay"

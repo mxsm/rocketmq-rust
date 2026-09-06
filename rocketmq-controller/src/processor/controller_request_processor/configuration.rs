@@ -102,8 +102,6 @@ impl ControllerRequestProcessor {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::ErrorKind;
-
     use super::*;
 
     #[test]
@@ -111,7 +109,7 @@ mod tests {
         let error = ControllerRequestProcessor::parse_properties_from_string(&[0xff])
             .expect_err("invalid utf8 should be rejected");
 
-        assert_eq!(error.kind(), ErrorKind::RequestBodyInvalid);
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_BODY_INVALID);
         assert!(error.to_string().contains("UPDATE_CONTROLLER_CONFIG"));
     }
 }

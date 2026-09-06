@@ -16,40 +16,18 @@ use super::callback_executor::ClientCallbackExecutor;
 use super::request_builder::heartbeat_request;
 use super::*;
 
-pub struct ProducerClient<'a> {
-    api: &'a MQClientAPIImpl,
-}
-
-impl ProducerClient<'_> {
-    pub async fn send_heartbeat(
-        &self,
-        addr: &CheetahString,
-        heartbeat_data: &HeartbeatData,
-        timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<(i32, Option<RemotingCommand>)> {
-        self.api.send_heartbeat(addr, heartbeat_data, timeout_millis).await
-    }
-}
-
-impl MQClientAPIImpl {
-    #[must_use]
-    pub fn producer_client(&self) -> ProducerClient<'_> {
-        ProducerClient { api: self }
-    }
-}
-
 impl MQClientAPIImpl {
     #[allow(
         clippy::too_many_arguments,
         reason = "existing send wire adapter signature is tracked by the lint debt registry"
     )]
-    pub async fn send_message<T>(
+    pub(crate) async fn send_message<T>(
         &self,
         addr: &CheetahString,
         broker_name: &CheetahString,
         msg: &mut T,
         request_header: SendMessageRequestHeader,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
@@ -57,11 +35,10 @@ impl MQClientAPIImpl {
         retry_times_when_send_failed: u32,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> Result<Option<SendResult>, RetryInput>
     where
         T: MessageTrait,
     {
-        let begin_start_time = Instant::now();
         let msg_type = msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TYPE));
         let is_reply = msg_type
             .as_ref()
@@ -98,35 +75,35 @@ impl MQClientAPIImpl {
         } else if let Some(body) = msg.get_body() {
             request.set_body_mut_ref(body.clone());
         } else {
-            return Err(mq_client_err!(-1, "Message body is None"));
+            return Err(mq_client_err!(-1, "Message body is None").into());
         }
         match communication_mode {
             CommunicationMode::Sync => {
-                let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
-                if cost_time_sync > timeout_millis {
+                if deadline.is_expired() {
                     return Err(rocketmq_error::RocketMQError::Timeout {
                         operation: "sendMessage",
-                        timeout_ms: timeout_millis,
-                    });
+                        timeout_ms: deadline.budget_millis(),
+                    }
+                    .into());
                 }
                 let result = self
-                    .send_message_sync(addr, broker_name, msg, timeout_millis - cost_time_sync, request)
+                    .send_message_sync(addr, broker_name, msg, deadline, request)
                     .await?;
                 Ok(Some(result))
             }
             CommunicationMode::Async => {
-                let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
-                if cost_time_sync > timeout_millis {
+                if deadline.is_expired() {
                     return Err(rocketmq_error::RocketMQError::Timeout {
                         operation: "sendMessage",
-                        timeout_ms: timeout_millis,
-                    });
+                        timeout_ms: deadline.budget_millis(),
+                    }
+                    .into());
                 }
                 self.send_message_async(
                     addr,
                     broker_name,
                     msg,
-                    timeout_millis,
+                    deadline,
                     request,
                     send_callback,
                     topic_publish_info,
@@ -140,8 +117,9 @@ impl MQClientAPIImpl {
             }
             CommunicationMode::Oneway => {
                 self.remoting_client
-                    .invoke_request_oneway(addr, request, timeout_millis)
-                    .await?;
+                    .invoke_request_oneway_with_deadline(addr, request, deadline)
+                    .await
+                    .map_err(RetryInput::BusinessError)?;
                 Ok(None)
             }
         }
@@ -169,17 +147,17 @@ impl MQClientAPIImpl {
             .await
     }
 
-    pub async fn send_message_simple<T>(
+    pub(crate) async fn send_message_simple<T>(
         &self,
         addr: &CheetahString,
         broker_name: &CheetahString,
         msg: &mut T,
         request_header: SendMessageRequestHeader,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         communication_mode: CommunicationMode,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> Result<Option<SendResult>, RetryInput>
     where
         T: MessageTrait,
     {
@@ -188,7 +166,7 @@ impl MQClientAPIImpl {
             broker_name,
             msg,
             request_header,
-            timeout_millis,
+            deadline,
             communication_mode,
             None,
             None,
@@ -205,17 +183,39 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         broker_name: &CheetahString,
         msg: &T,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         request: RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> Result<SendResult, RetryInput>
     where
         T: MessageTrait,
     {
-        let response = self
+        let outcome = self
             .remoting_client
-            .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
-        self.process_send_response(broker_name, msg, &response, addr)
+            .invoke_request_with_deadline(Some(addr), request, deadline)
+            .await
+            .map_err(RetryInput::Transport)?;
+        let response = match outcome {
+            OutboundRequestOutcome::Response(response) => response,
+            OutboundRequestOutcome::Rejected(rejection) => return Err(RetryInput::Rejected(rejection)),
+            OutboundRequestOutcome::Contract(contract) => return Err(RetryInput::Contract(contract)),
+        };
+        match ResponseCode::from(response.code()) {
+            ResponseCode::FlushDiskTimeout
+            | ResponseCode::FlushSlaveTimeout
+            | ResponseCode::SlaveNotAvailable
+            | ResponseCode::Success => self
+                .process_send_response(broker_name, msg, &response, addr)
+                .map_err(RetryInput::BusinessError),
+            _ => Err(RetryInput::Response {
+                code: response.code(),
+                retry_after: None,
+                terminal_error: client_broker_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |remark| remark.to_string()),
+                    addr.to_string()
+                ),
+            }),
+        }
     }
 
     pub(super) async fn send_message_async<T: MessageTrait>(
@@ -223,7 +223,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         broker_name: &CheetahString,
         msg: &T,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         request: RemotingCommand,
         send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
@@ -270,7 +270,9 @@ impl MQClientAPIImpl {
         let topic_publish_info_cloned = topic_publish_info.cloned();
         let instance_cloned = instance.clone();
         let mq_fault_strategy = producer.fault_strategy_snapshot();
-        let retry_response_codes = producer.producer_config_snapshot().retry_response_codes().clone();
+        let producer_config = producer.producer_config_snapshot();
+        let retry_response_codes = producer_config.retry_response_codes().clone();
+        let retry_not_store_ok = producer_config.retry_another_broker_when_not_store_ok();
         // Snapshot only the immutable hook capability and context data needed by the callback.
         let context_data = context.as_ref().map(|c| AsyncSendHookContext {
             producer_group: c.producer_group.as_ref().cloned(),
@@ -296,13 +298,14 @@ impl MQClientAPIImpl {
             msg_topic,
             msg_uniq_id,
             is_batch_message,
-            timeout_millis,
+            deadline,
             current_request,
             send_callback,
             topic_publish_info_cloned,
             instance_cloned,
             retry_times_when_send_failed,
             retry_response_codes,
+            retry_not_store_ok,
             context_data,
         )
         .await;
@@ -324,42 +327,80 @@ impl MQClientAPIImpl {
         msg_topic: CheetahString,
         msg_uniq_id: Option<CheetahString>,
         _is_batch_message: bool,
-        timeout_millis: u64,
+        deadline: RequestDeadline,
         current_request: RemotingCommand,
         send_callback: Option<ArcSendCallback>,
-        topic_publish_info: Option<TopicPublishInfo>,
+        mut topic_publish_info: Option<TopicPublishInfo>,
         instance: Option<Arc<MQClientInstance>>,
         retry_times_when_send_failed: u32,
         retry_response_codes: HashSet<i32>,
+        retry_not_store_ok: bool,
         context_data: Option<AsyncSendHookContext>,
     ) {
-        let begin_start_time_all = Instant::now();
+        let max_attempts = retry_times_when_send_failed.saturating_add(1);
         let mut retry_count = 0_u32;
         let mut retry_request = AsyncRetryRequest::new(current_request);
+        let mut last_error = None;
+        let mut refresh_route_before_send = false;
 
         loop {
-            let elapsed = (Instant::now() - begin_start_time_all).as_millis() as u64;
-            if elapsed >= timeout_millis {
-                let err = rocketmq_error::RocketMQError::Timeout {
+            if deadline.is_expired() {
+                let err = Arc::new(last_error.take().unwrap_or(rocketmq_error::RocketMQError::Timeout {
                     operation: "sendMessageAsync",
-                    timeout_ms: timeout_millis,
-                };
-                Self::execute_async_send_hook_after(&context_data, None, Some(Self::context_error(err.to_string())));
-                Self::notify_send_callback_exception(&callback_executor, &send_callback, &err).await;
+                    timeout_ms: deadline.budget_millis(),
+                }));
+                Self::execute_async_send_hook_after(&context_data, None, Some(Arc::clone(&err)));
+                Self::notify_send_callback_exception(&callback_executor, &send_callback, err.as_ref()).await;
                 return;
             }
 
-            let remaining_timeout = timeout_millis - elapsed;
+            let attempt = retry_count.saturating_add(1);
+            if refresh_route_before_send {
+                match Self::refresh_async_retry_route(
+                    &mq_fault_strategy,
+                    &mut topic_publish_info,
+                    instance.as_ref(),
+                    &mut current_broker_name,
+                    &mut current_addr,
+                    deadline,
+                    &msg_topic,
+                )
+                .await
+                {
+                    Ok(()) => refresh_route_before_send = false,
+                    Err(input) => {
+                        if Self::handle_async_route_refresh_failure(
+                            input,
+                            &mut retry_request,
+                            &mut retry_count,
+                            max_attempts,
+                            attempt,
+                            deadline,
+                            &mut last_error,
+                            &mut refresh_route_before_send,
+                            &current_addr,
+                            &callback_executor,
+                            &send_callback,
+                            &context_data,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        return;
+                    }
+                }
+            }
             let begin_attempt_time = Instant::now();
-            let keep_request_for_retry = retry_count < retry_times_when_send_failed;
+            let keep_request_for_retry = attempt < max_attempts;
             let attempt_request = retry_request.next_attempt(keep_request_for_retry);
             let result = remoting_client
-                .invoke_request(Some(&current_addr), attempt_request, remaining_timeout)
+                .invoke_request_with_deadline(Some(&current_addr), attempt_request, deadline)
                 .await;
             let cost = (Instant::now() - begin_attempt_time).as_millis() as u64;
 
             match result {
-                Ok(response) => {
+                Ok(OutboundRequestOutcome::Response(response)) => {
                     // Determine send status
                     let response_code = ResponseCode::from(response.code());
                     let send_status = match response_code {
@@ -368,46 +409,40 @@ impl MQClientAPIImpl {
                         ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
                         ResponseCode::Success => SendStatus::SendOk,
                         _ => {
-                            mq_fault_strategy
-                                .update_fault_item(current_broker_name.clone(), cost, true, true)
-                                .await;
-                            let err_obj = mq_client_err!(
-                                response.code(),
-                                response.remark().map_or("".to_string(), |s| s.to_string())
-                            );
-
-                            let retry_elapsed = (Instant::now() - begin_start_time_all).as_millis() as u64;
-                            let has_retry_budget = retry_count < retry_times_when_send_failed
-                                && retry_elapsed < timeout_millis
-                                && Self::should_retry_async_producer_send_error(&err_obj, &retry_response_codes);
-                            if has_retry_budget {
-                                retry_count += 1;
-                                if let Some((retry_addr, retry_broker_name)) = Self::select_async_retry_target(
-                                    &mq_fault_strategy,
-                                    topic_publish_info.as_ref(),
-                                    instance.as_ref(),
-                                    &current_broker_name,
-                                    &current_addr,
-                                )
-                                .await
-                                {
-                                    warn!(
-                                        "async send msg by retry {} times after broker response. topic={}, brokerAddr={}, brokerName={}",
-                                        retry_count, msg_topic, retry_addr, retry_broker_name
-                                    );
-                                    current_addr = retry_addr;
-                                    current_broker_name = retry_broker_name;
-                                    retry_request.set_retry_opaque(RemotingCommand::create_new_request_id());
-                                    continue;
-                                }
-                            }
-
-                            Self::execute_async_send_hook_after(
+                            let input = RetryInput::Response {
+                                code: response.code(),
+                                retry_after: None,
+                                terminal_error: client_broker_err!(
+                                    response.code(),
+                                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                                    current_addr.to_string()
+                                ),
+                            };
+                            if Self::handle_async_retry_input(
+                                &mq_fault_strategy,
+                                &mut topic_publish_info,
+                                instance.as_ref(),
+                                &mut current_broker_name,
+                                &mut current_addr,
+                                &mut retry_request,
+                                &mut retry_count,
+                                &mut last_error,
+                                &mut refresh_route_before_send,
+                                max_attempts,
+                                attempt,
+                                deadline,
+                                &retry_response_codes,
+                                input,
+                                cost,
+                                &msg_topic,
+                                &callback_executor,
+                                &send_callback,
                                 &context_data,
-                                None,
-                                Some(Self::context_error(err_obj.to_string())),
-                            );
-                            Self::notify_send_callback_exception(&callback_executor, &send_callback, &err_obj).await;
+                            )
+                            .await
+                            {
+                                continue;
+                            }
                             return;
                         }
                     };
@@ -442,13 +477,18 @@ impl MQClientAPIImpl {
                                     mq_fault_strategy
                                         .update_fault_item(current_broker_name.clone(), cost, true, true)
                                         .await;
+                                    let err_obj = Arc::new(err_obj);
                                     Self::execute_async_send_hook_after(
                                         &context_data,
                                         None,
-                                        Some(Self::context_error(err_obj.to_string())),
+                                        Some(Arc::clone(&err_obj)),
                                     );
-                                    Self::notify_send_callback_exception(&callback_executor, &send_callback, &err_obj)
-                                        .await;
+                                    Self::notify_send_callback_exception(
+                                        &callback_executor,
+                                        &send_callback,
+                                        err_obj.as_ref(),
+                                    )
+                                    .await;
                                     return;
                                 }
                             };
@@ -466,6 +506,68 @@ impl MQClientAPIImpl {
                                 ..Default::default()
                             };
 
+                            let status_input = RetryInput::SendStatus(send_result.send_status);
+                            let status_action = RetryPolicy::decide(
+                                RetryContext {
+                                    operation: RetryOperation::ProducerSend,
+                                    idempotency: RetryIdempotency::NonIdempotent,
+                                    attempt,
+                                    max_attempts,
+                                    remaining: deadline.remaining(),
+                                    producer_retry_response_codes: Some(&retry_response_codes),
+                                    retry_not_store_ok,
+                                },
+                                &status_input,
+                            );
+                            if status_action != RetryAction::Stop {
+                                match Self::execute_async_retry_action(
+                                    status_action,
+                                    &mq_fault_strategy,
+                                    &mut topic_publish_info,
+                                    instance.as_ref(),
+                                    &mut current_broker_name,
+                                    &mut current_addr,
+                                    deadline,
+                                    &msg_topic,
+                                )
+                                .await
+                                {
+                                    Ok(true) => {
+                                        last_error = Some(
+                                            crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                                                status_input,
+                                                Some(&current_addr),
+                                            ),
+                                        );
+                                        retry_count = retry_count.saturating_add(1);
+                                        retry_request.set_retry_opaque(RemotingCommand::create_new_request_id());
+                                        continue;
+                                    }
+                                    Ok(false) => {}
+                                    Err(input) => {
+                                        if Self::handle_async_route_refresh_failure(
+                                            input,
+                                            &mut retry_request,
+                                            &mut retry_count,
+                                            max_attempts,
+                                            attempt,
+                                            deadline,
+                                            &mut last_error,
+                                            &mut refresh_route_before_send,
+                                            &current_addr,
+                                            &callback_executor,
+                                            &send_callback,
+                                            &context_data,
+                                        )
+                                        .await
+                                        {
+                                            continue;
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+
                             // Success: update fault item and invoke callback
                             mq_fault_strategy
                                 .update_fault_item(current_broker_name.clone(), cost, false, true)
@@ -474,295 +576,117 @@ impl MQClientAPIImpl {
                             Self::notify_send_callback_success(&callback_executor, &send_callback, &send_result).await;
                             return;
                         }
-                        Err(_) => {
+                        Err(source) => {
                             mq_fault_strategy
                                 .update_fault_item(current_broker_name.clone(), cost, true, true)
                                 .await;
-                            let err_obj = mq_client_err!("decode SendMessageResponseHeader failed".to_string());
-                            Self::execute_async_send_hook_after(
-                                &context_data,
-                                None,
-                                Some(Self::context_error(err_obj.to_string())),
-                            );
-                            Self::notify_send_callback_exception(&callback_executor, &send_callback, &err_obj).await;
+                            let context = rocketmq_error::ErrorContext::new()
+                                .with_text(
+                                    rocketmq_error::fields::OPERATION_DIAGNOSTIC,
+                                    "decode SendMessageResponseHeader",
+                                )
+                                .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT);
+                            let err_obj = Arc::new(RocketMQError::Shared(Arc::new(
+                                rocketmq_error::Error::caused_by(&rocketmq_error::CORE_SERIALIZATION_FAILED, source)
+                                    .with_context(context),
+                            )));
+                            Self::execute_async_send_hook_after(&context_data, None, Some(Arc::clone(&err_obj)));
+                            Self::notify_send_callback_exception(&callback_executor, &send_callback, err_obj.as_ref())
+                                .await;
                             return;
                         }
                     }
                 }
-                Err(e) => {
-                    error!("send message async error: {:?}", e);
-                    mq_fault_strategy
-                        .update_fault_item(current_broker_name.clone(), cost, true, true)
-                        .await;
-
-                    let retry_elapsed = (Instant::now() - begin_start_time_all).as_millis() as u64;
-                    let has_retry_budget = retry_count < retry_times_when_send_failed
-                        && retry_elapsed < timeout_millis
-                        && Self::should_retry_async_producer_send_error(&e, &retry_response_codes);
-                    if has_retry_budget {
-                        retry_count += 1;
-                        if let Some((retry_addr, retry_broker_name)) = Self::select_async_retry_target(
-                            &mq_fault_strategy,
-                            topic_publish_info.as_ref(),
-                            instance.as_ref(),
-                            &current_broker_name,
-                            &current_addr,
-                        )
-                        .await
-                        {
-                            warn!(
-                                "async send msg by retry {} times. topic={}, brokerAddr={}, brokerName={}",
-                                retry_count, msg_topic, retry_addr, retry_broker_name
-                            );
-                            current_addr = retry_addr;
-                            current_broker_name = retry_broker_name;
-                            retry_request.set_retry_opaque(RemotingCommand::create_new_request_id());
-                            continue;
-                        }
+                Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                    let input = RetryInput::Rejected(rejection);
+                    if Self::handle_async_retry_input(
+                        &mq_fault_strategy,
+                        &mut topic_publish_info,
+                        instance.as_ref(),
+                        &mut current_broker_name,
+                        &mut current_addr,
+                        &mut retry_request,
+                        &mut retry_count,
+                        &mut last_error,
+                        &mut refresh_route_before_send,
+                        max_attempts,
+                        attempt,
+                        deadline,
+                        &retry_response_codes,
+                        input,
+                        cost,
+                        &msg_topic,
+                        &callback_executor,
+                        &send_callback,
+                        &context_data,
+                    )
+                    .await
+                    {
+                        continue;
                     }
-
-                    Self::execute_async_send_hook_after(&context_data, None, Some(Self::context_error(e.to_string())));
-                    Self::notify_send_callback_exception(&callback_executor, &send_callback, &e).await;
+                    return;
+                }
+                Ok(OutboundRequestOutcome::Contract(contract)) => {
+                    let input = RetryInput::Contract(contract);
+                    if Self::handle_async_retry_input(
+                        &mq_fault_strategy,
+                        &mut topic_publish_info,
+                        instance.as_ref(),
+                        &mut current_broker_name,
+                        &mut current_addr,
+                        &mut retry_request,
+                        &mut retry_count,
+                        &mut last_error,
+                        &mut refresh_route_before_send,
+                        max_attempts,
+                        attempt,
+                        deadline,
+                        &retry_response_codes,
+                        input,
+                        cost,
+                        &msg_topic,
+                        &callback_executor,
+                        &send_callback,
+                        &context_data,
+                    )
+                    .await
+                    {
+                        continue;
+                    }
+                    return;
+                }
+                Err(error) => {
+                    let input = RetryInput::Transport(error);
+                    error!("send message async operational failure");
+                    if Self::handle_async_retry_input(
+                        &mq_fault_strategy,
+                        &mut topic_publish_info,
+                        instance.as_ref(),
+                        &mut current_broker_name,
+                        &mut current_addr,
+                        &mut retry_request,
+                        &mut retry_count,
+                        &mut last_error,
+                        &mut refresh_route_before_send,
+                        max_attempts,
+                        attempt,
+                        deadline,
+                        &retry_response_codes,
+                        input,
+                        cost,
+                        &msg_topic,
+                        &callback_executor,
+                        &send_callback,
+                        &context_data,
+                    )
+                    .await
+                    {
+                        continue;
+                    }
                     return;
                 }
             }
         }
-    }
-
-    pub(super) fn select_async_retry_queue(
-        mq_fault_strategy: &MQFaultStrategy,
-        topic_publish_info: Option<&TopicPublishInfo>,
-        broker_name: &CheetahString,
-    ) -> Option<MessageQueue> {
-        topic_publish_info.and_then(|topic_publish_info| {
-            mq_fault_strategy.select_one_message_queue(topic_publish_info, Some(broker_name), false)
-        })
-    }
-
-    pub(super) fn should_retry_async_producer_send_error(
-        error: &rocketmq_error::RocketMQError,
-        retry_response_codes: &HashSet<i32>,
-    ) -> bool {
-        crate::common::retry_decision::producer_send_retry_decision(error, retry_response_codes).should_retry()
-    }
-
-    pub(super) async fn select_async_retry_target(
-        mq_fault_strategy: &MQFaultStrategy,
-        topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<&Arc<MQClientInstance>>,
-        broker_name: &CheetahString,
-        current_addr: &CheetahString,
-    ) -> Option<(CheetahString, CheetahString)> {
-        let mut retry_broker_name = broker_name.clone();
-        if let Some(mq_chosen) = Self::select_async_retry_queue(mq_fault_strategy, topic_publish_info, broker_name) {
-            retry_broker_name = if let Some(instance) = instance {
-                instance.get_broker_name_from_message_queue(&mq_chosen).await
-            } else {
-                mq_chosen.broker_name().clone()
-            };
-        }
-
-        let retry_addr = instance
-            .and_then(|instance| instance.find_broker_address_in_publish(retry_broker_name.as_ref()))
-            .unwrap_or_else(|| current_addr.clone());
-        Some((retry_addr, retry_broker_name))
-    }
-
-    pub(super) fn execute_async_send_hook_after(
-        context_data: &Option<AsyncSendHookContext>,
-        send_result: Option<&SendResult>,
-        exception: Option<Arc<RocketMQError>>,
-    ) {
-        let Some(context_data) = context_data.as_ref() else {
-            return;
-        };
-
-        let context = Some(SendMessageContext {
-            producer_group: context_data.producer_group.clone(),
-            broker_addr: context_data.broker_addr.clone(),
-            born_host: context_data.born_host.clone(),
-            communication_mode: context_data.communication_mode,
-            send_result,
-            exception,
-            mq_trace_context: context_data.mq_trace_context.clone(),
-            msg_type: context_data.msg_type,
-            namespace: context_data.namespace.clone(),
-            mq: context_data.mq.as_ref(),
-            message_trace_snapshot: context_data.message_trace_snapshot.clone(),
-            trace_start_time: context_data.trace_start_time,
-            ..Default::default()
-        });
-        for hook in context_data.hooks.iter() {
-            hook.send_message_after(&context);
-        }
-    }
-
-    pub(super) fn context_error(message: String) -> Arc<RocketMQError> {
-        Arc::new(RocketMQError::response_process_failed("send_callback", message))
-    }
-
-    pub(super) fn spawn_api_background_task<F>(
-        service_context: &ChildServiceContext,
-        thread_name: &'static str,
-        tracker: &TaskTracker,
-        shutdown_token: &CancellationToken,
-        task: F,
-    ) where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        if shutdown_token.is_cancelled() {
-            return;
-        }
-
-        let shutdown_token = shutdown_token.clone();
-        let tracked_task = tracker.track_future(async move {
-            tokio::select! {
-                biased;
-                _ = shutdown_token.cancelled() => {},
-                _ = task => {},
-            }
-        });
-
-        if let Err(error) = spawn_client_task_with_context(service_context, thread_name, Box::pin(tracked_task)) {
-            warn!("Failed to spawn {} background task: {}", thread_name, error);
-        }
-    }
-
-    pub(super) async fn notify_send_callback_success(
-        callback_executor: &ClientCallbackExecutor,
-        send_callback: &Option<ArcSendCallback>,
-        send_result: &SendResult,
-    ) {
-        let Some(callback) = send_callback.as_ref().cloned() else {
-            return;
-        };
-
-        let _ = callback_executor
-            .execute(async { callback.on_success(send_result) })
-            .await;
-    }
-
-    pub(super) async fn notify_send_callback_exception(
-        callback_executor: &ClientCallbackExecutor,
-        send_callback: &Option<ArcSendCallback>,
-        error: &RocketMQError,
-    ) {
-        let Some(callback) = send_callback.as_ref().cloned() else {
-            return;
-        };
-
-        let _ = callback_executor.execute(async { callback.on_exception(error) }).await;
-    }
-
-    pub(super) fn process_send_response<T>(
-        &self,
-        broker_name: &CheetahString,
-        msg: &T,
-        response: &RemotingCommand,
-        addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
-    where
-        T: MessageTrait,
-    {
-        let response_code = ResponseCode::from(response.code());
-        let send_status = match response_code {
-            ResponseCode::FlushDiskTimeout => SendStatus::FlushDiskTimeout,
-            ResponseCode::FlushSlaveTimeout => SendStatus::FlushSlaveTimeout,
-            ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
-            ResponseCode::Success => SendStatus::SendOk,
-            _ => {
-                return Err(client_broker_err!(
-                    response.code(),
-                    response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string()
-                ))
-            }
-        };
-        let response_header = response.decode_command_custom_header_fast::<SendMessageResponseHeader>()?;
-        let mut topic = msg.topic().to_string();
-        if let Some(ns) = self.client_config.get_namespace_v2() {
-            if !ns.is_empty() {
-                topic = NamespaceUtil::without_namespace_with_namespace(topic.as_str(), ns.as_str());
-            }
-        }
-        let message_queue = MessageQueue::from_parts(topic.as_str(), broker_name, response_header.queue_id());
-        let mut uniq_msg_id = MessageClientIDSetter::get_uniq_id(msg);
-        let msgs = msg.as_any().downcast_ref::<MessageBatch>();
-
-        if let (Some(msgs), true) = (msgs, response_header.batch_uniq_id().is_none()) {
-            let mut sb = String::new();
-            for msg in &msgs.messages {
-                if let Some(uniq_id) = MessageClientIDSetter::get_uniq_id(msg) {
-                    if !sb.is_empty() {
-                        sb.push(',');
-                    }
-                    sb.push_str(uniq_id.as_str());
-                } else {
-                    warn!(
-                        "skip empty uniq id while building batch send result for topic={}",
-                        msg.topic()
-                    );
-                }
-            }
-            if !sb.is_empty() {
-                uniq_msg_id = Some(CheetahString::from_string(sb));
-            }
-        }
-
-        let region_id = response
-            .ext_fields()
-            .and_then(|fields| fields.get(MessageConst::PROPERTY_MSG_REGION))
-            .map_or(mix_all::DEFAULT_TRACE_REGION_ID.to_string(), |s| s.to_string());
-        let trace_on = trace_on_from_ext_fields(response.ext_fields());
-        let queue_offset = java_long_to_u64_field("sendMessage", "queueOffset", response_header.queue_offset())?;
-        let send_result = SendResult {
-            send_status,
-            msg_id: uniq_msg_id,
-            offset_msg_id: Some(response_header.msg_id().to_string()),
-            message_queue: Some(message_queue),
-            queue_offset,
-            transaction_id: response_header.transaction_id().map(|s| s.to_string()),
-            recall_handle: response_header.recall_handle().map(|s| s.to_string()),
-            region_id: Some(region_id),
-            trace_on,
-            ..Default::default()
-        };
-
-        Ok(send_result)
-    }
-
-    pub(super) async fn prepare_retry<T: MessageTrait>(
-        &self,
-        broker_name: &CheetahString,
-        msg: &T,
-        _request: &mut RemotingCommand,
-        topic_publish_info: Option<&TopicPublishInfo>,
-        instance: Option<&Arc<MQClientInstance>>,
-        producer: &DefaultMQProducerImpl,
-    ) -> Option<(CheetahString, CheetahString)> {
-        let mut retry_broker_name = broker_name.clone();
-
-        if let Some(topic_publish_info) = topic_publish_info {
-            let mq_chosen = producer.select_one_message_queue(topic_publish_info, Some(&retry_broker_name), false);
-            let Some(mq_chosen) = mq_chosen.as_ref() else {
-                warn!(
-                    "prepare async retry failed: no message queue selected for topic={}",
-                    msg.topic()
-                );
-                return None;
-            };
-            if let Some(instance) = instance {
-                retry_broker_name = instance.get_broker_name_from_message_queue(mq_chosen).await;
-            }
-        }
-
-        if let Some(instance) = instance {
-            if let Some(addr) = instance.find_broker_address_in_publish(retry_broker_name.as_ref()) {
-                return Some((addr, retry_broker_name));
-            }
-        }
-
-        None
     }
 
     pub async fn send_heartbeat(
@@ -772,10 +696,30 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<(i32, Option<RemotingCommand>)> {
         let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Rejected(rejection),
+                        Some(addr),
+                    ),
+                );
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Contract(contract),
+                        Some(addr),
+                    ),
+                );
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok((response.version(), Some(response)));
         }
@@ -784,17 +728,6 @@ impl MQClientAPIImpl {
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
         ))
-    }
-
-    pub async fn send_heartbeat_async(
-        &self,
-        addr: &CheetahString,
-        heartbeat_data: &HeartbeatData,
-        timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i32> {
-        self.send_heartbeat(addr, heartbeat_data, timeout_millis)
-            .await
-            .map(|(version, _)| version)
     }
 
     pub async fn send_heartbeat_oneway(
@@ -816,10 +749,30 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<bool> {
         let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Rejected(rejection),
+                        Some(addr),
+                    ),
+                );
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Contract(contract),
+                        Some(addr),
+                    ),
+                );
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         Ok(ResponseCode::from(response.code()) == ResponseCode::Success)
     }
 
@@ -830,10 +783,30 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<HeartbeatV2Result> {
         let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Rejected(rejection),
+                        Some(addr),
+                    ),
+                );
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Contract(contract),
+                        Some(addr),
+                    ),
+                );
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(HeartbeatV2Result::from_response(&response));
         }
@@ -859,14 +832,31 @@ impl MQClientAPIImpl {
             subscription_data.clone(),
         );
         request.set_body_mut_ref(body.encode()?);
-        let response = self
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, broker_addr);
+        let outcome = self
             .remoting_client
-            .invoke_request(
-                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, broker_addr).as_ref()),
-                request,
-                timeout_millis,
-            )
-            .await?;
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Rejected(rejection),
+                        Some(&broker_addr),
+                    ),
+                );
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Contract(contract),
+                        Some(&broker_addr),
+                    ),
+                );
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(mq_client_err!(
                 response.code(),
@@ -884,10 +874,31 @@ impl MQClientAPIImpl {
     ) -> rocketmq_error::RocketMQResult<String> {
         let request = self.create_request_command(RequestCode::RecallMessage, request_header);
 
-        let response = self
+        let remote_addr = CheetahString::from_slice(addr);
+        let outcome = self
             .remoting_client
-            .invoke_request(Some(CheetahString::from_slice(addr).as_ref()), request, timeout_millis)
-            .await?;
+            .invoke_request(Some(&remote_addr), request, timeout_millis)
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Rejected(rejection),
+                        Some(&remote_addr),
+                    ),
+                );
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(
+                    crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                        RetryInput::Contract(contract),
+                        Some(&remote_addr),
+                    ),
+                );
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
@@ -919,10 +930,26 @@ impl MQClientAPIImpl {
         F: FnOnce(rocketmq_error::RocketMQResult<RemotingCommand>) + Send,
     {
         let request = self.create_request_command(RequestCode::RecallMessage, request_header);
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => Ok(response),
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => Err(
+                crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                    RetryInput::Rejected(rejection),
+                    Some(addr),
+                ),
+            ),
+            Ok(OutboundRequestOutcome::Contract(contract)) => Err(
+                crate::producer::producer_impl::default_mq_producer_impl::producer_retry_input_error(
+                    RetryInput::Contract(contract),
+                    Some(addr),
+                ),
+            ),
+            Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         invoke_callback(response);
         Ok(())
     }

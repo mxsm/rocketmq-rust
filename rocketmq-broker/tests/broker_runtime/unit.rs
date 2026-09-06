@@ -153,6 +153,7 @@ use rocketmq_store_api::TimerStoreMode;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::OutboundRequestOutcome;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportClient;
 use rocketmq_transport::api::TransportClientConfig;
@@ -2123,10 +2124,16 @@ async fn sync_namesrv_member_group(
     client.start().await.expect("start transport client");
     let request_header = GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone());
     let request = RemotingCommand::create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
-    let mut response = client
-        .invoke_request(Some(namesrv_addr), request, 3000)
-        .await
-        .expect("query broker member group from namesrv");
+    let mut response = match client.invoke_request(Some(namesrv_addr), request, 3000).await {
+        Ok(OutboundRequestOutcome::Response(response)) => response,
+        Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            panic!("broker member-group request was rejected: {rejection:?}")
+        }
+        Ok(OutboundRequestOutcome::Contract(contract)) => {
+            panic!("broker member-group request contract failed: {contract:?}")
+        }
+        Err(error) => panic!("broker member-group request failed: {error:?}"),
+    };
     assert_eq!(
         ResponseCode::from(response.code()),
         ResponseCode::Success,

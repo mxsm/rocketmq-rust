@@ -59,6 +59,7 @@ use crate::file_region::FileRegionSequence;
 use crate::file_region::FileTransferMode;
 use crate::telemetry::TransportTelemetry;
 use crate::write_result::WriterFailure;
+use crate::write_result::WriterRejection;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::QueuedWrite;
 use crate::write_strategy::QueuedWriteCancellation;
@@ -492,8 +493,8 @@ async fn close_collected_with_a_poisoned_batch_receives_the_same_canonical_failu
         .await
         .expect("close completion")
         .expect_err("poisoned close must report the write failure");
-    let RocketMQError::Network(close_error) = close_failure else {
-        panic!("poisoned close must retain the canonical Network error")
+    let RocketMQError::Shared(close_error) = close_failure else {
+        panic!("poisoned close must retain the canonical Shared error")
     };
     assert!(Arc::ptr_eq(
         write_failure.error().expect("canonical write failure"),
@@ -713,7 +714,10 @@ async fn queued_file_cancellation_releases_its_lease_before_socket_progress() {
         .await
         .expect("cancelled file completion")
         .expect_err("cancelled file must fail");
-    assert_eq!(failure.progress(), Some(WriteProgress::NotStarted));
+    assert!(matches!(
+        failure.into_operational(),
+        Err(WriterRejection::DeadlineExpired)
+    ));
     assert_eq!(attempts.load(Ordering::Acquire), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
@@ -780,7 +784,10 @@ async fn queued_cancellation_wins_before_writer_start_and_never_touches_the_sock
         .await
         .expect("deadline completion")
         .expect_err("cancelled queued write must fail");
-    assert_eq!(failure.progress(), Some(WriteProgress::NotStarted));
+    assert!(matches!(
+        failure.into_operational(),
+        Err(WriterRejection::DeadlineExpired)
+    ));
     assert_eq!(attempts.load(Ordering::Acquire), 0);
     assert_eq!(controller.snapshot().queued.current_count, 0);
     assert_eq!(diagnostics.snapshot().failed, 1);

@@ -46,8 +46,8 @@ pub trait CommandCustomHeader: AsAny {
     /// Returns a typed result indicating whether the fields are valid.
     ///
     /// If the fields are valid, the `Ok` variant is returned with an empty `()` value.
-    /// If the fields are invalid, an error with a stable [`rocketmq_error::ErrorKind`]
-    /// is returned.
+    /// If the fields are invalid, an error governed by a stable
+    /// [`rocketmq_error::ErrorDescriptor`] is returned.
     fn check_fields(&self) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }

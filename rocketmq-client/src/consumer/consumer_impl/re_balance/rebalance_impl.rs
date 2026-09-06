@@ -32,11 +32,18 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_transport::api::RequestDeadline;
 use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::common::retry_policy::RetryAction;
+use crate::common::retry_policy::RetryContext;
+use crate::common::retry_policy::RetryIdempotency;
+use crate::common::retry_policy::RetryInput;
+use crate::common::retry_policy::RetryOperation;
+use crate::common::retry_policy::RetryPolicy;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
@@ -50,6 +57,64 @@ use crate::types::TopicName;
 
 const TIMEOUT_CHECK_TIMES: u32 = 3;
 const QUERY_ASSIGNMENT_TIMEOUT: u64 = 3000;
+
+fn log_assignment_failure(topic: &CheetahString, attempt: u32, input: &RetryInput) {
+    match input {
+        RetryInput::Transport(error) => warn!(
+            %topic,
+            attempt,
+            error_code = %error.descriptor().code(),
+            stage = ?error.request_stage(),
+            "Assignment query transport failed"
+        ),
+        RetryInput::Rejected(rejection) => warn!(
+            %topic,
+            attempt,
+            reason = ?rejection.reason(),
+            stage = ?rejection.stage(),
+            "Assignment query was rejected"
+        ),
+        RetryInput::Contract(contract) => warn!(
+            %topic,
+            attempt,
+            reason = ?contract.reason(),
+            "Assignment query contract was not satisfied"
+        ),
+        RetryInput::Response {
+            code, terminal_error, ..
+        } => warn!(%topic, attempt, code, %terminal_error, "Assignment query response failed"),
+        RetryInput::RouteUnavailable => warn!(%topic, attempt, "Assignment route is unavailable"),
+        RetryInput::BusinessError(error) => {
+            error!(%topic, attempt, error_code = %error.descriptor().code(), %error, "Assignment query failed")
+        }
+        RetryInput::SendStatus(status) => {
+            warn!(%topic, attempt, ?status, "Assignment query received an inapplicable send status")
+        }
+    }
+}
+
+async fn apply_assignment_auxiliary_action(
+    topic: &CheetahString,
+    attempt: u32,
+    deadline: RequestDeadline,
+    action: RetryAction,
+    input: &RetryInput,
+) -> bool {
+    let retry = match action {
+        RetryAction::RetryNow => !deadline.is_expired(),
+        RetryAction::RetryAfter(delay) => {
+            tokio::time::timeout_at(deadline.instant(), tokio::time::sleep(delay))
+                .await
+                .is_ok()
+                && !deadline.is_expired()
+        }
+        RetryAction::Stop | RetryAction::RefreshRoute | RetryAction::RefreshLeader | RetryAction::SwitchBroker => false,
+    };
+    if !retry {
+        log_assignment_failure(topic, attempt, input);
+    }
+    retry
+}
 
 /// Maps each assigned [`MessageQueue`] to its push-mode [`ProcessQueue`].
 type ProcessQueueTable = Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>;
@@ -335,30 +400,119 @@ where
             return false;
         };
 
-        // Retry query assignment
-        for retry_times in 1..=TIMEOUT_CHECK_TIMES {
-            let timeout = QUERY_ASSIGNMENT_TIMEOUT / (TIMEOUT_CHECK_TIMES as u64) * (retry_times as u64);
+        let deadline = RequestDeadline::from_timeout_millis(QUERY_ASSIGNMENT_TIMEOUT);
+        for attempt in 1..=TIMEOUT_CHECK_TIMES {
+            if deadline.is_expired() {
+                break;
+            }
             match client_instance
-                .query_assignment(topic, &consumer_group, &strategy_name, message_model, timeout)
+                .query_assignment(topic, &consumer_group, &strategy_name, message_model, deadline)
                 .await
             {
                 Ok(_) => {
                     self.topic_broker_rebalance.insert(topic.clone(), topic.clone());
                     return true;
                 }
-                Err(e) => match e {
-                    rocketmq_error::RocketMQError::Timeout { .. } => {
-                        warn!(
-                            "tryQueryAssignment timeout for topic: {}, retry: {}/{}",
-                            topic, retry_times, TIMEOUT_CHECK_TIMES
-                        );
+                Err(input) => {
+                    let action = RetryPolicy::decide(
+                        RetryContext {
+                            operation: RetryOperation::AssignmentQuery,
+                            idempotency: RetryIdempotency::Idempotent,
+                            attempt,
+                            max_attempts: TIMEOUT_CHECK_TIMES,
+                            remaining: deadline.remaining(),
+                            producer_retry_response_codes: None,
+                            retry_not_store_ok: false,
+                        },
+                        &input,
+                    );
+                    match action {
+                        RetryAction::Stop => {
+                            log_assignment_failure(topic, attempt, &input);
+                            self.topic_client_rebalance.insert(topic.clone(), topic.clone());
+                            return false;
+                        }
+                        RetryAction::RetryNow => {}
+                        RetryAction::SwitchBroker => {
+                            log_assignment_failure(topic, attempt, &input);
+                            self.topic_client_rebalance.insert(topic.clone(), topic.clone());
+                            return false;
+                        }
+                        RetryAction::RetryAfter(delay) => {
+                            if tokio::time::timeout_at(deadline.instant(), tokio::time::sleep(delay))
+                                .await
+                                .is_err()
+                            {
+                                log_assignment_failure(topic, attempt, &input);
+                                self.topic_client_rebalance.insert(topic.clone(), topic.clone());
+                                return false;
+                            }
+                        }
+                        RetryAction::RefreshRoute | RetryAction::RefreshLeader => {
+                            match client_instance.refresh_topic_route_info_once(topic, deadline).await {
+                                Ok(Some(_)) => {}
+                                Ok(None) => {
+                                    let refresh_input = RetryInput::RouteUnavailable;
+                                    let refresh_action = RetryPolicy::decide(
+                                        RetryContext {
+                                            operation: RetryOperation::AssignmentQuery,
+                                            idempotency: RetryIdempotency::Idempotent,
+                                            attempt,
+                                            max_attempts: TIMEOUT_CHECK_TIMES,
+                                            remaining: deadline.remaining(),
+                                            producer_retry_response_codes: None,
+                                            retry_not_store_ok: false,
+                                        },
+                                        &refresh_input,
+                                    );
+                                    if !apply_assignment_auxiliary_action(
+                                        topic,
+                                        attempt,
+                                        deadline,
+                                        refresh_action,
+                                        &refresh_input,
+                                    )
+                                    .await
+                                    {
+                                        self.topic_client_rebalance.insert(topic.clone(), topic.clone());
+                                        return false;
+                                    }
+                                }
+                                Err(refresh_input) => {
+                                    let refresh_action = RetryPolicy::decide(
+                                        RetryContext {
+                                            operation: RetryOperation::AssignmentQuery,
+                                            idempotency: RetryIdempotency::Idempotent,
+                                            attempt,
+                                            max_attempts: TIMEOUT_CHECK_TIMES,
+                                            remaining: deadline.remaining(),
+                                            producer_retry_response_codes: None,
+                                            retry_not_store_ok: false,
+                                        },
+                                        &refresh_input,
+                                    );
+                                    if !apply_assignment_auxiliary_action(
+                                        topic,
+                                        attempt,
+                                        deadline,
+                                        refresh_action,
+                                        &refresh_input,
+                                    )
+                                    .await
+                                    {
+                                        self.topic_client_rebalance.insert(topic.clone(), topic.clone());
+                                        return false;
+                                    }
+                                }
+                            }
+                        }
                     }
-                    _ => {
-                        error!("tryQueryAssignment error for topic: {}, error: {}", topic, e);
+                    if deadline.is_expired() {
+                        log_assignment_failure(topic, attempt, &input);
                         self.topic_client_rebalance.insert(topic.clone(), topic.clone());
                         return false;
                     }
-                },
+                }
             }
         }
 
@@ -483,7 +637,7 @@ where
                 &consumer_group,
                 &CheetahString::from_slice(strategy_name),
                 message_model,
-                QUERY_ASSIGNMENT_TIMEOUT,
+                RequestDeadline::from_timeout_millis(QUERY_ASSIGNMENT_TIMEOUT),
             )
             .await;
         let (mq_set, message_queue_assignments) = match message_queue_assignments {
@@ -499,11 +653,9 @@ where
                 }
                 (mq_set, assignments_inner)
             }
-            Err(e) => {
-                error!(
-                    "allocate message queue exception. strategy name: {}, {}.",
-                    strategy_name, e
-                );
+            Err(input) => {
+                log_assignment_failure(topic, 1, &input);
+                error!("allocate message queue query failed. strategy name: {}.", strategy_name);
                 return false;
             }
         };

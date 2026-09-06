@@ -21,8 +21,10 @@ use cheetah_string::CheetahString;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use moka::sync::SegmentedCache;
+use rocketmq_error::Error;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::SharedRocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -83,7 +85,7 @@ struct CachedEntry {
 #[derive(Clone)]
 enum FlightState {
     Pending,
-    Complete(Result<CachedRoute, SharedRocketMQError>),
+    Complete(Result<CachedRoute, SharedError>),
     Unavailable,
     Cancelled,
 }
@@ -224,9 +226,9 @@ impl ClusterTestLookupCache {
                 Ok(RouteLookupOutcome::Cancelled)
             }
             Err(error) => {
-                let error = SharedRocketMQError::new(error);
+                let error = capture_lookup_failure(error);
                 leader.complete(FlightState::Complete(Err(error.clone())));
-                Err(error.into_error())
+                Err(RocketMQError::Shared(error))
             }
         }
     }
@@ -248,12 +250,23 @@ async fn wait_for_flight(flight: &LookupFlight) -> RocketMQResult<RouteLookupOut
         match state.borrow_and_update().clone() {
             FlightState::Pending => {}
             FlightState::Complete(Ok(route)) => return Ok(RouteLookupOutcome::Resolved(route.into_owned())),
-            FlightState::Complete(Err(error)) => return Err(error.into_error()),
+            FlightState::Complete(Err(error)) => return Err(RocketMQError::Shared(error)),
             FlightState::Unavailable => return Ok(RouteLookupOutcome::Unavailable),
             FlightState::Cancelled => return Ok(RouteLookupOutcome::Cancelled),
         }
         if state.changed().await.is_err() {
             return Ok(RouteLookupOutcome::Cancelled);
+        }
+    }
+}
+
+fn capture_lookup_failure(error: RocketMQError) -> SharedError {
+    match error {
+        RocketMQError::Shared(error) => error,
+        error => {
+            let descriptor = error.descriptor();
+            let context = error.context();
+            Arc::new(Error::caused_by(descriptor, error).with_context(context))
         }
     }
 }
@@ -422,14 +435,16 @@ mod tests {
     #[tokio::test]
     async fn failed_and_cancelled_resolutions_leave_no_cache_or_flight() {
         let cache = Arc::new(ClusterTestLookupCache::new(LookupCacheConfig::default()));
+        let canonical = Arc::new(rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED));
+        let expected = Arc::clone(&canonical);
         let error = cache
-            .get_or_resolve(key("error"), || async {
-                Err(RocketMQError::Network(Arc::new(rocketmq_error::Error::new(
-                    &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
-                ))))
-            })
-            .await;
-        assert!(error.is_err());
+            .get_or_resolve(key("error"), || async { Err(RocketMQError::Shared(canonical)) })
+            .await
+            .expect_err("lookup failure must be returned");
+        let RocketMQError::Shared(actual) = error else {
+            panic!("lookup failure must retain the canonical shared error")
+        };
+        assert!(Arc::ptr_eq(&actual, &expected));
         assert_eq!(cache.stats(), (0, 0, 0));
 
         let entered = Arc::new(Notify::new());
@@ -452,15 +467,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn coalesced_failure_retains_the_canonical_network_allocation() {
+    async fn coalesced_failure_retains_the_canonical_allocation() {
         let flight = LookupFlight::new();
         let canonical = Arc::new(rocketmq_error::Error::caused_by(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
             std::io::Error::other("connection refused"),
         ));
         let expected = Arc::clone(&canonical);
-        let shared = SharedRocketMQError::new(RocketMQError::Network(canonical));
-        flight.state.send_replace(FlightState::Complete(Err(shared)));
+        flight.state.send_replace(FlightState::Complete(Err(canonical)));
 
         let error = wait_for_flight(&flight)
             .await
@@ -468,11 +482,8 @@ mod tests {
         let RocketMQError::Shared(shared) = error else {
             panic!("coalesced failures must retain the shared typed error");
         };
-        let RocketMQError::Network(actual) = shared.as_error() else {
-            panic!("coalesced failures must retain the canonical Network error");
-        };
-        assert!(Arc::ptr_eq(actual, &expected));
-        assert!(std::error::Error::source(actual.as_ref()).is_some());
+        assert!(Arc::ptr_eq(&shared, &expected));
+        assert!(std::error::Error::source(shared.as_ref()).is_some());
     }
 
     #[tokio::test]

@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::ErrorKind;
 use rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -46,7 +45,7 @@ fn pull_required_header_decode_returns_typed_errors_for_untrusted_fields() {
         let error = command
             .decode_required_header_fast::<PullMessageRequestHeader>("decode pull request header")
             .expect_err(case);
-        assert_eq!(error.kind(), ErrorKind::RequestHeaderError, "{case}");
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID, "{case}");
     }
 }
 
@@ -72,7 +71,7 @@ fn admin_required_header_decode_returns_typed_errors_for_untrusted_fields() {
         let error = command
             .decode_required_header::<GetMaxOffsetRequestHeader>("decode get-max-offset request header")
             .expect_err(case);
-        assert_eq!(error.kind(), ErrorKind::RequestHeaderError, "{case}");
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID, "{case}");
     }
 }
 

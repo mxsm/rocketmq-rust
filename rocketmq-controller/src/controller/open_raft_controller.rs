@@ -1041,7 +1041,7 @@ fn controller_bind_error(addr: SocketAddr, node_id: NodeId, source: std::io::Err
         .with_text(fields::PHASE, "bind")
         .with_secret_presence(fields::REMOTE_ADDR_PRESENT)
         .with_secret_presence(fields::SOURCE_PRESENT);
-    RocketMQError::Network(Arc::new(
+    RocketMQError::Shared(Arc::new(
         Error::caused_by(&TRANSPORT_CONNECTION_FAILED, source).with_context(context),
     ))
 }
@@ -1473,7 +1473,6 @@ mod tests {
 
     use crate::config::ControllerConfig;
     use crate::config::RaftPeer;
-    use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
 
     use super::controller_bind_error;
@@ -1486,19 +1485,19 @@ mod tests {
     use std::net::SocketAddr;
 
     #[test]
-    fn openraft_startup_failed_uses_service_error_kind() {
+    fn openraft_startup_failed_uses_service_descriptor() {
         let error = openraft_startup_failed("spawn test service", "task group closed");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
         assert!(error.to_string().contains("OpenRaft controller spawn test service"));
     }
 
     #[test]
-    fn openraft_response_decode_failed_uses_serialization_error_kind() {
+    fn openraft_response_decode_failed_uses_serialization_descriptor() {
         let serde_error = serde_json::from_str::<serde_json::Value>("{").expect_err("invalid json");
         let error = openraft_response_decode_failed(serde_error);
 
-        assert_eq!(error.kind(), ErrorKind::Serialization);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
         assert!(error.to_string().contains("OpenRaft inactive broker scan response"));
     }
 
@@ -1512,7 +1511,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_bind_failure_uses_canonical_network_descriptor_and_retains_source() {
+    fn controller_bind_failure_uses_canonical_transport_descriptor_and_retains_source() {
         let error = controller_bind_error(
             "127.0.0.1:9876".parse().expect("valid test address"),
             7,
@@ -1521,8 +1520,8 @@ mod tests {
 
         assert_eq!(error.descriptor().code().as_str(), "transport.connection.failed");
         assert_eq!(error.boundary_view().remoting().code.as_i32(), 2);
-        let RocketMQError::Network(canonical) = &error else {
-            panic!("bind failure must use the canonical Network carrier");
+        let RocketMQError::Shared(canonical) = &error else {
+            panic!("bind failure must use the canonical shared carrier");
         };
         let bind_source = std::error::Error::source(canonical.as_ref())
             .and_then(|source| source.downcast_ref::<super::OpenRaftBindSource>())

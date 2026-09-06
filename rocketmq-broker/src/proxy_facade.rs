@@ -312,15 +312,13 @@ fn build_topic_route(broker_config: &BrokerConfig, topic_config: &TopicConfig) -
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::ErrorKind;
-
     use super::*;
 
     #[test]
     fn embedded_broker_request_processor_not_ready_uses_not_initialized_kind() {
         let error = embedded_broker_request_processor_not_ready();
 
-        assert_eq!(error.kind(), ErrorKind::NotInitialized);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED);
     }
 
     #[test]

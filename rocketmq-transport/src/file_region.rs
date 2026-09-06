@@ -147,7 +147,7 @@ impl FileRegion {
             .checked_add(len)
             .ok_or_else(|| RocketMQError::illegal_argument("file region offset plus length overflowed u64"))?;
         let metadata = lease.file().metadata().map_err(|source| {
-            crate::error_helpers::network(crate::error_helpers::connection_failed(
+            rocketmq_error::RocketMQError::Shared(crate::error_helpers::connection_failed(
                 crate::error_helpers::TransportStage::Read,
                 source,
             ))

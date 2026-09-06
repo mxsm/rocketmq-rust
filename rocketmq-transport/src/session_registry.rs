@@ -39,6 +39,8 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use tokio::sync::broadcast;
 
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
+use crate::base::pending_request_table::PendingRegistrationOutcome;
+use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::connection::CommandSendOutcome;
@@ -200,7 +202,10 @@ enum ServerCommandDisposition {
     DeadlineExpired,
     SessionClosed,
     EncodingFailed(RocketMQError),
-    OperationalFailure(SharedError),
+    OperationalFailure {
+        progress: crate::dispatch::WriteProgress,
+        error: SharedError,
+    },
 }
 
 fn server_command_disposition(outcome: CommandSendOutcome) -> ServerCommandDisposition {
@@ -210,7 +215,9 @@ fn server_command_disposition(outcome: CommandSendOutcome) -> ServerCommandDispo
         CommandSendOutcome::DeadlineExpired => ServerCommandDisposition::DeadlineExpired,
         CommandSendOutcome::SessionClosed | CommandSendOutcome::Cancelled => ServerCommandDisposition::SessionClosed,
         CommandSendOutcome::EncodingFailed(source) => ServerCommandDisposition::EncodingFailed(source),
-        CommandSendOutcome::OperationalFailure { error } => ServerCommandDisposition::OperationalFailure(error),
+        CommandSendOutcome::OperationalFailure { progress, error } => {
+            ServerCommandDisposition::OperationalFailure { progress, error }
+        }
     }
 }
 
@@ -283,7 +290,7 @@ impl ServerPushSender {
             ServerCommandDisposition::DeadlineExpired => Ok(ServerPushOutcome::DeadlineExpired),
             ServerCommandDisposition::SessionClosed => Ok(ServerPushOutcome::SessionClosed),
             ServerCommandDisposition::EncodingFailed(source) => Err(TransportError::push(source)),
-            ServerCommandDisposition::OperationalFailure(error) => Err(TransportError::push(error)),
+            ServerCommandDisposition::OperationalFailure { error, .. } => Err(TransportError::push(error)),
         }
     }
 }
@@ -538,18 +545,14 @@ impl ServerRequestSender {
             retained_bytes,
             response_tx,
         ) {
-            Ok(guard) => guard,
-            Err(RocketMQError::Network(source))
-                if source.code() == rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED.code() =>
-            {
-                return Ok(ServerRequestOutcome::QueueSaturated)
-            }
-            Err(RocketMQError::Network(source)) if source.code() == rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code() => {
-                return Ok(ServerRequestOutcome::DeadlineExpired)
-            }
-            Err(source) => {
-                return Err(request_transport_error(
+            PendingRegistrationOutcome::Registered(guard) => guard,
+            PendingRegistrationOutcome::QueueSaturated => return Ok(ServerRequestOutcome::QueueSaturated),
+            PendingRegistrationOutcome::DeadlineExpired => return Ok(ServerRequestOutcome::DeadlineExpired),
+            PendingRegistrationOutcome::SessionClosed => return Ok(ServerRequestOutcome::SessionClosed),
+            PendingRegistrationOutcome::OperationalFailure(source) => {
+                return Err(TransportError::request_failed(
                     crate::error::RequestOperation::Register,
+                    crate::request_outcome::OutboundRequestStage::BeforeWrite,
                     source,
                 ))
             }
@@ -577,22 +580,50 @@ impl ServerRequestSender {
             }
             ServerCommandDisposition::EncodingFailed(source) => {
                 fail_closed.complete();
-                return Err(request_transport_error(crate::error::RequestOperation::Write, source));
+                return Err(request_transport_error(
+                    crate::error::RequestOperation::Write,
+                    crate::request_outcome::OutboundRequestStage::BeforeWrite,
+                    source,
+                ));
             }
-            ServerCommandDisposition::OperationalFailure(error) => {
+            ServerCommandDisposition::OperationalFailure { progress, error } => {
+                let stage = match progress {
+                    crate::dispatch::WriteProgress::NotStarted => {
+                        crate::request_outcome::OutboundRequestStage::BeforeWrite
+                    }
+                    crate::dispatch::WriteProgress::PossiblyPartial => {
+                        crate::request_outcome::OutboundRequestStage::Writing
+                    }
+                };
                 return Err(TransportError::request_failed(
                     crate::error::RequestOperation::Write,
+                    stage,
                     error,
                 ));
             }
         }
 
         let response = match deadline.timeout(&mut response_rx).await {
-            Ok(Ok(result)) => result
-                .map_err(|source| request_transport_error(crate::error::RequestOperation::AwaitResponse, source))?,
+            Ok(Ok(PendingRequestCompletion::Response(response))) => response,
+            Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => {
+                fail_closed.complete();
+                return Ok(ServerRequestOutcome::DeadlineExpired);
+            }
+            Ok(Ok(PendingRequestCompletion::Cancelled | PendingRequestCompletion::SessionClosed)) => {
+                fail_closed.complete();
+                return Ok(ServerRequestOutcome::SessionClosed);
+            }
+            Ok(Ok(PendingRequestCompletion::OperationalFailure(source))) => {
+                return Err(TransportError::request_failed(
+                    crate::error::RequestOperation::AwaitResponse,
+                    crate::request_outcome::OutboundRequestStage::AwaitingResponse,
+                    source,
+                ));
+            }
             Ok(Err(_)) => {
                 return Err(TransportError::request_failed(
                     crate::error::RequestOperation::AwaitResponse,
+                    crate::request_outcome::OutboundRequestStage::AwaitingResponse,
                     connection_failed_without_source(TransportStage::Closed),
                 ))
             }
@@ -602,10 +633,11 @@ impl ServerRequestSender {
                     deadline.budget_millis(),
                     source,
                 );
-                let source = guard.expire_with_network(source);
+                let source = guard.expire_with_error(source);
                 self.session.terminate().await;
-                return Err(request_transport_error(
+                return Err(TransportError::request_failed(
                     crate::error::RequestOperation::AwaitResponse,
+                    crate::request_outcome::OutboundRequestStage::AwaitingResponse,
                     source,
                 ));
             }
@@ -619,11 +651,12 @@ impl ServerRequestSender {
     }
 }
 
-fn request_transport_error(operation: crate::error::RequestOperation, source: RocketMQError) -> TransportError {
-    match source {
-        RocketMQError::Network(source) => TransportError::request_failed(operation, source),
-        source => TransportError::request_failed(operation, source),
-    }
+fn request_transport_error(
+    operation: crate::error::RequestOperation,
+    stage: crate::request_outcome::OutboundRequestStage,
+    source: RocketMQError,
+) -> TransportError {
+    TransportError::request_failed(operation, stage, source)
 }
 
 /// Narrow close authority for one canonical session.
@@ -946,7 +979,8 @@ mod tests {
             crate::error_helpers::connection_failed_without_source(crate::error_helpers::TransportStage::Connect);
         let error = request_transport_error(
             crate::error::RequestOperation::Write,
-            RocketMQError::Network(Arc::clone(&stage)),
+            crate::request_outcome::OutboundRequestStage::Writing,
+            RocketMQError::Shared(Arc::clone(&stage)),
         );
 
         assert_eq!(error.code(), rocketmq_error::TRANSPORT_SESSION_FAILED.code());

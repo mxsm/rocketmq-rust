@@ -20,8 +20,6 @@ use rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT;
 use rocketmq_error::TRANSPORT_WRITE_TIMEOUT;
 use rocketmq_model::common::FAQUrl;
 
-use crate::common::retry_decision::retry_policy_error;
-
 const DEFAULT_RESPONSE_CODE: i32 = -1;
 const DEFAULT_BROKER_RESPONSE_CODE: i32 = 0;
 
@@ -342,16 +340,15 @@ impl RequestTimeoutException {
     }
 
     pub fn from_rocketmq_error(error: &RocketMQError) -> Option<Self> {
-        match retry_policy_error(error) {
+        match error {
             RocketMQError::Timeout { .. } => Some(Self::new(error.to_string())),
-            RocketMQError::Network(network_error)
-                if [
-                    &TRANSPORT_CONNECTION_TIMEOUT,
-                    &TRANSPORT_WRITE_TIMEOUT,
-                    &TRANSPORT_RESPONSE_TIMEOUT,
-                ]
-                .into_iter()
-                .any(|descriptor| network_error.code() == descriptor.code()) =>
+            _ if [
+                &TRANSPORT_CONNECTION_TIMEOUT,
+                &TRANSPORT_WRITE_TIMEOUT,
+                &TRANSPORT_RESPONSE_TIMEOUT,
+            ]
+            .into_iter()
+            .any(|descriptor| error.descriptor().code() == descriptor.code()) =>
             {
                 Some(Self::new(error.to_string()))
             }
@@ -383,7 +380,6 @@ mod tests {
 
     use super::*;
     use rocketmq_error::Error;
-    use rocketmq_error::SharedRocketMQError;
     use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 
     #[test]
@@ -479,18 +475,20 @@ mod tests {
     }
 
     #[test]
-    fn request_timeout_classification_uses_descriptor_for_direct_and_shared_errors() {
+    fn request_timeout_classification_uses_the_canonical_shared_descriptor() {
         for descriptor in [
             &TRANSPORT_CONNECTION_TIMEOUT,
             &TRANSPORT_WRITE_TIMEOUT,
             &TRANSPORT_RESPONSE_TIMEOUT,
         ] {
             let canonical = Arc::new(Error::new(descriptor));
-            let direct = RocketMQError::Network(Arc::clone(&canonical));
-            let shared = SharedRocketMQError::new(RocketMQError::Network(Arc::clone(&canonical))).into_error();
+            let shared = RocketMQError::Shared(Arc::clone(&canonical));
 
-            assert!(RequestTimeoutException::from_rocketmq_error(&direct).is_some());
             assert!(RequestTimeoutException::from_rocketmq_error(&shared).is_some());
+            let RocketMQError::Shared(retained) = shared else {
+                panic!("expected canonical Shared carrier")
+            };
+            assert!(Arc::ptr_eq(&canonical, &retained));
         }
     }
 
@@ -500,10 +498,12 @@ mod tests {
             &TRANSPORT_CONNECTION_FAILED,
             std::io::Error::other("rendered source contains timeout"),
         ));
-        let direct = RocketMQError::Network(Arc::clone(&canonical));
-        let shared = SharedRocketMQError::new(RocketMQError::Network(canonical)).into_error();
+        let shared = RocketMQError::Shared(Arc::clone(&canonical));
 
-        assert!(RequestTimeoutException::from_rocketmq_error(&direct).is_none());
         assert!(RequestTimeoutException::from_rocketmq_error(&shared).is_none());
+        let RocketMQError::Shared(retained) = shared else {
+            panic!("expected canonical Shared carrier")
+        };
+        assert!(Arc::ptr_eq(&canonical, &retained));
     }
 }

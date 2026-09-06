@@ -34,8 +34,6 @@ use crate::boundary::BoundaryErrorView;
 use crate::catalog::*;
 use crate::context::ErrorContext;
 use crate::fields;
-use crate::kind::ErrorKind;
-use crate::shared::SharedRocketMQError;
 use crate::ErrorDescriptor;
 use crate::SharedError;
 pub use protocol::ProtocolError;
@@ -76,16 +74,9 @@ pub use crate::controller_error::ControllerError;
 /// ```
 #[derive(Debug, Error)]
 pub enum RocketMQError {
-    /// An immutable shared snapshot of a typed RocketMQ error.
+    /// An immutable shared canonical error.
     #[error(transparent)]
-    Shared(#[from] SharedRocketMQError),
-
-    // ============================================================================
-    // Network Errors
-    // ============================================================================
-    /// Canonical Network failure selected by the transport operation owner.
-    #[error(transparent)]
-    Network(SharedError),
+    Shared(SharedError),
 
     // ============================================================================
     // Serialization Errors
@@ -643,82 +634,10 @@ pub enum RocketMQError {
 // ============================================================================
 
 impl RocketMQError {
-    /// Return the stable logical error kind.
-    #[inline]
-    pub fn kind(&self) -> ErrorKind {
-        match self {
-            Self::Shared(error) => error.as_error().kind(),
-            Self::Network(_) => ErrorKind::Network,
-            Self::Serialization(_) => ErrorKind::Serialization,
-            Self::Protocol(_) => ErrorKind::Protocol,
-            Self::Rpc(_) => ErrorKind::Rpc,
-            Self::Authentication(_) => ErrorKind::Authentication,
-            Self::Controller(_) => ErrorKind::Controller,
-            Self::InvalidProperty(_) => ErrorKind::InvalidProperty,
-            Self::BrokerNotFound { .. } => ErrorKind::BrokerNotFound,
-            Self::BrokerRegistrationFailed { .. } => ErrorKind::BrokerRegistrationFailed,
-            Self::BrokerOperationFailed { .. } => ErrorKind::BrokerOperationFailed,
-            Self::TopicNotExist { .. } => ErrorKind::TopicNotExist,
-            Self::QueueNotExist { .. } => ErrorKind::QueueNotExist,
-            Self::SubscriptionGroupNotExist { .. } => ErrorKind::SubscriptionGroupNotExist,
-            Self::QueueIdOutOfRange { .. } => ErrorKind::QueueIdOutOfRange,
-            Self::MessageTooLarge { .. } => ErrorKind::MessageTooLarge,
-            Self::MessageValidationFailed { .. } => ErrorKind::MessageValidationFailed,
-            Self::RetryLimitExceeded { .. } => ErrorKind::RetryLimitExceeded,
-            Self::TransactionRejected => ErrorKind::TransactionRejected,
-            Self::BrokerPermissionDenied { .. } => ErrorKind::BrokerPermissionDenied,
-            Self::NotMasterBroker { .. } => ErrorKind::NotMasterBroker,
-            Self::MessageLookupFailed { .. } => ErrorKind::MessageLookupFailed,
-            Self::QueryNotFound { .. } => ErrorKind::QueryNotFound,
-            Self::TopicSendingForbidden { .. } => ErrorKind::TopicSendingForbidden,
-            Self::BrokerAsyncTaskFailed { .. } => ErrorKind::BrokerAsyncTaskFailed,
-            Self::RequestBodyInvalid { .. } | Self::RequestBodySource { .. } => ErrorKind::RequestBodyInvalid,
-            Self::RequestHeaderError(_) | Self::RequestHeaderSource { .. } => ErrorKind::RequestHeaderError,
-            Self::AuthenticationSource { .. } => ErrorKind::Authentication,
-            Self::ResponseProcessFailed { .. } => ErrorKind::ResponseProcessFailed,
-            Self::RouteNotFound { .. } => ErrorKind::RouteNotFound,
-            Self::RouteInconsistent { .. } => ErrorKind::RouteInconsistent,
-            Self::RouteRegistrationConflict { .. } => ErrorKind::RouteRegistrationConflict,
-            Self::RouteVersionConflict { .. } => ErrorKind::RouteVersionConflict,
-            Self::ClusterNotFound { .. } => ErrorKind::ClusterNotFound,
-            Self::ClientNotStarted => ErrorKind::ClientNotStarted,
-            Self::ClientAlreadyStarted => ErrorKind::ClientAlreadyStarted,
-            Self::ClientShuttingDown => ErrorKind::ClientShuttingDown,
-            Self::ClientInvalidState { .. } => ErrorKind::ClientInvalidState,
-            Self::ProducerNotAvailable => ErrorKind::ProducerNotAvailable,
-            Self::ConsumerNotAvailable => ErrorKind::ConsumerNotAvailable,
-            Self::Tools(error) => error.kind(),
-            Self::Filter(_) => ErrorKind::Filter,
-            Self::Observability(error) => error.kind(),
-            Self::StorageReadFailed { .. } => ErrorKind::StorageReadFailed,
-            Self::StorageWriteFailed { .. } => ErrorKind::StorageWriteFailed,
-            Self::StorageCorrupted { .. } => ErrorKind::StorageCorrupted,
-            Self::StorageOutOfSpace { .. } => ErrorKind::StorageOutOfSpace,
-            Self::StorageLockFailed { .. } => ErrorKind::StorageLockFailed,
-            Self::ConfigParseFailed { .. } => ErrorKind::ConfigParseFailed,
-            Self::ConfigMissing { .. } => ErrorKind::ConfigMissing,
-            Self::ConfigInvalidValue { .. } => ErrorKind::ConfigInvalidValue,
-            Self::AuthConfigInvalid { .. } => ErrorKind::AuthConfigInvalid,
-            Self::AuthHotReloadFailed { .. } => ErrorKind::AuthHotReloadFailed,
-            Self::ControllerNotLeader { .. } => ErrorKind::ControllerNotLeader,
-            Self::ControllerRaftError { .. } => ErrorKind::ControllerRaftError,
-            Self::ControllerConsensusTimeout { .. } => ErrorKind::ControllerConsensusTimeout,
-            Self::ControllerSnapshotFailed { .. } => ErrorKind::ControllerSnapshotFailed,
-            Self::IO(_) => ErrorKind::Io,
-            Self::IllegalArgument(_) => ErrorKind::IllegalArgument,
-            Self::Timeout { .. } => ErrorKind::Timeout,
-            Self::Internal { .. } | Self::InvariantViolation { .. } => ErrorKind::Internal,
-            Self::Service(_) => ErrorKind::Service,
-            Self::InvalidVersionOrdinal(_) => ErrorKind::InvalidVersionOrdinal,
-            Self::NotInitialized(_) => ErrorKind::NotInitialized,
-        }
-    }
-
     /// Returns the canonical descriptor for this error.
     pub fn descriptor(&self) -> &'static ErrorDescriptor {
         match self {
-            Self::Shared(error) => error.as_error().descriptor(),
-            Self::Network(error) => error.descriptor(),
+            Self::Shared(error) => error.descriptor(),
             Self::Serialization(error) => error.descriptor(),
             Self::Protocol(error) => error.descriptor(),
             Self::Rpc(error) => error.descriptor(),
@@ -798,8 +717,7 @@ impl RocketMQError {
     /// projection; boundary adapters should use [`Self::boundary_view`].
     pub fn context(&self) -> ErrorContext {
         match self {
-            Self::Shared(error) => error.as_error().context(),
-            Self::Network(error) => error.context().clone(),
+            Self::Shared(error) => error.context().clone(),
             Self::Serialization(error) => error.context(),
             Self::Protocol(error) => error.context(),
             Self::Rpc(error) => error.context(),
@@ -1425,13 +1343,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn network_envelope_delegates_to_one_canonical_error() {
+    fn shared_carrier_delegates_to_one_canonical_error() {
         let canonical = std::sync::Arc::new(crate::Error::new(&TRANSPORT_CONNECTION_FAILED));
-        let error = RocketMQError::Network(std::sync::Arc::clone(&canonical));
+        let error = RocketMQError::Shared(std::sync::Arc::clone(&canonical));
 
         assert_eq!(error.descriptor().code(), TRANSPORT_CONNECTION_FAILED.code());
-        let RocketMQError::Network(retained) = error else {
-            panic!("expected the canonical Network carrier")
+        let RocketMQError::Shared(retained) = error else {
+            panic!("expected the canonical shared carrier")
         };
         assert!(std::sync::Arc::ptr_eq(&canonical, &retained));
     }

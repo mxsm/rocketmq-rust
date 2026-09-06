@@ -39,7 +39,6 @@ use crate::codec::remoting_command_codec::FrameLimits;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 #[cfg(test)]
 use crate::runtime::config::client_config::ConnectConfig;
-use crate::runtime::config::client_config::GoAwayPolicy;
 #[cfg(test)]
 use crate::runtime::config::client_config::MaintenanceConfig;
 use crate::runtime::config::client_config::TransportClientConfig;
@@ -229,7 +228,6 @@ pub struct TransportClient<PR = DefaultRequestProcessor> {
 
     telemetry: TransportTelemetry,
     frame_limits: FrameLimits,
-    go_away_policy: GoAwayPolicy,
 }
 
 impl<PR> Clone for TransportClient<PR> {
@@ -257,7 +255,6 @@ impl<PR> Clone for TransportClient<PR> {
             transport_security: self.transport_security.clone(),
             telemetry: self.telemetry.clone(),
             frame_limits: self.frame_limits,
-            go_away_policy: self.go_away_policy.clone(),
         }
     }
 }
@@ -281,7 +278,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
         frame_limits: FrameLimits,
-        go_away_policy: GoAwayPolicy,
     ) -> RocketMQResult<Self> {
         frame_limits.validate()?;
         let process_budget = service_context.process_budget();
@@ -300,7 +296,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
             service_context,
             telemetry,
             frame_limits,
-            go_away_policy,
         )
     }
 }
@@ -315,7 +310,6 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
         frame_limits: FrameLimits,
-        go_away_policy: GoAwayPolicy,
     ) -> RocketMQResult<Self> {
         Ok(Self {
             tokio_client_config,
@@ -340,7 +334,6 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             transport_security: None,
             telemetry,
             frame_limits,
-            go_away_policy,
         })
     }
 

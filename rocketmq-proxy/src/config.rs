@@ -589,7 +589,7 @@ observability:
     fn assert_proxy_config_parse_error(error: crate::error::ProxyError, expected_stage: &str) {
         match error {
             crate::error::ProxyError::RocketMQ(error) => {
-                assert_eq!(error.kind(), rocketmq_error::ErrorKind::ConfigParseFailed);
+                assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_PARSE_FAILED);
                 match error {
                     RocketMQError::ConfigParseFailed { key, reason } => {
                         assert_eq!(key, "proxy.config");

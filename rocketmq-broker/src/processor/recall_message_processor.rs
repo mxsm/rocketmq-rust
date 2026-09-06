@@ -749,7 +749,7 @@ mod tests {
     fn recall_response_header_missing_uses_response_process_failed_kind() {
         let error = recall_response_header_missing();
 
-        assert_eq!(error.kind(), rocketmq_error::ErrorKind::ResponseProcessFailed);
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
     }
 
     #[test]

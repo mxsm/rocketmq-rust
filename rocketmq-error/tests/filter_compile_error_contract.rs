@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use rocketmq_error::DomainError;
-use rocketmq_error::ErrorKind;
 use rocketmq_error::FilterCompileError;
 use rocketmq_error::FilterCompileErrorKind;
 use rocketmq_error::FilterCompileSource;
 use rocketmq_error::FilterCompileStage;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::CORE_INTERNAL_FAILURE;
+use rocketmq_error::PROTOCOL_FILTER_INVALID;
 
 #[test]
 fn compile_error_contract_is_typed_and_redaction_safe() {
@@ -33,7 +34,7 @@ fn compile_error_contract_is_typed_and_redaction_safe() {
     assert_eq!(error.stage(), FilterCompileStage::Parse);
     assert_eq!(error.position(), Some(7));
     assert_eq!(error.source(), Some(FilterCompileSource::Sql92));
-    assert_eq!(DomainError::kind(&error), ErrorKind::Filter);
+    assert_eq!(DomainError::descriptor(&error), &PROTOCOL_FILTER_INVALID);
 
     let display = error.to_string();
     let debug = format!("{error:?}");
@@ -44,7 +45,7 @@ fn compile_error_contract_is_typed_and_redaction_safe() {
     }
 
     let unified: RocketMQError = error.into();
-    assert_eq!(unified.kind(), ErrorKind::Filter);
+    assert_eq!(unified.descriptor(), &PROTOCOL_FILTER_INVALID);
     let unified_context = unified.context().to_string();
     assert!(unified_context.contains("filter_compile_kind=<redacted>"));
     assert!(unified_context.contains("filter_compile_source=<redacted>"));
@@ -63,5 +64,5 @@ fn legacy_compile_adapter_has_no_source_position() {
 
     assert_eq!(error.position(), None);
     assert_eq!(error.source(), None);
-    assert_eq!(DomainError::kind(&error), ErrorKind::Filter);
+    assert_eq!(DomainError::descriptor(&error), &CORE_INTERNAL_FAILURE);
 }

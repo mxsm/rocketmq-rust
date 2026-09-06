@@ -56,7 +56,7 @@ impl fmt::Display for InjectedProcessorFailure {
 impl std::error::Error for InjectedProcessorFailure {}
 
 fn injected_processor_failure() -> RocketMQError {
-    RocketMQError::Network(Arc::new(
+    RocketMQError::Shared(Arc::new(
         CanonicalError::caused_by(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
             InjectedProcessorFailure {
@@ -100,8 +100,8 @@ fn injected_fault_preserves_canonical_network_policy_and_typed_source() {
         "processor faults retain the legacy SystemError remoting code"
     );
 
-    let RocketMQError::Network(canonical) = &error else {
-        panic!("injected processor failure must remain a Network error")
+    let RocketMQError::Shared(canonical) = &error else {
+        panic!("injected processor failure must remain a canonical Shared error")
     };
     assert_eq!(canonical.fault(), rocketmq_error::FaultAttribution::Dependency);
     let source = canonical

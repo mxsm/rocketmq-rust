@@ -24,8 +24,6 @@ pub fn into_rocketmq_error(_error: ProtocolContractViolation) -> rocketmq_error:
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::ErrorKind;
-
     use super::*;
 
     #[test]
@@ -38,7 +36,7 @@ mod tests {
 
         let adapted = into_rocketmq_error(error);
 
-        assert_eq!(adapted.kind(), ErrorKind::RequestHeaderError);
+        assert_eq!(adapted.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID);
         assert_eq!(adapted.boundary_view().message(), "Request header is invalid");
         assert!(!adapted.to_string().contains(SENTINEL));
     }

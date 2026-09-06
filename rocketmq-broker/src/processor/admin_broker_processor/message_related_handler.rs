@@ -494,7 +494,6 @@ mod tests {
     use crate::config::broker_config::BrokerConfig;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
-    use rocketmq_error::ErrorKind;
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_model::common::message::MessageConst;
@@ -559,7 +558,7 @@ mod tests {
             serde_json::from_str::<serde_json::Value>("{").expect_err("invalid json should produce a serde error");
         let error = cq_ext_unit_response_serialize_error(serde_error);
 
-        assert_eq!(error.kind(), ErrorKind::ResponseProcessFailed);
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
         assert!(error.to_string().contains("query_consume_queue.cq_ext_unit"));
     }
 

@@ -19,6 +19,7 @@ use rocketmq_error::BoundaryErrorView;
 use rocketmq_error::CliExitCode;
 use rocketmq_error::ControllerError;
 use rocketmq_error::DomainError;
+use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::Exposure;
@@ -37,7 +38,6 @@ use rocketmq_error::RecoveryHint;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RpcClientError;
 use rocketmq_error::SerializationError;
-use rocketmq_error::SharedRocketMQError;
 use rocketmq_error::ToolsError;
 use rocketmq_error::UnifiedServiceError;
 
@@ -891,7 +891,11 @@ fn shared_filter_view_keeps_the_same_descriptor_and_projection() {
         Some(7),
         FilterCompileSource::Sql92,
     );
-    let shared = SharedRocketMQError::new(RocketMQError::Filter(FilterError::Compile(compile)));
+    let legacy = RocketMQError::Filter(FilterError::Compile(compile));
+    let context = legacy.context();
+    let shared = RocketMQError::Shared(std::sync::Arc::new(
+        Error::caused_by(legacy.descriptor(), legacy).with_context(context),
+    ));
     assert_domain_error(
         &shared,
         "shared Filter UnexpectedToken",
@@ -925,7 +929,10 @@ fn the_two_retained_corrected_legacy_backoff_associations_publish_never() {
             RecoveryHint::Never,
             "hint for {label}"
         );
-        let shared = SharedRocketMQError::new(error);
+        let context = error.context();
+        let shared = RocketMQError::Shared(std::sync::Arc::new(
+            Error::caused_by(error.descriptor(), error).with_context(context),
+        ));
         assert_eq!(
             shared.descriptor().code().as_str(),
             code,

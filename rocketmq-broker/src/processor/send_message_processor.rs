@@ -279,7 +279,7 @@ where
             .await;
         match result {
             Ok(outcome) => Ok(outcome),
-            Err(error) if error.kind() == rocketmq_error::ErrorKind::RequestHeaderError => {
+            Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
                 BrokerResponseParts::from_command(command_from_error_with_factory_and_opaque(
                     &self.inner.context.command_factory,
                     &error,
@@ -2453,7 +2453,7 @@ mod tests {
     fn message_store_not_initialized_uses_not_initialized_kind() {
         let error = message_store_not_initialized();
 
-        assert_eq!(error.kind(), rocketmq_error::ErrorKind::NotInitialized);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED);
     }
 
     #[test]

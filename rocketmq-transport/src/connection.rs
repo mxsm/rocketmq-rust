@@ -52,7 +52,6 @@ use crate::dispatch::WriteProgress;
 use crate::error_helpers::admission_queue_saturated;
 use crate::error_helpers::connection_failed;
 use crate::error_helpers::connection_failed_without_source;
-use crate::error_helpers::network;
 use crate::error_helpers::TransportStage;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
@@ -186,7 +185,10 @@ pub(crate) enum CommandSendOutcome {
     Cancelled,
     QueueSaturated,
     EncodingFailed(rocketmq_error::RocketMQError),
-    OperationalFailure { error: SharedError },
+    OperationalFailure {
+        progress: WriteProgress,
+        error: SharedError,
+    },
 }
 
 impl SendFailure {
@@ -196,9 +198,11 @@ impl SendFailure {
                 operation: "transport_before_send",
                 timeout_ms,
             },
-            Self::SessionClosed | Self::Cancelled => network(connection_failed_without_source(TransportStage::Closed)),
-            Self::QueueSaturated { target } => network(admission_queue_saturated(target)),
-            Self::Writer { error, .. } => network(error),
+            Self::SessionClosed | Self::Cancelled => {
+                rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
+            }
+            Self::QueueSaturated { target } => rocketmq_error::RocketMQError::Shared(admission_queue_saturated(target)),
+            Self::Writer { error, .. } => rocketmq_error::RocketMQError::Shared(error),
         }
     }
 
@@ -220,7 +224,7 @@ impl SendFailure {
             Self::SessionClosed => CommandSendOutcome::SessionClosed,
             Self::Cancelled => CommandSendOutcome::Cancelled,
             Self::QueueSaturated { .. } => CommandSendOutcome::QueueSaturated,
-            Self::Writer { error, .. } => CommandSendOutcome::OperationalFailure { error },
+            Self::Writer { progress, error } => CommandSendOutcome::OperationalFailure { progress, error },
         }
     }
 }
@@ -1823,19 +1827,16 @@ impl Connection {
         let result = match &mut self.outbound {
             ConnectionWriter::Queued(queued) => {
                 let (completion, result) = oneshot::channel();
-                queued
-                    .writer
-                    .close(completion)
-                    .await
-                    .map_err(|_| network(connection_failed_without_source(TransportStage::Closed)))?;
-                result
-                    .await
-                    .map_err(|source| network(connection_failed(TransportStage::Closed, source)))?
+                queued.writer.close(completion).await.map_err(|_| {
+                    rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
+                })?;
+                result.await.map_err(|source| {
+                    rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
+                })?
             }
-            ConnectionWriter::Direct(writer) => writer
-                .shutdown()
-                .await
-                .map_err(|source| network(connection_failed(TransportStage::Closed, source))),
+            ConnectionWriter::Direct(writer) => writer.shutdown().await.map_err(|source| {
+                rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
+            }),
         };
         self.mark_closed();
         result

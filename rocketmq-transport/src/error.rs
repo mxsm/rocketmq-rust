@@ -30,6 +30,8 @@ use rocketmq_error::RecoveryHint;
 use rocketmq_error::SharedError;
 use rocketmq_error::ViewContextViolation;
 
+use crate::request_outcome::OutboundRequestStage;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum TransportOperation {
     Start,
@@ -71,17 +73,23 @@ impl TransportOperation {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum RequestOperation {
+    Connect,
     Register,
+    BeforeHook,
     Write,
     AwaitResponse,
+    AfterHook,
 }
 
 impl RequestOperation {
     const fn transport_operation(self) -> TransportOperation {
         match self {
+            Self::Connect => TransportOperation::RequestRegister,
             Self::Register => TransportOperation::RequestRegister,
+            Self::BeforeHook => TransportOperation::RequestRegister,
             Self::Write => TransportOperation::RequestWrite,
             Self::AwaitResponse => TransportOperation::RequestAwaitResponse,
+            Self::AfterHook => TransportOperation::RequestAwaitResponse,
         }
     }
 }
@@ -91,10 +99,13 @@ impl RequestOperation {
 /// Stable identity and policy are supplied exclusively by the canonical error
 /// catalog. The operation is closed diagnostic context, and a typed cause is
 /// retained without rendering source text or request and session identifiers.
+/// Request failures also retain the physical request stage at which the
+/// failure was captured.
 #[derive(Clone)]
 pub struct TransportError {
     error: SharedError,
     operation: TransportOperation,
+    request_stage: Option<OutboundRequestStage>,
 }
 
 impl TransportError {
@@ -144,12 +155,40 @@ impl TransportError {
     }
 
     #[track_caller]
-    pub(crate) fn request_failed(operation: RequestOperation, source: impl StdError + Send + Sync + 'static) -> Self {
-        Self::new(
-            &rocketmq_error::TRANSPORT_SESSION_FAILED,
-            operation.transport_operation(),
-            source,
-        )
+    pub(crate) fn request_failed(
+        operation: RequestOperation,
+        stage: OutboundRequestStage,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::new_request(&rocketmq_error::TRANSPORT_SESSION_FAILED, operation, stage, source)
+    }
+
+    /// Retains an existing canonical request failure without reallocating or
+    /// changing its descriptor, context, or physical source.
+    pub(crate) fn request(operation: RequestOperation, stage: OutboundRequestStage, error: SharedError) -> Self {
+        Self {
+            error,
+            operation: operation.transport_operation(),
+            request_stage: Some(stage),
+        }
+    }
+
+    #[track_caller]
+    pub(crate) fn request_canonicalized(
+        operation: RequestOperation,
+        stage: OutboundRequestStage,
+        source: rocketmq_error::RocketMQError,
+    ) -> Self {
+        let source = match source {
+            rocketmq_error::RocketMQError::Shared(error) => {
+                return Self::request(operation, stage, error);
+            }
+            source => source,
+        };
+        let descriptor = source.descriptor();
+        let context = source.context();
+        let error = CanonicalError::caused_by(descriptor, source).with_context(context);
+        Self::request(operation, stage, Arc::new(error))
     }
 
     #[track_caller]
@@ -169,6 +208,18 @@ impl TransportError {
     }
 
     #[track_caller]
+    fn new_request(
+        descriptor: &'static ErrorDescriptor,
+        operation: RequestOperation,
+        stage: OutboundRequestStage,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        let mut error = Self::new(descriptor, operation.transport_operation(), source);
+        error.request_stage = Some(stage);
+        error
+    }
+
+    #[track_caller]
     fn new(
         descriptor: &'static ErrorDescriptor,
         operation: TransportOperation,
@@ -181,7 +232,33 @@ impl TransportError {
         Self {
             error: Arc::new(error),
             operation,
+            request_stage: None,
         }
+    }
+
+    /// Returns the physical request stage associated with this failure.
+    ///
+    /// Non-request Transport operations return `None`. For request operations,
+    /// the stage is recorded at the failure capture point rather than inferred
+    /// from the descriptor or operation name.
+    #[must_use]
+    pub const fn request_stage(&self) -> Option<OutboundRequestStage> {
+        self.request_stage
+    }
+
+    /// Borrows the canonical error retained by this Transport failure.
+    ///
+    /// Cloning the returned [`SharedError`] preserves the same canonical error
+    /// allocation and physical source chain.
+    #[must_use]
+    pub fn shared_error(&self) -> &SharedError {
+        &self.error
+    }
+
+    /// Consumes this value and returns its canonical error allocation.
+    #[must_use]
+    pub fn into_shared_error(self) -> SharedError {
+        self.error
     }
 
     /// Returns the catalog descriptor that owns this failure's identity.
@@ -266,6 +343,7 @@ impl fmt::Debug for TransportError {
             .field("code", &self.code())
             .field("condition", &self.condition())
             .field("operation", &self.operation)
+            .field("request_stage", &self.request_stage)
             .field("source_present", &self.error.source().is_some())
             .finish()
     }
@@ -319,5 +397,28 @@ mod tests {
 
         assert_eq!(error.location().file(), file!());
         assert_eq!(error.location().line(), caller_line);
+    }
+
+    #[test]
+    fn request_carrier_reuses_a_shared_error_and_records_the_explicit_stage() {
+        let shared = crate::error_helpers::write_timeout_caused_by(
+            crate::error_helpers::TransportStage::Writing,
+            25,
+            io::Error::other("socket write elapsed"),
+        );
+        let error = TransportError::request_canonicalized(
+            RequestOperation::Write,
+            OutboundRequestStage::Writing,
+            rocketmq_error::RocketMQError::Shared(Arc::clone(&shared)),
+        );
+
+        assert!(Arc::ptr_eq(&shared, error.shared_error()));
+        assert_eq!(error.request_stage(), Some(OutboundRequestStage::Writing));
+        assert_eq!(error.descriptor(), &rocketmq_error::TRANSPORT_WRITE_TIMEOUT);
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .is_some_and(|source| source.to_string() == "socket write elapsed"));
+        assert!(Arc::ptr_eq(&shared, &error.into_shared_error()));
     }
 }

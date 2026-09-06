@@ -186,7 +186,6 @@ fn decode_controller_release_snapshot_manifest(
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::ErrorKind;
     use rocketmq_protocol::code::request_code::RequestCode;
 
     use super::*;
@@ -199,7 +198,7 @@ mod tests {
         let error = decode_controller_release_snapshot_manifest(&request, "MAINTENANCE_VERIFY_CHECKPOINT")
             .expect_err("malformed JSON must be rejected");
 
-        assert_eq!(error.kind(), ErrorKind::RequestBodyInvalid);
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_BODY_INVALID);
         let source = std::error::Error::source(&error).expect("serde source must be retained");
         assert!(source.downcast_ref::<serde_json::Error>().is_some());
         assert!(!error.boundary_view().context().to_string().contains("expected ident"));

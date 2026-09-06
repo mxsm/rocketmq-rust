@@ -80,6 +80,11 @@ fn four_boundary_mappings_match_the_golden_contract() {
             view.http().status,
             view.cli().exit_code,
         );
-        assert_eq!(expected, actual, "boundary mapping changed for {:?}", error.kind());
+        assert_eq!(
+            expected,
+            actual,
+            "boundary mapping changed for {}",
+            error.descriptor().code()
+        );
     }
 }

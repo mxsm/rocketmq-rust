@@ -25,9 +25,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RpcClientError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
@@ -43,7 +41,7 @@ use rocketmq_security_api::SigningError;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::DefaultRequestProcessor;
-use rocketmq_transport::api::GoAwayPolicy;
+use rocketmq_transport::api::OutboundRequestOutcome;
 use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::TlsClientConfig;
@@ -62,7 +60,6 @@ struct Reply {
     code: i32,
     delay: Duration,
     body: &'static [u8],
-    late_success: Option<(usize, &'static [u8])>,
 }
 
 impl Reply {
@@ -71,22 +68,11 @@ impl Reply {
             code,
             delay: Duration::ZERO,
             body,
-            late_success: None,
         }
     }
 
     const fn delayed(code: i32, delay: Duration, body: &'static [u8]) -> Self {
-        Self {
-            code,
-            delay,
-            body,
-            late_success: None,
-        }
-    }
-
-    const fn with_late_success_after_calls(mut self, expected_calls: usize, body: &'static [u8]) -> Self {
-        self.late_success = Some((expected_calls, body));
-        self
+        Self { code, delay, body }
     }
 }
 
@@ -210,16 +196,6 @@ impl ConnectionHandler for ScriptedHandler {
                         .set_body(reply.body),
                 )
                 .await;
-            if let Some((expected_calls, late_body)) = reply.late_success {
-                self.wait_for_calls(expected_calls).await;
-                let _ = connection
-                    .send_command(
-                        RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                            .set_opaque(command.opaque())
-                            .set_body(late_body),
-                    )
-                    .await;
-            }
             self.completed.fetch_add(1, Ordering::SeqCst);
             self.completion_changed.notify_waiters();
         })
@@ -312,19 +288,13 @@ where
     address
 }
 
-async fn start_client(
-    runtime: &RuntimeContext,
-    name: &'static str,
-    policy: Option<GoAwayPolicy>,
-    tls_enabled: bool,
-) -> Arc<TransportClient> {
-    start_client_with_security(runtime, name, policy, tls_enabled, None).await
+async fn start_client(runtime: &RuntimeContext, name: &'static str, tls_enabled: bool) -> Arc<TransportClient> {
+    start_client_with_security(runtime, name, tls_enabled, None).await
 }
 
 async fn start_client_with_security(
     runtime: &RuntimeContext,
     name: &'static str,
-    policy: Option<GoAwayPolicy>,
     tls_enabled: bool,
     transport_security: Option<Arc<TransportSecurity>>,
 ) -> Arc<TransportClient> {
@@ -342,9 +312,6 @@ async fn start_client_with_security(
         ..TransportClientConfig::default()
     });
     let mut builder = TransportClient::builder(config, DefaultRequestProcessor, runtime.service_context(name));
-    if let Some(policy) = policy {
-        builder = builder.go_away_policy(policy);
-    }
     if let Some(transport_security) = transport_security {
         builder = builder.transport_security(transport_security);
     }
@@ -353,8 +320,24 @@ async fn start_client_with_security(
     client
 }
 
-fn retry_safe_reads() -> GoAwayPolicy {
-    GoAwayPolicy::enabled_for_request_codes([RequestCode::GetBrokerClusterInfo.to_i32()])
+fn expect_response(outcome: OutboundRequestOutcome) -> RemotingCommand {
+    match outcome {
+        OutboundRequestOutcome::Response(response) => response,
+        OutboundRequestOutcome::Rejected(rejection) => {
+            panic!(
+                "request was rejected at {:?}: {:?}",
+                rejection.stage(),
+                rejection.reason()
+            )
+        }
+        OutboundRequestOutcome::Contract(contract) => {
+            panic!(
+                "request contract failed at {:?}: {:?}",
+                contract.stage(),
+                contract.reason()
+            )
+        }
+    }
 }
 
 async fn shutdown(runtime: RuntimeContext, clients: &[Arc<TransportClient>]) {
@@ -366,19 +349,17 @@ async fn shutdown(runtime: RuntimeContext, clients: &[Arc<TransportClient>]) {
 }
 
 #[tokio::test]
-async fn go_away_retries_once_on_a_replacement_connection() {
+async fn go_away_is_returned_without_hidden_retry_and_starts_drain() {
     let runtime = RuntimeContext::from_current("go-away-replacement-test");
-    let handler = Arc::new(ScriptedHandler::new(vec![
-        Reply::immediate(ResponseCode::GoAway.to_i32(), b"retire")
-            .with_late_success_after_calls(2, b"late-old-session"),
-        Reply::immediate(ResponseCode::Success.to_i32(), b"replacement"),
-    ]));
+    let handler = Arc::new(ScriptedHandler::new(vec![Reply::immediate(
+        ResponseCode::GoAway.to_i32(),
+        b"retire",
+    )]));
     let address = start_server(&runtime, "go-away-replacement-server", handler.clone(), false).await;
     let signer = Arc::new(CountingSigner::default());
     let client = start_client_with_security(
         &runtime,
         "go-away-replacement-client",
-        Some(retry_safe_reads()),
         false,
         Some(Arc::new(TransportSecurity::development_insecure_loopback(
             None,
@@ -401,10 +382,11 @@ async fn go_away_retries_once_on_a_replacement_connection() {
     let response = client
         .invoke_request_with_deadline(Some(&target), request, RequestDeadline::after(Duration::from_secs(2)))
         .await
-        .expect("GO_AWAY retry should succeed");
+        .expect("GO_AWAY response");
+    let response = expect_response(response);
 
-    assert_eq!(response.code(), ResponseCode::Success.to_i32());
-    assert_eq!(response.body().map(|body| body.as_ref()), Some(b"replacement".as_ref()));
+    assert_eq!(response.code(), ResponseCode::GoAway.to_i32());
+    assert_eq!(response.body().map(|body| body.as_ref()), Some(b"retire".as_ref()));
     assert_eq!(
         response
             .ext_fields()
@@ -413,16 +395,7 @@ async fn go_away_retries_once_on_a_replacement_connection() {
         Some("true")
     );
     let observed = handler.observations();
-    assert_eq!(observed.len(), 2);
-    assert_ne!(observed[0].0, observed[1].0, "retry must use a replacement session");
-    assert_ne!(observed[0].1.opaque(), observed[1].1.opaque());
-    assert_eq!(observed[0].1.code(), observed[1].1.code());
-    assert_eq!(observed[0].1.language(), observed[1].1.language());
-    assert_eq!(observed[0].1.version(), observed[1].1.version());
-    assert_eq!(observed[0].1.serialize_type(), observed[1].1.serialize_type());
-    assert_eq!(observed[0].1.flag(), observed[1].1.flag());
-    assert_eq!(observed[0].1.body(), observed[1].1.body());
-    assert_eq!(observed[0].1.remark(), observed[1].1.remark());
+    assert_eq!(observed.len(), 1, "Transport must not hide a replay");
     for (_, request) in &observed {
         assert_eq!(
             request
@@ -448,7 +421,7 @@ async fn go_away_retries_once_on_a_replacement_connection() {
     }
     assert_eq!(hook.before.load(Ordering::SeqCst), 1);
     assert_eq!(hook.after.load(Ordering::SeqCst), 1);
-    assert_eq!(signer.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(signer.calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         observed[0]
             .1
@@ -457,16 +430,8 @@ async fn go_away_retries_once_on_a_replacement_connection() {
             .map(CheetahString::as_str),
         Some("1")
     );
-    assert_eq!(
-        observed[1]
-            .1
-            .ext_fields()
-            .and_then(|fields| fields.get("connectionSignature"))
-            .map(CheetahString::as_str),
-        Some("2")
-    );
     assert_eq!(client.snapshot().pending.count, 0);
-    assert_eq!(client.snapshot().connection_count, 1);
+    assert_eq!(client.snapshot().connection_count, 0);
 
     shutdown(runtime, &[client]).await;
 }
@@ -474,18 +439,12 @@ async fn go_away_retries_once_on_a_replacement_connection() {
 #[tokio::test]
 async fn nameserver_routing_retires_the_actual_selected_endpoint() {
     let runtime = RuntimeContext::from_current("go-away-nameserver-routing-test");
-    let handler = Arc::new(ScriptedHandler::new(vec![
-        Reply::immediate(ResponseCode::GoAway.to_i32(), b"retire"),
-        Reply::immediate(ResponseCode::Success.to_i32(), b"replacement"),
-    ]));
+    let handler = Arc::new(ScriptedHandler::new(vec![Reply::immediate(
+        ResponseCode::GoAway.to_i32(),
+        b"retire",
+    )]));
     let address = start_server(&runtime, "go-away-nameserver-routing-server", handler.clone(), false).await;
-    let client = start_client(
-        &runtime,
-        "go-away-nameserver-routing-client",
-        Some(retry_safe_reads()),
-        false,
-    )
-    .await;
+    let client = start_client(&runtime, "go-away-nameserver-routing-client", false).await;
     let identity = CheetahString::from_string(address.to_string());
     client.update_name_server_address_list(vec![identity]).await;
 
@@ -496,62 +455,20 @@ async fn nameserver_routing_retires_the_actual_selected_endpoint() {
             RequestDeadline::after(Duration::from_secs(2)),
         )
         .await
-        .expect("NameServer GO_AWAY retry");
+        .expect("NameServer GO_AWAY response");
+    let response = expect_response(response);
 
-    assert_eq!(response.code(), ResponseCode::Success.to_i32());
+    assert_eq!(response.code(), ResponseCode::GoAway.to_i32());
     let observed = handler.observations();
-    assert_eq!(observed.len(), 2);
-    assert_ne!(observed[0].0, observed[1].0);
-    assert_eq!(client.snapshot().connection_count, 1);
-    assert_eq!(client.snapshot().pending.count, 0);
-
-    shutdown(runtime, &[client]).await;
-}
-
-#[tokio::test]
-async fn a_second_go_away_fails_without_an_unbounded_retry() {
-    let runtime = RuntimeContext::from_current("go-away-bound-test");
-    let handler = Arc::new(ScriptedHandler::new(vec![
-        Reply::immediate(ResponseCode::GoAway.to_i32(), b"first"),
-        Reply::immediate(ResponseCode::GoAway.to_i32(), b"second"),
-    ]));
-    let address = start_server(&runtime, "go-away-bound-server", handler.clone(), false).await;
-    let client = start_client(&runtime, "go-away-bound-client", Some(retry_safe_reads()), false).await;
-    let hook = Arc::new(CountingHook::default());
-    client.register_rpc_hook(hook.clone());
-    let target = CheetahString::from_string(address.to_string());
-
-    let result = tokio::time::timeout(
-        Duration::from_secs(2),
-        client.invoke_request_with_deadline(
-            Some(&target),
-            RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
-            RequestDeadline::after(Duration::from_secs(1)),
-        ),
-    )
-    .await
-    .expect("bounded retry must complete");
-    let error = match result {
-        Ok(_) => panic!("second GO_AWAY must be an error"),
-        Err(error) => error,
-    };
-
-    let RocketMQError::Rpc(RpcClientError::UnexpectedResponseCode { code, code_name }) = error else {
-        panic!("second GO_AWAY must preserve the typed unexpected-response error");
-    };
-    assert_eq!(code, ResponseCode::GoAway.to_i32());
-    assert_eq!(code_name, "GO_AWAY after replacement-connection retry");
-    assert_eq!(handler.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(hook.before.load(Ordering::SeqCst), 1);
-    assert_eq!(hook.after.load(Ordering::SeqCst), 0);
-    assert_eq!(client.snapshot().pending.count, 0);
+    assert_eq!(observed.len(), 1, "NameServer transport must not hide a replay");
     assert_eq!(client.snapshot().connection_count, 0);
+    assert_eq!(client.snapshot().pending.count, 0);
 
     shutdown(runtime, &[client]).await;
 }
 
 #[tokio::test]
-async fn disabled_and_non_allowlisted_requests_preserve_single_attempt_behavior() {
+async fn request_code_does_not_change_single_attempt_go_away_behavior() {
     let runtime = RuntimeContext::from_current("go-away-policy-test");
     let handler = Arc::new(ScriptedHandler::new(vec![
         Reply::immediate(ResponseCode::GoAway.to_i32(), b"disabled"),
@@ -559,42 +476,44 @@ async fn disabled_and_non_allowlisted_requests_preserve_single_attempt_behavior(
     ]));
     let address = start_server(&runtime, "go-away-policy-server", handler.clone(), false).await;
     let target = CheetahString::from_string(address.to_string());
-    let disabled = start_client(&runtime, "go-away-disabled-client", None, false).await;
-    let allowlisted = start_client(&runtime, "go-away-allowlisted-client", Some(retry_safe_reads()), false).await;
+    let read_client = start_client(&runtime, "go-away-read-client", false).await;
+    let write_client = start_client(&runtime, "go-away-write-client", false).await;
 
-    let disabled_response = disabled
+    let read_response = read_client
         .invoke_request(
             Some(&target),
             RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
             1_000,
         )
         .await
-        .expect("disabled policy preserves the response");
-    let side_effect_response = allowlisted
+        .expect("read request preserves GO_AWAY");
+    let side_effect_response = write_client
         .invoke_request(
             Some(&target),
             RemotingCommand::create_remoting_command(RequestCode::SendMessage),
             1_000,
         )
         .await
-        .expect("non-allowlisted request preserves the response");
+        .expect("write request preserves GO_AWAY");
+    let read_response = expect_response(read_response);
+    let side_effect_response = expect_response(side_effect_response);
 
-    assert_eq!(disabled_response.code(), ResponseCode::GoAway.to_i32());
+    assert_eq!(read_response.code(), ResponseCode::GoAway.to_i32());
     assert_eq!(side_effect_response.code(), ResponseCode::GoAway.to_i32());
     assert_eq!(handler.calls.load(Ordering::SeqCst), 2);
 
-    shutdown(runtime, &[disabled, allowlisted]).await;
+    shutdown(runtime, &[read_client, write_client]).await;
 }
 
 #[tokio::test]
-async fn retry_uses_only_the_original_deadline_budget() {
+async fn go_away_response_uses_one_attempt_within_the_original_deadline() {
     let runtime = RuntimeContext::from_current("go-away-deadline-test");
     let handler = Arc::new(ScriptedHandler::new(vec![
         Reply::delayed(ResponseCode::GoAway.to_i32(), Duration::from_millis(100), b"retire"),
         Reply::delayed(ResponseCode::Success.to_i32(), Duration::from_millis(150), b"too-late"),
     ]));
     let address = start_server(&runtime, "go-away-deadline-server", handler.clone(), false).await;
-    let client = start_client(&runtime, "go-away-deadline-client", Some(retry_safe_reads()), false).await;
+    let client = start_client(&runtime, "go-away-deadline-client", false).await;
     let target = CheetahString::from_string(address.to_string());
 
     let result = tokio::time::timeout(
@@ -605,10 +524,13 @@ async fn retry_uses_only_the_original_deadline_budget() {
             RequestDeadline::after(Duration::from_millis(180)),
         ),
     )
-    .await;
+    .await
+    .expect("request must finish within the bounded test timeout")
+    .expect("GO_AWAY response must be returned");
+    let response = expect_response(result);
 
-    assert!(matches!(result, Ok(Err(_))), "the immutable request deadline must win");
-    handler.wait_for_calls(2).await;
+    assert_eq!(response.code(), ResponseCode::GoAway.to_i32());
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
     assert_eq!(client.snapshot().pending.count, 0);
 
     shutdown(runtime, &[client]).await;
@@ -623,13 +545,7 @@ async fn an_exhausted_deadline_never_writes_a_second_attempt() {
         b"too-late",
     )]));
     let address = start_server(&runtime, "go-away-exhausted-deadline-server", handler.clone(), false).await;
-    let client = start_client(
-        &runtime,
-        "go-away-exhausted-deadline-client",
-        Some(retry_safe_reads()),
-        false,
-    )
-    .await;
+    let client = start_client(&runtime, "go-away-exhausted-deadline-client", false).await;
     let target = CheetahString::from_string(address.to_string());
 
     let result = client
@@ -663,7 +579,7 @@ async fn retiring_the_old_session_does_not_remove_a_concurrent_replacement() {
         first_release.clone(),
     ));
     let address = start_server(&runtime, "go-away-cache-race-server", handler.clone(), false).await;
-    let client = start_client(&runtime, "go-away-cache-race-client", Some(retry_safe_reads()), false).await;
+    let client = start_client(&runtime, "go-away-cache-race-client", false).await;
     let target = CheetahString::from_string(address.to_string());
 
     let primary_client = client.clone();
@@ -695,17 +611,31 @@ async fn retiring_the_old_session_does_not_remove_a_concurrent_replacement() {
     handler.wait_for_calls(2).await;
     first_release.notify_one();
 
-    let primary_response = primary.await.expect("primary task").expect("primary response");
-    let concurrent_response = concurrent.await.expect("concurrent task").expect("concurrent response");
-    assert_eq!(primary_response.code(), ResponseCode::Success.to_i32());
+    let primary_response = expect_response(primary.await.expect("primary task").expect("primary response"));
+    let concurrent_response = expect_response(concurrent.await.expect("concurrent task").expect("concurrent response"));
+    assert_eq!(primary_response.code(), ResponseCode::GoAway.to_i32());
     assert_eq!(concurrent_response.code(), ResponseCode::Success.to_i32());
+
+    let replacement_response = client
+        .invoke_request_with_deadline(
+            Some(&target),
+            RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+            RequestDeadline::after(Duration::from_secs(2)),
+        )
+        .await
+        .expect("explicit next attempt must use a replacement session");
+    let replacement_response = expect_response(replacement_response);
+    assert_eq!(replacement_response.code(), ResponseCode::Success.to_i32());
     let observed = handler.observations();
     assert_eq!(observed.len(), 3);
     assert_eq!(
         observed[0].0, observed[1].0,
         "concurrent work started on the old session"
     );
-    assert_ne!(observed[0].0, observed[2].0, "retry must install a replacement session");
+    assert_ne!(
+        observed[0].0, observed[2].0,
+        "the next explicit request must install a replacement session"
+    );
     assert_eq!(client.snapshot().pending.count, 0);
     assert_eq!(client.snapshot().connection_count, 1);
 
@@ -722,7 +652,6 @@ async fn a_short_go_away_request_does_not_truncate_an_older_pending_deadline() {
             b"older-long-request",
         ),
         Reply::immediate(ResponseCode::GoAway.to_i32(), b"retire"),
-        Reply::immediate(ResponseCode::Success.to_i32(), b"replacement"),
     ]));
     let address = start_server(
         &runtime,
@@ -731,13 +660,7 @@ async fn a_short_go_away_request_does_not_truncate_an_older_pending_deadline() {
         false,
     )
     .await;
-    let client = start_client(
-        &runtime,
-        "go-away-independent-drain-deadline-client",
-        Some(retry_safe_reads()),
-        false,
-    )
-    .await;
+    let client = start_client(&runtime, "go-away-independent-drain-deadline-client", false).await;
     let target = CheetahString::from_string(address.to_string());
 
     let older_client = client.clone();
@@ -760,35 +683,43 @@ async fn a_short_go_away_request_does_not_truncate_an_older_pending_deadline() {
             RequestDeadline::after(Duration::from_millis(500)),
         )
         .await
-        .expect("short request should reconnect within its own budget");
-    let older_response = older
-        .await
-        .expect("older request task")
-        .expect("older request keeps its longer deadline while the old session drains");
+        .expect("short request should return GO_AWAY within its own budget");
+    let short_response = expect_response(short_response);
+    let older_response = expect_response(
+        older
+            .await
+            .expect("older request task")
+            .expect("older request keeps its longer deadline while the old session drains"),
+    );
 
     assert_eq!(
         short_response.body().map(|body| body.as_ref()),
-        Some(b"replacement".as_ref())
+        Some(b"retire".as_ref())
     );
     assert_eq!(
         older_response.body().map(|body| body.as_ref()),
         Some(b"older-long-request".as_ref())
     );
+    let observed = handler.observations();
+    assert_eq!(observed.len(), 2, "drain must not hide a replacement request");
+    assert_eq!(
+        observed[0].0, observed[1].0,
+        "both requests began on the draining session"
+    );
     assert_eq!(client.snapshot().pending.count, 0);
-    assert_eq!(client.snapshot().connection_count, 1);
 
     shutdown(runtime, &[client]).await;
 }
 
 #[tokio::test]
-async fn oneway_requests_do_not_enter_the_response_retry_policy() {
+async fn oneway_requests_remain_single_attempt() {
     let runtime = RuntimeContext::from_current("go-away-oneway-test");
     let handler = Arc::new(ScriptedHandler::new(vec![Reply::immediate(
         ResponseCode::GoAway.to_i32(),
         b"ignored",
     )]));
     let address = start_server(&runtime, "go-away-oneway-server", handler.clone(), false).await;
-    let client = start_client(&runtime, "go-away-oneway-client", Some(retry_safe_reads()), false).await;
+    let client = start_client(&runtime, "go-away-oneway-client", false).await;
     let target = CheetahString::from_string(address.to_string());
 
     client
@@ -809,14 +740,14 @@ async fn oneway_requests_do_not_enter_the_response_retry_policy() {
 
 #[tokio::test]
 #[cfg(feature = "tls")]
-async fn tls_go_away_retry_uses_a_replacement_connection() {
+async fn tls_go_away_returns_the_first_response_without_hidden_retry() {
     let runtime = RuntimeContext::from_current("go-away-tls-test");
-    let handler = Arc::new(ScriptedHandler::new(vec![
-        Reply::immediate(ResponseCode::GoAway.to_i32(), b"retire"),
-        Reply::immediate(ResponseCode::Success.to_i32(), b"replacement"),
-    ]));
+    let handler = Arc::new(ScriptedHandler::new(vec![Reply::immediate(
+        ResponseCode::GoAway.to_i32(),
+        b"retire",
+    )]));
     let address = start_server(&runtime, "go-away-tls-server", handler.clone(), true).await;
-    let client = start_client(&runtime, "go-away-tls-client", Some(retry_safe_reads()), true).await;
+    let client = start_client(&runtime, "go-away-tls-client", true).await;
     let target = CheetahString::from_string(address.to_string());
 
     let response = client
@@ -826,12 +757,12 @@ async fn tls_go_away_retry_uses_a_replacement_connection() {
             RequestDeadline::after(Duration::from_secs(2)),
         )
         .await
-        .expect("TLS GO_AWAY retry");
+        .expect("TLS GO_AWAY response");
+    let response = expect_response(response);
 
-    assert_eq!(response.code(), ResponseCode::Success.to_i32());
+    assert_eq!(response.code(), ResponseCode::GoAway.to_i32());
     let observed = handler.observations();
-    assert_eq!(observed.len(), 2);
-    assert_ne!(observed[0].0, observed[1].0);
+    assert_eq!(observed.len(), 1, "TLS transport must not hide a replay");
     assert_eq!(client.snapshot().pending.count, 0);
 
     shutdown(runtime, &[client]).await;

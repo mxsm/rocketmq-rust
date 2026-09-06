@@ -30,6 +30,7 @@ use crate::admission::AdmissionLimits;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScope;
 use crate::admission::AdmissionScopeHandle;
+use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
@@ -246,15 +247,14 @@ impl PendingHotPathHarness {
     pub fn concrete_register_complete(&self) {
         let opaque = self.next_opaque.fetch_add(1, Ordering::Relaxed);
         let (sender, _receiver) = tokio::sync::oneshot::channel();
-        let guard = self
-            .table
-            .register_for_owner(
-                &self.owner,
-                opaque,
-                RequestDeadline::after(std::time::Duration::from_secs(30)),
-                sender,
-            )
-            .expect("pending registration");
+        let PendingRegistrationOutcome::Registered(guard) = self.table.register_for_owner(
+            &self.owner,
+            opaque,
+            RequestDeadline::after(std::time::Duration::from_secs(30)),
+            sender,
+        ) else {
+            panic!("pending registration rejected")
+        };
         assert!(self.table.complete_response_for_owner(
             &self.owner,
             opaque,

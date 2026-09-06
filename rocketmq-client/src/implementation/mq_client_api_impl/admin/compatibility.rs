@@ -32,7 +32,17 @@ impl MqClientAdminInner for MQClientAPIImpl {
             CheetahString::from_static_str(if unique_key_flag { "true" } else { "false" }),
         );
 
-        let mut response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let mut response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error("query_message", RetryInput::Rejected(rejection)));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error("query_message", RetryInput::Contract(contract)));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let Some(mut body) = response.take_body() else {
@@ -58,7 +68,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<TopicStatsTable> {
         let request = self.create_request_command(RequestCode::GetTopicStatsInfo, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_topic_stats_info",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_topic_stats_info",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
                 return TopicStatsTable::decode(body.as_ref());
@@ -77,7 +103,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<Vec<QueueTimeSpan>> {
         let request = self.create_request_command(RequestCode::QueryConsumeTimeSpan, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "query_consume_time_span",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "query_consume_time_span",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
                 let body: QueryConsumeTimeSpanBody = super::decode_admin_json(body.as_ref())?;
@@ -98,7 +140,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request = self.create_request_command(RequestCode::UpdateAndCreateTopic, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "update_or_create_topic",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "update_or_create_topic",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
         }
@@ -118,7 +176,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         let request = self
             .create_request_command(RequestCode::UpdateAndCreateSubscriptionGroup, EmptyHeader {})
             .set_body(config.encode()?);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "update_or_create_subscription_group",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "update_or_create_subscription_group",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
         }
@@ -136,7 +210,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request = self.create_request_command(RequestCode::DeleteTopicInBroker, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "delete_topic_in_broker",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "delete_topic_in_broker",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
         }
@@ -154,7 +244,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request = delete_topic_list_request(&self.command_factory, topic_list)?;
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "delete_topic_in_broker_list",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "delete_topic_in_broker_list",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => Ok(()),
             _ => Err(mq_client_err!(
@@ -172,7 +278,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request = self.create_request_command(RequestCode::DeleteTopicInNamesrv, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "delete_topic_in_nameserver",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "delete_topic_in_nameserver",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
         }
@@ -190,7 +312,17 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request = self.create_request_command(RequestCode::DeleteKvConfig, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error("delete_kv_config", RetryInput::Rejected(rejection)));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error("delete_kv_config", RetryInput::Contract(contract)));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
         }
@@ -208,7 +340,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request = self.create_request_command(RequestCode::DeleteSubscriptionGroup, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "delete_subscription_group",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "delete_subscription_group",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
         }
@@ -227,7 +375,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request = delete_subscription_group_list_request(&self.command_factory, group_name_list, clean_offset)?;
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "delete_subscription_group_list",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "delete_subscription_group_list",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => Ok(()),
             _ => Err(mq_client_err!(
@@ -245,7 +409,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<HashMap<MessageQueue, i64>> {
         let request = self.create_request_command(RequestCode::InvokeBrokerToResetOffset, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "invoke_broker_to_reset_offset",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "invoke_broker_to_reset_offset",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         reset_offset_table_from_response(&response)
     }
 
@@ -256,7 +436,17 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<MessageExt> {
         let request = self.create_request_command(RequestCode::ViewMessageById, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error("view_message", RetryInput::Rejected(rejection)));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error("view_message", RetryInput::Contract(contract)));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 if let Some(body) = response.get_body() {
@@ -276,7 +466,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
 
     async fn get_broker_cluster_info(&self, address: &str, timeout_millis: u64) -> RocketMQResult<ClusterInfo> {
         let request = self.create_request_command(RequestCode::GetBrokerClusterInfo, EmptyHeader {});
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_broker_cluster_info",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_broker_cluster_info",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
                 return ClusterInfo::decode(body.as_ref());
@@ -295,7 +501,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<ConsumerConnection> {
         let request = self.create_request_command(RequestCode::GetConsumerConnectionList, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_consumer_connection_list",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_consumer_connection_list",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
                 return ConsumerConnection::decode(body.as_ref());
@@ -314,7 +536,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<TopicList> {
         let request = self.create_request_command(RequestCode::QueryTopicsByConsumer, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "query_topics_by_consumer",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "query_topics_by_consumer",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
                 return TopicList::decode(body.as_ref());
@@ -333,7 +571,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<SubscriptionData> {
         let request = self.create_request_command(RequestCode::QuerySubscriptionByConsumer, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "query_subscription_by_consumer",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "query_subscription_by_consumer",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let body = response
                 .get_body()
@@ -356,7 +610,20 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<ConsumeStats> {
         let request = self.create_request_command(RequestCode::GetConsumeStats, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_consume_stats",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error("get_consume_stats", RetryInput::Contract(contract)));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
                 return ConsumeStats::decode(body.as_ref());
@@ -375,7 +642,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<GroupList> {
         let request = self.create_request_command(RequestCode::QueryTopicConsumeByWho, request_header);
-        let response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "query_topic_consume_by_who",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "query_topic_consume_by_who",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
                 return GroupList::decode(body.as_ref());
@@ -394,7 +677,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<ConsumerRunningInfo> {
         let request = self.create_request_command(RequestCode::GetConsumerRunningInfo, request_header);
-        let mut response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let mut response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "get_consumer_running_info",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "get_consumer_running_info",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let Some(body) = response.take_body() else {
@@ -417,7 +716,23 @@ impl MqClientAdminInner for MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<ConsumeMessageDirectlyResult> {
         let request = self.create_request_command(RequestCode::ConsumeMessageDirectly, request_header);
-        let mut response = self.invoke_admin_request(address, request, timeout_millis).await?;
+        let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
+        let mut response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(admin_request_error(
+                    "consume_message_directly",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(admin_request_error(
+                    "consume_message_directly",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let Some(body) = response.take_body() else {

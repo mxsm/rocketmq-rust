@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::bail;
+use anyhow::Context;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::config::TopicConfig;
@@ -47,6 +49,7 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::OutboundRequestOutcome;
 use rocketmq_transport::api::ServerConfig;
 use rocketmq_transport::api::TransportClient;
 use rocketmq_transport::api::TransportClientConfig;
@@ -141,10 +144,21 @@ impl NamesrvHarness {
         );
     }
 
-    async fn request(&self, request: RemotingCommand) -> RocketMQResult<RemotingCommand> {
-        self.client
+    async fn request(&self, request: RemotingCommand) -> anyhow::Result<RemotingCommand> {
+        let outcome = self
+            .client
             .invoke_request(Some(&self.addr), request, REQUEST_TIMEOUT_MILLIS)
             .await
+            .context("execute NameServer integration request")?;
+        match outcome {
+            OutboundRequestOutcome::Response(response) => Ok(response),
+            OutboundRequestOutcome::Rejected(rejection) => {
+                bail!("NameServer integration request was rejected: {rejection:?}")
+            }
+            OutboundRequestOutcome::Contract(contract) => {
+                bail!("NameServer integration request contract failed: {contract:?}")
+            }
+        }
     }
 
     async fn shutdown(mut self) {
@@ -208,12 +222,22 @@ async fn wait_until_ready(
         request.make_custom_header_to_net();
 
         let failure = match client.invoke_request(Some(addr), request, REQUEST_TIMEOUT_MILLIS).await {
-            Ok(response) if ResponseCode::from(response.code()) == ResponseCode::Success => return Ok(()),
-            Ok(response) => format!(
+            Ok(OutboundRequestOutcome::Response(response))
+                if ResponseCode::from(response.code()) == ResponseCode::Success =>
+            {
+                return Ok(());
+            }
+            Ok(OutboundRequestOutcome::Response(response)) => format!(
                 "unexpected response code {:?}, remark {:?}",
                 ResponseCode::from(response.code()),
                 response.remark()
             ),
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                format!("request rejected before readiness: {rejection:?}")
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                format!("request contract failed before readiness: {contract:?}")
+            }
             Err(error) => error.to_string(),
         };
 

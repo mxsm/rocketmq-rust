@@ -1323,7 +1323,6 @@ fn pull_message_service_shutdown_signal_failed() -> RocketMQError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_error::ErrorKind;
 
     fn test_pop_request(queue_id: i32) -> PopRequest {
         PopRequest::new(
@@ -1415,10 +1414,10 @@ mod tests {
     }
 
     #[test]
-    fn pull_message_service_startup_failed_uses_service_error_kind() {
+    fn pull_message_service_startup_failed_uses_service_descriptor() {
         let error = pull_message_service_startup_failed("spawn test worker", "task group closed");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
+        assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
         assert!(error.to_string().contains("PullMessageService spawn test worker"));
     }
 
@@ -1426,7 +1425,10 @@ mod tests {
     fn pull_message_service_request_type_mismatch_uses_client_invalid_state() {
         let error = pull_message_service_request_type_mismatch("PullRequest");
 
-        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert_eq!(
+            error.descriptor().code(),
+            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
+        );
         assert!(error.to_string().contains("PullRequest"));
     }
 
@@ -1463,7 +1465,10 @@ mod tests {
     async fn process_request_reports_pull_downcast_mismatch_as_client_invalid_state() {
         let error = process_mismatched_request(MessageRequestMode::Pull).await;
 
-        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert_eq!(
+            error.descriptor().code(),
+            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
+        );
         assert!(error.to_string().contains("PullRequest"));
     }
 
@@ -1471,7 +1476,10 @@ mod tests {
     async fn process_request_reports_pop_downcast_mismatch_as_client_invalid_state() {
         let error = process_mismatched_request(MessageRequestMode::Pop).await;
 
-        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert_eq!(
+            error.descriptor().code(),
+            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
+        );
         assert!(error.to_string().contains("PopRequest"));
     }
 
@@ -1548,7 +1556,10 @@ mod tests {
             Err(error) => error,
         };
 
-        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert_eq!(
+            error.descriptor().code(),
+            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
+        );
     }
 
     #[tokio::test]

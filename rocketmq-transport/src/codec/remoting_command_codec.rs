@@ -564,7 +564,7 @@ impl SessionCommandDecoder {
                 AdmissionClass::Data,
             )
             .map_err(|_| {
-                crate::error_helpers::network(crate::error_helpers::admission_queue_saturated(
+                rocketmq_error::RocketMQError::Shared(crate::error_helpers::admission_queue_saturated(
                     "partial-frame-admission",
                 ))
             })?;

@@ -637,6 +637,7 @@ mod tests {
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_runtime::ShutdownDeadline;
+    use rocketmq_transport::api::OutboundRequestOutcome;
     use rocketmq_transport::api::TransportClient;
     use rocketmq_transport::api::TransportClientConfig;
     use tokio::io::AsyncReadExt;
@@ -839,7 +840,7 @@ mod tests {
         )
         .build()
         .expect("build transport client");
-        let bootstrap_response = client
+        let bootstrap_outcome = client
             .invoke_request(
                 Some(&target),
                 RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
@@ -847,6 +848,9 @@ mod tests {
             )
             .await
             .expect("bootstrap transport request");
+        let OutboundRequestOutcome::Response(bootstrap_response) = bootstrap_outcome else {
+            panic!("bootstrap transport request should receive a response");
+        };
         assert_eq!(bootstrap_response.code(), ResponseCode::Success.to_i32());
 
         peer.await.expect("broker peer task");

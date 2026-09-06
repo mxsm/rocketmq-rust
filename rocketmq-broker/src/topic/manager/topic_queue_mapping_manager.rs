@@ -482,7 +482,6 @@ mod tests {
     use std::sync::Arc;
 
     use crate::config::broker_config::BrokerConfig;
-    use rocketmq_error::ErrorKind;
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
@@ -501,7 +500,7 @@ mod tests {
     fn topic_queue_mapping_persist_failed_uses_storage_write_error_kind() {
         let error = topic_queue_mapping_persist_failed("topic_queue_mapping.json", "disk full");
 
-        assert_eq!(error.kind(), ErrorKind::StorageWriteFailed);
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_WRITE_FAILED);
         assert!(error.to_string().contains("topic_queue_mapping.json"));
     }
 

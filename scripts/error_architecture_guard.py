@@ -687,16 +687,22 @@ def check_client_callback_boundary() -> list[Finding]:
 
 
 def check_client_retry_boundary() -> list[Finding]:
+    retry_path = ROOT / "rocketmq-client" / "src" / "common" / "retry_policy.rs"
     required_tokens = {
-        ROOT / "rocketmq-client" / "src" / "common" / "retry_decision.rs": [
-            "error.descriptor().recovery_hint()",
-            "pub(crate) struct ClientRetryEffect",
-            "pub(crate) fn producer_send_retry_decision",
+        retry_path: [
+            "pub(crate) struct RetryPolicy",
+            "pub(crate) enum RetryInput",
+            "RetryInput::Transport(error)",
+            "descriptor: error.shared_error().descriptor()",
+            "stage: error.request_stage()",
+            "RetryInput::Rejected(rejection)",
+            "RetryInput::Contract(_)",
+            "RetryInput::Response { code, retry_after, .. }",
+            "OutboundRequestStage::BeforeWrite",
+            "producer_retry_response_codes",
+            "codes.contains(&code)",
             "pub(crate) fn producer_send_fault_decision",
-            "fn retry_policy_error(error: &RocketMQError)",
-            "RocketMQError::Shared(shared) => shared.as_error()",
-            "retry_response_codes.contains(code)",
-            "Java producer retries only configured broker response codes for send.",
+            "RetryInput::Response { .. }",
         ],
         ROOT
         / "rocketmq-client"
@@ -705,8 +711,15 @@ def check_client_retry_boundary() -> list[Finding]:
         / "producer_impl"
         / "default_mq_producer_impl"
         / "retry.rs": [
-            "producer_send_retry_decision(error, runtime.producer_config.retry_response_codes())",
-            "producer_send_fault_decision(error, detector_enabled)",
+            "RetryPolicy::decide(",
+        ],
+        ROOT
+        / "rocketmq-client"
+        / "src"
+        / "implementation"
+        / "mq_client_api_impl"
+        / "producer_retry.rs": [
+            "RetryPolicy::decide(",
         ],
     }
     findings: list[Finding] = []
@@ -722,9 +735,17 @@ def check_client_retry_boundary() -> list[Finding]:
     forbidden = {
         "to_string()": "client retry decisions must not parse or build display strings",
         "format!(": "client retry decisions must use descriptor recovery policy, not local text construction",
-        "downcast_ref": "client retry decisions must not use runtime downcast",
+        "fields::PHASE": "client retry decisions must use typed request stage, not PHASE context",
+        ".source()": "client retry decisions must not infer policy from error sources",
+        "downcast_ref": "client retry decisions must not infer policy through runtime downcast",
+        "retry_decision": "legacy client retry decision authority must not return",
+        "ClientRetryDecision": "legacy client retry decision type must not return",
+        "ClientRetryEffect": "legacy client retry effect type must not return",
+        "producer_send_retry_decision": "legacy producer retry decision helper must not return",
+        "retry_policy_error": "legacy retry error unwrapping helper must not return",
+        "SharedRocketMQError": "legacy shared compatibility carrier must not return",
+        "RocketMQError::Network": "legacy Network carrier must not return",
     }
-    retry_path = ROOT / "rocketmq-client" / "src" / "common" / "retry_decision.rs"
     return [*findings, *scan_forbidden_terms([retry_path], forbidden)]
 
 

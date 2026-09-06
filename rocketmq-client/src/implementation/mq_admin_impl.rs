@@ -20,10 +20,19 @@ use std::sync::Weak;
 use crate::base::client_config::ClientConfig;
 use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
+use crate::common::retry_policy::RetryAction;
+use crate::common::retry_policy::RetryContext;
+use crate::common::retry_policy::RetryIdempotency;
+use crate::common::retry_policy::RetryInput;
+use crate::common::retry_policy::RetryOperation;
+use crate::common::retry_policy::RetryPolicy;
 use crate::factory::mq_client_instance;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use cheetah_string::CheetahString;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_model::common::boundary_type::BoundaryType;
@@ -41,6 +50,67 @@ use rocketmq_protocol::protocol::header::query_message_request_header::QueryMess
 use rocketmq_protocol::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
+use rocketmq_transport::api::OutboundRequestContractReason;
+use rocketmq_transport::api::OutboundRequestRejectionReason;
+use rocketmq_transport::api::OutboundRequestStage;
+use rocketmq_transport::api::RequestDeadline;
+
+const CREATE_TOPIC_ATTEMPTS: u32 = 5;
+
+fn create_topic_retry_error(input: RetryInput) -> RocketMQError {
+    match input {
+        RetryInput::Transport(error) => RocketMQError::Shared(error.into_shared_error()),
+        RetryInput::Rejected(rejection) => match rejection.reason() {
+            OutboundRequestRejectionReason::DeadlineExpired => {
+                let mut context = ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "create_topic");
+                if let Some(timeout_millis) = rejection.timeout_millis() {
+                    context = context.with_u64(fields::TIMEOUT_MS, timeout_millis);
+                }
+                RocketMQError::Shared(Arc::new(
+                    Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
+                ))
+            }
+            OutboundRequestRejectionReason::ClientStopping => RocketMQError::ClientNotStarted,
+            OutboundRequestRejectionReason::QueueSaturated => RocketMQError::Shared(Arc::new(Error::new(
+                &rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED,
+            ))),
+            OutboundRequestRejectionReason::Cancelled
+            | OutboundRequestRejectionReason::SessionClosed
+            | OutboundRequestRejectionReason::EndpointUnavailable => {
+                let phase = match rejection.reason() {
+                    OutboundRequestRejectionReason::SessionClosed => "closed",
+                    _ => create_topic_stage_phase(rejection.stage()),
+                };
+                let mut context = ErrorContext::new().with_text(fields::PHASE, phase);
+                if rejection.remote_addr_present() {
+                    context = context.with_secret_presence(fields::REMOTE_ADDR_PRESENT);
+                }
+                RocketMQError::Shared(Arc::new(
+                    Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
+                ))
+            }
+        },
+        RetryInput::Contract(contract) => match contract.reason() {
+            OutboundRequestContractReason::NameServerEndpointMissing => {
+                RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
+            }
+        },
+        RetryInput::Response { terminal_error, .. } | RetryInput::BusinessError(terminal_error) => terminal_error,
+        // The create-topic request path cannot construct producer send status or route-policy inputs.
+        RetryInput::SendStatus(_) | RetryInput::RouteUnavailable => {
+            unreachable!("create-topic request returned an unrelated retry input")
+        }
+    }
+}
+
+const fn create_topic_stage_phase(stage: OutboundRequestStage) -> &'static str {
+    match stage {
+        OutboundRequestStage::BeforeWrite => "before_write",
+        OutboundRequestStage::Writing => "writing",
+        OutboundRequestStage::AwaitingResponse => "awaiting_response",
+        OutboundRequestStage::ResponseReceived => "response_received",
+    }
+}
 
 pub struct MQAdminImpl {
     timeout_millis: u64,
@@ -192,13 +262,16 @@ impl MQAdminImpl {
         broker_datas.sort();
         let mut create_ok_at_least_once = false;
         let mut last_error: Option<rocketmq_error::RocketMQError> = None;
-
         for broker_data in broker_datas {
             let Some(addr) = broker_data.broker_addrs().get(&mix_all::MASTER_ID).cloned() else {
                 continue;
             };
             let mut create_ok = false;
-            for _ in 0..5 {
+            let deadline = RequestDeadline::from_timeout_millis(self.timeout_millis);
+            for attempt in 1..=CREATE_TOPIC_ATTEMPTS {
+                if deadline.is_expired() && last_error.is_some() {
+                    break;
+                }
                 let request_header = CreateTopicRequestHeader {
                     topic: CheetahString::from_slice(new_topic),
                     default_topic: CheetahString::from_slice(key),
@@ -213,7 +286,7 @@ impl MQAdminImpl {
                     topic_request_header: None,
                 };
                 match api_impl
-                    .update_or_create_topic(&addr, request_header, self.timeout_millis)
+                    .update_or_create_topic_once(&addr, request_header, deadline)
                     .await
                 {
                     Ok(()) => {
@@ -221,7 +294,44 @@ impl MQAdminImpl {
                         create_ok_at_least_once = true;
                         break;
                     }
-                    Err(error) => last_error = Some(error),
+                    Err(input) => {
+                        let action = RetryPolicy::decide(
+                            RetryContext {
+                                operation: RetryOperation::CreateTopic,
+                                idempotency: RetryIdempotency::Idempotent,
+                                attempt,
+                                max_attempts: CREATE_TOPIC_ATTEMPTS,
+                                remaining: deadline.remaining(),
+                                producer_retry_response_codes: None,
+                                retry_not_store_ok: false,
+                            },
+                            &input,
+                        );
+                        match action {
+                            RetryAction::Stop
+                            | RetryAction::SwitchBroker
+                            | RetryAction::RefreshRoute
+                            | RetryAction::RefreshLeader => {
+                                last_error = Some(create_topic_retry_error(input));
+                                break;
+                            }
+                            RetryAction::RetryNow => {
+                                last_error = Some(create_topic_retry_error(input));
+                            }
+                            RetryAction::RetryAfter(delay) => {
+                                last_error = Some(create_topic_retry_error(input));
+                                if tokio::time::timeout_at(deadline.instant(), tokio::time::sleep(delay))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                        if deadline.is_expired() {
+                            break;
+                        }
+                    }
                 }
             }
             if !create_ok {
@@ -502,8 +612,228 @@ impl MQAdminImpl {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
     use super::*;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_protocol::protocol::RemotingSerializable;
+    use rocketmq_protocol::RemotingCommand;
+    use rocketmq_runtime::RuntimeContext;
+    use rocketmq_runtime::ShutdownDeadline;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::test_support::SessionProcessor;
+    use rocketmq_transport::test_support::SessionTransportServer;
+    use rocketmq_transport::test_support::SessionTransportServerConfig;
+
+    struct CreateTopicProcessor {
+        broker_addr: OnceLock<CheetahString>,
+        create_responses: Mutex<VecDeque<RemotingCommand>>,
+        route_requests: std::sync::atomic::AtomicUsize,
+        create_requests: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CreateTopicProcessor {
+        fn new() -> Self {
+            Self {
+                broker_addr: OnceLock::new(),
+                create_responses: Mutex::new(VecDeque::new()),
+                route_requests: std::sync::atomic::AtomicUsize::new(0),
+                create_requests: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn push_create_response(&self, response: RemotingCommand) {
+            self.create_responses
+                .lock()
+                .expect("create response queue")
+                .push_back(response);
+        }
+
+        fn counts(&self) -> (usize, usize) {
+            use std::sync::atomic::Ordering;
+
+            (
+                self.route_requests.load(Ordering::SeqCst),
+                self.create_requests.load(Ordering::SeqCst),
+            )
+        }
+
+        fn route_response(&self) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+            let broker_addr = self
+                .broker_addr
+                .get()
+                .ok_or_else(|| RocketMQError::invariant_violated("test broker address must be initialized"))?;
+            let route = TopicRouteData {
+                broker_datas: vec![BrokerData::new(
+                    CheetahString::from_static_str("cluster-a"),
+                    CheetahString::from_static_str("broker-a"),
+                    HashMap::from([(mix_all::MASTER_ID, broker_addr.clone())]),
+                    None,
+                )],
+                ..Default::default()
+            };
+            Ok(RemotingCommand::create_success_response_command().set_body(route.encode()?))
+        }
+    }
+
+    impl SessionProcessor for CreateTopicProcessor {
+        fn process(
+            &self,
+            request: RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
+            Box::pin(async move {
+                use std::sync::atomic::Ordering;
+
+                let mut response = if request.code() == RequestCode::GetRouteinfoByTopic.to_i32() {
+                    self.route_requests.fetch_add(1, Ordering::SeqCst);
+                    self.route_response()?
+                } else if request.code() == RequestCode::UpdateAndCreateTopic.to_i32() {
+                    self.create_requests.fetch_add(1, Ordering::SeqCst);
+                    self.create_responses
+                        .lock()
+                        .expect("create response queue")
+                        .pop_front()
+                        .ok_or_else(|| RocketMQError::illegal_argument("unexpected create-topic request"))?
+                } else {
+                    return Err(RocketMQError::illegal_argument(format!(
+                        "unexpected request code {}",
+                        request.code()
+                    )));
+                };
+                response.set_opaque_mut(request.opaque());
+                Ok(response)
+            })
+        }
+    }
+
+    async fn create_topic_harness(
+        scope: &'static str,
+    ) -> (
+        MQAdminImpl,
+        Arc<MQClientInstance>,
+        Arc<crate::runtime::ClientRuntime>,
+        Arc<CreateTopicProcessor>,
+        Arc<SessionTransportServer>,
+        RuntimeContext,
+    ) {
+        let server_runtime = RuntimeContext::from_current(scope);
+        let admission = Arc::new(AdmissionController::new(AdmissionLimits::default()));
+        let processor = Arc::new(CreateTopicProcessor::new());
+        let server = SessionTransportServer::bind(
+            server_runtime.service_context("create-topic-server"),
+            SessionTransportServerConfig::loopback(),
+            Arc::clone(&processor) as Arc<dyn SessionProcessor>,
+            admission,
+        )
+        .await
+        .expect("bind scripted create-topic server");
+        let broker_addr = CheetahString::from_string(server.local_addr().to_string());
+        processor
+            .broker_addr
+            .set(broker_addr.clone())
+            .expect("set test broker address once");
+        server.start().expect("start create-topic server");
+
+        let client_runtime = crate::runtime::test_client_runtime(scope);
+        let mut client_config = ClientConfig::default();
+        client_config.set_vip_channel_enabled(false);
+        let client_instance = MQClientInstance::new_arc(
+            client_config,
+            0,
+            CheetahString::from_string(format!("{scope}-client")),
+            None,
+            client_runtime.component("instance"),
+            client_runtime.telemetry_handle().clone(),
+            client_runtime.pool().request_future_holder(),
+        );
+        let api = client_instance.get_mq_client_api_impl().expect("client API");
+        api.update_name_server_address_list_sync(broker_addr.as_str());
+        api.start().await.expect("start client transport");
+        let mut admin = MQAdminImpl::new();
+        admin.timeout_millis = 2_000;
+        assert!(admin.set_client(&client_instance));
+
+        (
+            admin,
+            client_instance,
+            client_runtime,
+            processor,
+            server,
+            server_runtime,
+        )
+    }
+
+    async fn shutdown_create_topic_harness(
+        client_instance: Arc<MQClientInstance>,
+        client_runtime: Arc<crate::runtime::ClientRuntime>,
+        server: Arc<SessionTransportServer>,
+        server_runtime: RuntimeContext,
+    ) {
+        client_instance.shutdown().await;
+        client_runtime
+            .shutdown()
+            .await
+            .assert_no_task_leak()
+            .expect("client runtime tasks drained");
+        server
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await
+            .assert_no_task_leak()
+            .expect("server tasks drained");
+        server_runtime
+            .shutdown_tasks(Duration::from_secs(5))
+            .await
+            .assert_no_task_leak()
+            .expect("server runtime tasks drained");
+    }
+
+    #[tokio::test]
+    async fn create_topic_retries_per_broker_and_returns_the_last_response_failure() {
+        let (admin, client_instance, client_runtime, processor, server, server_runtime) =
+            create_topic_harness("create-topic-retry-test").await;
+        processor.push_create_response(RemotingCommand::create_response_command_with_code_remark(
+            ResponseCode::SystemError,
+            "retryable-first",
+        ));
+        processor.push_create_response(RemotingCommand::create_success_response_command());
+
+        admin
+            .create_topic("route-key", "created-topic", 4, 0, HashMap::new())
+            .await
+            .expect("the second counted request should create the topic");
+        assert_eq!(processor.counts(), (1, 2));
+
+        for attempt in 1..=CREATE_TOPIC_ATTEMPTS {
+            processor.push_create_response(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                format!("terminal-attempt-{attempt}"),
+            ));
+        }
+        let before = processor.counts();
+        let error = admin
+            .create_topic("route-key", "exhausted-topic", 4, 0, HashMap::new())
+            .await
+            .expect_err("five failed counted requests must exhaust the per-broker budget");
+        let after = processor.counts();
+
+        assert_eq!(after.0 - before.0, 1, "outer route discovery remains one request");
+        assert_eq!(after.1 - before.1, CREATE_TOPIC_ATTEMPTS as usize);
+        assert!(
+            error.to_string().contains("terminal-attempt-5"),
+            "budget exhaustion must return the last broker response: {error}"
+        );
+
+        shutdown_create_topic_harness(client_instance, client_runtime, server, server_runtime).await;
+    }
 
     #[test]
     fn client_binding_is_one_time_and_shared() {

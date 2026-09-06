@@ -35,6 +35,7 @@ use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::OutboundRequestOutcome;
 use rocketmq_transport::api::TransportClient;
 use rocketmq_transport::api::TransportClientConfig;
 
@@ -172,10 +173,19 @@ async fn expect_success(
     step: &str,
     request: RemotingCommand,
 ) -> Result<()> {
-    let response = client
+    let outcome = client
         .invoke_request(Some(namesrv), request, REQUEST_TIMEOUT_MILLIS)
         .await
         .with_context(|| format!("{step} request failed"))?;
+    let response = match outcome {
+        OutboundRequestOutcome::Response(response) => response,
+        OutboundRequestOutcome::Rejected(rejection) => {
+            bail!("{step} request was rejected: {rejection:?}")
+        }
+        OutboundRequestOutcome::Contract(contract) => {
+            bail!("{step} request contract failed: {contract:?}")
+        }
+    };
     record_response(step, &response);
     if ResponseCode::from(response.code()) != ResponseCode::Success {
         bail!("{step} returned {:?}", ResponseCode::from(response.code()));
@@ -194,10 +204,19 @@ async fn expect_route(
         GetRouteInfoRequestHeader::new(args.topic.clone(), Some(false)),
     );
     request.make_custom_header_to_net();
-    let response = client
+    let outcome = client
         .invoke_request(Some(&args.namesrv), request, REQUEST_TIMEOUT_MILLIS)
         .await
         .with_context(|| format!("{step} request failed"))?;
+    let response = match outcome {
+        OutboundRequestOutcome::Response(response) => response,
+        OutboundRequestOutcome::Rejected(rejection) => {
+            bail!("{step} request was rejected: {rejection:?}")
+        }
+        OutboundRequestOutcome::Contract(contract) => {
+            bail!("{step} request contract failed: {contract:?}")
+        }
+    };
     record_response(step, &response);
     if ResponseCode::from(response.code()) != expected {
         bail!(

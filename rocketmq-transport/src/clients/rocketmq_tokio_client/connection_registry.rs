@@ -371,6 +371,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
     use std::sync::Arc;
     use std::sync::Barrier;
     use std::time::Duration;
@@ -424,7 +425,10 @@ mod tests {
         let RocketMQError::Shared(snapshot) = error else {
             panic!("shutdown completion must preserve the typed shared error");
         };
-        assert!(matches!(snapshot.as_error(), RocketMQError::ClientNotStarted));
+        assert!(snapshot
+            .source()
+            .and_then(|source| source.downcast_ref::<RocketMQError>())
+            .is_some_and(|source| matches!(source, RocketMQError::ClientNotStarted)));
         let (replacement, replacement_leader) = registry.acquire_flight(identity.clone(), None);
         assert!(replacement_leader);
         registry.remove_flight_if_matches(&identity, &retired);

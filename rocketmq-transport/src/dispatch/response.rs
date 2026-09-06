@@ -341,7 +341,7 @@ mod tests {
     use std::sync::Arc;
 
     use rocketmq_error::Error as CanonicalError;
-    use rocketmq_error::ErrorKind;
+    use rocketmq_error::PROTOCOL_MESSAGE_PROPERTY_INVALID;
     use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 
     use super::*;
@@ -397,7 +397,7 @@ mod tests {
             .downcast_ref::<RocketMQError>()
             .expect("encode source should remain a RocketMQError");
         assert!(std::ptr::eq(typed, expected));
-        assert_eq!(typed.kind(), ErrorKind::InvalidProperty);
+        assert_eq!(typed.descriptor(), &PROTOCOL_MESSAGE_PROPERTY_INVALID);
 
         let canonical = Arc::new(CanonicalError::new(&TRANSPORT_CONNECTION_FAILED));
         let transport = ResponseOperationalFailure::Transport {

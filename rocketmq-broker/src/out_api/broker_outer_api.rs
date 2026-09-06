@@ -23,6 +23,9 @@ use crate::out_api::send::process_send_response;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::SerializationError;
 use rocketmq_model::common::broker::broker_identity::BrokerIdentity;
@@ -100,6 +103,11 @@ use rocketmq_store::TimerMetricsSerializeWrapper;
 use rocketmq_transport::api::ClientMetadata;
 use rocketmq_transport::api::ClientShutdownReport;
 use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::OutboundRequestContract;
+use rocketmq_transport::api::OutboundRequestContractReason;
+use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::OutboundRequestRejection;
+use rocketmq_transport::api::OutboundRequestRejectionReason;
 use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RemotingClient;
 use rocketmq_transport::api::RpcClient;
@@ -152,6 +160,42 @@ pub struct BrokerOuterAPI {
     rpc_client: RpcClientImpl,
     client_metadata: Arc<ClientMetadata>,
     command_factory: RemotingCommandFactory,
+}
+
+fn broker_request_rejection_error(operation: &'static str, rejection: OutboundRequestRejection) -> RocketMQError {
+    match rejection.reason() {
+        OutboundRequestRejectionReason::DeadlineExpired => {
+            let context = ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+                .with_u64(fields::TIMEOUT_MS, rejection.timeout_millis().unwrap_or_default());
+            RocketMQError::Shared(Arc::new(
+                Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
+            ))
+        }
+        OutboundRequestRejectionReason::ClientStopping => RocketMQError::ClientNotStarted,
+        OutboundRequestRejectionReason::QueueSaturated => RocketMQError::Shared(Arc::new(Error::new(
+            &rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED,
+        ))),
+        OutboundRequestRejectionReason::Cancelled
+        | OutboundRequestRejectionReason::SessionClosed
+        | OutboundRequestRejectionReason::EndpointUnavailable => {
+            let mut context = ErrorContext::new();
+            if rejection.remote_addr_present() {
+                context = context.with_secret_presence(fields::REMOTE_ADDR_PRESENT);
+            }
+            RocketMQError::Shared(Arc::new(
+                Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
+            ))
+        }
+    }
+}
+
+fn broker_request_contract_error(contract: OutboundRequestContract) -> RocketMQError {
+    match contract.reason() {
+        OutboundRequestContractReason::NameServerEndpointMissing => {
+            RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
+        }
+    }
 }
 
 impl BrokerOuterAPI {
@@ -368,7 +412,7 @@ impl BrokerOuterAPI {
             .invoke_request(Some(namesrv_addr), request, timeout_mills)
             .await
         {
-            Ok(response) => match From::from(response.code()) {
+            Ok(OutboundRequestOutcome::Response(response)) => match From::from(response.code()) {
                 ResponseCode::Success => {
                     info!(
                         "Register broker to name remoting_server success, namesrv_addr={} response_body_len={}",
@@ -389,7 +433,11 @@ impl BrokerOuterAPI {
                 }
                 _ => Ok(None),
             },
-            Err(error) => Err(error),
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                Err(broker_request_rejection_error("register_broker", rejection))
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => Err(broker_request_contract_error(contract)),
+            Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
         }
     }
 
@@ -407,7 +455,16 @@ impl BrokerOuterAPI {
             let cloned_request = request.clone();
             let addr = namesrv_addr.clone();
             let client = self.remoting_client.clone();
-            async move { client.invoke_request(Some(&addr), cloned_request, timeout_mills).await }
+            async move {
+                match client.invoke_request(Some(&addr), cloned_request, timeout_mills).await {
+                    Ok(OutboundRequestOutcome::Response(_)) => Ok(()),
+                    Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                        Err(broker_request_rejection_error("register_single_topic_all", rejection))
+                    }
+                    Ok(OutboundRequestOutcome::Contract(contract)) => Err(broker_request_contract_error(contract)),
+                    Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
+                }
+            }
         });
         let _ = futures::future::join_all(futures).await;
     }
@@ -476,7 +533,7 @@ impl BrokerOuterAPI {
         let mut report = OnewayBroadcastReport::default();
         for (addr, result) in futures::future::join_all(futures).await {
             if let Err(error) = &result {
-                warn!(remote_addr = %addr, error_kind = ?error.kind(), "name server heartbeat failed");
+                warn!(remote_addr = %addr, error_code = %error.descriptor().code(), "name server heartbeat failed");
             }
             report.record(addr, result);
         }
@@ -546,7 +603,7 @@ impl BrokerOuterAPI {
         let mut report = OnewayBroadcastReport::default();
         for (addr, result) in futures::future::join_all(futures).await {
             if let Err(error) = &result {
-                warn!(remote_addr = %addr, error_kind = ?error.kind(), "data-version heartbeat failed");
+                warn!(remote_addr = %addr, error_code = %error.descriptor().code(), "data-version heartbeat failed");
             }
             report.record(addr, result);
         }
@@ -611,7 +668,7 @@ impl BrokerOuterAPI {
                 request.set_body_mut_ref(bytes::Bytes::from(body));
 
                 match client.invoke_request(Some(&addr), request, timeout_millis).await {
-                    Ok(response) => match ResponseCode::from(response.code()) {
+                    Ok(OutboundRequestOutcome::Response(response)) => match ResponseCode::from(response.code()) {
                         ResponseCode::Success => {
                             if let Ok(response_header) =
                                 response.decode_command_custom_header::<QueryDataVersionResponseHeader>()
@@ -638,6 +695,24 @@ impl BrokerOuterAPI {
                             Some(true)
                         }
                     },
+                    Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                        warn!(
+                            address = %addr,
+                            reason = ?rejection.reason(),
+                            stage = ?rejection.stage(),
+                            "Query data version was rejected"
+                        );
+                        Some(true)
+                    }
+                    Ok(OutboundRequestOutcome::Contract(contract)) => {
+                        warn!(
+                            address = %addr,
+                            reason = ?contract.reason(),
+                            stage = ?contract.stage(),
+                            "Query data version contract was not satisfied"
+                        );
+                        Some(true)
+                    }
                     Err(e) => {
                         error!("Query data version from {} error: {}", addr, e);
                         Some(true)
@@ -678,7 +753,14 @@ impl BrokerOuterAPI {
             .command_factory
             .create_request_command(RequestCode::GetMaxOffset, request_header);
 
-        let response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        let response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_max_offset", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
@@ -719,7 +801,14 @@ impl BrokerOuterAPI {
             .command_factory
             .create_request_command(RequestCode::GetMinOffset, request_header);
 
-        let response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        let response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_min_offset", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
@@ -754,7 +843,7 @@ impl BrokerOuterAPI {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         match result {
-            Ok(response) => {
+            Ok(OutboundRequestOutcome::Response(response)) => {
                 if ResponseCode::from(response.code()) == ResponseCode::Success {
                     let lock_batch_response_body = LockBatchResponseBody::decode(response.get_body().unwrap()).unwrap();
                     Ok(lock_batch_response_body.lock_ok_mq_set)
@@ -772,7 +861,11 @@ impl BrokerOuterAPI {
                     })
                 }
             }
-            Err(e) => Err(e),
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                Err(broker_request_rejection_error("lock_batch_mq", rejection))
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => Err(broker_request_contract_error(contract)),
+            Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
         }
     }
 
@@ -791,7 +884,7 @@ impl BrokerOuterAPI {
             .invoke_request(Some(addr), request, timeout_millis)
             .await;
         match result {
-            Ok(response) => {
+            Ok(OutboundRequestOutcome::Response(response)) => {
                 if ResponseCode::from(response.code()) == ResponseCode::Success {
                     Ok(())
                 } else {
@@ -803,7 +896,11 @@ impl BrokerOuterAPI {
                     })
                 }
             }
-            Err(e) => Err(e),
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                Err(broker_request_rejection_error("unlock_batch_mq", rejection))
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => Err(broker_request_contract_error(contract)),
+            Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
         }
     }
 
@@ -820,10 +917,18 @@ impl BrokerOuterAPI {
         let request = self
             .command_factory
             .create_request_command(RequestCode::GetRouteinfoByTopic, header);
-        let response = self
-            .remoting_client
-            .invoke_request(None, request, timeout_millis)
-            .await?;
+        let response = self.remoting_client.invoke_request(None, request, timeout_millis).await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error(
+                    "get_topic_route_info_from_name_server",
+                    rejection,
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::TopicNotExist if allow_topic_not_exist => {
                 warn!("get Topic [{}] RouteInfoFromNameServer is not exist value", topic);
@@ -933,7 +1038,18 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(broker_addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error(
+                    "send_message_to_specific_broker",
+                    rejection,
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         process_send_response(broker_name, uniq_msg_id.unwrap_or_default(), queue_id, topic, &response)
     }
@@ -963,7 +1079,7 @@ impl BrokerOuterAPI {
             .invoke_request(Some(broker_addr), request_command, timeout_millis)
             .await
         {
-            Ok(response) => {
+            Ok(OutboundRequestOutcome::Response(response)) => {
                 let code = response.code();
                 let pull_response = match process_pull_response(response, broker_addr) {
                     Ok(value) => value,
@@ -973,7 +1089,13 @@ impl BrokerOuterAPI {
                 let name = outcome.pull_status().to_string();
                 Ok((Some(outcome), name, false))
             }
-            Err(e) => Ok((None, e.to_string(), true)),
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                Ok((None, format!("request rejected: {:?}", rejection.reason()), true))
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                Ok((None, format!("request contract failed: {:?}", contract.reason()), true))
+            }
+            Err(error) => Ok((None, error.to_string(), true)),
         }
     }
 
@@ -1025,7 +1147,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(namesrv_addr), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("unregister_broker", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
@@ -1048,7 +1178,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(mix_all::broker_vip_channel(true, addr).as_ref()), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_all_topic_config", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.body() {
                 let topic_configs = TopicConfigAndMappingSerializeWrapper::decode(body)?;
@@ -1073,7 +1211,14 @@ impl BrokerOuterAPI {
             .command_factory
             .create_remoting_command(RequestCode::GetAllConsumerOffset);
         // let addr_ = mix_all::broker_vip_channel(true, addr);
-        let response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        let response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_all_consumer_offset", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.body() {
                 let topic_configs = ConsumerOffsetSerializeWrapper::decode(body)?;
@@ -1094,7 +1239,14 @@ impl BrokerOuterAPI {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetAllDelayOffset);
-        let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        let mut response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_delay_offset", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
                 return Ok(Some(String::from_utf8_lossy(body.as_ref()).to_string()));
@@ -1117,7 +1269,17 @@ impl BrokerOuterAPI {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetAllSubscriptionGroupConfig);
-        let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        let mut response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error(
+                    "get_all_subscription_group_config",
+                    rejection,
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
                 return Ok(Some(SubscriptionGroupWrapper::decode(body.as_ref())?));
@@ -1140,7 +1302,14 @@ impl BrokerOuterAPI {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetAllMessageRequestMode);
-        let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        let mut response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_message_request_mode", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
                 return Ok(Some(MessageRequestModeSerializeWrapper::decode(body.as_ref())?));
@@ -1163,7 +1332,14 @@ impl BrokerOuterAPI {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetTimerMetrics);
-        let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        let mut response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_timer_metrics", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
                 return serde_json::from_slice(body.as_ref())
@@ -1188,7 +1364,14 @@ impl BrokerOuterAPI {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetTimerCheckPoint);
-        let mut response = self.remoting_client.invoke_request(Some(addr), request, 3000).await?;
+        let mut response = match self.remoting_client.invoke_request(Some(addr), request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_timer_check_point", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
                 return Ok(Some(TimerCheckpointSnapshot::decode(body.as_ref())?));
@@ -1226,7 +1409,14 @@ impl BrokerOuterAPI {
         let request = self
             .command_factory
             .create_request_command(RequestCode::GetBrokerMemberGroup, request_header);
-        let mut response = self.remoting_client.invoke_request(None, request, 3000).await?;
+        let mut response = match self.remoting_client.invoke_request(None, request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_broker_member_group", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
                 let response_body = GetBrokerMemberGroupResponseBody::decode(body.as_ref())?;
@@ -1256,7 +1446,17 @@ impl BrokerOuterAPI {
         let request = self
             .command_factory
             .create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
-        let mut response = self.remoting_client.invoke_request(None, request, 3000).await?;
+        let mut response = match self.remoting_client.invoke_request(None, request, 3000).await {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error(
+                    "get_broker_member_group_compatible",
+                    rejection,
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
                 let topic_route_data = TopicRouteData::decode(body.as_ref())?;
@@ -1281,7 +1481,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_controller_metadata", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => Ok(response.decode_command_custom_header::<GetMetaDataResponseHeader>()?),
             _ => Err(RocketMQError::BrokerOperationFailed {
@@ -1309,7 +1517,18 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(&controller_address), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error(
+                    "send_heartbeat_to_controller",
+                    rejection,
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => response
                 .body()
@@ -1337,7 +1556,18 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error(
+                    "send_heartbeat_to_controller_sync",
+                    rejection,
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => response
@@ -1382,7 +1612,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("alter_sync_state_set", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(RocketMQError::BrokerOperationFailed {
@@ -1429,7 +1667,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("broker_elect", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success | ResponseCode::ControllerMasterStillExist => {
@@ -1482,7 +1728,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_next_broker_id", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(RocketMQError::BrokerOperationFailed {
@@ -1527,7 +1781,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("apply_broker_id", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(RocketMQError::BrokerOperationFailed {
@@ -1574,7 +1836,18 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error(
+                    "register_broker_to_controller",
+                    rejection,
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(RocketMQError::BrokerOperationFailed {
@@ -1625,7 +1898,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(controller_address), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("get_replica_info", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(RocketMQError::BrokerOperationFailed {
@@ -1679,7 +1960,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(Some(broker_addr), request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("send_broker_ha_info", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
@@ -1703,7 +1992,15 @@ impl BrokerOuterAPI {
         let response = self
             .remoting_client
             .invoke_request(master_broker_addr, request, 3000)
-            .await?;
+            .await;
+        let response = match response {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(broker_request_rejection_error("retrieve_broker_ha_info", rejection));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
 
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let header = response.decode_command_custom_header::<ExchangeHaInfoResponseHeader>()?;

@@ -16,7 +16,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::{ConsumerAdmin as _, MQAdminReadExt as _};
-use rocketmq_error::ErrorKind;
 use rocketmq_model::version::RocketMqVersion;
 use rocketmq_protocol::common::wire_constants::MASTER_ID;
 use rocketmq_protocol::protocol::body::{
@@ -331,7 +330,6 @@ impl ConsumerWorkspaceAdmin for AdminSession {
                     .await
                 {
                     Ok(_) => ConsumerConfigPresence::Present,
-                    Err(error) if config_is_absent(&error) => ConsumerConfigPresence::Absent,
                     Err(error) => {
                         failures.push(safe_failure(
                             target.broker_name.clone(),
@@ -776,13 +774,6 @@ fn safe_failure(
         code: WorkspaceFailureCode::Unavailable,
         retryable: error.boundary_view().is_retryable(),
     }
-}
-
-fn config_is_absent(error: &rocketmq_error::RocketMQError) -> bool {
-    matches!(
-        error.kind(),
-        ErrorKind::SubscriptionGroupNotExist | ErrorKind::QueryNotFound
-    )
 }
 
 fn map_producer_connections(

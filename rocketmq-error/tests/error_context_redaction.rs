@@ -1,10 +1,15 @@
 use rocketmq_error::fields;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::ErrorKind;
+use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::FieldValueRef;
 use rocketmq_error::ObservabilityError;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::Sensitive;
+use rocketmq_error::AUTH_OPERATION_FAILED;
+use rocketmq_error::OBSERVABILITY_INITIALIZATION_FAILED;
+use rocketmq_error::OBSERVABILITY_LOG_FILTER_INVALID;
+use rocketmq_error::PROTOCOL_BODY_INVALID;
+use rocketmq_error::PROTOCOL_HEADER_INVALID;
 
 #[test]
 fn sensitive_display_and_debug_are_redacted() {
@@ -77,7 +82,7 @@ fn observability_error_context_redacts_sensitive_details() {
         "endpoint=http://127.0.0.1:4317?token=secret",
     ));
 
-    assert_eq!(init.kind(), ErrorKind::ObservabilityMetricsInitFailed);
+    assert_eq!(init.descriptor(), &OBSERVABILITY_INITIALIZATION_FAILED);
     let context = init.context();
     assert!(context.public_fields().next().is_none());
     assert_eq!(
@@ -92,7 +97,7 @@ fn observability_error_context_redacts_sensitive_details() {
     ));
     let context = filter.context();
 
-    assert_eq!(filter.kind(), ErrorKind::ObservabilityLogFilterInvalid);
+    assert_eq!(filter.descriptor(), &OBSERVABILITY_LOG_FILTER_INVALID);
     assert_eq!(context.len(), 2);
     assert!(context.public_fields().next().is_none());
     assert!(!context.to_string().contains("rocketmq_store=trace"));
@@ -114,12 +119,12 @@ fn request_boundary_errors_preserve_typed_source_chains() {
         std::io::Error::new(std::io::ErrorKind::PermissionDenied, "auth-secret"),
     );
 
-    for (error, expected_kind, secret) in [
-        (body, ErrorKind::RequestBodyInvalid, "body-secret"),
-        (header, ErrorKind::RequestHeaderError, "header-secret"),
-        (authentication, ErrorKind::Authentication, "auth-secret"),
+    for (error, expected_descriptor, secret) in [
+        (body, &PROTOCOL_BODY_INVALID as &'static ErrorDescriptor, "body-secret"),
+        (header, &PROTOCOL_HEADER_INVALID, "header-secret"),
+        (authentication, &AUTH_OPERATION_FAILED, "auth-secret"),
     ] {
-        assert_eq!(error.kind(), expected_kind);
+        assert_eq!(error.descriptor(), expected_descriptor);
         let source = error.source().expect("typed source must be retained");
         assert!(source.downcast_ref::<std::io::Error>().is_some());
         assert!(source.to_string().contains(secret));

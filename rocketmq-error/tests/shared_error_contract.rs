@@ -17,99 +17,67 @@ use std::io;
 
 use rocketmq_error::DomainError;
 use rocketmq_error::Error;
-use rocketmq_error::FilterCompileError;
-use rocketmq_error::FilterCompileErrorKind;
-use rocketmq_error::FilterCompileSource;
-use rocketmq_error::FilterCompileStage;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
-use rocketmq_error::SharedRocketMQError;
+use rocketmq_error::SharedError;
+use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 
-fn assert_shared_contract(error: RocketMQError) {
-    let expected_kind = error.kind();
-    let expected_descriptor = error.descriptor();
-    let expected_context = error.context();
-    let expected_boundary = error.boundary_view();
-    let expected_recovery_hint = error.recovery_hint();
-    let expected_severity = error.severity();
-    let expected_exposure = error.exposure();
-    let expected_display = error.to_string();
-    let expected_source = error.source().map(ToString::to_string);
-    let expected_nested_source = error
-        .source()
-        .and_then(|source| source.source())
-        .map(ToString::to_string);
+fn assert_shared_contract(canonical: Error, expected_cause: Option<&str>) {
+    let shared: SharedError = std::sync::Arc::new(canonical);
+    let wrapped = RocketMQError::Shared(std::sync::Arc::clone(&shared));
 
-    let shared = SharedRocketMQError::new(error);
-    let cloned = shared.clone();
+    assert_eq!(wrapped.descriptor(), shared.descriptor());
+    assert_eq!(wrapped.context(), shared.context().clone());
+    let boundary = wrapped.boundary_view();
+    assert_eq!(boundary.code(), shared.code());
+    assert_eq!(boundary.recovery_hint(), shared.recovery_hint());
+    assert_eq!(boundary.severity(), shared.severity());
+    assert_eq!(boundary.exposure(), shared.exposure());
+    assert_eq!(wrapped.recovery_hint(), shared.recovery_hint());
+    assert_eq!(wrapped.severity(), shared.severity());
+    assert_eq!(wrapped.exposure(), shared.exposure());
+    assert_eq!(wrapped.to_string(), shared.to_string());
 
-    for snapshot in [&shared, &cloned] {
-        assert_eq!(snapshot.kind(), expected_kind);
-        assert_eq!(snapshot.descriptor(), expected_descriptor);
-        assert_eq!(snapshot.context(), expected_context);
-        assert_eq!(snapshot.boundary_view(), expected_boundary);
-        assert_eq!(snapshot.recovery_hint(), expected_recovery_hint);
-        assert_eq!(snapshot.severity(), expected_severity);
-        assert_eq!(snapshot.exposure(), expected_exposure);
-        assert_eq!(snapshot.to_string(), expected_display);
-    }
-    assert!(std::ptr::eq(shared.as_error(), cloned.as_error()));
-
-    let source = shared.source().expect("shared error source");
-    let original = source
-        .downcast_ref::<RocketMQError>()
-        .expect("shared source must be the original RocketMQ error");
-    assert!(std::ptr::eq(shared.as_error(), original));
-    assert_eq!(source.to_string(), expected_display);
-    assert_eq!(source.source().map(ToString::to_string), expected_source);
-    assert_eq!(
-        source
+    assert_eq!(wrapped.source().map(ToString::to_string).as_deref(), expected_cause);
+    if expected_cause.is_some() {
+        assert!(wrapped
             .source()
-            .and_then(|nested| nested.source())
-            .map(ToString::to_string),
-        expected_nested_source
-    );
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .is_some());
+    }
 
-    let wrapped = cloned.into_error();
-    assert_eq!(wrapped.kind(), expected_kind);
-    assert_eq!(wrapped.context(), expected_context);
-    assert_eq!(wrapped.boundary_view(), expected_boundary);
-    assert_eq!(wrapped.to_string(), expected_display);
+    let RocketMQError::Shared(retained) = wrapped else {
+        panic!("expected the canonical shared carrier")
+    };
+    assert!(std::sync::Arc::ptr_eq(&shared, &retained));
 }
 
 #[test]
 fn shared_error_clones_preserve_typed_metadata_and_source_chains() {
-    assert_shared_contract(RocketMQError::Network(std::sync::Arc::new(Error::new(
-        &TRANSPORT_CONNECTION_FAILED,
-    ))));
-    let config_invalid_value = RocketMQError::ConfigInvalidValue {
-        key: "connect.timeout",
-        value: "invalid".to_owned(),
-        reason: "must be positive".to_owned(),
-    };
-    assert_eq!(
-        config_invalid_value.context().to_string(),
-        "key=<redacted>, value=<redacted>, reason=<redacted>"
+    assert_shared_contract(Error::new(&TRANSPORT_CONNECTION_FAILED), None);
+    assert_shared_contract(
+        Error::caused_by(
+            &CORE_CONFIGURATION_INVALID,
+            io::Error::new(io::ErrorKind::InvalidInput, "invalid timeout"),
+        )
+        .with_context(ErrorContext::new()),
+        Some("invalid timeout"),
     );
-    assert_shared_contract(config_invalid_value);
-    assert_shared_contract(RocketMQError::ClientNotStarted);
-    assert_shared_contract(RocketMQError::from(io::Error::new(
-        io::ErrorKind::ConnectionRefused,
-        io::Error::new(io::ErrorKind::TimedOut, "inner connect timeout"),
-    )));
-    assert_shared_contract(RocketMQError::from(FilterCompileError::new_with_source(
-        FilterCompileErrorKind::UnexpectedToken,
-        FilterCompileStage::Parse,
-        Some(12),
-        FilterCompileSource::Sql92,
-    )));
 }
 
 #[test]
-fn rewrapping_a_shared_error_reuses_the_original_snapshot() {
-    let shared = SharedRocketMQError::new(RocketMQError::ClientNotStarted);
-    let rewrapped = SharedRocketMQError::new(shared.clone().into_error());
+fn multiple_carriers_reuse_the_original_canonical_snapshot() {
+    let shared: SharedError = std::sync::Arc::new(Error::new(&TRANSPORT_CONNECTION_FAILED));
+    let first = RocketMQError::Shared(std::sync::Arc::clone(&shared));
+    let second = RocketMQError::Shared(std::sync::Arc::clone(&shared));
 
-    assert!(std::ptr::eq(shared.as_error(), rewrapped.as_error()));
-    assert_eq!(shared.to_string(), rewrapped.to_string());
+    let RocketMQError::Shared(first) = first else {
+        panic!("expected the first shared carrier")
+    };
+    let RocketMQError::Shared(second) = second else {
+        panic!("expected the second shared carrier")
+    };
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+    assert!(std::sync::Arc::ptr_eq(&shared, &first));
 }

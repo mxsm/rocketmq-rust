@@ -20,7 +20,6 @@ use std::fs::File;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -155,7 +154,7 @@ pub(crate) fn immediate_outcome_from_command_result(
     let command = match result {
         Ok(Some(command)) => command,
         Ok(None) => return Err(RocketMQError::invariant_violated(missing_response)),
-        Err(error) if error.kind() == ErrorKind::RequestHeaderError => {
+        Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
             command_from_error_with_factory_and_opaque(command_factory, &error, original_opaque)
         }
         Err(error) => return Err(error),

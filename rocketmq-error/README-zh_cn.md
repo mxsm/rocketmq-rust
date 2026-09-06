@@ -35,7 +35,7 @@ use rocketmq_error::TRANSPORT_ENDPOINT_INVALID;
 
 fn validate_transport_endpoint(addr: &str) -> RocketMQResult<()> {
     if addr.is_empty() {
-        return Err(RocketMQError::Network(Arc::new(Error::new(
+        return Err(RocketMQError::Shared(Arc::new(Error::new(
             &TRANSPORT_ENDPOINT_INVALID,
         ))));
     }
@@ -44,8 +44,8 @@ fn validate_transport_endpoint(addr: &str) -> RocketMQResult<()> {
 }
 ```
 
-`Network` variant 携带唯一的规范 `SharedError`，因此 transport descriptor 标识、
-上下文和类型化物理 source 可以跨 crate 传递而无需重建。保留的领域错误类型，
+`Shared` variant 是唯一的规范 `SharedError` 载体，因此 descriptor 标识、上下文和
+类型化物理 source 可以跨 crate 传递而无需重建。保留的领域错误类型，
 如 `SerializationError`、`ProtocolError`、`RpcClientError`、`AuthError`、
 `ControllerError`、`ToolsError`、`FilterError`、`ObservabilityError` 和
 `UnifiedServiceError`，都可通过 `From` 转换为 `RocketMQError`。
@@ -70,8 +70,8 @@ assert_eq!(
 ```
 
 `ALL_DESCRIPTORS` 是唯一 catalog。`descriptor_by_code` 对规范的小写点分 code
-进行精确查询。`ErrorKind` 仅作为本地穷举匹配使用的结构化类型 discriminator，
-不再拥有第二份元数据或 policy 表。
+进行精确查询。稳定行为直接依据 descriptor 选择；系统不再维护中央结构化错误
+类型，也不提供 descriptor 到错误类型的反向映射。
 
 每个 descriptor 显式拥有四类投影：
 

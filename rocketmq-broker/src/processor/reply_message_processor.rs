@@ -315,7 +315,7 @@ where
             .await;
         match result {
             Ok(outcome) => Ok(outcome),
-            Err(error) if error.kind() == rocketmq_error::ErrorKind::RequestHeaderError => {
+            Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
                 BrokerResponseParts::from_command(command_from_error_with_factory_and_opaque(
                     &self.inner.context.command_factory,
                     &error,

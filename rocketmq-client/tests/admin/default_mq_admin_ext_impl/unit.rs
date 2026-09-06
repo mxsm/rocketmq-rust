@@ -32,7 +32,6 @@ use crate::admin::capability::{AuthAdmin, BrokerAdmin, ConsumerAdmin, OffsetAdmi
 use crate::base::client_config::ClientConfig;
 use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
 use cheetah_string::CheetahString;
-use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_model::common::base::service_state::ServiceState;
@@ -83,10 +82,10 @@ use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::Topic
 use super::DefaultMQAdminExtImpl;
 
 #[test]
-fn admin_route_not_found_uses_route_error_kind() {
+fn admin_route_not_found_uses_route_descriptor() {
     let error = admin_route_not_found(&CheetahString::from_static_str("RouteTopic"));
 
-    assert_eq!(error.kind(), ErrorKind::RouteNotFound);
+    assert_eq!(error.descriptor().code(), rocketmq_error::ROUTE_TOPIC_NOT_FOUND.code());
     assert!(error.to_string().contains("RouteTopic"));
 }
 
@@ -94,7 +93,10 @@ fn admin_route_not_found_uses_route_error_kind() {
 fn sync_pull_result_missing_uses_client_invalid_state() {
     let error = sync_pull_result_missing("DefaultMQAdminExtImpl::pull_message_from_queue");
 
-    assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+    assert_eq!(
+        error.descriptor().code(),
+        rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
+    );
     assert!(error
         .to_string()
         .contains("DefaultMQAdminExtImpl::pull_message_from_queue returned None"));

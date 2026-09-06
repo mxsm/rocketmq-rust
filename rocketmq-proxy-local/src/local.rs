@@ -2788,7 +2788,7 @@ mod tests {
 
         let error = broker_operation_error("queryAssignment", &response);
 
-        assert_eq!(error.kind(), rocketmq_error::ErrorKind::BrokerOperationFailed);
+        assert_eq!(error.descriptor(), &rocketmq_error::BROKER_OPERATION_FAILED);
         match error {
             RocketMQError::BrokerOperationFailed {
                 operation,

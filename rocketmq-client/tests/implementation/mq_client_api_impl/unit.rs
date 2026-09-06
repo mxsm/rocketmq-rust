@@ -140,6 +140,26 @@ impl SendMessageHook for CountingAfterSendHook {
     }
 }
 
+struct CapturingFailureHook {
+    observed: Arc<std::sync::Mutex<Option<Arc<rocketmq_error::Error>>>>,
+}
+
+impl SendMessageHook for CapturingFailureHook {
+    fn hook_name(&self) -> &'static str {
+        "CapturingFailureHook"
+    }
+
+    fn send_message_before(&self, _context: &Option<SendMessageContext<'_>>) {}
+
+    fn send_message_after(&self, context: &Option<SendMessageContext<'_>>) {
+        let Some(RocketMQError::Shared(canonical)) = context.as_ref().and_then(|context| context.exception.as_deref())
+        else {
+            panic!("failure hook should receive the canonical shared carrier")
+        };
+        *self.observed.lock().expect("hook observation lock") = Some(Arc::clone(canonical));
+    }
+}
+
 #[test]
 fn async_send_after_hook_uses_immutable_hook_snapshot_without_producer_owner() {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -153,6 +173,53 @@ fn async_send_after_hook_uses_immutable_hook_snapshot_without_producer_owner() {
     MQClientAPIImpl::execute_async_send_hook_after(&context_data, None, None);
 
     assert_eq!(calls.load(AtomicOrdering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn async_failure_hook_and_callback_share_the_original_canonical_source() {
+    let canonical = Arc::new(rocketmq_error::Error::caused_by(
+        &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+        std::io::Error::new(std::io::ErrorKind::ConnectionReset, "physical reset"),
+    ));
+    let hook_observed = Arc::new(std::sync::Mutex::new(None));
+    let hook: Arc<dyn SendMessageHook> = Arc::new(CapturingFailureHook {
+        observed: Arc::clone(&hook_observed),
+    });
+    let context_data = Some(AsyncSendHookContext {
+        hooks: vec![hook].into(),
+        ..Default::default()
+    });
+    let (callback_tx, callback_rx) = std::sync::mpsc::channel();
+    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+        let Some(RocketMQError::Shared(canonical)) = error else {
+            panic!("failure callback should receive the canonical shared carrier")
+        };
+        callback_tx
+            .send(Arc::clone(canonical))
+            .expect("callback receiver remains open");
+    });
+
+    MQClientAPIImpl::finish_async_retry_failure(
+        RocketMQError::Shared(Arc::clone(&canonical)),
+        &ClientCallbackExecutor::new(1),
+        &Some(callback),
+        &context_data,
+    )
+    .await;
+
+    let hook_error = hook_observed
+        .lock()
+        .expect("hook observation lock")
+        .take()
+        .expect("hook should observe the failure");
+    let callback_error = callback_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("callback should observe the failure");
+    assert!(Arc::ptr_eq(&canonical, &hook_error));
+    assert!(Arc::ptr_eq(&canonical, &callback_error));
+    assert!(std::error::Error::source(canonical.as_ref())
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some());
 }
 
 #[test]
@@ -717,7 +784,7 @@ async fn async_send_callback_exception_runs_in_owned_send_task() {
         tx.send((result.is_some(), error.map(ToString::to_string)))
             .expect("test receiver should be alive");
     });
-    let error = RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::caused_by(
+    let error = RocketMQError::Shared(std::sync::Arc::new(rocketmq_error::Error::caused_by(
         &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
         std::io::Error::other("callback failure"),
     )));
@@ -1186,77 +1253,6 @@ fn reset_offset_table_from_response_decodes_java_body() {
     let offset_table = reset_offset_table_from_response(&response).expect("valid reset offset body should decode");
 
     assert_eq!(offset_table.get(&mq), Some(&42));
-}
-
-#[test]
-fn async_send_retries_transient_network_failures_only() {
-    let connection_failed =
-        rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::caused_by(
-            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
-            std::io::Error::other("connection failed"),
-        )));
-    let send_failed = rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::caused_by(
-        &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
-        std::io::Error::other("write failed"),
-    )));
-
-    let retry_response_codes = HashSet::new();
-    assert!(MQClientAPIImpl::should_retry_async_producer_send_error(
-        &connection_failed,
-        &retry_response_codes,
-    ));
-    assert!(MQClientAPIImpl::should_retry_async_producer_send_error(
-        &send_failed,
-        &retry_response_codes,
-    ));
-}
-
-#[test]
-fn async_producer_send_uses_configured_response_code_allowlist() {
-    let retryable =
-        rocketmq_error::RocketMQError::broker_operation_failed("SEND_MESSAGE", ResponseCode::SystemBusy as i32, "busy");
-    let configured = HashSet::from([ResponseCode::SystemBusy as i32]);
-
-    assert!(MQClientAPIImpl::should_retry_async_producer_send_error(
-        &retryable,
-        &configured,
-    ));
-    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
-        &retryable,
-        &HashSet::new(),
-    ));
-}
-
-#[test]
-fn async_send_does_not_retry_timeout_backpressure_or_stopped_client() {
-    let timeout = rocketmq_error::RocketMQError::Timeout {
-        operation: "send_request",
-        timeout_ms: 3_000,
-    };
-    let connection_timeout = rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::new(
-        &rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT,
-    )));
-    let too_many_requests = rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::new(
-        &rocketmq_error::TRANSPORT_REMOTE_RATE_LIMITED,
-    )));
-
-    let retry_response_codes = HashSet::new();
-    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
-        &timeout,
-        &retry_response_codes,
-    ));
-    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
-        &connection_timeout,
-        &retry_response_codes,
-    ));
-    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
-        &too_many_requests,
-        &retry_response_codes,
-    ));
-    assert!(!MQClientAPIImpl::should_retry_async_producer_send_error(
-        &rocketmq_error::RocketMQError::ClientShuttingDown,
-        &retry_response_codes,
-    ));
 }
 
 #[test]

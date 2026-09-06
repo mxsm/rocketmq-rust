@@ -44,6 +44,8 @@ use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssig
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
+#[cfg(test)]
+use rocketmq_model::common::topic::TopicValidator;
 use rocketmq_observability::metrics::client::ClientMetrics;
 use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
@@ -74,6 +76,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_transport::api::ConnectionNetEvent;
 use rocketmq_transport::api::RPCHook;
+use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::TransportClientConfig;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -84,6 +87,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::common::retry_policy::RetryInput;
 use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
@@ -106,6 +110,7 @@ use crate::nameserver_discovery::NameServerSource;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
+use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::request_future_holder::RequestFutureHolder;
 use crate::producer::send_result::SendResult;
 use crate::runtime::spawn_client_task_with_context;
@@ -1264,6 +1269,141 @@ impl MQClientInstance {
             TopicRouteRefreshKind::RouteMiss,
         )
         .await
+    }
+
+    pub(crate) async fn refresh_topic_route_info_once(
+        &self,
+        topic: &CheetahString,
+        deadline: RequestDeadline,
+    ) -> Result<Option<TopicPublishInfo>, RetryInput> {
+        self.route_refresh_state.metrics.record_attempt();
+        let started = Instant::now();
+        let request_version = self.topic_route_version(topic);
+        let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
+            self.route_refresh_state.metrics.record_failure();
+            self.record_topic_route_refresh_finish(
+                TopicRouteRefreshKind::RouteMiss,
+                started,
+                TopicRouteApplyOutcome::Unchanged,
+            );
+            return Err(RetryInput::BusinessError(RocketMQError::ClientNotStarted));
+        };
+
+        let topic_route_data = match mq_client_api_impl
+            .get_topic_route_info_once(topic, deadline, true)
+            .await
+        {
+            Ok(Some(topic_route_data)) => topic_route_data,
+            Ok(None) => {
+                self.record_single_route_refresh_failure(started);
+                return Ok(None);
+            }
+            Err(input) => {
+                self.record_single_route_refresh_failure(started);
+                return Err(input);
+            }
+        };
+
+        Ok(self
+            .apply_topic_publish_info_once(topic, topic_route_data, request_version, started)
+            .await)
+    }
+
+    /// Performs initial producer route preparation without creating a second retry authority.
+    ///
+    /// The requested topic is queried once. Only an absent requested-topic route permits one
+    /// fallback query for the auto-create topic, using the same absolute deadline. The fallback
+    /// retains the producer's configured queue cap before the route is published for `topic`.
+    pub(crate) async fn prepare_topic_publish_info_once(
+        &self,
+        topic: &CheetahString,
+        producer_config: &ProducerConfig,
+        deadline: RequestDeadline,
+    ) -> Result<Option<TopicPublishInfo>, RetryInput> {
+        self.route_refresh_state.metrics.record_attempt();
+        let started = Instant::now();
+        let request_version = self.topic_route_version(topic);
+        let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
+            self.record_single_route_refresh_failure(started);
+            return Err(RetryInput::BusinessError(RocketMQError::ClientNotStarted));
+        };
+
+        let topic_route_data = match mq_client_api_impl
+            .get_topic_route_info_once(topic, deadline, true)
+            .await
+        {
+            Ok(Some(topic_route_data)) => topic_route_data,
+            Ok(None) => match mq_client_api_impl.get_default_topic_route_info_once(deadline).await {
+                Ok(Some(mut topic_route_data)) => {
+                    cap_default_topic_route_queue_nums(
+                        &mut topic_route_data,
+                        producer_config.default_topic_queue_nums(),
+                    );
+                    topic_route_data
+                }
+                Ok(None) => {
+                    self.record_single_route_refresh_failure(started);
+                    return Ok(None);
+                }
+                Err(input) => {
+                    self.record_single_route_refresh_failure(started);
+                    return Err(input);
+                }
+            },
+            Err(input) => {
+                self.record_single_route_refresh_failure(started);
+                return Err(input);
+            }
+        };
+
+        Ok(self
+            .apply_topic_publish_info_once(topic, topic_route_data, request_version, started)
+            .await)
+    }
+
+    fn record_single_route_refresh_failure(&self, started: Instant) {
+        self.route_refresh_state.metrics.record_failure();
+        self.record_topic_route_refresh_finish(
+            TopicRouteRefreshKind::RouteMiss,
+            started,
+            TopicRouteApplyOutcome::Unchanged,
+        );
+    }
+
+    async fn apply_topic_publish_info_once(
+        &self,
+        topic: &CheetahString,
+        mut topic_route_data: TopicRouteData,
+        request_version: u64,
+        started: Instant,
+    ) -> Option<TopicPublishInfo> {
+        let mut publish_info = topic_route_data2topic_publish_info(topic, &mut topic_route_data);
+        publish_info.have_topic_router_info = true;
+        let outcome = self
+            .apply_topic_route_data_if_fresh(topic, &mut topic_route_data, request_version)
+            .await;
+        self.record_topic_route_refresh_finish(TopicRouteRefreshKind::RouteMiss, started, outcome);
+        match outcome {
+            TopicRouteApplyOutcome::Applied => self.route_refresh_state.metrics.record_success(),
+            TopicRouteApplyOutcome::Unchanged | TopicRouteApplyOutcome::Stale => {
+                self.route_refresh_state.metrics.record_skip()
+            }
+        }
+
+        if matches!(outcome, TopicRouteApplyOutcome::Stale) {
+            let current_route = self
+                .topic_route_table
+                .get(topic)
+                .map(|entry| TopicRouteData::from_existing(entry.value()));
+            if let Some(mut current_route) = current_route {
+                let mut current_publish_info = topic_route_data2topic_publish_info(topic, &mut current_route);
+                current_publish_info.have_topic_router_info = true;
+                return Some(current_publish_info);
+            }
+            return None;
+        }
+
+        Some(publish_info)
     }
 
     async fn update_topic_route_info_from_name_server_default_with_kind(
@@ -2617,11 +2757,11 @@ impl MQClientInstance {
         }
     }
 
-    /// Queries the assignment for a given topic.
+    /// Performs one broker assignment query under an existing absolute deadline.
     ///
-    /// This function attempts to find the broker address for the specified topic. If the broker
-    /// address is not found, it updates the topic route information from the name server and
-    /// retries. If the broker address is found, it queries the assignment from the broker.
+    /// Route selection and the broker request are a single attempt. A missing route is returned
+    /// as [`RetryInput::RouteUnavailable`] so the caller's retry policy remains the sole owner of
+    /// refresh and retry decisions.
     ///
     /// # Arguments
     ///
@@ -2630,28 +2770,20 @@ impl MQClientInstance {
     /// * `strategy_name` - A reference to a `CheetahString` representing the allocation strategy
     ///   name.
     /// * `message_model` - The message model to use for the query.
-    /// * `timeout` - The timeout duration for the query.
+    /// * `deadline` - The absolute operation deadline shared by every attempt.
     ///
     /// # Returns
     ///
-    /// A `Result` containing an `Option` with a `HashSet` of `MessageQueueAssignment` if the query
-    /// is successful, or an error if it fails.
-    pub async fn query_assignment(
+    /// The decoded assignment, or the typed input describing why this attempt did not complete.
+    pub(crate) async fn query_assignment(
         &self,
         topic: &CheetahString,
         consumer_group: &CheetahString,
         strategy_name: &CheetahString,
         message_model: MessageModel,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<HashSet<MessageQueueAssignment>>> {
-        // Try to find broker address
-        let mut broker_addr = self.find_broker_addr_by_topic(topic).await;
-
-        // If not found, update and retry
-        if broker_addr.is_none() {
-            self.update_topic_route_info_from_name_server_topic(topic).await;
-            broker_addr = self.find_broker_addr_by_topic(topic).await;
-        }
+        deadline: RequestDeadline,
+    ) -> Result<Option<HashSet<MessageQueueAssignment>>, RetryInput> {
+        let broker_addr = self.find_broker_addr_by_topic(topic).await;
         if let Some(broker_addr) = broker_addr {
             let client_id = self.client_id.clone();
             match self.mq_client_api_impl.load_full() {
@@ -2664,14 +2796,14 @@ impl MQClientInstance {
                             client_id,
                             strategy_name.clone(),
                             message_model,
-                            timeout,
+                            deadline,
                         )
                         .await
                 }
-                None => Err(mq_client_err!("mq_client_api_impl is None")),
+                None => Err(RetryInput::BusinessError(mq_client_err!("mq_client_api_impl is None"))),
             }
         } else {
-            Ok(None)
+            Err(RetryInput::RouteUnavailable)
         }
     }
 
@@ -2877,15 +3009,31 @@ pub fn run_heartbeat_route_index_probe(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
+    use std::time::Duration;
 
     use futures::FutureExt;
-    use rocketmq_error::ErrorKind;
     use rocketmq_error::RocketMQError;
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
     use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+    use rocketmq_protocol::protocol::RemotingSerializable;
+    use rocketmq_protocol::RemotingCommand;
+    use rocketmq_runtime::RuntimeContext;
+    use rocketmq_runtime::ShutdownDeadline;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::test_support::SessionProcessor;
+    use rocketmq_transport::test_support::SessionTransportServer;
+    use rocketmq_transport::test_support::SessionTransportServerConfig;
 
     use super::*;
     use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
@@ -2893,6 +3041,50 @@ mod tests {
     use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
     use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
     use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
+
+    #[derive(Default)]
+    struct RoutePreparationProcessor {
+        responses: Mutex<VecDeque<RemotingCommand>>,
+        topics: Mutex<Vec<CheetahString>>,
+    }
+
+    impl RoutePreparationProcessor {
+        fn push(&self, response: RemotingCommand) {
+            self.responses
+                .lock()
+                .expect("route preparation responses")
+                .push_back(response);
+        }
+
+        fn topics(&self) -> Vec<CheetahString> {
+            self.topics.lock().expect("route preparation topics").clone()
+        }
+    }
+
+    impl SessionProcessor for RoutePreparationProcessor {
+        fn process(
+            &self,
+            request: RemotingCommand,
+        ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
+            Box::pin(async move {
+                if request.code() != RequestCode::GetRouteinfoByTopic.to_i32() {
+                    return Err(RocketMQError::illegal_argument(format!(
+                        "unexpected request code {}",
+                        request.code()
+                    )));
+                }
+                let header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
+                self.topics.lock().expect("route preparation topics").push(header.topic);
+                let response = self
+                    .responses
+                    .lock()
+                    .expect("route preparation responses")
+                    .pop_front()
+                    .ok_or_else(|| RocketMQError::illegal_argument("unexpected route preparation request"))?;
+                Ok(response.set_opaque(request.opaque()))
+            })
+        }
+    }
 
     fn test_instance(client_config: ClientConfig, client_id: &'static str) -> Arc<MQClientInstance> {
         let runtime = crate::runtime::test_client_runtime("mq-client-instance-test");
@@ -2905,6 +3097,132 @@ mod tests {
             runtime.telemetry_handle().clone(),
             runtime.pool().request_future_holder(),
         )
+    }
+
+    fn default_topic_route_response(write_queues: u32) -> RemotingCommand {
+        let broker_name = CheetahString::from_static_str("broker-a");
+        let route = TopicRouteData {
+            queue_datas: vec![QueueData::new(
+                broker_name.clone(),
+                write_queues,
+                write_queues,
+                PermName::PERM_READ | PermName::PERM_WRITE,
+                0,
+            )],
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from_static_str("cluster-a"),
+                broker_name,
+                [(mix_all::MASTER_ID, CheetahString::from_static_str("127.0.0.1:10911"))]
+                    .into_iter()
+                    .collect(),
+                None,
+            )],
+            ..Default::default()
+        };
+        RemotingCommand::create_success_response_command().set_body(route.encode().expect("encode default-topic route"))
+    }
+
+    #[tokio::test]
+    async fn producer_initial_route_preparation_uses_one_conditional_default_lookup() {
+        let server_runtime = RuntimeContext::from_current("producer-route-preparation-test");
+        let processor = Arc::new(RoutePreparationProcessor::default());
+        let server = SessionTransportServer::bind(
+            server_runtime.service_context("route-preparation-server"),
+            SessionTransportServerConfig::loopback(),
+            Arc::clone(&processor) as Arc<dyn SessionProcessor>,
+            Arc::new(AdmissionController::new(AdmissionLimits::default())),
+        )
+        .await
+        .expect("bind route preparation server");
+        let name_server_addr = CheetahString::from_string(server.local_addr().to_string());
+        server.start().expect("start route preparation server");
+        processor.push(RemotingCommand::create_response_command_with_code(
+            ResponseCode::TopicNotExist,
+        ));
+        processor.push(default_topic_route_response(8));
+
+        let client_runtime = crate::runtime::test_client_runtime("producer-route-preparation-test");
+        let mut client_config = ClientConfig::default();
+        client_config.set_vip_channel_enabled(false);
+        let instance = MQClientInstance::new_arc(
+            client_config,
+            0,
+            "producer-route-preparation-client",
+            None,
+            client_runtime.component("instance"),
+            client_runtime.telemetry_handle().clone(),
+            client_runtime.pool().request_future_holder(),
+        );
+        let api = instance.get_mq_client_api_impl().expect("client API");
+        api.update_name_server_address_list_sync(name_server_addr.as_str());
+        api.start().await.expect("start route preparation transport");
+        let topic = CheetahString::from_static_str("requested-topic");
+        let producer_config = ProducerConfig::default();
+        let deadline = RequestDeadline::from_timeout_millis(2_000);
+
+        let publish_info = instance
+            .prepare_topic_publish_info_once(&topic, &producer_config, deadline)
+            .await
+            .expect("route preparation should stay within the parent attempt")
+            .expect("default route should supply publish information");
+        assert_eq!(
+            publish_info.message_queue_list.len(),
+            4,
+            "configured queue cap is retained"
+        );
+        assert_eq!(
+            processor.topics(),
+            vec![
+                topic.clone(),
+                CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
+            ],
+            "actual-topic absence alone authorizes one default-topic lookup"
+        );
+
+        processor.push(RemotingCommand::create_response_command_with_code_remark(
+            ResponseCode::SystemError,
+            "operational-route-failure",
+        ));
+        let failed_topic = CheetahString::from_static_str("failed-topic");
+        let error = match instance
+            .prepare_topic_publish_info_once(&failed_topic, &producer_config, deadline)
+            .await
+        {
+            Ok(_) => panic!("a real route failure must not fall back to the default topic"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            RetryInput::Response {
+                code,
+                ..
+            } if code == ResponseCode::SystemError.to_i32()
+        ));
+        assert_eq!(
+            processor.topics(),
+            vec![
+                topic,
+                CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
+                failed_topic,
+            ]
+        );
+
+        instance.shutdown().await;
+        client_runtime
+            .shutdown()
+            .await
+            .assert_no_task_leak()
+            .expect("client runtime tasks drained");
+        server
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await
+            .assert_no_task_leak()
+            .expect("route preparation server tasks drained");
+        server_runtime
+            .shutdown_tasks(Duration::from_secs(5))
+            .await
+            .assert_no_task_leak()
+            .expect("route preparation runtime tasks drained");
     }
 
     #[tokio::test]
@@ -2953,10 +3271,10 @@ mod tests {
     }
 
     #[test]
-    fn client_scheduled_task_startup_failed_uses_service_error_kind() {
+    fn client_scheduled_task_startup_failed_uses_service_descriptor() {
         let error = client_scheduled_task_startup_failed("fetchNameServerAddr", "scheduler closed");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
+        assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
         assert!(error.to_string().contains("fetchNameServerAddr"));
     }
 
@@ -2964,7 +3282,10 @@ mod tests {
     fn sync_pull_result_missing_uses_client_invalid_state() {
         let error = sync_pull_result_missing("MQClientInstance::pull_message");
 
-        assert_eq!(error.kind(), ErrorKind::ClientInvalidState);
+        assert_eq!(
+            error.descriptor().code(),
+            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
+        );
         assert!(error
             .to_string()
             .contains("MQClientInstance::pull_message returned None"));

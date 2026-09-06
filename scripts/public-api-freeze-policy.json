@@ -150,6 +150,16 @@
       "reason": "The repository owner approved moving the exact Network legacy-deletion slice forward from E9 into E4-4. Transport now allocates one canonical stage error with truthful typed-source and context ownership, normal delivery decisions remain typed outcomes, and callers classify exact descriptors without reconstructing the removed NetworkError taxonomy. The unreachable transport.request.timeout descriptor and latent remoting 207 branch are deleted without activating new wire behavior, and the obsolete address argument is removed from the unreleased deadline API without a compatibility shim.",
       "approved_by": "repository-owner",
       "approved_on": "2026-09-05"
+    },
+    {
+      "id": "API-0.9-016",
+      "classification": "approved-break",
+      "applies_to": "0.9-to-1.0",
+      "old_item_path": "rocketmq_error::{RocketMQError::{Network(SharedError),Shared(SharedRocketMQError),kind}, shared::SharedRocketMQError, kind::ErrorKind, DomainError::kind, ToolsError::kind, ObservabilityError::kind}; rocketmq_transport::{TransportClient::{request,invoke_request,invoke_request_with_deadline}->RocketMQResult<RemotingCommand>, PendingRequestGuard, GoAwayPolicy, TransportClientBuilder::go_away_policy, RemotingClientBuilder::go_away_policy}; rocketmq_client_rust::{implementation::mq_client_api_impl::producer::ProducerClient, MQClientAPIImpl::{send_message,send_message_simple,query_assignment}}",
+      "replacement": "rocketmq_error::RocketMQError::Shared(SharedError) as the sole canonical Arc carrier; rocketmq_transport::{OutboundRequestOutcome,OutboundRequestRejection,OutboundRequestRejectionReason,OutboundRequestContract,OutboundRequestContractReason,OutboundRequestStage,TransportError::{shared_error,into_shared_error,request_stage}} with in-place typed request results and no hidden GO_AWAY replay; rocketmq_client_rust::implementation::mq_client_api_impl::producer_client::ProducerClient, crate-private MQClientAPIImpl wire adapters, and one private RetryPolicy across the five approved executors",
+      "reason": "The repository owner approved the unreleased E2-4 and E5-1 boundary redesign together with the exact necessary E9 deletion slice. Transport now reports physical request progress, normal source-free rejections, deterministic contracts, and canonical operational errors without a RocketMQResult compatibility projector; Client owns one deadline-, idempotency-, jitter-, and attempt-budget-aware retry policy and performs no hidden GO_AWAY replay. The Shared carrier reuses the canonical allocation directly, while the legacy Network arm, SharedRocketMQError wrapper, central ErrorKind authority, and duplicate kind accessors are deleted without a parallel taxonomy, alias, or descriptor-to-kind reconstruction. Existing RocketMQ remoting numerics and actual R1, R2, R29, and domain projections remain unchanged.",
+      "approved_by": "repository-owner",
+      "approved_on": "2026-09-05"
     }
   ],
   "frozen_contracts": [

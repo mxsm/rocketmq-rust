@@ -1182,7 +1182,7 @@ path = "/rocketmq"
 
         let error = config.update(properties).await.expect_err("invalid value should fail");
 
-        assert_eq!(error.kind(), rocketmq_error::ErrorKind::ConfigInvalidValue);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
         assert!(matches!(
             error,
             RocketMQError::ConfigInvalidValue {
@@ -1200,7 +1200,7 @@ path = "/rocketmq"
 
         let error = config.update(properties).await.expect_err("unknown key should fail");
 
-        assert_eq!(error.kind(), rocketmq_error::ErrorKind::ConfigInvalidValue);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
         assert!(matches!(
             error,
             RocketMQError::ConfigInvalidValue { key: "property", .. }

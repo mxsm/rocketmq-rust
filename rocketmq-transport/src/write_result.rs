@@ -25,7 +25,6 @@ use crate::dispatch::ResponseOperationalFailure;
 use crate::dispatch::WriteProgress;
 use crate::error_helpers::connection_failed;
 use crate::error_helpers::connection_failed_without_source;
-use crate::error_helpers::network;
 use crate::error_helpers::write_timeout;
 use crate::error_helpers::write_timeout_caused_by;
 use crate::error_helpers::TransportStage;
@@ -170,8 +169,8 @@ impl WriterFailure {
             .map(|(progress, error)| ResponseOperationalFailure::transport(progress, error))
     }
 
-    pub(crate) fn into_network(self) -> Result<rocketmq_error::RocketMQError, WriterRejection> {
-        self.into_operational().map(|(_, error)| network(error))
+    pub(crate) fn into_shared_error(self) -> Result<SharedError, WriterRejection> {
+        self.into_operational().map(|(_, error)| error)
     }
 }
 
@@ -187,8 +186,6 @@ mod tests {
     use std::error::Error;
     use std::fmt;
     use std::io;
-
-    use rocketmq_error::RocketMQError;
 
     use super::WriterFailure;
     use crate::dispatch::ResponseOperationalFailure;
@@ -228,16 +225,13 @@ mod tests {
         let failure = WriterFailure::from_io(WriteProgress::NotStarted, io::Error::other(PanicDisplay));
         let expected = std::sync::Arc::clone(failure.error().expect("operational error"));
         let response = failure.clone().into_response().expect("operational response failure");
-        let outbound = failure.into_network().expect("operational outbound failure");
+        let outbound = failure.into_shared_error().expect("operational outbound failure");
 
         let ResponseOperationalFailure::Transport { source, .. } = response else {
             panic!("writer failure must remain a transport response failure")
         };
         assert!(std::sync::Arc::ptr_eq(&expected, &source));
-        let RocketMQError::Network(source) = outbound else {
-            panic!("outbound writer failure must use the canonical Network carrier")
-        };
-        assert!(std::sync::Arc::ptr_eq(&expected, &source));
+        assert!(std::sync::Arc::ptr_eq(&expected, &outbound));
     }
 
     #[test]

@@ -24,6 +24,7 @@ use super::HandlerOutcome;
 use super::RemotingRequest;
 use super::RemotingResponse;
 use super::ResponseSink;
+use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::contract::TransportContractViolation;
@@ -344,11 +345,9 @@ where
     }
 
     fn close_network_session(&self, session: &Self::NetworkSession) {
-        session.response_table.close_owner(&session.owner, || {
-            crate::error_helpers::network(crate::error_helpers::connection_failed_without_source(
-                crate::error_helpers::TransportStage::Closed,
-            ))
-        });
+        session
+            .response_table
+            .close_owner(&session.owner, || PendingRequestCompletion::SessionClosed);
     }
 
     fn request_ordering(&self, builder: &RemotingRequestBuilder) -> RequestOrdering {

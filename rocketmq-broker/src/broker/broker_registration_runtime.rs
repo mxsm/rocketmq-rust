@@ -24,7 +24,7 @@ use rocketmq_error::fields;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
-use rocketmq_error::SharedRocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::constant::PermName;
@@ -60,7 +60,7 @@ pub(crate) enum BrokerRegistrationError {
     #[error("broker registration was requested after shutdown")]
     ShuttingDown,
     #[error("broker registration coordination failed: {0}")]
-    Coordination(#[source] SharedRocketMQError),
+    Coordination(#[source] SharedError),
     #[error("broker registration completion channel was dropped")]
     CompletionDropped,
     #[error("broker registration snapshot contains a topic without a name")]
@@ -71,19 +71,19 @@ pub(crate) enum BrokerRegistrationError {
 
 impl BrokerRegistrationError {
     fn coordination(error: RocketMQError) -> Self {
-        Self::Coordination(SharedRocketMQError::new(error))
+        Self::Coordination(capture_coordination_failure(error))
     }
 
     pub(crate) fn into_coordination_result(self, operation: &'static str) -> rocketmq_error::RocketMQResult<()> {
         match self {
             Self::ShuttingDown => Ok(()),
-            Self::Coordination(error) => Err(error.into_error()),
+            Self::Coordination(error) => Err(RocketMQError::Shared(error)),
             error @ Self::NoSuccessfulNameServer { .. } => {
                 let context = ErrorContext::new()
                     .with_text(fields::PHASE, "connect")
                     .with_secret_presence(fields::REMOTE_ADDR_PRESENT)
                     .with_secret_presence(fields::SOURCE_PRESENT);
-                Err(RocketMQError::Network(Arc::new(
+                Err(RocketMQError::Shared(Arc::new(
                     Error::caused_by(&TRANSPORT_CONNECTION_FAILED, error).with_context(context),
                 )))
             }
@@ -91,6 +91,17 @@ impl BrokerRegistrationError {
                 operation,
                 source: Box::new(error),
             }),
+        }
+    }
+}
+
+fn capture_coordination_failure(error: RocketMQError) -> SharedError {
+    match error {
+        RocketMQError::Shared(error) => error,
+        error => {
+            let descriptor = error.descriptor();
+            let context = error.context();
+            Arc::new(Error::caused_by(descriptor, error).with_context(context))
         }
     }
 }
@@ -539,18 +550,14 @@ mod tests {
         assert!(std::error::Error::source(&unavailable).is_some());
 
         let canonical = std::sync::Arc::new(rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED));
-        let shared =
-            rocketmq_error::SharedRocketMQError::new(RocketMQError::Network(std::sync::Arc::clone(&canonical)));
-        let coordinated = super::BrokerRegistrationError::Coordination(shared)
-            .into_coordination_result("broker registration coordination")
-            .expect_err("coordination failure must be returned");
+        let coordinated =
+            super::BrokerRegistrationError::coordination(RocketMQError::Shared(std::sync::Arc::clone(&canonical)))
+                .into_coordination_result("broker registration coordination")
+                .expect_err("coordination failure must be returned");
         let RocketMQError::Shared(shared) = coordinated else {
             panic!("coordination must retain the underlying shared error");
         };
-        let RocketMQError::Network(actual) = shared.as_error() else {
-            panic!("coordination must retain the underlying Network error");
-        };
-        assert!(std::sync::Arc::ptr_eq(actual, &canonical));
+        assert!(std::sync::Arc::ptr_eq(&shared, &canonical));
 
         let completion = super::BrokerRegistrationError::CompletionDropped
             .into_coordination_result("broker registration coordination")

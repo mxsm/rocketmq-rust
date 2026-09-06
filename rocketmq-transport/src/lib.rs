@@ -58,6 +58,7 @@ mod public_api;
 mod remoting;
 mod remoting_server;
 mod request_ordering;
+mod request_outcome;
 mod request_processor;
 mod rpc;
 mod runtime;

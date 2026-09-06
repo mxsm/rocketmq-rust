@@ -24,6 +24,8 @@ impl DefaultMQProducerImpl {
     where
         M: MessageTrait + Send + Sync,
     {
+        let deadline =
+            RequestDeadline::from_timeout_millis(self.runtime_snapshot().producer_config.send_msg_timeout() as u64);
         let runtime = self.runtime_snapshot();
         let transaction_listener = self
             .transaction_runtime
@@ -51,13 +53,7 @@ impl DefaultMQProducerImpl {
             runtime.producer_config.producer_group().to_owned(),
         );
         let send_result = self
-            .send_default_impl_with_runtime(
-                &mut msg,
-                CommunicationMode::Sync,
-                None,
-                runtime.producer_config.send_msg_timeout() as u64,
-                &runtime,
-            )
+            .send_default_impl_with_runtime(&mut msg, CommunicationMode::Sync, None, deadline, &runtime)
             .await
             .map_err(|e| mq_client_err!(format!("send message in transaction error, {}", e)))?
             .ok_or_else(|| mq_client_err!("send result is none"))?;

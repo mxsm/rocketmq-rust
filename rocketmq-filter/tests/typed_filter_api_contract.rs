@@ -14,7 +14,6 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::ErrorKind;
 use rocketmq_error::RocketMQError;
 use rocketmq_filter::expression::MessageEvaluationContext;
 use rocketmq_filter::expression::Value;
@@ -58,7 +57,7 @@ fn factory_trait_object_typed_failures_preserve_safe_metadata_and_unified_kind()
     assert_eq!(error.source(), Some(FilterCompileSource::Sql92));
 
     let unified: RocketMQError = error.into();
-    assert_eq!(unified.kind(), ErrorKind::Filter);
+    assert_eq!(unified.descriptor(), &rocketmq_error::PROTOCOL_FILTER_INVALID);
     for rendered in [
         error.to_string(),
         format!("{error:?}"),

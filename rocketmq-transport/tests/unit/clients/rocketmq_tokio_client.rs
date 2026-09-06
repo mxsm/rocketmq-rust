@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error as _;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
 
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -27,6 +30,9 @@ use tokio::net::TcpListener;
 use super::*;
 use crate::connection::Connection;
 use crate::deadline::RequestDeadline;
+use crate::request_outcome::OutboundRequestOutcome;
+use crate::request_outcome::OutboundRequestRejectionReason;
+use crate::request_outcome::OutboundRequestStage;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::runtime::config::client_config::TransportClientConfig;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -35,6 +41,26 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use tokio::time;
 
 use self::runtime_test_support::test_service_context;
+
+fn expect_response(outcome: OutboundRequestOutcome) -> RemotingCommand {
+    match outcome {
+        OutboundRequestOutcome::Response(response) => response,
+        OutboundRequestOutcome::Rejected(rejection) => {
+            panic!(
+                "request was rejected at {:?}: {:?}",
+                rejection.stage(),
+                rejection.reason()
+            )
+        }
+        OutboundRequestOutcome::Contract(contract) => {
+            panic!(
+                "request contract failed at {:?}: {:?}",
+                contract.stage(),
+                contract.reason()
+            )
+        }
+    }
+}
 
 #[cfg(test)]
 mod runtime_test_support {
@@ -82,6 +108,49 @@ impl RPCHook for CountingHook {
 
 struct RejectingRequestHook {
     calls: AtomicUsize,
+}
+
+struct RejectingResponseHook;
+
+impl RPCHook for RejectingResponseHook {
+    fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+        Ok(())
+    }
+
+    fn do_after_response(
+        &self,
+        _remote_addr: SocketAddr,
+        _request: &RemotingCommand,
+        _response: &mut RemotingCommand,
+    ) -> RocketMQResult<()> {
+        Err(RocketMQError::illegal_argument("injected response hook rejection"))
+    }
+}
+
+struct BlockingResponseHook {
+    entered: std::sync::mpsc::Sender<()>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl RPCHook for BlockingResponseHook {
+    fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+        Ok(())
+    }
+
+    fn do_after_response(
+        &self,
+        _remote_addr: SocketAddr,
+        _request: &RemotingCommand,
+        _response: &mut RemotingCommand,
+    ) -> RocketMQResult<()> {
+        self.entered.send(()).expect("response hook observer");
+        let (lock, condition) = self.release.as_ref();
+        let mut released = lock.lock().expect("response hook release lock");
+        while !*released {
+            released = condition.wait(released).expect("response hook release wait");
+        }
+        Ok(())
+    }
 }
 
 impl RPCHook for RejectingRequestHook {
@@ -705,6 +774,7 @@ async fn invoke_request_runs_outbound_rpc_hooks() {
         .invoke_request(Some(&target), request, 3_000)
         .await
         .expect("invoke request");
+    let response = expect_response(response);
 
     assert_eq!(hook.before_count.load(Ordering::SeqCst), 1);
     assert_eq!(hook.after_count.load(Ordering::SeqCst), 1);
@@ -752,10 +822,16 @@ async fn request_before_hook_error_is_preserved_without_writing_a_frame() {
         Ok(_) => panic!("request hook rejection must be returned"),
     };
 
-    assert!(matches!(
-        error,
-        RocketMQError::IllegalArgument(message) if message == "injected request hook rejection"
-    ));
+    assert_eq!(error.request_stage(), Some(OutboundRequestStage::BeforeWrite));
+    assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+    assert!(error
+        .shared_error()
+        .source()
+        .and_then(|source| source.downcast_ref::<RocketMQError>())
+        .is_some_and(|source| matches!(
+            source,
+            RocketMQError::IllegalArgument(message) if message == "injected request hook rejection"
+        )));
     assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
     client.shutdown();
     assert_eq!(
@@ -763,6 +839,127 @@ async fn request_before_hook_error_is_preserved_without_writing_a_frame() {
         0,
         "hook rejection must not write bytes"
     );
+}
+
+#[tokio::test]
+async fn response_hook_error_is_operational_at_response_received() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind response hook peer");
+    let target = CheetahString::from_string(listener.local_addr().expect("response hook peer address").to_string());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("accept response hook client");
+        let mut connection = Connection::new(socket);
+        let request = connection
+            .receive_command()
+            .await
+            .expect("request frame")
+            .expect("request command");
+        connection
+            .send_command(
+                RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(request.opaque()),
+            )
+            .await
+            .expect("send response");
+    });
+    let client = TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("remoting-client-response-hook-error-test"),
+    );
+    client.register_rpc_hook(Arc::new(RejectingResponseHook));
+
+    let error = client
+        .invoke_request(
+            Some(&target),
+            RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+            3_000,
+        )
+        .await
+        .expect_err("response hook rejection must be returned");
+
+    assert_eq!(error.request_stage(), Some(OutboundRequestStage::ResponseReceived));
+    assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+    assert!(error
+        .shared_error()
+        .source()
+        .and_then(|source| source.downcast_ref::<RocketMQError>())
+        .is_some_and(|source| matches!(
+            source,
+            RocketMQError::IllegalArgument(message) if message == "injected response hook rejection"
+        )));
+
+    server.await.expect("response hook server task");
+    client.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deadline_after_response_is_a_response_received_rejection() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind delayed hook peer");
+    let target = CheetahString::from_string(listener.local_addr().expect("delayed hook peer address").to_string());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.expect("accept delayed hook client");
+        let mut connection = Connection::new(socket);
+        let request = connection
+            .receive_command()
+            .await
+            .expect("request frame")
+            .expect("request command");
+        connection
+            .send_command(
+                RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(request.opaque()),
+            )
+            .await
+            .expect("send response");
+    });
+    let client = Arc::new(TransportClient::build_for_test(
+        Arc::new(TransportClientConfig::default()),
+        DefaultRequestProcessor,
+        test_service_context("remoting-client-response-deadline-test"),
+    ));
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    client.register_rpc_hook(Arc::new(BlockingResponseHook {
+        entered: entered_tx,
+        release: Arc::clone(&release),
+    }));
+    let deadline = RequestDeadline::after(Duration::from_millis(50));
+    let invocation_deadline = deadline;
+    let invocation_client = Arc::clone(&client);
+    let invocation = tokio::spawn(async move {
+        invocation_client
+            .invoke_request_with_deadline(
+                Some(&target),
+                RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
+                invocation_deadline,
+            )
+            .await
+    });
+
+    tokio::task::spawn_blocking(move || entered_rx.recv_timeout(Duration::from_secs(1)))
+        .await
+        .expect("response hook observer task")
+        .expect("response must reach the hook");
+    time::sleep_until(deadline.instant()).await;
+    {
+        let (lock, condition) = release.as_ref();
+        *lock.lock().expect("response hook release lock") = true;
+        condition.notify_one();
+    }
+    let outcome = invocation
+        .await
+        .expect("response deadline invocation task")
+        .expect("post-response deadline is a normal rejection");
+    let rejection = match outcome {
+        OutboundRequestOutcome::Rejected(rejection) => rejection,
+        other => panic!("expected response deadline rejection, got {other:?}"),
+    };
+
+    assert_eq!(rejection.reason(), OutboundRequestRejectionReason::DeadlineExpired);
+    assert_eq!(rejection.stage(), OutboundRequestStage::ResponseReceived);
+    assert_eq!(rejection.timeout_millis(), Some(50));
+    assert!(rejection.remote_addr_present());
+
+    server.await.expect("delayed hook server task");
+    client.shutdown();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -851,14 +1048,21 @@ async fn timed_out_request_retires_the_cached_session_before_the_next_request() 
         test_service_context("remoting-client-timeout-test"),
     );
     let target = CheetahString::from_string(addr.to_string());
-    assert!(client
+    let error = client
         .invoke_request(
             Some(&target),
             RemotingCommand::create_remoting_command(RequestCode::GetBrokerClusterInfo),
             30,
         )
         .await
-        .is_err());
+        .expect_err("an actual response wait timeout is operational");
+    assert_eq!(error.request_stage(), Some(OutboundRequestStage::AwaitingResponse));
+    assert_eq!(error.descriptor(), &rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT);
+    assert!(error
+        .shared_error()
+        .source()
+        .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())
+        .is_some());
 
     let response = client
         .invoke_request(
@@ -868,6 +1072,7 @@ async fn timed_out_request_retires_the_cached_session_before_the_next_request() 
         )
         .await
         .expect("next request must use a new owner and connection");
+    let response = expect_response(response);
     assert_eq!(response.code(), ResponseCode::Success.to_i32());
 
     server.await.expect("server task");
@@ -1234,11 +1439,19 @@ async fn removed_endpoint_rejects_new_work_and_closes_after_drain_timeout() {
 
     assert!(client.get_name_server_address_list().is_empty());
     assert!(!client.connection_registry.contains(&identity));
-    assert!(time::timeout(Duration::from_secs(1), request)
+    let outcome = time::timeout(Duration::from_secs(1), request)
         .await
-        .unwrap()
-        .unwrap()
-        .is_err());
+        .expect("drained request deadline")
+        .expect("drained request task")
+        .expect("expected drain is a normal rejection");
+    let rejection = match outcome {
+        OutboundRequestOutcome::Rejected(rejection) => rejection,
+        other => panic!("expected a typed session-close rejection, got {other:?}"),
+    };
+    assert_eq!(rejection.reason(), OutboundRequestRejectionReason::SessionClosed);
+    assert_eq!(rejection.stage(), OutboundRequestStage::AwaitingResponse);
+    assert_eq!(rejection.timeout_millis(), None);
+    assert!(rejection.remote_addr_present());
     server.await.expect("server task");
     let report = client.shutdown_with_report(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{report:?}");
@@ -1289,6 +1502,7 @@ async fn nameserver_connect_failure_tries_next_candidate_within_deadline() {
         )
         .await
         .expect("second NameServer should satisfy the request");
+    let response = expect_response(response);
 
     assert_eq!(response.code(), ResponseCode::Success.to_i32());
     server.await.expect("fallback server task");

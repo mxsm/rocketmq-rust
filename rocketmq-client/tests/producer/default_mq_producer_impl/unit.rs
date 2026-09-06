@@ -48,6 +48,73 @@ static COUNTING_COMPRESSOR: CountingCompressor = CountingCompressor {
     calls: AtomicUsize::new(0),
 };
 
+#[derive(Default)]
+struct ProducerRoutePreparationProcessor {
+    responses: std::sync::Mutex<std::collections::VecDeque<RemotingCommand>>,
+    primary_responses: std::sync::Mutex<std::collections::VecDeque<RemotingCommand>>,
+    topics: std::sync::Mutex<Vec<CheetahString>>,
+    primary_sends: AtomicUsize,
+}
+
+impl rocketmq_transport::test_support::SessionProcessor for ProducerRoutePreparationProcessor {
+    fn process(
+        &self,
+        request: RemotingCommand,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>>
+    {
+        Box::pin(async move {
+            if request.code() != rocketmq_protocol::code::request_code::RequestCode::GetRouteinfoByTopic.to_i32() {
+                self.primary_sends.fetch_add(1, Ordering::SeqCst);
+                let response = self
+                    .primary_responses
+                    .lock()
+                    .expect("primary responses lock")
+                    .pop_front()
+                    .ok_or_else(|| RocketMQError::illegal_argument("unexpected primary send"))?;
+                return Ok(response.set_opaque(request.opaque()));
+            }
+            let header = request.decode_command_custom_header::<
+                rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader,
+            >()?;
+            self.topics.lock().expect("route topics lock").push(header.topic);
+            let response = self
+                .responses
+                .lock()
+                .expect("route responses lock")
+                .pop_front()
+                .ok_or_else(|| RocketMQError::illegal_argument("unexpected producer route request"))?;
+            Ok(response.set_opaque(request.opaque()))
+        })
+    }
+}
+
+fn producer_default_route_response(write_queues: u32, broker_addr: &CheetahString) -> RemotingCommand {
+    use rocketmq_model::common::constant::PermName;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+    use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+    use rocketmq_protocol::protocol::RemotingSerializable;
+
+    let broker_name = CheetahString::from_static_str("broker-a");
+    let route = TopicRouteData {
+        queue_datas: vec![QueueData::new(
+            broker_name.clone(),
+            write_queues,
+            write_queues,
+            PermName::PERM_READ | PermName::PERM_WRITE,
+            0,
+        )],
+        broker_datas: vec![BrokerData::new(
+            CheetahString::from_static_str("cluster-a"),
+            broker_name,
+            [(mix_all::MASTER_ID, broker_addr.clone())].into_iter().collect(),
+            None,
+        )],
+        ..Default::default()
+    };
+    RemotingCommand::create_success_response_command().set_body(route.encode().expect("encode producer route"))
+}
+
 fn test_runtime() -> Arc<ClientRuntime> {
     crate::runtime::test_client_runtime("default-producer-impl-test")
 }
@@ -214,7 +281,7 @@ async fn running_is_published_only_after_async_start_initialization() {
 
 #[test]
 fn request_cause_from_error_uses_typed_error() {
-    let error = DefaultMQProducerImpl::request_cause_from_error(&RocketMQError::Network(Arc::new(
+    let error = DefaultMQProducerImpl::request_cause_from_error(&RocketMQError::Shared(Arc::new(
         rocketmq_error::Error::caused_by(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
             std::io::Error::other("send failed"),
@@ -269,8 +336,7 @@ async fn execute_async_message_send_uses_injected_client_runtime() {
                 tx.send(thread_name).expect("test receiver should still be open");
             },
             None,
-            1000,
-            Instant::now(),
+            RequestDeadline::from_timeout_millis(1000),
             1,
         )
         .await
@@ -626,8 +692,265 @@ fn default_send_retry_attempts_match_java_communication_mode() {
     );
 }
 
+#[tokio::test]
+async fn zero_retry_producer_prepares_route_then_executes_one_primary_send() {
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_runtime::RuntimeContext;
+    use rocketmq_runtime::ShutdownDeadline;
+    use rocketmq_transport::api::AdmissionController;
+    use rocketmq_transport::api::AdmissionLimits;
+    use rocketmq_transport::test_support::SessionTransportServer;
+    use rocketmq_transport::test_support::SessionTransportServerConfig;
+
+    let server_runtime = RuntimeContext::from_current("zero-retry-producer-route-test");
+    let processor = Arc::new(ProducerRoutePreparationProcessor::default());
+    let server = SessionTransportServer::bind(
+        server_runtime.service_context("route-server"),
+        SessionTransportServerConfig::loopback(),
+        Arc::clone(&processor) as Arc<dyn rocketmq_transport::test_support::SessionProcessor>,
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    )
+    .await
+    .expect("bind route server");
+    let name_server_addr = CheetahString::from_string(server.local_addr().to_string());
+    server.start().expect("start route server");
+    processor.responses.lock().expect("route responses lock").push_back(
+        RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist),
+    );
+    processor
+        .responses
+        .lock()
+        .expect("route responses lock")
+        .push_back(producer_default_route_response(8, &name_server_addr));
+    let mut primary_response = RemotingCommand::create_success_response_command_with_header(
+        rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader::new(
+            CheetahString::from_static_str("message-id"),
+            0,
+            1,
+            None,
+            None,
+            None,
+        ),
+    );
+    primary_response
+        .try_make_custom_header_to_net()
+        .expect("materialize primary response header");
+    primary_response
+        .decode_command_custom_header_fast::<
+            rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader,
+        >()
+        .expect("primary response fixture must decode before transport");
+    processor
+        .primary_responses
+        .lock()
+        .expect("primary responses lock")
+        .push_back(primary_response);
+
+    let client_runtime = crate::runtime::test_client_runtime("zero-retry-producer-route-test");
+    let mut client_config = ClientConfig::default();
+    client_config.set_vip_channel_enabled(false);
+    let instance = MQClientInstance::new_arc(
+        client_config,
+        0,
+        "zero-retry-producer-route-client",
+        None,
+        client_runtime.component("instance"),
+        client_runtime.telemetry_handle().clone(),
+        client_runtime.pool().request_future_holder(),
+    );
+    let api = instance.get_mq_client_api_impl().expect("client API");
+    api.update_name_server_address_list_sync(name_server_addr.as_str());
+    api.start().await.expect("start route client transport");
+
+    let producer = running_producer_without_client();
+    producer.bind_client_instance(&instance).expect("bind producer client");
+    let mut configured = DefaultMQProducer::builder(test_runtime())
+        .producer_group("zero-retry-route-group")
+        .build();
+    configured.set_retry_times_when_send_failed(0);
+    configured.set_default_topic_queue_nums(3);
+    producer.replace_producer_config(configured.producer_config_snapshot().as_ref().clone());
+    let runtime = producer.runtime_snapshot();
+    assert_eq!(
+        DefaultMQProducerImpl::get_retry_times(&runtime, CommunicationMode::Sync),
+        1
+    );
+
+    let mut message = Message::builder()
+        .topic("new-topic")
+        .body_slice(b"body")
+        .build_unchecked();
+    let result = producer
+        .send_with_retry(
+            &mut message,
+            &CheetahString::from_static_str("new-topic"),
+            &TopicPublishInfo::new(),
+            None,
+            SendContext::new(RequestDeadline::from_timeout_millis(2_000), CommunicationMode::Sync),
+            &runtime,
+        )
+        .await
+        .expect("zero-retry producer should complete its initial primary send")
+        .expect("sync send should return a result");
+    assert_eq!(result.send_status, SendStatus::SendOk);
+    assert_eq!(processor.primary_sends.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        processor.topics.lock().expect("route topics lock").as_slice(),
+        [
+            CheetahString::from_static_str("new-topic"),
+            CheetahString::from_static_str("TBW102"),
+        ]
+    );
+
+    let strategy = producer.fault_strategy_snapshot();
+    let mut same_broker = TopicPublishInfo::new();
+    same_broker.message_queue_list = vec![MessageQueue::from_parts("new-topic", "broker-a", 0)];
+    let (selected_addr, selected_broker) =
+        crate::implementation::mq_client_api_impl::MQClientAPIImpl::select_async_retry_target(
+            &strategy,
+            Some(&same_broker),
+            Some(&instance),
+            &CheetahString::from_static_str("broker-a"),
+        )
+        .await
+        .expect("a selected same-broker queue with a matching address remains valid");
+    assert_eq!(selected_broker, "broker-a");
+    assert_eq!(selected_addr, name_server_addr);
+
+    let mut missing_alternate = TopicPublishInfo::new();
+    missing_alternate.message_queue_list = vec![
+        MessageQueue::from_parts("new-topic", "broker-a", 0),
+        MessageQueue::from_parts("new-topic", "broker-b", 0),
+    ];
+    assert!(
+        crate::implementation::mq_client_api_impl::MQClientAPIImpl::select_async_retry_target(
+            &strategy,
+            Some(&missing_alternate),
+            Some(&instance),
+            &CheetahString::from_static_str("broker-a"),
+        )
+        .await
+        .is_none()
+    );
+    assert!(
+        crate::implementation::mq_client_api_impl::MQClientAPIImpl::select_async_retry_target(
+            &strategy,
+            None,
+            Some(&instance),
+            &CheetahString::from_static_str("broker-a"),
+        )
+        .await
+        .is_none()
+    );
+
+    let mut configured = DefaultMQProducer::builder(test_runtime())
+        .producer_group("zero-retry-route-group")
+        .build();
+    configured.set_retry_times_when_send_failed(3);
+    configured.set_retry_times_when_send_async_failed(3);
+    configured.set_default_topic_queue_nums(3);
+    producer.replace_producer_config(configured.producer_config_snapshot().as_ref().clone());
+    let runtime = producer.runtime_snapshot();
+    {
+        let mut primary_responses = processor.primary_responses.lock().expect("primary responses lock");
+        primary_responses.push_back(RemotingCommand::create_response_command_with_code(ResponseCode::GoAway));
+        primary_responses.push_back(RemotingCommand::create_response_command_with_code(ResponseCode::GoAway));
+    }
+
+    let sends_before_sync = processor.primary_sends.load(Ordering::SeqCst);
+    let mut sync_message = Message::builder()
+        .topic("new-topic")
+        .body_slice(b"sync-go-away")
+        .build_unchecked();
+    let sync_error = producer
+        .send_with_retry(
+            &mut sync_message,
+            &CheetahString::from_static_str("new-topic"),
+            &same_broker,
+            None,
+            SendContext::new(RequestDeadline::from_timeout_millis(2_000), CommunicationMode::Sync),
+            &runtime,
+        )
+        .await
+        .expect_err("a non-idempotent sync send must not replay GO_AWAY");
+    assert!(matches!(
+        sync_error,
+        RocketMQError::BrokerOperationFailed { code, .. } if code == ResponseCode::GoAway.to_i32()
+    ));
+    assert_eq!(processor.primary_sends.load(Ordering::SeqCst), sends_before_sync + 1);
+
+    let (callback_tx, callback_rx) = tokio::sync::oneshot::channel();
+    let callback_tx = Arc::new(std::sync::Mutex::new(Some(callback_tx)));
+    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+        let code = match error {
+            Some(RocketMQError::BrokerOperationFailed { code, .. }) => *code,
+            _ => i32::MIN,
+        };
+        if let Some(sender) = callback_tx.lock().expect("callback sender lock").take() {
+            let _ = sender.send(code);
+        }
+    });
+    let sends_before_async = processor.primary_sends.load(Ordering::SeqCst);
+    let mut async_message = Message::builder()
+        .topic("new-topic")
+        .body_slice(b"async-go-away")
+        .build_unchecked();
+    assert!(producer
+        .send_with_retry(
+            &mut async_message,
+            &CheetahString::from_static_str("new-topic"),
+            &same_broker,
+            Some(callback),
+            SendContext::new(RequestDeadline::from_timeout_millis(2_000), CommunicationMode::Async),
+            &runtime,
+        )
+        .await
+        .expect("async send should hand execution to the owned callback task")
+        .is_none());
+    let callback_code = tokio::time::timeout(Duration::from_secs(2), callback_rx)
+        .await
+        .expect("async GO_AWAY callback should complete")
+        .expect("async GO_AWAY callback sender should remain available");
+    assert_eq!(callback_code, ResponseCode::GoAway.to_i32());
+    assert_eq!(processor.primary_sends.load(Ordering::SeqCst), sends_before_async + 1);
+
+    instance.shutdown().await;
+    client_runtime
+        .shutdown()
+        .await
+        .assert_no_task_leak()
+        .expect("client runtime tasks drained");
+    server
+        .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+        .await
+        .assert_no_task_leak()
+        .expect("route server tasks drained");
+    server_runtime
+        .shutdown_tasks(Duration::from_secs(5))
+        .await
+        .assert_no_task_leak()
+        .expect("route server runtime tasks drained");
+}
+
 #[test]
-fn send_timeout_for_attempt_caps_only_retryable_attempts_like_java() {
+fn retry_attempt_count_saturates_without_preallocating_configured_maximum() {
+    let mut configured = DefaultMQProducer::builder(test_runtime()).build();
+    configured.set_retry_times_when_send_failed(u32::MAX);
+    let producer = running_producer_without_client();
+    producer.replace_producer_config(configured.producer_config_snapshot().as_ref().clone());
+    let runtime = producer.runtime_snapshot();
+
+    assert_eq!(
+        DefaultMQProducerImpl::get_retry_times(&runtime, CommunicationMode::Sync),
+        u32::MAX
+    );
+    let retry_state = RetryState::new(u32::MAX);
+    assert_eq!(retry_state.times_total, u32::MAX);
+    assert_eq!(retry_state.brokers_sent.capacity(), 0);
+}
+
+#[test]
+fn send_deadline_for_attempt_caps_without_extending_the_absolute_deadline() {
     let producer = running_producer_without_client();
     let configured = DefaultMQProducer::builder(test_runtime())
         .producer_group("retry-timeout-group")
@@ -635,29 +958,28 @@ fn send_timeout_for_attempt_caps_only_retryable_attempts_like_java() {
         .build();
     producer.replace_producer_config(configured.producer_config_snapshot().as_ref().clone());
     let runtime = producer.runtime_snapshot();
+    let deadline = RequestDeadline::from_timeout_millis(3_000);
 
+    let first = DefaultMQProducerImpl::send_deadline_for_attempt(&runtime, deadline, 1, 3);
+    let second = DefaultMQProducerImpl::send_deadline_for_attempt(&runtime, deadline, 2, 3);
+    assert_eq!(first.budget_millis(), 500);
+    assert_eq!(second.budget_millis(), 500);
+    assert!(first.instant() <= deadline.instant());
+    assert!(second.instant() <= deadline.instant());
     assert_eq!(
-        DefaultMQProducerImpl::send_timeout_for_attempt(&runtime, 3_000, 0, 3),
-        500
+        DefaultMQProducerImpl::send_deadline_for_attempt(&runtime, deadline, 3, 3),
+        deadline
     );
     assert_eq!(
-        DefaultMQProducerImpl::send_timeout_for_attempt(&runtime, 3_000, 1, 3),
-        500
-    );
-    assert_eq!(
-        DefaultMQProducerImpl::send_timeout_for_attempt(&runtime, 3_000, 2, 3),
-        3_000
-    );
-    assert_eq!(
-        DefaultMQProducerImpl::send_timeout_for_attempt(&runtime, 3_000, 0, 1),
-        3_000
+        DefaultMQProducerImpl::send_deadline_for_attempt(&runtime, deadline, 1, 1),
+        deadline
     );
 
     let producer_without_cap = running_producer_without_client();
     let runtime = producer_without_cap.runtime_snapshot();
     assert_eq!(
-        DefaultMQProducerImpl::send_timeout_for_attempt(&runtime, 3_000, 0, 3),
-        3_000
+        DefaultMQProducerImpl::send_deadline_for_attempt(&runtime, deadline, 1, 3),
+        deadline
     );
 }
 
@@ -686,26 +1008,115 @@ fn last_retryable_send_result_is_preserved() {
 }
 
 #[test]
-fn retry_failure_redacts_direct_and_shared_network_sources_equally() {
+fn retry_failure_preserves_shared_network_source_identity_and_redaction() {
     let canonical = Arc::new(rocketmq_error::Error::caused_by(
         &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
         std::io::Error::new(std::io::ErrorKind::ConnectionReset, "private network detail"),
     ));
-    let errors = [
-        rocketmq_error::RocketMQError::Network(Arc::clone(&canonical)),
-        rocketmq_error::SharedRocketMQError::new(rocketmq_error::RocketMQError::Network(Arc::clone(&canonical)))
-            .into_error(),
-    ];
+    let mut retry_state = RetryState::new(1);
+    retry_state.set_error(rocketmq_error::RocketMQError::Shared(Arc::clone(&canonical)));
+    let error = retry_state.take_failure_error(&CheetahString::from_static_str("TopicTest"), 1);
+    let rendered = error.to_string();
+    let remoting_code = error.boundary_view().remoting().code.as_i32();
+    let rocketmq_error::RocketMQError::Shared(retained) = error else {
+        panic!("expected the canonical shared carrier")
+    };
 
-    for error in errors {
-        let mut retry_state = RetryState::new(1);
-        retry_state.set_error(error);
-        let rendered = retry_state
-            .build_failure_error(&CheetahString::from_static_str("TopicTest"), 1)
-            .to_string();
-        assert!(rendered.contains("CODE: 10003"));
-        assert!(!rendered.contains("private network detail"));
+    assert!(Arc::ptr_eq(&canonical, &retained));
+    assert!(std::error::Error::source(retained.as_ref())
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some());
+    assert_eq!(
+        retained.descriptor().code(),
+        rocketmq_error::TRANSPORT_CONNECTION_FAILED.code()
+    );
+    assert_eq!(remoting_code, 2);
+    assert!(!rendered.contains("private network detail"));
+}
+
+#[tokio::test]
+async fn sync_retry_actions_preserve_the_target_unless_switch_broker_is_requested() {
+    let producer = running_producer_without_client();
+    let topic = CheetahString::from_static_str("TopicTest");
+    let ctx = SendContext::new(RequestDeadline::from_timeout_millis(3_000), CommunicationMode::Sync);
+    let broker_a = MessageQueue::from_parts("TopicTest", "broker-a", 0);
+    let broker_b = MessageQueue::from_parts("TopicTest", "broker-b", 0);
+    let mut publish_info = TopicPublishInfo {
+        message_queue_list: vec![broker_a.clone(), broker_b.clone()],
+        ..Default::default()
+    };
+    let producer_config = ProducerConfig::default();
+
+    for action in [RetryAction::Stop, RetryAction::RefreshLeader] {
+        let mut queued_retry_queue = None;
+        assert!(!producer
+            .execute_producer_retry_action(
+                action,
+                &ctx,
+                &topic,
+                &mut publish_info,
+                &broker_a,
+                &mut queued_retry_queue,
+            )
+            .await
+            .expect("unsupported action should stop without projecting an error"));
+        assert!(queued_retry_queue.is_none());
     }
+
+    for action in [RetryAction::RetryNow, RetryAction::RetryAfter(Duration::ZERO)] {
+        let mut queued_retry_queue = None;
+        assert!(producer
+            .execute_producer_retry_action(
+                action,
+                &ctx,
+                &topic,
+                &mut publish_info,
+                &broker_a,
+                &mut queued_retry_queue,
+            )
+            .await
+            .expect("same-target retry action should execute"));
+        let selected = producer
+            .select_or_refresh_route_for_attempt(
+                &mut queued_retry_queue,
+                &topic,
+                &mut publish_info,
+                Some(broker_a.broker_name()),
+                true,
+                &producer_config,
+                ctx.deadline,
+            )
+            .await
+            .expect("the next attempt should consume the queued retry target");
+        assert_eq!(selected, broker_a);
+        assert!(queued_retry_queue.is_none());
+    }
+
+    let mut queued_retry_queue = None;
+    assert!(producer
+        .execute_producer_retry_action(
+            RetryAction::SwitchBroker,
+            &ctx,
+            &topic,
+            &mut publish_info,
+            &broker_a,
+            &mut queued_retry_queue,
+        )
+        .await
+        .expect("switch-broker should continue without queuing the current target"));
+    let selected = producer
+        .select_or_refresh_route_for_attempt(
+            &mut queued_retry_queue,
+            &topic,
+            &mut publish_info,
+            Some(broker_a.broker_name()),
+            true,
+            &producer_config,
+            ctx.deadline,
+        )
+        .await
+        .expect("switch-broker should select the alternate broker");
+    assert_eq!(selected, broker_b);
 }
 
 #[test]
@@ -1105,8 +1516,7 @@ async fn async_backpressure_permits_are_held_until_task_finishes_like_java() {
                 let _ = release_rx.await;
             },
             None,
-            1000,
-            Instant::now(),
+            RequestDeadline::from_timeout_millis(1000),
             msg_len,
         )
         .await

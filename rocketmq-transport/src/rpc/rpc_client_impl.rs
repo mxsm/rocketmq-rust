@@ -60,6 +60,9 @@ use tracing::trace;
 
 use crate::clients::rocketmq_tokio_client::TransportClient;
 use crate::deadline::RequestDeadline;
+use crate::request_outcome::OutboundRequestContractReason;
+use crate::request_outcome::OutboundRequestOutcome;
+use crate::request_outcome::OutboundRequestRejectionReason;
 use crate::request_processor::default_request_processor::DefaultRequestProcessor;
 use crate::rpc::client_metadata::ClientMetadata;
 use crate::rpc::rpc_client::RpcClient;
@@ -90,6 +93,51 @@ struct ResponseConfig {
 impl ResponseConfig {
     const fn new(success_codes: &'static [ResponseCode]) -> Self {
         Self { success_codes }
+    }
+}
+
+fn rpc_request_response(
+    result: Result<OutboundRequestOutcome, crate::error::TransportError>,
+) -> RocketMQResult<RemotingCommand> {
+    match result {
+        Ok(OutboundRequestOutcome::Response(response)) => Ok(response),
+        Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+            let error = match rejection.reason() {
+                OutboundRequestRejectionReason::DeadlineExpired => {
+                    rocketmq_error::Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(
+                        rocketmq_error::ErrorContext::new()
+                            .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, "rpc_request")
+                            .with_u64(
+                                rocketmq_error::fields::TIMEOUT_MS,
+                                rejection.timeout_millis().unwrap_or_default(),
+                            ),
+                    )
+                }
+                OutboundRequestRejectionReason::ClientStopping => {
+                    rocketmq_error::Error::new(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)
+                }
+                OutboundRequestRejectionReason::QueueSaturated => {
+                    rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED)
+                }
+                OutboundRequestRejectionReason::Cancelled
+                | OutboundRequestRejectionReason::SessionClosed
+                | OutboundRequestRejectionReason::EndpointUnavailable => {
+                    rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)
+                }
+            };
+            Err(rocketmq_error::RocketMQError::Shared(Arc::new(error)))
+        }
+        Ok(OutboundRequestOutcome::Contract(contract)) => {
+            let descriptor = match contract.reason() {
+                OutboundRequestContractReason::NameServerEndpointMissing => {
+                    &rocketmq_error::TRANSPORT_CONNECTION_FAILED
+                }
+            };
+            Err(rocketmq_error::RocketMQError::Shared(Arc::new(
+                rocketmq_error::Error::new(descriptor),
+            )))
+        }
+        Err(error) => Err(rocketmq_error::RocketMQError::Shared(error.into_shared_error())),
     }
 }
 
@@ -230,22 +278,23 @@ impl RpcClientImpl {
                 source: Box::new(err),
             })?;
 
-        let response = self
-            .remoting_client
-            .invoke_request_with_deadline(Some(addr), request_command, deadline)
-            .await
-            .map_err(|err| {
-                error!(
-                    "RPC request failed: addr={}, code={}, error={}",
-                    addr, request_code, err
-                );
-                RpcClientError::RequestFailed {
-                    addr: addr.to_string(),
-                    request_code,
-                    timeout_ms: timeout_millis,
-                    source: Box::new(err),
-                }
-            })?;
+        let response = rpc_request_response(
+            self.remoting_client
+                .invoke_request_with_deadline(Some(addr), request_command, deadline)
+                .await,
+        )
+        .map_err(|err| {
+            error!(
+                "RPC request failed: addr={}, code={}, error={}",
+                addr, request_code, err
+            );
+            RpcClientError::RequestFailed {
+                addr: addr.to_string(),
+                request_code,
+                timeout_ms: timeout_millis,
+                source: Box::new(err),
+            }
+        })?;
 
         let response_code = ResponseCode::from(response.code());
 
@@ -312,16 +361,17 @@ impl RpcClientImpl {
                 source: Box::new(err),
             })?;
 
-        let response = self
-            .remoting_client
-            .invoke_request_with_deadline(Some(addr), request_command, deadline)
-            .await
-            .map_err(|err| RpcClientError::RequestFailed {
-                addr: addr.to_string(),
-                request_code,
-                timeout_ms: timeout_millis,
-                source: Box::new(err),
-            })?;
+        let response = rpc_request_response(
+            self.remoting_client
+                .invoke_request_with_deadline(Some(addr), request_command, deadline)
+                .await,
+        )
+        .map_err(|err| RpcClientError::RequestFailed {
+            addr: addr.to_string(),
+            request_code,
+            timeout_ms: timeout_millis,
+            source: Box::new(err),
+        })?;
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
@@ -369,9 +419,9 @@ impl RpcClientImpl {
         let timeout_millis = deadline.budget_millis();
         if let Some(response) = self.execute_hooks(&request)? {
             if deadline.is_expired() {
-                return Err(crate::error_helpers::network(crate::error_helpers::response_timeout(
-                    timeout_millis,
-                )));
+                return Err(rocketmq_error::RocketMQError::Shared(
+                    crate::error_helpers::response_timeout(timeout_millis),
+                ));
             }
             return Ok(response);
         }
@@ -436,16 +486,17 @@ impl RpcClientImpl {
             RequestCode::GetTopicStatsInfo | RequestCode::GetTopicConfig => {
                 let (request_code, request_command) = self.create_request_command(&addr, request, timeout_millis)?;
                 deadline.ensure_before_send()?;
-                let response = self
-                    .remoting_client
-                    .invoke_request_with_deadline(Some(&addr), request_command, deadline)
-                    .await
-                    .map_err(|err| RpcClientError::RequestFailed {
-                        addr: addr.to_string(),
-                        request_code,
-                        timeout_ms: timeout_millis,
-                        source: Box::new(err),
-                    })?;
+                let response = rpc_request_response(
+                    self.remoting_client
+                        .invoke_request_with_deadline(Some(&addr), request_command, deadline)
+                        .await,
+                )
+                .map_err(|err| RpcClientError::RequestFailed {
+                    addr: addr.to_string(),
+                    request_code,
+                    timeout_ms: timeout_millis,
+                    source: Box::new(err),
+                })?;
 
                 if response.code() != ResponseCode::Success as i32 {
                     return Err(RpcClientError::UnexpectedResponseCode {

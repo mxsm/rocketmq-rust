@@ -2421,7 +2421,6 @@ fn proxy_error_response(command_factory: &RemotingCommandFactory, opaque: i32, e
         ProxyError::RocketMQ(error) if is_auth_error(error) => ResponseCode::NoPermission,
         ProxyError::RocketMQ(RocketMQError::BrokerPermissionDenied { .. })
         | ProxyError::RocketMQ(RocketMQError::TopicSendingForbidden { .. }) => ResponseCode::NoPermission,
-        ProxyError::RocketMQ(RocketMQError::Network(_)) => ResponseCode::SystemError,
         ProxyError::TooManyRequests { .. } => ResponseCode::SystemBusy,
         ProxyError::IllegalOffset { .. } => ResponseCode::PullOffsetMoved,
         ProxyError::IllegalFilterExpression { .. } => ResponseCode::SubscriptionParseFailed,
@@ -2592,8 +2591,8 @@ mod tests {
     }
 
     #[test]
-    fn network_error_preserves_proxy_system_error_response_code() {
-        let error = RocketMQError::Network(Arc::new(rocketmq_error::Error::new(
+    fn shared_transport_error_preserves_proxy_system_error_response_code() {
+        let error = RocketMQError::Shared(Arc::new(rocketmq_error::Error::new(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
         )));
         let response = super::proxy_error_response(

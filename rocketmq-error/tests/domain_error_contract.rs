@@ -18,12 +18,16 @@ use std::io;
 use rocketmq_error::AuthError;
 use rocketmq_error::ControllerError;
 use rocketmq_error::DomainError;
-use rocketmq_error::ErrorKind;
+use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::SerializationError;
+use rocketmq_error::AUTH_CREDENTIALS_INVALID;
+use rocketmq_error::CONTROLLER_CONSENSUS_FAILED;
+use rocketmq_error::CORE_INTERNAL_FAILURE;
+use rocketmq_error::CORE_SERIALIZATION_FAILED;
 
-fn assert_domain_contract(error: &dyn DomainError, expected_kind: ErrorKind) {
-    assert_eq!(expected_kind, error.kind());
+fn assert_domain_contract(error: &dyn DomainError, expected_descriptor: &'static ErrorDescriptor) {
+    assert_eq!(expected_descriptor, error.descriptor());
     assert_eq!(error.code(), error.descriptor().code());
     assert_eq!(error.code(), error.boundary_view().code());
     assert_eq!(error.recovery_hint(), error.boundary_view().recovery_hint());
@@ -34,20 +38,20 @@ fn assert_domain_contract(error: &dyn DomainError, expected_kind: ErrorKind) {
 #[test]
 fn domain_errors_share_one_stable_metadata_contract() {
     let auth = AuthError::InvalidCredential("missing access key".to_owned());
-    assert_domain_contract(&auth, ErrorKind::Authentication);
+    assert_domain_contract(&auth, &AUTH_CREDENTIALS_INVALID);
 
     let controller = RocketMQError::Controller(ControllerError::Raft("append failed".to_owned()));
-    assert_domain_contract(&controller, ErrorKind::Controller);
+    assert_domain_contract(&controller, &CONTROLLER_CONSENSUS_FAILED);
 
     let serialization = SerializationError::source(
         "decode command",
         "JSON",
         io::Error::new(io::ErrorKind::InvalidData, "invalid token"),
     );
-    assert_domain_contract(&serialization, ErrorKind::Serialization);
+    assert_domain_contract(&serialization, &CORE_SERIALIZATION_FAILED);
 
     let internal = RocketMQError::internal("join request worker", io::Error::other("worker cancelled"));
-    assert_domain_contract(&internal, ErrorKind::Internal);
+    assert_domain_contract(&internal, &CORE_INTERNAL_FAILURE);
 }
 
 #[test]
@@ -80,7 +84,7 @@ fn source_preserving_variants_retain_the_original_error_chain() {
 fn invariant_failure_is_not_a_string_catch_all() {
     let error = RocketMQError::invariant_violated("request owner must outlive its worker");
 
-    assert_eq!(ErrorKind::Internal, error.kind());
+    assert_eq!(&CORE_INTERNAL_FAILURE, error.descriptor());
     assert!(error.source().is_none());
     let context = error.boundary_view().context().to_string();
     assert!(context.is_empty());

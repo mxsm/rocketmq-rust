@@ -26,6 +26,7 @@ use crate::clients::nameserver_endpoint::ConnectTarget;
 #[cfg(test)]
 use crate::config::TlsConfig;
 use crate::runtime::config::client_config::TransportClientConfig;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
@@ -41,22 +42,30 @@ use crate::admission::AdmissionController;
 use crate::admission::AdmissionLimits;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::pending_request_table::materialize_and_estimate_remoting_command_retained_bytes;
+use crate::base::pending_request_table::PendingRegistrationOutcome;
+use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::codec::remoting_command_codec::FrameLimits;
+use crate::connection::CommandSendOutcome;
 use crate::connection::Connection;
 use crate::connection::ConnectionStateHandle;
 use crate::deadline::RequestDeadline;
+use crate::dispatch::WriteProgress;
+use crate::error::RequestOperation;
+use crate::error::TransportError;
 use crate::error_helpers::connection_failed;
 use crate::error_helpers::connection_failed_for_remote;
 use crate::error_helpers::connection_failed_without_source;
 use crate::error_helpers::connection_failed_without_source_for_remote;
 use crate::error_helpers::connection_timeout_caused_by;
-use crate::error_helpers::network;
 use crate::error_helpers::response_timeout_caused_by_for_remote;
 use crate::error_helpers::TransportStage;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
+use crate::request_outcome::OutboundRequestOutcome;
+use crate::request_outcome::OutboundRequestRejection;
+use crate::request_outcome::OutboundRequestStage;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
 use crate::security::TransportSecurity;
@@ -350,12 +359,8 @@ impl<PR> Drop for TransportSession<PR> {
         }
 
         let _ = self.notify_shutdown.send(());
-        self.pending_requests.close_owner(&self.pending_request_owner, || {
-            network(connection_failed_without_source_for_remote(
-                self.peer.address().to_string(),
-                TransportStage::Closed,
-            ))
-        });
+        self.pending_requests
+            .close_owner(&self.pending_request_owner, || PendingRequestCompletion::SessionClosed);
         self.session.abort();
         self.task_lifecycle.operation.cancel();
     }
@@ -437,18 +442,22 @@ fn connect(
         )?;
         task_group
             .spawn_operation(&operation, "rocketmq.transport.client-session", session_runner)
-            .map_err(|source| network(connection_failed(TransportStage::Connect, source)))?;
+            .map_err(|source| {
+                rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Connect, source))
+            })?;
         let (channel, pending_request_owner, session) = deadline
             .timeout(connected_session)
             .await
             .map_err(|source| {
-                network(connection_timeout_caused_by(
+                rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
                     error_identity,
                     deadline.budget_millis(),
                     source,
                 ))
             })?
-            .map_err(|_| network(connection_failed_without_source(TransportStage::Closed)))?;
+            .map_err(|_| {
+                rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
+            })?;
         if let Some(tx) = tx {
             let _ = tx.send(ConnectionNetEvent::CONNECTED(channel.remote_address()));
         }
@@ -594,18 +603,21 @@ impl<PR> TransportSession<PR> {
         deadline: RequestDeadline,
     ) -> RocketMQResult<()> {
         if !self.accepting_requests.load(Ordering::Acquire) {
-            return Err(network(connection_failed_without_source_for_remote(
-                self.peer.address().to_string(),
-                TransportStage::Closed,
-            )));
+            return Err(rocketmq_error::RocketMQError::Shared(
+                connection_failed_without_source_for_remote(self.peer.address().to_string(), TransportStage::Closed),
+            ));
         }
         self.last_used_millis.store(current_millis(), Ordering::Release);
         let transport_security = &self.transport_security;
         let target = self.peer.address().to_string();
         deadline.ensure_before_send()?;
-        transport_security
-            .sign(request, Some(&self.peer))
-            .map_err(|source| network(connection_failed_for_remote(&target, TransportStage::Connect, source)))?;
+        transport_security.sign(request, Some(&self.peer)).map_err(|source| {
+            rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
+                &target,
+                TransportStage::Connect,
+                source,
+            ))
+        })?;
         deadline.ensure_before_send()
     }
 
@@ -644,47 +656,187 @@ impl<PR> TransportSession<PR> {
     ///
     /// # Returns
     ///
-    /// The `RemotingCommand` representing the response, wrapped in a `Result`. Returns an error if
-    /// the invocation fails.
+    /// Returns a response, a typed normal rejection, or a deterministic
+    /// contract failure. The caller must handle each outcome explicitly.
     ///
     /// # Errors
     ///
-    /// Returns an error when request signing or deadline validation fails, the
-    /// pending-response owner rejects the correlation, the writer cannot send
-    /// the command, the response owner closes, or the deadline expires before a
-    /// response arrives.
+    /// Returns an operational Transport failure when request signing fails, the
+    /// pending-response owner reports an operational failure, the writer fails,
+    /// or awaiting the response fails. Normal deadline, admission, cancellation,
+    /// and expected-close conditions are returned as typed rejection outcomes.
     pub async fn send_read(
         &mut self,
         mut request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<RemotingCommand> {
-        self.prepare_transport_request(&mut request, deadline)?;
-        let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
+    ) -> Result<OutboundRequestOutcome, TransportError> {
+        const REMOTE_ADDR_PRESENT: bool = true;
+
+        if !self.accepting_requests.load(Ordering::Acquire) {
+            return Ok(OutboundRequestOutcome::Rejected(
+                OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
+            ));
+        }
+        self.last_used_millis.store(current_millis(), Ordering::Release);
+        if deadline.is_expired() {
+            return Ok(OutboundRequestOutcome::Rejected(
+                OutboundRequestRejection::deadline_expired(
+                    OutboundRequestStage::BeforeWrite,
+                    deadline.budget_millis(),
+                    REMOTE_ADDR_PRESENT,
+                ),
+            ));
+        }
+        let target = self.peer.address().to_string();
+        if let Err(source) = self.transport_security.sign(&mut request, Some(&self.peer)) {
+            return Err(TransportError::request(
+                RequestOperation::BeforeHook,
+                OutboundRequestStage::BeforeWrite,
+                connection_failed_for_remote(&target, TransportStage::Connect, source),
+            ));
+        }
+        if deadline.is_expired() {
+            return Ok(OutboundRequestOutcome::Rejected(
+                OutboundRequestRejection::deadline_expired(
+                    OutboundRequestStage::BeforeWrite,
+                    deadline.budget_millis(),
+                    REMOTE_ADDR_PRESENT,
+                ),
+            ));
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
         let opaque = request.opaque();
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
-        let guard = self.pending_requests.register_for_owner_with_bytes(
+        let guard = match self.pending_requests.register_for_owner_with_bytes(
             &self.pending_request_owner,
             opaque,
             deadline,
             retained_bytes,
             tx,
-        )?;
+        ) {
+            PendingRegistrationOutcome::Registered(guard) => guard,
+            PendingRegistrationOutcome::DeadlineExpired => {
+                return Ok(OutboundRequestOutcome::Rejected(
+                    OutboundRequestRejection::deadline_expired(
+                        OutboundRequestStage::BeforeWrite,
+                        deadline.budget_millis(),
+                        REMOTE_ADDR_PRESENT,
+                    ),
+                ));
+            }
+            PendingRegistrationOutcome::QueueSaturated => {
+                return Ok(OutboundRequestOutcome::Rejected(
+                    OutboundRequestRejection::queue_saturated(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
+                ));
+            }
+            PendingRegistrationOutcome::SessionClosed => {
+                return Ok(OutboundRequestOutcome::Rejected(
+                    OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
+                ));
+            }
+            PendingRegistrationOutcome::OperationalFailure(error) => {
+                return Err(TransportError::request(
+                    RequestOperation::Register,
+                    OutboundRequestStage::BeforeWrite,
+                    error,
+                ));
+            }
+        };
 
-        self.send_prepared_transport(request, deadline).await?;
+        match self
+            .session
+            .connection()
+            .send_command_outcome_with_deadline(request, deadline, target)
+            .await
+        {
+            CommandSendOutcome::Written => {}
+            CommandSendOutcome::DeadlineExpired => {
+                return Ok(OutboundRequestOutcome::Rejected(
+                    OutboundRequestRejection::deadline_expired(
+                        OutboundRequestStage::BeforeWrite,
+                        deadline.budget_millis(),
+                        REMOTE_ADDR_PRESENT,
+                    ),
+                ));
+            }
+            CommandSendOutcome::SessionClosed => {
+                return Ok(OutboundRequestOutcome::Rejected(
+                    OutboundRequestRejection::session_closed(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
+                ));
+            }
+            CommandSendOutcome::Cancelled => {
+                return Ok(OutboundRequestOutcome::Rejected(OutboundRequestRejection::cancelled(
+                    OutboundRequestStage::BeforeWrite,
+                    REMOTE_ADDR_PRESENT,
+                )));
+            }
+            CommandSendOutcome::QueueSaturated => {
+                return Ok(OutboundRequestOutcome::Rejected(
+                    OutboundRequestRejection::queue_saturated(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
+                ));
+            }
+            CommandSendOutcome::EncodingFailed(RocketMQError::Shared(error)) => {
+                return Err(TransportError::request(
+                    RequestOperation::Write,
+                    OutboundRequestStage::BeforeWrite,
+                    error,
+                ));
+            }
+            CommandSendOutcome::EncodingFailed(source) => {
+                return Err(TransportError::request_canonicalized(
+                    RequestOperation::Write,
+                    OutboundRequestStage::BeforeWrite,
+                    source,
+                ));
+            }
+            CommandSendOutcome::OperationalFailure { progress, error } => {
+                let stage = match progress {
+                    WriteProgress::NotStarted => OutboundRequestStage::BeforeWrite,
+                    WriteProgress::PossiblyPartial => OutboundRequestStage::Writing,
+                };
+                return Err(TransportError::request(RequestOperation::Write, stage, error));
+            }
+        }
+
         match deadline.timeout(rx).await {
-            Ok(Ok(value)) => value,
-            Ok(Err(source)) => Err(network(connection_failed_for_remote(
-                self.peer.address().to_string(),
-                TransportStage::Closed,
-                source,
-            ))),
+            Ok(Ok(PendingRequestCompletion::Response(response))) => Ok(OutboundRequestOutcome::Response(response)),
+            Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => Ok(OutboundRequestOutcome::Rejected(
+                OutboundRequestRejection::deadline_expired(
+                    OutboundRequestStage::AwaitingResponse,
+                    deadline.budget_millis(),
+                    REMOTE_ADDR_PRESENT,
+                ),
+            )),
+            Ok(Ok(PendingRequestCompletion::Cancelled)) => Ok(OutboundRequestOutcome::Rejected(
+                OutboundRequestRejection::cancelled(OutboundRequestStage::AwaitingResponse, REMOTE_ADDR_PRESENT),
+            )),
+            Ok(Ok(PendingRequestCompletion::SessionClosed)) => Ok(OutboundRequestOutcome::Rejected(
+                OutboundRequestRejection::session_closed(OutboundRequestStage::AwaitingResponse, REMOTE_ADDR_PRESENT),
+            )),
+            Ok(Ok(PendingRequestCompletion::OperationalFailure(error))) => Err(TransportError::request(
+                RequestOperation::AwaitResponse,
+                OutboundRequestStage::AwaitingResponse,
+                error,
+            )),
+            Ok(Err(source)) => Err(TransportError::request(
+                RequestOperation::AwaitResponse,
+                OutboundRequestStage::AwaitingResponse,
+                connection_failed_for_remote(self.peer.address().to_string(), TransportStage::Closed, source),
+            )),
             Err(source) => {
                 let source = response_timeout_caused_by_for_remote(
                     self.peer.address().to_string(),
                     deadline.budget_millis(),
                     source,
                 );
-                Err(guard.expire_with_network(source))
+                let completion_source = Arc::clone(&source);
+                let _ = guard.expire_with_error(completion_source);
+                Err(TransportError::request(
+                    RequestOperation::AwaitResponse,
+                    OutboundRequestStage::AwaitingResponse,
+                    source,
+                ))
             }
         }
     }
@@ -694,7 +846,7 @@ impl<PR> TransportSession<PR> {
     where
         F: FnMut(),
     {
-        let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
+        let (tx, rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
         let deadline = RequestDeadline::after(timeout);
         if self.prepare_transport_request(&mut request, deadline).is_err() {
             return;
@@ -707,8 +859,11 @@ impl<PR> TransportSession<PR> {
             retained_bytes,
             tx,
         ) {
-            Ok(guard) => guard,
-            Err(_) => return,
+            PendingRegistrationOutcome::Registered(guard) => guard,
+            PendingRegistrationOutcome::DeadlineExpired
+            | PendingRegistrationOutcome::SessionClosed
+            | PendingRegistrationOutcome::QueueSaturated
+            | PendingRegistrationOutcome::OperationalFailure(_) => return,
         };
         if self.send_prepared_transport(request, deadline).await.is_err() {
             return;
@@ -720,7 +875,7 @@ impl<PR> TransportSession<PR> {
                 deadline.budget_millis(),
                 source,
             );
-            guard.expire_with_network(source);
+            guard.expire_with_error(source);
             self.retire_after_timeout().await;
         }
         func();
@@ -795,15 +950,32 @@ impl<PR> TransportSession<PR> {
         // Send all requests and collect oneshot receivers
         for mut request in requests {
             self.prepare_transport_request(&mut request, deadline)?;
-            let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
+            let (tx, rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
             let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
-            let guard = self.pending_requests.register_for_owner_with_bytes(
+            let guard = match self.pending_requests.register_for_owner_with_bytes(
                 &self.pending_request_owner,
                 request.opaque(),
                 deadline,
                 retained_bytes,
                 tx,
-            )?;
+            ) {
+                PendingRegistrationOutcome::Registered(guard) => guard,
+                PendingRegistrationOutcome::DeadlineExpired => return Err(deadline.elapsed_error()),
+                PendingRegistrationOutcome::SessionClosed => {
+                    return Err(RocketMQError::Shared(connection_failed_without_source_for_remote(
+                        self.peer.address().to_string(),
+                        TransportStage::Closed,
+                    )));
+                }
+                PendingRegistrationOutcome::QueueSaturated => {
+                    return Err(RocketMQError::Shared(crate::error_helpers::admission_queue_saturated(
+                        "pending_request",
+                    )));
+                }
+                PendingRegistrationOutcome::OperationalFailure(error) => {
+                    return Err(RocketMQError::Shared(error));
+                }
+            };
 
             self.send_prepared_transport(request, deadline).await?;
             receivers.push((guard, rx));
@@ -814,8 +986,16 @@ impl<PR> TransportSession<PR> {
         let mut timed_out = false;
         for (guard, rx) in receivers {
             let result = match deadline.timeout(rx).await {
-                Ok(Ok(value)) => value,
-                Ok(Err(source)) => Err(network(connection_failed_for_remote(
+                Ok(Ok(PendingRequestCompletion::Response(value))) => Ok(value),
+                Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => Err(deadline.elapsed_error()),
+                Ok(Ok(PendingRequestCompletion::Cancelled | PendingRequestCompletion::SessionClosed)) => {
+                    Err(RocketMQError::Shared(connection_failed_without_source_for_remote(
+                        self.peer.address().to_string(),
+                        TransportStage::Closed,
+                    )))
+                }
+                Ok(Ok(PendingRequestCompletion::OperationalFailure(error))) => Err(RocketMQError::Shared(error)),
+                Ok(Err(source)) => Err(rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
                     self.peer.address().to_string(),
                     TransportStage::Closed,
                     source,
@@ -827,7 +1007,7 @@ impl<PR> TransportSession<PR> {
                         deadline.budget_millis(),
                         source,
                     );
-                    Err(guard.expire_with_network(source))
+                    Err(RocketMQError::Shared(guard.expire_with_error(source)))
                 }
             };
             results.push(result);
@@ -879,12 +1059,8 @@ impl<PR> TransportSession<PR> {
                 "transport session close completed with an unhealthy lifecycle report",
             ));
         }
-        self.pending_requests.close_owner(&self.pending_request_owner, || {
-            network(connection_failed_without_source_for_remote(
-                self.peer.address().to_string(),
-                TransportStage::Closed,
-            ))
-        });
+        self.pending_requests
+            .close_owner(&self.pending_request_owner, || PendingRequestCompletion::SessionClosed);
         report.log_if_unhealthy();
         report
     }
@@ -920,12 +1096,8 @@ impl<PR> TransportSession<PR> {
             self.session.abort();
             let _ = self.notify_shutdown.send(());
             self.task_lifecycle.operation.cancel();
-            self.pending_requests.close_owner(&self.pending_request_owner, || {
-                network(connection_failed_without_source_for_remote(
-                    self.peer.address().to_string(),
-                    TransportStage::Closed,
-                ))
-            });
+            self.pending_requests
+                .close_owner(&self.pending_request_owner, || PendingRequestCompletion::SessionClosed);
         })
     }
 
@@ -1137,7 +1309,7 @@ mod lifecycle_tests {
         assert_eq!(results.len(), 3);
         assert!(results.iter().all(|result| matches!(
             result,
-            Err(RocketMQError::Network(source))
+            Err(RocketMQError::Shared(source))
                 if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
                     && source
                         .source()

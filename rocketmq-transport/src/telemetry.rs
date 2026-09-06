@@ -1141,16 +1141,12 @@ pub(crate) enum TransportNameServerFailoverReason {
 #[derive(Clone, Copy)]
 pub(crate) enum TransportGoAwayOutcome {
     Received,
-    RetrySuccess,
-    RetryFailed,
 }
 
 impl TransportGoAwayOutcome {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Received => "received",
-            Self::RetrySuccess => "retry_success",
-            Self::RetryFailed => "retry_failed",
         }
     }
 }

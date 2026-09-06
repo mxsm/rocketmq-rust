@@ -897,8 +897,6 @@ impl TopicQueueMappingUtils {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::ErrorKind;
-
     use super::*;
 
     #[test]
@@ -937,7 +935,7 @@ mod tests {
         let error = TopicQueueMappingUtils::check_logic_queue_mapping_item_offset(&items)
             .expect_err("negative gen should be rejected");
 
-        assert_eq!(error.kind(), ErrorKind::IllegalArgument);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -950,7 +948,7 @@ mod tests {
         )
         .expect_err("empty static topic config map should be rejected");
 
-        assert_eq!(error.kind(), ErrorKind::RouteInconsistent);
+        assert_eq!(error.descriptor(), &rocketmq_error::ROUTE_TOPIC_INCONSISTENT);
     }
 
     #[test]
@@ -986,7 +984,7 @@ mod tests {
         let error = TopicQueueMappingUtils::check_if_reuse_physical_queue(&mapping_ones)
             .expect_err("duplicate physical queue should be rejected");
 
-        assert_eq!(error.kind(), ErrorKind::RouteInconsistent);
+        assert_eq!(error.descriptor(), &rocketmq_error::ROUTE_TOPIC_INCONSISTENT);
     }
 
     #[test]
@@ -1022,7 +1020,7 @@ mod tests {
         let error = TopicQueueMappingUtils::write_to_temp(&TopicRemappingDetailWrapper::empty(), false)
             .expect_err("missing temp directory property should be rejected");
 
-        assert_eq!(error.kind(), ErrorKind::ConfigMissing);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_MISSING);
     }
 
     #[test]
@@ -1040,7 +1038,7 @@ mod tests {
         let error = TopicQueueMappingUtils::get_leader_broker(&items)
             .expect_err("leader item without broker should be rejected");
 
-        assert_eq!(error.kind(), ErrorKind::RouteInconsistent);
+        assert_eq!(error.descriptor(), &rocketmq_error::ROUTE_TOPIC_INCONSISTENT);
     }
 
     #[test]

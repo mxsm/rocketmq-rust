@@ -36,11 +36,7 @@ use rocketmq_runtime::ResourcePermit;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::deadline::RequestDeadline;
-use crate::error_helpers::admission_queue_saturated;
 use crate::error_helpers::connection_failed_without_source;
-use crate::error_helpers::network;
-use crate::error_helpers::response_timeout;
-use crate::error_helpers::response_timeout_for_remote;
 use crate::error_helpers::TransportStage;
 
 static NEXT_TABLE_ID: AtomicU64 = AtomicU64::new(1);
@@ -126,17 +122,16 @@ struct PendingRequest {
     owner: PendingRequestOwner,
     created_at: Instant,
     deadline: RequestDeadline,
-    timeout_millis: u64,
     _permit: ResourcePermit,
     completion: PendingCompletion,
 }
 
 enum PendingCompletion {
-    OneShot(tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>),
+    OneShot(tokio::sync::oneshot::Sender<PendingRequestCompletion>),
 }
 
 impl PendingCompletion {
-    fn complete(self, result: RocketMQResult<RemotingCommand>) {
+    fn complete(self, result: PendingRequestCompletion) {
         match self {
             Self::OneShot(sender) => {
                 let _ = sender.send(result);
@@ -150,6 +145,7 @@ struct PendingRequestTableInner {
     entries: DashMap<PendingRequestKey, PendingRequest>,
     next_owner: AtomicU64,
     next_reservation: AtomicU64,
+    #[cfg(test)]
     default_owner: PendingRequestOwner,
     budget: ResourceBudget,
     max_request_age: Duration,
@@ -184,6 +180,38 @@ pub struct PendingRequestUsage {
     pub rejected_bytes: usize,
 }
 
+pub(crate) enum PendingRegistrationOutcome {
+    Registered(PendingRequestGuard),
+    DeadlineExpired,
+    SessionClosed,
+    QueueSaturated,
+    OperationalFailure(SharedError),
+}
+
+pub(crate) enum PendingRequestCompletion {
+    Response(RemotingCommand),
+    DeadlineExpired,
+    Cancelled,
+    SessionClosed,
+    OperationalFailure(SharedError),
+}
+
+impl PendingRequestCompletion {
+    #[track_caller]
+    pub(crate) fn operational(error: RocketMQError) -> Self {
+        match error {
+            RocketMQError::Shared(error) => Self::OperationalFailure(error),
+            source => {
+                let descriptor = source.descriptor();
+                let context = source.context();
+                Self::OperationalFailure(Arc::new(
+                    rocketmq_error::Error::caused_by(descriptor, source).with_context(context),
+                ))
+            }
+        }
+    }
+}
+
 /// Concurrent pending request registry with connection-aware, exactly-once completion.
 #[derive(Clone)]
 pub struct PendingRequestTable {
@@ -194,6 +222,7 @@ pub struct PendingRequestTable {
 pub struct PendingRequestGuard {
     table: PendingRequestTable,
     token: Option<PendingRequestToken>,
+    #[cfg(test)]
     deadline: RequestDeadline,
 }
 
@@ -273,6 +302,7 @@ impl PendingRequestTable {
                 entries: DashMap::with_capacity(max_count),
                 next_owner: AtomicU64::new(2),
                 next_reservation: AtomicU64::new(1),
+                #[cfg(test)]
                 default_owner: PendingRequestOwner::new(table_id, 1),
                 budget,
                 max_request_age,
@@ -301,61 +331,71 @@ impl PendingRequestTable {
         )
     }
 
-    /// Compatibility adapter for callers that use a table as one connection.
-    pub fn register(
+    #[cfg(test)]
+    pub(crate) fn register(
         &self,
         opaque: i32,
         deadline: RequestDeadline,
-        sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
-    ) -> RocketMQResult<PendingRequestGuard> {
+        sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
+    ) -> PendingRegistrationOutcome {
         self.register_with_bytes(opaque, deadline, 0, sender)
     }
 
-    pub fn register_with_bytes(
+    #[cfg(test)]
+    pub(crate) fn register_with_bytes(
         &self,
         opaque: i32,
         deadline: RequestDeadline,
         retained_bytes: usize,
-        sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
-    ) -> RocketMQResult<PendingRequestGuard> {
+        sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
+    ) -> PendingRegistrationOutcome {
         self.register_for_owner_with_bytes(&self.inner.default_owner, opaque, deadline, retained_bytes, sender)
     }
 
-    pub fn register_for_owner(
+    pub(crate) fn register_for_owner(
         &self,
         owner: &PendingRequestOwner,
         opaque: i32,
         deadline: RequestDeadline,
-        sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
-    ) -> RocketMQResult<PendingRequestGuard> {
+        sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
+    ) -> PendingRegistrationOutcome {
         self.register_for_owner_with_bytes(owner, opaque, deadline, 0, sender)
     }
 
-    pub fn register_for_owner_with_bytes(
+    pub(crate) fn register_for_owner_with_bytes(
         &self,
         owner: &PendingRequestOwner,
         opaque: i32,
         deadline: RequestDeadline,
         retained_bytes: usize,
-        sender: tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>,
-    ) -> RocketMQResult<PendingRequestGuard> {
+        sender: tokio::sync::oneshot::Sender<PendingRequestCompletion>,
+    ) -> PendingRegistrationOutcome {
         let deadline = deadline.capped(self.inner.max_request_age);
-        deadline.ensure_before_send()?;
-        self.validate_owner(owner)?;
-        if !owner.accepting.load(Ordering::Acquire) {
-            return Err(network(connection_failed_without_source(TransportStage::Closed)));
+        if deadline.is_expired() {
+            return PendingRegistrationOutcome::DeadlineExpired;
         }
-        let permit = self.inner.budget.try_acquire_data(retained_bytes).map_err(|error| {
-            match error.dimension() {
-                BudgetDimension::Bytes => {
-                    self.inner.rejected_bytes.fetch_add(1, Ordering::Relaxed);
+        if owner.table_id != self.inner.table_id {
+            return PendingRegistrationOutcome::OperationalFailure(connection_failed_without_source(
+                TransportStage::Closed,
+            ));
+        }
+        if !owner.accepting.load(Ordering::Acquire) {
+            return PendingRegistrationOutcome::SessionClosed;
+        }
+        let permit = match self.inner.budget.try_acquire_data(retained_bytes) {
+            Ok(permit) => permit,
+            Err(error) => {
+                match error.dimension() {
+                    BudgetDimension::Bytes => {
+                        self.inner.rejected_bytes.fetch_add(1, Ordering::Relaxed);
+                    }
+                    BudgetDimension::Count | BudgetDimension::Rate => {
+                        self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
-                BudgetDimension::Count | BudgetDimension::Rate => {
-                    self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
-                }
+                return PendingRegistrationOutcome::QueueSaturated;
             }
-            network(admission_queue_saturated("pending_request"))
-        })?;
+        };
         let reservation = self.inner.next_reservation.fetch_add(1, Ordering::Relaxed);
         let key = PendingRequestKey {
             owner_id: owner.id,
@@ -363,13 +403,11 @@ impl PendingRequestTable {
         };
         let token = PendingRequestToken { key, reservation };
         let created_at = Instant::now();
-        let timeout_millis = deadline.budget_millis();
         let pending = PendingRequest {
             reservation,
             owner: owner.clone(),
             created_at,
             deadline,
-            timeout_millis,
             _permit: permit,
             completion: PendingCompletion::OneShot(sender),
         };
@@ -377,31 +415,32 @@ impl PendingRequestTable {
         let result = match self.inner.entries.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(pending);
-                Ok(PendingRequestGuard {
+                PendingRegistrationOutcome::Registered(PendingRequestGuard {
                     table: self.clone(),
                     token: Some(token),
+                    #[cfg(test)]
                     deadline,
                 })
             }
-            Entry::Occupied(_) => Err(network(connection_failed_without_source(TransportStage::Closed))),
-        };
-        if result.is_ok() && !owner.accepting.load(Ordering::Acquire) {
-            if let Some(pending) = self.take_token(token) {
-                pending
-                    .completion
-                    .complete(Err(network(connection_failed_without_source(TransportStage::Closed))));
+            Entry::Occupied(_) => {
+                PendingRegistrationOutcome::OperationalFailure(connection_failed_without_source(TransportStage::Closed))
             }
-            return Err(network(connection_failed_without_source(TransportStage::Closed)));
+        };
+        if matches!(&result, PendingRegistrationOutcome::Registered(_)) && !owner.accepting.load(Ordering::Acquire) {
+            if let Some(pending) = self.take_token(token) {
+                pending.completion.complete(PendingRequestCompletion::SessionClosed);
+            }
+            return PendingRegistrationOutcome::SessionClosed;
         }
         result
     }
 
-    /// Compatibility adapter for the table's default single-connection owner.
-    pub fn complete_response(&self, opaque: i32, response: RemotingCommand) -> bool {
+    #[cfg(test)]
+    pub(crate) fn complete_response(&self, opaque: i32, response: RemotingCommand) -> bool {
         self.complete_response_for_owner(&self.inner.default_owner, opaque, response)
     }
 
-    pub fn complete_response_for_owner(
+    pub(crate) fn complete_response_for_owner(
         &self,
         owner: &PendingRequestOwner,
         opaque: i32,
@@ -416,7 +455,9 @@ impl PendingRequestTable {
         }) else {
             return false;
         };
-        pending.completion.complete(Ok(response));
+        pending
+            .completion
+            .complete(PendingRequestCompletion::Response(response));
         true
     }
 
@@ -447,9 +488,9 @@ impl PendingRequestTable {
         self.inner.entries.iter().map(|entry| entry.age(now)).max()
     }
 
-    pub fn close_owner<F>(&self, owner: &PendingRequestOwner, mut cause: F) -> usize
+    pub(crate) fn close_owner<F>(&self, owner: &PendingRequestOwner, mut cause: F) -> usize
     where
-        F: FnMut() -> RocketMQError,
+        F: FnMut() -> PendingRequestCompletion,
     {
         if owner.table_id != self.inner.table_id {
             return 0;
@@ -461,7 +502,7 @@ impl PendingRequestTable {
             let Some(pending) = self.take_token(token) else {
                 continue;
             };
-            pending.completion.complete(Err(cause()));
+            pending.completion.complete(cause());
             completed += 1;
         }
         completed
@@ -503,10 +544,10 @@ impl PendingRequestTable {
         }
     }
 
-    /// Compatibility adapter that retires and completes every active owner.
-    pub fn close_all<F>(&self, mut cause: F) -> usize
+    #[cfg(test)]
+    pub(crate) fn close_all<F>(&self, mut cause: F) -> usize
     where
-        F: FnMut() -> RocketMQError,
+        F: FnMut() -> PendingRequestCompletion,
     {
         let tokens: Vec<PendingRequestToken> = self
             .inner
@@ -524,7 +565,7 @@ impl PendingRequestTable {
                 continue;
             };
             pending.owner.retire();
-            pending.completion.complete(Err(cause()));
+            pending.completion.complete(cause());
             completed += 1;
         }
         completed
@@ -532,7 +573,7 @@ impl PendingRequestTable {
 
     /// Completes every request whose registered absolute response deadline has elapsed.
     pub fn expire_due(&self, now: tokio::time::Instant) -> usize {
-        let expired: Vec<(PendingRequestToken, u64, PendingRequestOwner)> = self
+        let expired: Vec<(PendingRequestToken, PendingRequestOwner)> = self
             .inner
             .entries
             .iter()
@@ -543,36 +584,26 @@ impl PendingRequestTable {
                         key: *entry.key(),
                         reservation: entry.reservation,
                     },
-                    entry.timeout_millis,
                     entry.owner.clone(),
                 )
             })
             .collect();
         let mut completed = 0;
-        for (token, timeout_millis, owner) in expired {
+        for (token, owner) in expired {
             owner.retire();
-            if self.complete_token(token, Err(network(response_timeout(timeout_millis)))) {
+            if self.complete_token(token, PendingRequestCompletion::DeadlineExpired) {
                 completed += 1;
             }
         }
         completed
     }
 
-    #[doc(hidden)]
-    pub fn complete_token(&self, token: PendingRequestToken, result: RocketMQResult<RemotingCommand>) -> bool {
+    pub(crate) fn complete_token(&self, token: PendingRequestToken, result: PendingRequestCompletion) -> bool {
         let Some(pending) = self.take_token(token) else {
             return false;
         };
         pending.completion.complete(result);
         true
-    }
-
-    fn validate_owner(&self, owner: &PendingRequestOwner) -> RocketMQResult<()> {
-        if owner.table_id == self.inner.table_id {
-            Ok(())
-        } else {
-            Err(network(connection_failed_without_source(TransportStage::Closed)))
-        }
     }
 
     fn tokens_for_owner(&self, owner_id: u64) -> Vec<PendingRequestToken> {
@@ -616,12 +647,12 @@ impl PendingRequestGuard {
         self.token.expect("active pending request guard must have a token")
     }
 
-    #[doc(hidden)]
+    #[cfg(test)]
     pub fn deadline(&self) -> RequestDeadline {
         self.deadline
     }
 
-    pub fn complete(mut self, result: RocketMQResult<RemotingCommand>) -> bool {
+    pub(crate) fn complete(mut self, result: PendingRequestCompletion) -> bool {
         let token = self
             .token
             .take()
@@ -629,21 +660,17 @@ impl PendingRequestGuard {
         self.table.complete_token(token, result)
     }
 
-    #[doc(hidden)]
-    pub fn expire(self, addr: impl Into<String>) -> RocketMQError {
-        let source = response_timeout_for_remote(addr.into(), self.deadline.budget_millis());
-        self.expire_with_network(source)
-    }
-
-    pub(crate) fn expire_with_network(mut self, source: SharedError) -> RocketMQError {
+    pub(crate) fn expire_with_error(mut self, source: SharedError) -> SharedError {
         let token = self
             .token
             .take()
             .expect("active pending request guard must have a token");
-        let error = network(Arc::clone(&source));
+        let error = Arc::clone(&source);
         if let Some(pending) = self.table.take_token(token) {
             pending.owner.retire();
-            pending.completion.complete(Err(network(source)));
+            pending
+                .completion
+                .complete(PendingRequestCompletion::OperationalFailure(source));
         }
         error
     }
@@ -652,10 +679,7 @@ impl PendingRequestGuard {
 impl Drop for PendingRequestGuard {
     fn drop(&mut self) {
         if let Some(token) = self.token.take() {
-            self.table.complete_token(
-                token,
-                Err(network(connection_failed_without_source(TransportStage::Closed))),
-            );
+            self.table.complete_token(token, PendingRequestCompletion::Cancelled);
         }
     }
 }
@@ -702,7 +726,7 @@ mod owner_epoch_tests {
         let (sender, _receiver) = tokio::sync::oneshot::channel();
         let result = table.register_for_owner(&owner, 7, RequestDeadline::from_timeout_millis(30_000), sender);
 
-        assert!(result.is_err());
+        assert!(matches!(result, PendingRegistrationOutcome::SessionClosed));
         assert!(table.is_empty());
     }
 }

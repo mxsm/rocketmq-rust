@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn public_error_is_typed_and_never_retains_endpoint_detail() {
-        let error = sanitized_error(RocketMQError::Network(Arc::new(Error::caused_by(
+        let error = sanitized_error(RocketMQError::Shared(Arc::new(Error::caused_by(
             &TRANSPORT_CONNECTION_FAILED,
             std::io::Error::other("private-controller.internal:9878 at 10.23.45.67:10911"),
         ))));

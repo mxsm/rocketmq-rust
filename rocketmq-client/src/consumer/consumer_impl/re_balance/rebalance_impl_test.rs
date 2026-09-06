@@ -13,21 +13,132 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_model::allocation::AllocateMessageQueueAveragely;
 use rocketmq_model::common::message::message_queue::MessageQueue;
+use rocketmq_model::common::mix_all;
+use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_protocol::code::response_code::ResponseCode;
+use rocketmq_protocol::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
+use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_protocol::RemotingCommand;
+use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_transport::api::AdmissionController;
+use rocketmq_transport::api::AdmissionLimits;
+use rocketmq_transport::test_support::SessionProcessor;
+use rocketmq_transport::test_support::SessionTransportServer;
+use rocketmq_transport::test_support::SessionTransportServerConfig;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use super::RebalanceImpl;
+use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::pop_request::PopRequest;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
+use crate::factory::mq_client_instance::MQClientInstance;
+
+struct AssignmentProcessor {
+    broker_addr: std::sync::OnceLock<CheetahString>,
+    assignment_responses: Mutex<VecDeque<RemotingCommand>>,
+    assignment_requests: std::sync::atomic::AtomicUsize,
+    route_requests: std::sync::atomic::AtomicUsize,
+}
+
+impl AssignmentProcessor {
+    fn new() -> Self {
+        Self {
+            broker_addr: std::sync::OnceLock::new(),
+            assignment_responses: Mutex::new(VecDeque::new()),
+            assignment_requests: std::sync::atomic::AtomicUsize::new(0),
+            route_requests: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn route(&self) -> rocketmq_error::RocketMQResult<TopicRouteData> {
+        let broker_addr = self
+            .broker_addr
+            .get()
+            .ok_or_else(|| rocketmq_error::RocketMQError::invariant_violated("test broker address is unset"))?;
+        Ok(TopicRouteData {
+            queue_datas: vec![QueueData::new(
+                CheetahString::from_static_str("broker-a"),
+                1,
+                1,
+                rocketmq_model::common::constant::PermName::PERM_READ
+                    | rocketmq_model::common::constant::PermName::PERM_WRITE,
+                0,
+            )],
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from_static_str("cluster-a"),
+                CheetahString::from_static_str("broker-a"),
+                [(mix_all::MASTER_ID, broker_addr.clone())].into_iter().collect(),
+                None,
+            )],
+            ..Default::default()
+        })
+    }
+
+    fn push_assignment(&self, response: RemotingCommand) {
+        self.assignment_responses
+            .lock()
+            .expect("assignment response queue")
+            .push_back(response);
+    }
+
+    fn counts(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering;
+
+        (
+            self.assignment_requests.load(Ordering::SeqCst),
+            self.route_requests.load(Ordering::SeqCst),
+        )
+    }
+}
+
+impl SessionProcessor for AssignmentProcessor {
+    fn process(
+        &self,
+        request: RemotingCommand,
+    ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
+        Box::pin(async move {
+            use std::sync::atomic::Ordering;
+
+            let response = if request.code() == RequestCode::QueryAssignment.to_i32() {
+                self.assignment_requests.fetch_add(1, Ordering::SeqCst);
+                self.assignment_responses
+                    .lock()
+                    .expect("assignment response queue")
+                    .pop_front()
+                    .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("unexpected assignment request"))?
+            } else if request.code() == RequestCode::GetRouteinfoByTopic.to_i32() {
+                self.route_requests.fetch_add(1, Ordering::SeqCst);
+                RemotingCommand::create_success_response_command().set_body(self.route()?.encode()?)
+            } else {
+                return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                    "unexpected request code {}",
+                    request.code()
+                )));
+            };
+            Ok(response.set_opaque(request.opaque()))
+        })
+    }
+}
 
 struct BlockingRemovalRebalance {
     callback_started: Notify,
@@ -101,6 +212,85 @@ impl Rebalance for BlockingRemovalRebalance {
     }
 
     fn destroy(&self) {}
+}
+
+#[tokio::test]
+async fn assignment_retry_refreshes_route_once_and_reuses_the_operation_budget() {
+    let server_runtime = RuntimeContext::from_current("assignment-retry-test");
+    let processor = Arc::new(AssignmentProcessor::new());
+    let server = SessionTransportServer::bind(
+        server_runtime.service_context("assignment-server"),
+        SessionTransportServerConfig::loopback(),
+        Arc::clone(&processor) as Arc<dyn SessionProcessor>,
+        Arc::new(AdmissionController::new(AdmissionLimits::default())),
+    )
+    .await
+    .expect("bind assignment server");
+    let broker_addr = CheetahString::from_string(server.local_addr().to_string());
+    processor
+        .broker_addr
+        .set(broker_addr.clone())
+        .expect("set assignment broker address once");
+    server.start().expect("start assignment server");
+    processor.push_assignment(RemotingCommand::create_response_command_with_code_remark(
+        ResponseCode::SystemError,
+        "refresh-route",
+    ));
+    processor.push_assignment(
+        RemotingCommand::create_success_response_command().set_body(
+            QueryAssignmentResponseBody::default()
+                .encode()
+                .expect("assignment body"),
+        ),
+    );
+
+    let client_runtime = crate::runtime::test_client_runtime("assignment-retry-test");
+    let mut client_config = ClientConfig::default();
+    client_config.set_vip_channel_enabled(false);
+    let client_instance = MQClientInstance::new_arc(
+        client_config,
+        0,
+        "assignment-retry-client",
+        None,
+        client_runtime.component("instance"),
+        client_runtime.telemetry_handle().clone(),
+        client_runtime.pool().request_future_holder(),
+    );
+    let api = client_instance.get_mq_client_api_impl().expect("client API");
+    api.update_name_server_address_list_sync(broker_addr.as_str());
+    api.start().await.expect("start assignment client transport");
+    let topic = CheetahString::from_static_str("assignment-topic");
+    client_instance
+        .topic_route_table
+        .insert(topic.clone(), processor.route().expect("initial assignment route"));
+    let rebalance = RebalanceImpl::<BlockingRemovalRebalance>::new(
+        Some(CheetahString::from_static_str("assignment-group")),
+        Some(MessageModel::Clustering),
+        Some(Arc::new(AllocateMessageQueueAveragely)),
+        Some(Arc::clone(&client_instance)),
+    );
+
+    assert!(rebalance.try_query_assignment(&topic).await);
+    assert_eq!(processor.counts(), (2, 1));
+    assert!(rebalance.topic_broker_rebalance.contains_key(&topic));
+    assert!(!rebalance.topic_client_rebalance.contains_key(&topic));
+
+    client_instance.shutdown().await;
+    client_runtime
+        .shutdown()
+        .await
+        .assert_no_task_leak()
+        .expect("client runtime tasks drained");
+    server
+        .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+        .await
+        .assert_no_task_leak()
+        .expect("assignment server tasks drained");
+    server_runtime
+        .shutdown_tasks(Duration::from_secs(5))
+        .await
+        .assert_no_task_leak()
+        .expect("assignment runtime tasks drained");
 }
 
 #[tokio::test]

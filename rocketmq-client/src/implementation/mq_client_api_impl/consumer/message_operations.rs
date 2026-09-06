@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use super::*;
+use rocketmq_transport::api::OutboundRequestOutcome;
+use rocketmq_transport::api::RequestDeadline;
+
 impl MQClientAPIImpl {
     pub async fn get_max_offset(
         &self,
@@ -35,7 +38,7 @@ impl MQClientAPIImpl {
 
         let request = self.create_request_command(RequestCode::GetMaxOffset, request_header);
 
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(
                 Some(&mix_all::broker_vip_channel(
@@ -45,7 +48,20 @@ impl MQClientAPIImpl {
                 request,
                 timeout_millis,
             )
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(consumer_request_error(
+                    "get_max_offset",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(consumer_request_error("get_max_offset", RetryInput::Contract(contract)));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let response_header = response.decode_command_custom_header::<GetMaxOffsetResponseHeader>()?;
             return Ok(response_header.offset);
@@ -77,7 +93,7 @@ impl MQClientAPIImpl {
 
         let request = self.create_request_command(RequestCode::GetMinOffset, request_header);
 
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(
                 Some(&mix_all::broker_vip_channel(
@@ -87,7 +103,20 @@ impl MQClientAPIImpl {
                 request,
                 timeout_millis,
             )
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(consumer_request_error(
+                    "get_min_offset",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(consumer_request_error("get_min_offset", RetryInput::Contract(contract)));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let response_header = response.decode_command_custom_header::<GetMinOffsetResponseHeader>()?;
             return Ok(response_header.offset);
@@ -119,7 +148,7 @@ impl MQClientAPIImpl {
 
         let request = self.create_request_command(RequestCode::GetEarliestMsgStoreTime, request_header);
 
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(
                 Some(&mix_all::broker_vip_channel(
@@ -129,7 +158,23 @@ impl MQClientAPIImpl {
                 request,
                 timeout_millis,
             )
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(consumer_request_error(
+                    "get_earliest_msg_store_time",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(consumer_request_error(
+                    "get_earliest_msg_store_time",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let response_header = response.decode_command_custom_header::<GetEarliestMsgStoretimeResponseHeader>()?;
             return Ok(response_header.timestamp);
@@ -185,7 +230,7 @@ impl MQClientAPIImpl {
             }),
         };
         let request = self.create_request_command(RequestCode::SearchOffsetByTimestamp, request_header);
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(
                 Some(&mix_all::broker_vip_channel(
@@ -195,7 +240,23 @@ impl MQClientAPIImpl {
                 request,
                 timeout_millis,
             )
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(consumer_request_error(
+                    "search_offset_by_timestamp",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(consumer_request_error(
+                    "search_offset_by_timestamp",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let response_header = response.decode_command_custom_header::<SearchOffsetResponseHeader>()?;
             return Ok(response_header.offset);
@@ -237,7 +298,7 @@ impl MQClientAPIImpl {
         let request = self
             .create_remoting_command(RequestCode::SetMessageRequestMode)
             .set_body(body.encode()?);
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(
                 Some(&mix_all::broker_vip_channel(
@@ -247,7 +308,23 @@ impl MQClientAPIImpl {
                 request,
                 timeout_millis,
             )
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(consumer_request_error(
+                    "set_message_request_mode",
+                    RetryInput::Rejected(rejection),
+                ));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(consumer_request_error(
+                    "set_message_request_mode",
+                    RetryInput::Contract(contract),
+                ));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(mq_client_err!(
                 response.code(),
@@ -257,7 +334,7 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
-    pub async fn query_assignment(
+    pub(crate) async fn query_assignment(
         &self,
         addr: &CheetahString,
         topic: CheetahString,
@@ -265,8 +342,8 @@ impl MQClientAPIImpl {
         client_id: CheetahString,
         strategy_name: CheetahString,
         message_model: MessageModel,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<HashSet<MessageQueueAssignment>>> {
+        deadline: RequestDeadline,
+    ) -> Result<Option<HashSet<MessageQueueAssignment>>, RetryInput> {
         let request_body = QueryAssignmentRequestBody {
             topic,
             consumer_group,
@@ -275,17 +352,23 @@ impl MQClientAPIImpl {
             message_model,
         };
         let request = self.create_request(RequestCode::QueryAssignment, request_body.encode()?);
-        let response = self
+        let outcome = self
             .remoting_client
-            .invoke_request(
+            .invoke_request_with_deadline(
                 Some(&mix_all::broker_vip_channel(
                     self.client_config.vip_channel_enabled,
                     addr,
                 )),
                 request,
-                timeout,
+                deadline,
             )
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => return Err(RetryInput::Rejected(rejection)),
+            Ok(OutboundRequestOutcome::Contract(contract)) => return Err(RetryInput::Contract(contract)),
+            Err(error) => return Err(RetryInput::Transport(error)),
+        };
 
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let body = response.body();
@@ -298,11 +381,16 @@ impl MQClientAPIImpl {
             return Ok(None);
         }
 
-        Err(client_broker_err!(
-            response.code(),
-            response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
-        ))
+        let code = response.code();
+        Err(RetryInput::Response {
+            code,
+            retry_after: None,
+            terminal_error: client_broker_err!(
+                code,
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string()
+            ),
+        })
     }
 
     pub async fn change_invisible_time_async(
@@ -322,7 +410,7 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await
         {
-            Ok(response) => {
+            Ok(OutboundRequestOutcome::Response(response)) => {
                 let response_header = response.decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()?;
                 let ack_result = if ResponseCode::from(response.code()) == ResponseCode::Success {
                     AckResult {
@@ -354,10 +442,25 @@ impl MQClientAPIImpl {
                     .execute(async { ack_callback.on_success(ack_result) })
                     .await;
             }
-            Err(e) => {
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                let error = consumer_request_error("change_invisible_time", RetryInput::Rejected(rejection));
                 let _ = self
                     .callback_executor
-                    .execute(async { ack_callback.on_exception(e) })
+                    .execute(async { ack_callback.on_exception(error) })
+                    .await;
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                let error = consumer_request_error("change_invisible_time", RetryInput::Contract(contract));
+                let _ = self
+                    .callback_executor
+                    .execute(async { ack_callback.on_exception(error) })
+                    .await;
+            }
+            Err(error) => {
+                let error = RocketMQError::Shared(error.into_shared_error());
+                let _ = self
+                    .callback_executor
+                    .execute(async { ack_callback.on_exception(error) })
                     .await;
             }
         };
@@ -385,10 +488,20 @@ impl MQClientAPIImpl {
         let callback_executor = self.callback_executor.clone();
         let request = self.create_request_command(RequestCode::PopMessage, request_header);
         let request_task = async move {
-            let response = self
+            let outcome = self
                 .remoting_client
                 .invoke_request(Some(&addr), request, timeout_millis)
-                .await?;
+                .await;
+            let response = match outcome {
+                Ok(OutboundRequestOutcome::Response(response)) => response,
+                Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                    return Err(consumer_request_error("pop_message", RetryInput::Rejected(rejection)));
+                }
+                Ok(OutboundRequestOutcome::Contract(contract)) => {
+                    return Err(consumer_request_error("pop_message", RetryInput::Contract(contract)));
+                }
+                Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            };
             self.process_pop_response(&broker_name, response, &topic, order)
         };
         Self::spawn_pop_callback_task(
@@ -422,10 +535,26 @@ impl MQClientAPIImpl {
         let callback_executor = self.callback_executor.clone();
         let request = self.create_request_command(RequestCode::PopLiteMessage, request_header);
         let request_task = async move {
-            let response = self
+            let outcome = self
                 .remoting_client
                 .invoke_request(Some(&addr), request, timeout_millis)
-                .await?;
+                .await;
+            let response = match outcome {
+                Ok(OutboundRequestOutcome::Response(response)) => response,
+                Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                    return Err(consumer_request_error(
+                        "pop_lite_message",
+                        RetryInput::Rejected(rejection),
+                    ));
+                }
+                Ok(OutboundRequestOutcome::Contract(contract)) => {
+                    return Err(consumer_request_error(
+                        "pop_lite_message",
+                        RetryInput::Contract(contract),
+                    ));
+                }
+                Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            };
             self.process_pop_lite_response(&broker_name, response, &bind_topic)
         };
         Self::spawn_pop_callback_task(
@@ -888,10 +1017,20 @@ impl MQClientAPIImpl {
                 request_body.ok_or_else(|| mq_client_err!("BatchAckMessage request body is required".to_string()))?;
             self.create_request(RequestCode::BatchAckMessage, body.encode()?)
         };
-        let response = self
+        let outcome = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
-            .await?;
+            .await;
+        let response = match outcome {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                return Err(consumer_request_error("ack_message", RetryInput::Rejected(rejection)));
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                return Err(consumer_request_error("ack_message", RetryInput::Contract(contract)));
+            }
+            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+        };
         let response_code = ResponseCode::from(response.code());
         Ok(if response_code == ResponseCode::Success {
             AckResult {

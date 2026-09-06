@@ -266,9 +266,10 @@ mod cluster_session {
                     client_id,
                     strategy_name,
                     message_model,
-                    timeout_millis,
+                    rocketmq_transport::api::RequestDeadline::from_timeout_millis(timeout_millis),
                 )
                 .await
+                .map_err(assignment_query_error)
                 .map(|assignments| assignments.map(|items| items.into_iter().collect()))
         }
 
@@ -570,6 +571,51 @@ mod cluster_session {
 
         async fn operation(&self) -> tokio::sync::OwnedMutexGuard<()> {
             self.operation_gate.clone().lock_owned().await
+        }
+    }
+
+    fn assignment_query_error(input: crate::common::retry_policy::RetryInput) -> rocketmq_error::RocketMQError {
+        use crate::common::retry_policy::RetryInput;
+        use rocketmq_error::fields;
+        use rocketmq_error::Error;
+        use rocketmq_error::ErrorContext;
+        use rocketmq_error::RocketMQError;
+        use rocketmq_transport::api::OutboundRequestContractReason;
+        use rocketmq_transport::api::OutboundRequestRejectionReason;
+
+        match input {
+            RetryInput::Transport(error) => RocketMQError::Shared(error.into_shared_error()),
+            RetryInput::Rejected(rejection) => match rejection.reason() {
+                OutboundRequestRejectionReason::DeadlineExpired => {
+                    let mut context = ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "query_assignment");
+                    if let Some(timeout_millis) = rejection.timeout_millis() {
+                        context = context.with_u64(fields::TIMEOUT_MS, timeout_millis);
+                    }
+                    RocketMQError::Shared(Arc::new(
+                        Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
+                    ))
+                }
+                OutboundRequestRejectionReason::ClientStopping => RocketMQError::ClientNotStarted,
+                OutboundRequestRejectionReason::QueueSaturated => RocketMQError::Shared(Arc::new(Error::new(
+                    &rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED,
+                ))),
+                OutboundRequestRejectionReason::Cancelled
+                | OutboundRequestRejectionReason::SessionClosed
+                | OutboundRequestRejectionReason::EndpointUnavailable => {
+                    RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
+                }
+            },
+            RetryInput::Contract(contract) => match contract.reason() {
+                OutboundRequestContractReason::NameServerEndpointMissing => {
+                    RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
+                }
+            },
+            RetryInput::Response { terminal_error, .. } | RetryInput::BusinessError(terminal_error) => terminal_error,
+            // The query-assignment wire operation cannot construct producer send status or
+            // route-selection inputs; MQClientInstance owns route selection before this facade.
+            RetryInput::SendStatus(_) | RetryInput::RouteUnavailable => {
+                unreachable!("query-assignment API returned an unrelated retry input")
+            }
         }
     }
 

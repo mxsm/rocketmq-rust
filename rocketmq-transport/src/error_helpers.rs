@@ -66,11 +66,6 @@ fn caused_by(
     Arc::new(Error::caused_by(descriptor, source).with_context(context))
 }
 
-#[inline]
-pub(crate) fn network(error: SharedError) -> RocketMQError {
-    RocketMQError::Network(error)
-}
-
 #[track_caller]
 pub(crate) fn endpoint_invalid(remote_addr_present: bool) -> SharedError {
     let context = if remote_addr_present {
@@ -222,17 +217,6 @@ pub(crate) fn response_timeout_caused_by(
             .with_u64(rocketmq_error::fields::TIMEOUT_MS, timeout_millis)
             .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT),
         source,
-    )
-}
-
-#[track_caller]
-pub(crate) fn response_timeout_for_remote(_remote_addr: impl AsRef<str>, timeout_millis: u64) -> SharedError {
-    source_free(
-        &rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT,
-        ErrorContext::new()
-            .with_text(rocketmq_error::fields::PHASE, TransportStage::AwaitingResponse.as_str())
-            .with_u64(rocketmq_error::fields::TIMEOUT_MS, timeout_millis)
-            .with_secret_presence(rocketmq_error::fields::REMOTE_ADDR_PRESENT),
     )
 }
 

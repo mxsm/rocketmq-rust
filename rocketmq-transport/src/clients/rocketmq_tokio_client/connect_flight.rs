@@ -20,7 +20,7 @@ use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::SharedRocketMQError;
+use rocketmq_error::SharedError;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -34,11 +34,10 @@ use crate::clients::nameserver_endpoint::NameServerEndpoint;
 use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
 use crate::error_helpers::connection_timeout_caused_by;
-use crate::error_helpers::network;
 
 enum ConnectFlightState<PR> {
     Connecting,
-    Complete(Box<Result<Option<TransportSession<PR>>, SharedRocketMQError>>),
+    Complete(Box<Result<Option<TransportSession<PR>>, SharedError>>),
 }
 
 /// A shared connection attempt associated with one endpoint generation.
@@ -77,7 +76,7 @@ where
         if matches!(*state, ConnectFlightState::Complete(_)) {
             return;
         }
-        *state = ConnectFlightState::Complete(Box::new(result.map_err(SharedRocketMQError::new)));
+        *state = ConnectFlightState::Complete(Box::new(result.map_err(canonicalize_connect_failure)));
         drop(state);
         self.changed.notify_waiters();
     }
@@ -100,15 +99,27 @@ where
             tokio::pin!(changed);
             changed.as_mut().enable();
             if let ConnectFlightState::Complete(result) = &*self.state.lock() {
-                return (**result).clone().map_err(SharedRocketMQError::into_error);
+                return (**result).clone().map_err(RocketMQError::Shared);
             }
             deadline.timeout(changed).await.map_err(|source| {
-                network(connection_timeout_caused_by(
+                rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
                     target.to_string(),
                     deadline.budget_millis(),
                     source,
                 ))
             })?;
+        }
+    }
+}
+
+#[track_caller]
+fn canonicalize_connect_failure(error: RocketMQError) -> SharedError {
+    match error {
+        RocketMQError::Shared(error) => error,
+        source => {
+            let descriptor = source.descriptor();
+            let context = source.context();
+            Arc::new(rocketmq_error::Error::caused_by(descriptor, source).with_context(context))
         }
     }
 }
@@ -252,6 +263,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             let target_for_task = target.clone();
             let lease_for_task = lease.clone();
             let connect_timeout = self.tokio_client_config.connect.timeout;
+            let connection_deadline = deadline.capped(connect_timeout);
             let commit_fence = worker_owner.commit_fence();
             let spawned =
                 self.spawn_worker_task_with_owner(&worker_owner, connection_worker_task_name(&target), async move {
@@ -262,7 +274,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                             &target_for_task,
                             configured_nameserver,
                             lease_for_task,
-                            RequestDeadline::after(connect_timeout),
+                            connection_deadline,
                             &commit_fence,
                         )
                         .await;
@@ -491,13 +503,20 @@ mod tests {
     async fn assert_connect_flight_preserves_failure(error: RocketMQError) {
         const WAITERS: usize = 3;
 
-        let expected_kind = error.kind();
         let expected_context = error.context();
-        let expected_boundary = error.boundary_view();
         let expected_descriptor = error.descriptor();
         let expected_severity = error.severity();
-        let expected_display = error.to_string();
+        let expected_source_display = error.to_string();
+        let expected_canonical_display = format!(
+            "{}: {}",
+            expected_descriptor.code(),
+            expected_descriptor.public_message()
+        );
         let expected_source = error.source().map(ToString::to_string);
+        let expected_shared = match &error {
+            RocketMQError::Shared(error) => Some(Arc::clone(error)),
+            _ => None,
+        };
 
         let flight = Arc::new(ConnectFlight::<DefaultRequestProcessor>::new(None));
         let target = CheetahString::from_static_str("127.0.0.1:10911");
@@ -552,21 +571,24 @@ mod tests {
 
         let first = snapshots.first().expect("leader and waiters return snapshots");
         for snapshot in &snapshots {
-            assert_eq!(snapshot.kind(), expected_kind);
-            assert_eq!(snapshot.context(), expected_context);
-            assert_eq!(snapshot.boundary_view(), expected_boundary);
+            assert_eq!(snapshot.context(), &expected_context);
             assert_eq!(snapshot.descriptor(), expected_descriptor);
             assert_eq!(snapshot.severity(), expected_severity);
-            assert_eq!(snapshot.to_string(), expected_display);
-            assert!(std::ptr::eq(first.as_error(), snapshot.as_error()));
+            assert_eq!(snapshot.to_string(), expected_canonical_display);
+            assert!(Arc::ptr_eq(first, snapshot));
 
-            let source = snapshot.source().expect("shared error source");
-            let original = source
-                .downcast_ref::<RocketMQError>()
-                .expect("shared source must be the original error");
-            assert!(std::ptr::eq(snapshot.as_error(), original));
-            assert_eq!(source.to_string(), expected_display);
-            assert_eq!(source.source().map(ToString::to_string), expected_source);
+            if let Some(expected_shared) = expected_shared.as_ref() {
+                assert!(Arc::ptr_eq(expected_shared, snapshot));
+                assert_eq!(snapshot.source().map(ToString::to_string), expected_source);
+            } else {
+                let source = snapshot.source().expect("promoted error retains its typed source");
+                let original = source
+                    .downcast_ref::<RocketMQError>()
+                    .expect("promoted source must retain the original RocketMQ error");
+                assert_eq!(original.descriptor(), expected_descriptor);
+                assert_eq!(source.to_string(), expected_source_display);
+                assert_eq!(source.source().map(ToString::to_string), expected_source);
+            }
         }
 
         flight.complete_not_started();
@@ -580,12 +602,12 @@ mod tests {
         let RocketMQError::Shared(snapshot) = error else {
             panic!("completed flight must retain its shared error");
         };
-        assert!(std::ptr::eq(first.as_error(), snapshot.as_error()));
+        assert!(Arc::ptr_eq(first, &snapshot));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn connect_flight_shares_exact_typed_failures_with_leader_and_waiters() {
-        assert_connect_flight_preserves_failure(crate::error_helpers::network(
+        assert_connect_flight_preserves_failure(rocketmq_error::RocketMQError::Shared(
             crate::error_helpers::connection_failed_for_remote(
                 "127.0.0.1:10911",
                 crate::error_helpers::TransportStage::Connect,
@@ -616,7 +638,7 @@ mod tests {
             Err(error) => error,
             Ok(_) => panic!("an expired waiter deadline must time out"),
         };
-        assert!(matches!(timeout, RocketMQError::Network(_)));
+        assert!(matches!(timeout, RocketMQError::Shared(_)));
 
         flight.complete(Ok(None));
         assert!(flight
@@ -649,7 +671,10 @@ mod tests {
         let RocketMQError::Shared(snapshot) = error else {
             panic!("cancelled leader completion must be shared");
         };
-        assert!(matches!(snapshot.as_error(), RocketMQError::ClientNotStarted));
+        assert!(snapshot
+            .source()
+            .and_then(|source| source.downcast_ref::<RocketMQError>())
+            .is_some_and(|source| matches!(source, RocketMQError::ClientNotStarted)));
         assert_eq!(registry.flight_count(), 0);
     }
 
@@ -686,7 +711,10 @@ mod tests {
         let RocketMQError::Shared(snapshot) = error else {
             panic!("unpolled service cancellation must preserve the shared typed error");
         };
-        assert!(matches!(snapshot.as_error(), RocketMQError::ClientNotStarted));
+        assert!(snapshot
+            .source()
+            .and_then(|source| source.downcast_ref::<RocketMQError>())
+            .is_some_and(|source| matches!(source, RocketMQError::ClientNotStarted)));
         assert_eq!(registry.flight_count(), 0);
     }
 
@@ -728,7 +756,10 @@ mod tests {
         let RocketMQError::Shared(snapshot) = error else {
             panic!("aborted service completion must be shared");
         };
-        assert!(matches!(snapshot.as_error(), RocketMQError::ClientNotStarted));
+        assert!(snapshot
+            .source()
+            .and_then(|source| source.downcast_ref::<RocketMQError>())
+            .is_some_and(|source| matches!(source, RocketMQError::ClientNotStarted)));
         assert_eq!(registry.flight_count(), 0);
 
         let preserved_target = CheetahString::from_static_str("127.0.0.1:10912");

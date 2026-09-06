@@ -566,7 +566,7 @@ fn map_request_header_error(
     opaque: i32,
 ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
     match result {
-        Err(error) if error.kind() == rocketmq_error::ErrorKind::RequestHeaderError => {
+        Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
             let response = command_from_error_with_factory_and_opaque(command_factory, &error, opaque);
             BrokerResponseParts::from_command(response)?.into_handler_outcome()
         }

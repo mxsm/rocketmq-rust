@@ -391,7 +391,7 @@ mod tests {
         let error = ConsumerRunningInfo::analyze_subscription_at(BTreeMap::new(), 0)
             .expect_err("empty consumer running info should be rejected");
 
-        assert_eq!(error.kind(), rocketmq_error::ErrorKind::ResponseProcessFailed);
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
         assert!(matches!(
             error,
             RocketMQError::ResponseProcessFailed {

@@ -55,7 +55,6 @@ use crate::error_helpers::connection_failed_for_remote;
 #[cfg(feature = "tls")]
 use crate::error_helpers::connection_failed_without_source;
 #[cfg(feature = "tls")]
-use crate::error_helpers::network;
 #[cfg(feature = "tls")]
 use crate::error_helpers::TransportStage;
 
@@ -207,14 +206,19 @@ impl TlsServerRuntime {
                     build_server_acceptor(&effective)
                 })
                 .await
-                .map_err(|source| network(connection_failed(TransportStage::EndpointValidation, source)))?;
+                .map_err(|source| {
+                    rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::EndpointValidation, source))
+                })?;
             match initial {
                 Ok(initial) => acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
                     generation: 1,
                     acceptor: initial,
                 }))),
                 Err(error) if mode == TlsMode::Enforcing => {
-                    return Err(network(connection_failed(TransportStage::EndpointValidation, error)));
+                    return Err(rocketmq_error::RocketMQError::Shared(connection_failed(
+                        TransportStage::EndpointValidation,
+                        error,
+                    )));
                 }
                 Err(error) => warn!("failed to build initial TLS server acceptor: {error}"),
             }
@@ -384,7 +388,9 @@ impl TlsServerRuntime {
                 }
             })
             .await
-            .map_err(|source| network(connection_failed(TransportStage::EndpointValidation, source)))??;
+            .map_err(|source| {
+                rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::EndpointValidation, source))
+            })??;
         let previous_generation = self.active_generation();
         let Some(acceptor) = acceptor else {
             return Ok(TlsReloadReport {
@@ -393,9 +399,9 @@ impl TlsServerRuntime {
                 changed: false,
             });
         };
-        let active_generation = previous_generation
-            .checked_add(1)
-            .ok_or_else(|| network(connection_failed_without_source(TransportStage::EndpointValidation)))?;
+        let active_generation = previous_generation.checked_add(1).ok_or_else(|| {
+            rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::EndpointValidation))
+        })?;
         self.acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
             generation: active_generation,
             acceptor,
@@ -552,7 +558,7 @@ pub async fn connect_tls_stream(
         .connect(parse_server_name(server_name)?, stream)
         .await
         .map_err(|source| {
-            network(connection_failed_for_remote(
+            rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
                 server_name,
                 TransportStage::Connect,
                 source,

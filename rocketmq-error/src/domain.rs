@@ -21,7 +21,6 @@ use crate::BoundaryErrorView;
 use crate::ErrorCode;
 use crate::ErrorContext;
 use crate::ErrorDescriptor;
-use crate::ErrorKind;
 use crate::ErrorSeverity;
 use crate::Exposure;
 use crate::FilterCompileError;
@@ -42,9 +41,6 @@ use crate::CORE_SERVICE_FAILED;
 /// Boundary adapters consume [`Self::boundary_view`] and derive all identity,
 /// projection, recovery, and exposure policy from [`Self::descriptor`].
 pub trait DomainError: StdError + Send + Sync + 'static {
-    /// Returns the structural legacy error kind.
-    fn kind(&self) -> ErrorKind;
-
     /// Returns the authoritative catalog descriptor.
     fn descriptor(&self) -> &'static ErrorDescriptor;
 
@@ -84,10 +80,6 @@ pub trait DomainError: StdError + Send + Sync + 'static {
 }
 
 impl DomainError for RocketMQError {
-    fn kind(&self) -> ErrorKind {
-        RocketMQError::kind(self)
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         RocketMQError::descriptor(self)
     }
@@ -102,10 +94,6 @@ impl DomainError for RocketMQError {
 }
 
 impl DomainError for AuthError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Authentication
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         AuthError::descriptor(self)
     }
@@ -116,10 +104,6 @@ impl DomainError for AuthError {
 }
 
 impl DomainError for SerializationError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Serialization
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         SerializationError::descriptor(self)
     }
@@ -130,10 +114,6 @@ impl DomainError for SerializationError {
 }
 
 impl DomainError for ProtocolError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Protocol
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         ProtocolError::descriptor(self)
     }
@@ -144,10 +124,6 @@ impl DomainError for ProtocolError {
 }
 
 impl DomainError for RpcClientError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Rpc
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         RpcClientError::descriptor(self)
     }
@@ -158,10 +134,6 @@ impl DomainError for RpcClientError {
 }
 
 impl DomainError for FilterError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Filter
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         FilterError::descriptor(self)
     }
@@ -172,10 +144,6 @@ impl DomainError for FilterError {
 }
 
 impl DomainError for FilterCompileError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Filter
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         FilterCompileError::descriptor(self)
     }
@@ -186,10 +154,6 @@ impl DomainError for FilterCompileError {
 }
 
 impl DomainError for ObservabilityError {
-    fn kind(&self) -> ErrorKind {
-        ObservabilityError::kind(self)
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         ObservabilityError::descriptor(self)
     }
@@ -200,10 +164,6 @@ impl DomainError for ObservabilityError {
 }
 
 impl DomainError for ToolsError {
-    fn kind(&self) -> ErrorKind {
-        ToolsError::kind(self)
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         ToolsError::descriptor(self)
     }
@@ -214,10 +174,6 @@ impl DomainError for ToolsError {
 }
 
 impl DomainError for UnifiedServiceError {
-    fn kind(&self) -> ErrorKind {
-        ErrorKind::Service
-    }
-
     fn descriptor(&self) -> &'static ErrorDescriptor {
         &CORE_SERVICE_FAILED
     }

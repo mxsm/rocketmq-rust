@@ -20,7 +20,6 @@ use thiserror::Error;
 
 use crate::context::ErrorContext;
 use crate::fields;
-use crate::kind::ErrorKind;
 use crate::ErrorDescriptor;
 use crate::AUTH_PERMISSION_DENIED;
 use crate::BROKER_LOOKUP_NOT_FOUND;
@@ -282,31 +281,6 @@ impl ToolsError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::Internal {
             message: message.into(),
-        }
-    }
-
-    /// Return the closest stable logical error kind for this tools error.
-    #[inline]
-    pub const fn kind(&self) -> ErrorKind {
-        match self {
-            Self::TopicNotFound { .. } => ErrorKind::TopicNotExist,
-            Self::ClusterNotFound { .. } => ErrorKind::ClusterNotFound,
-            Self::BrokerNotFound { .. } => ErrorKind::BrokerNotFound,
-            Self::ConsumerGroupNotFound { .. } => ErrorKind::SubscriptionGroupNotExist,
-            Self::NameServerUnreachable { .. } => ErrorKind::Network,
-            Self::NameServerConfigInvalid { .. }
-            | Self::InvalidConfiguration { .. }
-            | Self::MissingRequiredField { .. } => ErrorKind::ConfigInvalidValue,
-            Self::ValidationError { .. } | Self::ValidationFailed { .. } | Self::InvalidPermission { .. } => {
-                ErrorKind::IllegalArgument
-            }
-            Self::PermissionDenied { .. } => ErrorKind::BrokerPermissionDenied,
-            Self::OperationTimeout { .. } => ErrorKind::Timeout,
-            Self::Internal { .. } => ErrorKind::Internal,
-            Self::TopicInvalid { .. } | Self::ClusterInvalid { .. } => ErrorKind::ConfigInvalidValue,
-            Self::TopicAlreadyExists { .. } | Self::BrokerOffline { .. } | Self::ConsumerOffline { .. } => {
-                ErrorKind::Tools
-            }
         }
     }
 

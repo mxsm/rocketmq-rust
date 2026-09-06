@@ -14,7 +14,6 @@
 
 use crate::context::ErrorContext;
 use crate::fields;
-use crate::kind::ErrorKind;
 use crate::ErrorDescriptor;
 use crate::OBSERVABILITY_CONFIGURATION_INVALID;
 use crate::OBSERVABILITY_FEATURE_DISABLED;
@@ -96,23 +95,6 @@ impl ObservabilityError {
             Self::MetricsShutdown(_) | Self::TracesShutdown(_) | Self::LogsShutdown(_) => {
                 &OBSERVABILITY_SHUTDOWN_FAILED
             }
-        }
-    }
-
-    /// Returns the kind.
-    pub fn kind(&self) -> ErrorKind {
-        match self {
-            Self::FeatureDisabled(_) => ErrorKind::ObservabilityFeatureDisabled,
-            Self::InvalidConfig(_) => ErrorKind::ObservabilityConfigInvalid,
-            Self::MetricsInit(_) => ErrorKind::ObservabilityMetricsInitFailed,
-            Self::TracesInit(_) => ErrorKind::ObservabilityTracesInitFailed,
-            Self::LogsInit(_) => ErrorKind::ObservabilityLogsInitFailed,
-            Self::LoggingInit(_) => ErrorKind::ObservabilityLoggingInitFailed,
-            Self::InvalidLogFilter { .. } => ErrorKind::ObservabilityLogFilterInvalid,
-            Self::SubscriberInstallFailed { .. } => ErrorKind::ObservabilitySubscriberInstallFailed,
-            Self::MetricsShutdown(_) => ErrorKind::ObservabilityMetricsShutdownFailed,
-            Self::TracesShutdown(_) => ErrorKind::ObservabilityTracesShutdownFailed,
-            Self::LogsShutdown(_) => ErrorKind::ObservabilityLogsShutdownFailed,
         }
     }
 

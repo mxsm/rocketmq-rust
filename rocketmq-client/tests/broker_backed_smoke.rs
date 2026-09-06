@@ -910,7 +910,7 @@ async fn broker_backed_producer_async_callback_smoke() -> RocketMQResult<()> {
         .take()
         .expect("async callback should store an outcome");
     let msg_id = outcome.map_err(|_| {
-        rocketmq_error::RocketMQError::Network(std::sync::Arc::new(rocketmq_error::Error::new(
+        rocketmq_error::RocketMQError::Shared(std::sync::Arc::new(rocketmq_error::Error::new(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
         )))
     })?;

@@ -32,6 +32,9 @@ use parking_lot::RwLock as ParkingLotRwLock;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rand::random;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::base::service_state::ServiceState;
 use rocketmq_model::common::compression::compression_type::CompressionType;
@@ -61,7 +64,11 @@ use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_transport::api::OutboundRequestContractReason;
+use rocketmq_transport::api::OutboundRequestRejectionReason;
+use rocketmq_transport::api::OutboundRequestStage;
 use rocketmq_transport::api::RPCHook;
+use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::RpcRequestHeader;
 use rocketmq_transport::api::TopicRequestHeader;
 use tokio::sync::watch;
@@ -76,11 +83,13 @@ use crate::base::client_options::ClientOptions;
 use crate::base::query_result::QueryResult;
 use crate::base::validators::Validators;
 use crate::common::client_error_code::ClientErrorCode;
-use crate::common::retry_decision::is_network_send_failure;
-use crate::common::retry_decision::producer_send_fault_decision;
-use crate::common::retry_decision::producer_send_retry_decision;
-use crate::common::retry_decision::retry_policy_error;
-use crate::common::retry_decision::ClientRetryDecision;
+use crate::common::retry_policy::producer_send_fault_decision;
+use crate::common::retry_policy::RetryAction;
+use crate::common::retry_policy::RetryContext;
+use crate::common::retry_policy::RetryIdempotency;
+use crate::common::retry_policy::RetryInput;
+use crate::common::retry_policy::RetryOperation;
+use crate::common::retry_policy::RetryPolicy;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::check_forbidden_context::CheckForbiddenContext;
 use crate::hook::check_forbidden_hook::CheckForbiddenHook;
@@ -248,39 +257,26 @@ where
 /// Send context - encapsulates mutable state during message sending
 struct SendContext {
     invoke_id: u64,
-    start_time: Instant,
-    timeout_ms: u64,
+    deadline: RequestDeadline,
     communication_mode: CommunicationMode,
 }
 
 impl SendContext {
-    fn new(timeout_ms: u64, communication_mode: CommunicationMode) -> Self {
+    fn new(deadline: RequestDeadline, communication_mode: CommunicationMode) -> Self {
         Self {
             invoke_id: random::<u64>(),
-            start_time: Instant::now(),
-            timeout_ms,
+            deadline,
             communication_mode,
         }
     }
 
     #[inline]
     fn elapsed(&self) -> u64 {
-        self.start_time.elapsed().as_millis() as u64
-    }
-
-    #[inline]
-    fn remaining_timeout(&self) -> u64 {
-        self.timeout_ms.saturating_sub(self.elapsed())
-    }
-
-    fn check_timeout(&self) -> rocketmq_error::RocketMQResult<()> {
-        if self.elapsed() >= self.timeout_ms {
-            return Err(rocketmq_error::RocketMQError::Timeout {
-                operation: "send_with_retry",
-                timeout_ms: self.timeout_ms,
-            });
-        }
-        Ok(())
+        self.deadline
+            .budget()
+            .saturating_sub(self.deadline.remaining())
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
     }
 }
 
@@ -296,20 +292,24 @@ impl RetryState {
     fn new(times_total: u32) -> Self {
         Self {
             times_total,
-            brokers_sent: vec![String::new(); times_total as usize],
+            brokers_sent: Vec::new(),
             last_error: None,
             last_send_result: None,
         }
     }
 
     fn record_broker(&mut self, attempt: usize, broker_name: &str) {
-        if attempt < self.brokers_sent.len() {
-            self.brokers_sent[attempt] = broker_name.to_string();
+        if attempt == self.brokers_sent.len() {
+            self.brokers_sent.push(broker_name.to_string());
         }
     }
 
     fn set_error(&mut self, error: rocketmq_error::RocketMQError) {
         self.last_error = Some(error);
+    }
+
+    fn take_last_error(&mut self) -> Option<rocketmq_error::RocketMQError> {
+        self.last_error.take()
     }
 
     fn record_send_result(&mut self, result: SendResult) {
@@ -320,7 +320,11 @@ impl RetryState {
         self.last_send_result.take()
     }
 
-    fn build_failure_error(&self, topic: &CheetahString, elapsed_ms: u128) -> rocketmq_error::RocketMQError {
+    fn take_failure_error(&mut self, topic: &CheetahString, elapsed_ms: u128) -> rocketmq_error::RocketMQError {
+        if let Some(error) = self.last_error.take() {
+            return error;
+        }
+
         let info = format!(
             "Send [{}] times, still failed, cost [{}]ms, Topic:{}, BrokersSent: {} {}",
             self.times_total,
@@ -330,26 +334,80 @@ impl RetryState {
             FAQUrl::suggest_todo(FAQUrl::SEND_MSG_FAILED)
         );
 
-        if let Some(ref err) = self.last_error {
-            let policy_error = retry_policy_error(err);
-            if matches!(
-                policy_error,
-                rocketmq_error::RocketMQError::IllegalArgument(_)
-                    | rocketmq_error::RocketMQError::Timeout { .. }
-                    | rocketmq_error::RocketMQError::BrokerOperationFailed { .. }
-            ) || is_network_send_failure(policy_error)
-            {
-                mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
-            } else {
-                // For other error types, create a new error with info
-                mq_client_err!(
-                    ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                    format!("{}: {}", info, err)
-                )
+        mq_client_err!(info)
+    }
+}
+
+pub(crate) fn producer_retry_input_error(input: RetryInput, remote_addr: Option<&CheetahString>) -> RocketMQError {
+    match input {
+        RetryInput::Transport(error) => RocketMQError::Shared(error.into_shared_error()),
+        RetryInput::Rejected(rejection) => match rejection.reason() {
+            OutboundRequestRejectionReason::DeadlineExpired => {
+                let mut context = ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "producer_send");
+                if let Some(timeout_millis) = rejection.timeout_millis() {
+                    context = context.with_u64(fields::TIMEOUT_MS, timeout_millis);
+                }
+                RocketMQError::Shared(Arc::new(
+                    Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
+                ))
             }
-        } else {
-            mq_client_err!(info)
+            OutboundRequestRejectionReason::ClientStopping => {
+                RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)))
+            }
+            OutboundRequestRejectionReason::QueueSaturated => {
+                let context = remote_addr.map_or_else(ErrorContext::new, |addr| {
+                    ErrorContext::new().with_text(fields::REMOTE_ADDR, addr.as_str())
+                });
+                RocketMQError::Shared(Arc::new(
+                    Error::new(&rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED).with_context(context),
+                ))
+            }
+            OutboundRequestRejectionReason::Cancelled => {
+                producer_connection_error(request_stage_phase(rejection.stage()), rejection.remote_addr_present())
+            }
+            OutboundRequestRejectionReason::SessionClosed => {
+                producer_connection_error("closed", rejection.remote_addr_present())
+            }
+            OutboundRequestRejectionReason::EndpointUnavailable => {
+                producer_connection_error("connect", rejection.remote_addr_present())
+            }
+        },
+        RetryInput::Contract(contract) => match contract.reason() {
+            OutboundRequestContractReason::NameServerEndpointMissing => {
+                producer_connection_error("connect", contract.remote_addr_present())
+            }
+        },
+        RetryInput::Response { terminal_error, .. } | RetryInput::BusinessError(terminal_error) => terminal_error,
+        RetryInput::SendStatus(status) => mq_client_err!(format!("Send status not OK: {status:?}")),
+        RetryInput::RouteUnavailable => {
+            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, "No route available")
         }
+    }
+}
+
+fn producer_retry_hook_error(input: &RetryInput) -> Arc<RocketMQError> {
+    match input {
+        RetryInput::Transport(error) => Arc::new(RocketMQError::Shared(Arc::clone(error.shared_error()))),
+        _ => DefaultMQProducerImpl::context_error("send failed".to_string()),
+    }
+}
+
+fn producer_connection_error(phase: &'static str, remote_addr_present: bool) -> RocketMQError {
+    let mut context = ErrorContext::new().with_text(fields::PHASE, phase);
+    if remote_addr_present {
+        context = context.with_secret_presence(fields::REMOTE_ADDR_PRESENT);
+    }
+    RocketMQError::Shared(Arc::new(
+        Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
+    ))
+}
+
+const fn request_stage_phase(stage: OutboundRequestStage) -> &'static str {
+    match stage {
+        OutboundRequestStage::BeforeWrite => "before_write",
+        OutboundRequestStage::Writing => "writing",
+        OutboundRequestStage::AwaitingResponse => "awaiting_response",
+        OutboundRequestStage::ResponseReceived => "response_received",
     }
 }
 
@@ -401,6 +459,7 @@ pub struct DefaultMQProducerImpl {
 mod hooks;
 mod lifecycle;
 mod retry;
+mod retry_action;
 mod send;
 mod transaction;
 

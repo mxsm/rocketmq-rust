@@ -12,31 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use std::error::Error as _;
 use std::sync::Arc;
 use std::sync::Barrier;
 use std::time::Duration;
 
+use super::pending_request_table::PendingRegistrationOutcome;
+use super::pending_request_table::PendingRequestCompletion;
+use super::pending_request_table::PendingRequestGuard;
 use super::pending_request_table::PendingRequestLimits;
 use super::pending_request_table::PendingRequestTable;
 use crate::deadline::RequestDeadline;
 
-fn closed_error(target: &str) -> RocketMQError {
-    crate::error_helpers::network(crate::error_helpers::connection_failed_without_source_for_remote(
-        target,
-        crate::error_helpers::TransportStage::Closed,
-    ))
+fn registered(outcome: PendingRegistrationOutcome) -> PendingRequestGuard {
+    match outcome {
+        PendingRegistrationOutcome::Registered(guard) => guard,
+        PendingRegistrationOutcome::DeadlineExpired => panic!("registration deadline expired"),
+        PendingRegistrationOutcome::SessionClosed => panic!("registration owner closed"),
+        PendingRegistrationOutcome::QueueSaturated => panic!("registration queue saturated"),
+        PendingRegistrationOutcome::OperationalFailure(_) => panic!("registration failed operationally"),
+    }
+}
+
+fn is_rejected(outcome: &PendingRegistrationOutcome) -> bool {
+    !matches!(outcome, PendingRegistrationOutcome::Registered(_))
+}
+
+fn response(completion: PendingRequestCompletion) -> RemotingCommand {
+    match completion {
+        PendingRequestCompletion::Response(response) => response,
+        PendingRequestCompletion::DeadlineExpired => panic!("request deadline expired"),
+        PendingRequestCompletion::Cancelled => panic!("request was cancelled"),
+        PendingRequestCompletion::SessionClosed => panic!("request session closed"),
+        PendingRequestCompletion::OperationalFailure(_) => panic!("request failed operationally"),
+    }
 }
 
 #[tokio::test]
 async fn response_completion_is_exactly_once_and_releases_the_reservation() {
     let table = PendingRequestTable::new();
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    let guard = table
-        .register(7, RequestDeadline::from_timeout_millis(3_000), sender)
-        .expect("first reservation should succeed");
+    let guard = registered(table.register(7, RequestDeadline::from_timeout_millis(3_000), sender));
 
     assert_eq!(table.len(), 1);
     assert!(table.complete_response(
@@ -48,7 +66,7 @@ async fn response_completion_is_exactly_once_and_releases_the_reservation() {
         RemotingCommand::create_response_command_with_code(ResponseCode::SystemError),
     ));
 
-    let response = receiver.await.expect("completion should notify the waiter").unwrap();
+    let response = response(receiver.await.expect("completion should notify the waiter"));
     assert_eq!(response.code(), ResponseCode::Success.to_i32());
     assert_eq!(table.len(), 0);
     drop(guard);
@@ -64,11 +82,11 @@ async fn expiring_ten_thousand_requests_completes_every_waiter_and_releases_ever
     let mut guards = Vec::with_capacity(REQUESTS);
     for opaque in 0..REQUESTS as i32 {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        guards.push(
-            table
-                .register(opaque, RequestDeadline::from_timeout_millis(3_000), sender)
-                .expect("unique opaque should reserve successfully"),
-        );
+        guards.push(registered(table.register(
+            opaque,
+            RequestDeadline::from_timeout_millis(3_000),
+            sender,
+        )));
         receivers.push(receiver);
     }
 
@@ -80,8 +98,7 @@ async fn expiring_ten_thousand_requests_completes_every_waiter_and_releases_ever
     for receiver in receivers {
         assert!(matches!(
             receiver.await.expect("timeout should notify every waiter"),
-            Err(RocketMQError::Network(source))
-                if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
+            PendingRequestCompletion::DeadlineExpired
         ));
     }
     drop(guards);
@@ -91,16 +108,41 @@ async fn expiring_ten_thousand_requests_completes_every_waiter_and_releases_ever
 async fn dropping_guard_completes_waiter_with_typed_cancellation() {
     let table = PendingRequestTable::new();
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    let guard = table
-        .register(41, RequestDeadline::from_timeout_millis(3_000), sender)
-        .unwrap();
+    let guard = registered(table.register(41, RequestDeadline::from_timeout_millis(3_000), sender));
 
     drop(guard);
 
     assert!(matches!(
         receiver.await.expect("drop should complete the waiter"),
-        Err(RocketMQError::Network(_))
+        PendingRequestCompletion::Cancelled
     ));
+    assert!(table.is_empty());
+}
+
+#[tokio::test]
+async fn operational_completion_reuses_the_original_canonical_error() {
+    let table = PendingRequestTable::new();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let guard = registered(table.register(42, RequestDeadline::from_timeout_millis(3_000), sender));
+    let source = crate::error_helpers::response_timeout_caused_by_for_remote(
+        "127.0.0.1:9876",
+        3_000,
+        std::io::Error::other("response wait failed"),
+    );
+
+    let returned = guard.expire_with_error(Arc::clone(&source));
+    let completed = match receiver.await.expect("operational completion") {
+        PendingRequestCompletion::OperationalFailure(error) => error,
+        _ => panic!("operational expiration must retain its canonical error"),
+    };
+
+    assert!(Arc::ptr_eq(&source, &returned));
+    assert!(Arc::ptr_eq(&source, &completed));
+    assert_eq!(completed.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());
+    assert!(completed
+        .source()
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some_and(|source| source.to_string() == "response wait failed"));
     assert!(table.is_empty());
 }
 
@@ -108,24 +150,23 @@ async fn dropping_guard_completes_waiter_with_typed_cancellation() {
 async fn retired_opaque_cannot_be_reused_by_a_late_response() {
     let table = PendingRequestTable::new();
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
-    let first = table
-        .register(9, RequestDeadline::from_timeout_millis(1), first_sender)
-        .unwrap();
+    let first = registered(table.register(9, RequestDeadline::from_timeout_millis(1), first_sender));
     assert_eq!(
         table.expire_due(tokio::time::Instant::now() + Duration::from_millis(2)),
         1
     );
     assert!(matches!(
         first_receiver.await.unwrap(),
-        Err(RocketMQError::Network(source))
-            if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
+        PendingRequestCompletion::DeadlineExpired
     ));
     drop(first);
 
     let (second_sender, _second_receiver) = tokio::sync::oneshot::channel();
-    assert!(table
-        .register(9, RequestDeadline::from_timeout_millis(3_000), second_sender)
-        .is_err());
+    assert!(is_rejected(&table.register(
+        9,
+        RequestDeadline::from_timeout_millis(3_000),
+        second_sender,
+    )));
     assert!(!table.complete_response(
         9,
         RemotingCommand::create_response_command_with_code(ResponseCode::Success),
@@ -136,20 +177,24 @@ async fn retired_opaque_cannot_be_reused_by_a_late_response() {
 async fn admission_permit_is_released_after_completion() {
     let table = PendingRequestTable::with_capacity(1);
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
-    let first = table
-        .register(1, RequestDeadline::from_timeout_millis(3_000), first_sender)
-        .unwrap();
+    let first = registered(table.register(1, RequestDeadline::from_timeout_millis(3_000), first_sender));
     let (blocked_sender, _blocked_receiver) = tokio::sync::oneshot::channel();
-    assert!(table
-        .register(2, RequestDeadline::from_timeout_millis(3_000), blocked_sender)
-        .is_err());
+    assert!(is_rejected(&table.register(
+        2,
+        RequestDeadline::from_timeout_millis(3_000),
+        blocked_sender,
+    )));
 
-    assert!(first.complete(Err(closed_error("test"))));
-    assert!(first_receiver.await.unwrap().is_err());
+    assert!(first.complete(PendingRequestCompletion::SessionClosed));
+    assert!(matches!(
+        first_receiver.await.unwrap(),
+        PendingRequestCompletion::SessionClosed
+    ));
     let (next_sender, _next_receiver) = tokio::sync::oneshot::channel();
-    assert!(table
-        .register(2, RequestDeadline::from_timeout_millis(3_000), next_sender)
-        .is_ok());
+    assert!(matches!(
+        table.register(2, RequestDeadline::from_timeout_millis(3_000), next_sender),
+        PendingRegistrationOutcome::Registered(_)
+    ));
 }
 
 #[tokio::test]
@@ -161,20 +206,20 @@ async fn close_all_completes_every_waiter_with_a_typed_cause() {
     let mut guards = Vec::with_capacity(REQUESTS);
     for opaque in 0..REQUESTS as i32 {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        guards.push(
-            table
-                .register(opaque, RequestDeadline::from_timeout_millis(3_000), sender)
-                .expect("unique opaque should reserve successfully"),
-        );
+        guards.push(registered(table.register(
+            opaque,
+            RequestDeadline::from_timeout_millis(3_000),
+            sender,
+        )));
         receivers.push(receiver);
     }
 
-    assert_eq!(table.close_all(|| closed_error("test-peer")), REQUESTS);
+    assert_eq!(table.close_all(|| PendingRequestCompletion::SessionClosed), REQUESTS);
     assert!(table.is_empty());
     for receiver in receivers {
         assert!(matches!(
             receiver.await.expect("close should notify every waiter"),
-            Err(RocketMQError::Network(_))
+            PendingRequestCompletion::SessionClosed
         ));
     }
     drop(guards);
@@ -188,27 +233,26 @@ async fn closing_one_connection_owner_does_not_complete_another_owners_request()
     let second_owner = table.new_owner();
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
     let (second_sender, mut second_receiver) = tokio::sync::oneshot::channel();
-    let first_guard = table
-        .register_for_owner(
-            &first_owner,
-            17,
-            RequestDeadline::from_timeout_millis(3_000),
-            first_sender,
-        )
-        .unwrap();
-    let second_guard = table
-        .register_for_owner(
-            &second_owner,
-            17,
-            RequestDeadline::from_timeout_millis(3_000),
-            second_sender,
-        )
-        .unwrap();
+    let first_guard = registered(table.register_for_owner(
+        &first_owner,
+        17,
+        RequestDeadline::from_timeout_millis(3_000),
+        first_sender,
+    ));
+    let second_guard = registered(table.register_for_owner(
+        &second_owner,
+        17,
+        RequestDeadline::from_timeout_millis(3_000),
+        second_sender,
+    ));
 
-    assert_eq!(table.close_owner(&first_owner, || closed_error("first-peer")), 1);
+    assert_eq!(
+        table.close_owner(&first_owner, || PendingRequestCompletion::SessionClosed),
+        1
+    );
     assert!(matches!(
         first_receiver.await.expect("first owner should be completed"),
-        Err(RocketMQError::Network(_))
+        PendingRequestCompletion::SessionClosed
     ));
     assert!(second_receiver.try_recv().is_err());
     assert_eq!(table.len(), 1);
@@ -219,7 +263,7 @@ async fn closing_one_connection_owner_does_not_complete_another_owners_request()
         RemotingCommand::create_response_command_with_code(ResponseCode::Success),
     ));
     assert_eq!(
-        second_receiver.await.unwrap().unwrap().code(),
+        response(second_receiver.await.unwrap()).code(),
         ResponseCode::Success.to_i32()
     );
     drop((first_guard, second_guard));
@@ -230,14 +274,12 @@ async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_respo
     let table = PendingRequestTable::new();
     let retired_owner = table.new_owner();
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
-    let first = table
-        .register_for_owner(
-            &retired_owner,
-            29,
-            RequestDeadline::from_timeout_millis(1),
-            first_sender,
-        )
-        .unwrap();
+    let first = registered(table.register_for_owner(
+        &retired_owner,
+        29,
+        RequestDeadline::from_timeout_millis(1),
+        first_sender,
+    ));
 
     assert_eq!(
         table.expire_due(tokio::time::Instant::now() + Duration::from_millis(2)),
@@ -245,30 +287,25 @@ async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_respo
     );
     assert!(matches!(
         first_receiver.await.unwrap(),
-        Err(RocketMQError::Network(source))
-            if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
+        PendingRequestCompletion::DeadlineExpired
     ));
     drop(first);
     let (reused_sender, _reused_receiver) = tokio::sync::oneshot::channel();
-    assert!(table
-        .register_for_owner(
-            &retired_owner,
-            29,
-            RequestDeadline::from_timeout_millis(3_000),
-            reused_sender,
-        )
-        .is_err());
+    assert!(is_rejected(&table.register_for_owner(
+        &retired_owner,
+        29,
+        RequestDeadline::from_timeout_millis(3_000),
+        reused_sender,
+    )));
 
     let rotated_owner = table.new_owner();
     let (rotated_sender, rotated_receiver) = tokio::sync::oneshot::channel();
-    let rotated = table
-        .register_for_owner(
-            &rotated_owner,
-            29,
-            RequestDeadline::from_timeout_millis(3_000),
-            rotated_sender,
-        )
-        .unwrap();
+    let rotated = registered(table.register_for_owner(
+        &rotated_owner,
+        29,
+        RequestDeadline::from_timeout_millis(3_000),
+        rotated_sender,
+    ));
     assert!(!table.complete_response_for_owner(
         &retired_owner,
         29,
@@ -280,7 +317,7 @@ async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_respo
         RemotingCommand::create_response_command_with_code(ResponseCode::Success),
     ));
     assert_eq!(
-        rotated_receiver.await.unwrap().unwrap().code(),
+        response(rotated_receiver.await.unwrap()).code(),
         ResponseCode::Success.to_i32()
     );
     drop(rotated);
@@ -295,29 +332,34 @@ async fn count_and_byte_admission_are_observable_and_released_on_every_completio
         max_request_age: Duration::from_secs(3),
     });
     let (first_sender, first_receiver) = tokio::sync::oneshot::channel();
-    let first = table
-        .register_with_bytes(1, RequestDeadline::from_timeout_millis(3_000), 6, first_sender)
-        .expect("first request fits both budgets");
+    let first = registered(table.register_with_bytes(1, RequestDeadline::from_timeout_millis(3_000), 6, first_sender));
     assert_eq!(table.usage().count, 1);
     assert_eq!(table.usage().bytes, 6);
 
     let (byte_blocked_sender, _byte_blocked_receiver) = tokio::sync::oneshot::channel();
-    assert!(table
-        .register_with_bytes(2, RequestDeadline::from_timeout_millis(3_000), 3, byte_blocked_sender,)
-        .is_err());
+    assert!(is_rejected(&table.register_with_bytes(
+        2,
+        RequestDeadline::from_timeout_millis(3_000),
+        3,
+        byte_blocked_sender,
+    )));
     assert_eq!(table.usage().rejected_bytes, 1);
 
-    assert!(first.complete(Err(closed_error("test"))));
-    assert!(first_receiver.await.unwrap().is_err());
+    assert!(first.complete(PendingRequestCompletion::SessionClosed));
+    assert!(matches!(
+        first_receiver.await.unwrap(),
+        PendingRequestCompletion::SessionClosed
+    ));
     assert_eq!(table.usage().count, 0);
     assert_eq!(table.usage().bytes, 0);
 
     let (next_sender, next_receiver) = tokio::sync::oneshot::channel();
-    let next = table
-        .register_with_bytes(2, RequestDeadline::from_timeout_millis(3_000), 8, next_sender)
-        .unwrap();
-    assert_eq!(table.close_all(|| closed_error("test")), 1);
-    assert!(next_receiver.await.unwrap().is_err());
+    let next = registered(table.register_with_bytes(2, RequestDeadline::from_timeout_millis(3_000), 8, next_sender));
+    assert_eq!(table.close_all(|| PendingRequestCompletion::SessionClosed), 1);
+    assert!(matches!(
+        next_receiver.await.unwrap(),
+        PendingRequestCompletion::SessionClosed
+    ));
     drop(next);
     assert_eq!(table.usage().count, 0);
     assert_eq!(table.usage().bytes, 0);
@@ -333,9 +375,7 @@ fn pending_request_deadline_is_capped_by_the_configured_maximum_age() {
     })
     .expect("pending request limits");
     let (sender, _receiver) = tokio::sync::oneshot::channel();
-    let guard = table
-        .register(1, RequestDeadline::from_timeout_millis(60_000), sender)
-        .expect("request should be admitted");
+    let guard = registered(table.register(1, RequestDeadline::from_timeout_millis(60_000), sender));
 
     assert_eq!(guard.deadline().budget(), Duration::from_millis(50));
     assert!(guard.deadline().remaining() <= Duration::from_millis(50));
@@ -367,7 +407,7 @@ fn close_and_registration_are_one_atomic_owner_epoch() {
     let close_barrier = barrier.clone();
     let closing = std::thread::spawn(move || {
         close_barrier.wait();
-        close_table.close_owner(&close_owner, || closed_error("race"))
+        close_table.close_owner(&close_owner, || PendingRequestCompletion::SessionClosed)
     });
 
     barrier.wait();
@@ -376,7 +416,13 @@ fn close_and_registration_are_one_atomic_owner_epoch() {
         .into_iter()
         .filter_map(|registration| {
             let (result, receiver) = registration.join().unwrap();
-            result.ok().map(|guard| (guard, receiver))
+            match result {
+                PendingRegistrationOutcome::Registered(guard) => Some((guard, receiver)),
+                PendingRegistrationOutcome::DeadlineExpired
+                | PendingRegistrationOutcome::SessionClosed
+                | PendingRegistrationOutcome::QueueSaturated
+                | PendingRegistrationOutcome::OperationalFailure(_) => None,
+            }
         })
         .collect::<Vec<_>>();
 
@@ -398,15 +444,18 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
         let table = PendingRequestTable::new();
         let owner = table.new_owner();
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let guard = table
-            .register_for_owner(&owner, opaque, RequestDeadline::from_timeout_millis(30_000), sender)
-            .expect("request should be admitted");
+        let guard =
+            registered(table.register_for_owner(&owner, opaque, RequestDeadline::from_timeout_millis(30_000), sender));
         let barrier = Arc::new(Barrier::new(4));
 
         let expire_barrier = Arc::clone(&barrier);
         let expiration = std::thread::spawn(move || {
             expire_barrier.wait();
-            guard.expire("race")
+            guard.expire_with_error(crate::error_helpers::response_timeout_caused_by_for_remote(
+                "race",
+                30_000,
+                std::io::Error::other("elapsed"),
+            ))
         });
 
         let response_table = table.clone();
@@ -426,7 +475,7 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
         let disconnect_barrier = Arc::clone(&barrier);
         let disconnect = std::thread::spawn(move || {
             disconnect_barrier.wait();
-            disconnect_table.close_owner(&disconnect_owner, || closed_error("race"))
+            disconnect_table.close_owner(&disconnect_owner, || PendingRequestCompletion::SessionClosed)
         });
 
         barrier.wait();
@@ -438,20 +487,25 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
             .expect("one contender must complete the waiter");
 
         match result {
-            Ok(command) => {
+            PendingRequestCompletion::Response(command) => {
                 assert!(response_won);
                 assert_eq!(command.code(), ResponseCode::Success.to_i32());
                 assert_eq!(disconnected, 0);
             }
-            Err(RocketMQError::Network(source))
+            PendingRequestCompletion::OperationalFailure(source)
                 if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code() =>
             {
                 assert!(!response_won);
                 assert_eq!(disconnected, 0);
             }
-            Err(_) => {
+            PendingRequestCompletion::SessionClosed => {
                 assert!(!response_won);
                 assert_eq!(disconnected, 1);
+            }
+            PendingRequestCompletion::DeadlineExpired
+            | PendingRequestCompletion::Cancelled
+            | PendingRequestCompletion::OperationalFailure(_) => {
+                panic!("race returned an unrelated pending completion")
             }
         }
         assert!(table.is_empty());
@@ -460,13 +514,11 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
         assert_eq!(table.usage().bytes, 0);
 
         let (next_sender, _next_receiver) = tokio::sync::oneshot::channel();
-        assert!(table
-            .register_for_owner(
-                &owner,
-                opaque,
-                RequestDeadline::from_timeout_millis(30_000),
-                next_sender,
-            )
-            .is_err());
+        assert!(is_rejected(&table.register_for_owner(
+            &owner,
+            opaque,
+            RequestDeadline::from_timeout_millis(30_000),
+            next_sender,
+        )));
     }
 }

@@ -1098,7 +1098,6 @@ pub async fn run_trace_worker_lifecycle_probe(service_context: ChildServiceConte
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rocketmq_error::ErrorKind;
 
     fn test_runtime() -> Arc<ClientRuntime> {
         crate::runtime::test_client_runtime("async-trace-dispatcher-test")
@@ -1109,25 +1108,28 @@ mod tests {
     }
 
     #[test]
-    fn trace_dispatcher_interrupted_uses_service_error_kind() {
+    fn trace_dispatcher_interrupted_uses_service_descriptor() {
         let error = trace_dispatcher_interrupted("worker is stopped");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
+        assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
     }
 
     #[test]
-    fn trace_dispatcher_flush_timeout_uses_timeout_error_kind() {
+    fn trace_dispatcher_flush_timeout_uses_timeout_descriptor() {
         let error = trace_dispatcher_flush_timeout();
 
-        assert_eq!(error.kind(), ErrorKind::Timeout);
+        assert_eq!(
+            error.descriptor().code(),
+            rocketmq_error::CORE_OPERATION_TIMED_OUT.code()
+        );
         assert!(error.to_string().contains("trace_dispatcher_flush"));
     }
 
     #[test]
-    fn trace_dispatcher_startup_failed_uses_service_error_kind() {
+    fn trace_dispatcher_startup_failed_uses_service_descriptor() {
         let error = trace_dispatcher_startup_failed("rocketmq-client-trace-test", "task group closed");
 
-        assert_eq!(error.kind(), ErrorKind::Service);
+        assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
         assert!(error.to_string().contains("rocketmq-client-trace-test"));
     }
 

@@ -172,7 +172,6 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
 
-    use rocketmq_error::ErrorKind;
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
 
     use super::*;
@@ -213,7 +212,7 @@ mod tests {
         let error =
             BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, "DefaultCluster").unwrap_err();
 
-        assert_eq!(error.kind(), ErrorKind::ConfigInvalidValue);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
     }
 
     #[test]
@@ -222,7 +221,7 @@ mod tests {
         let error =
             BrokerAddressResolver::fetch_master_addr_by_broker_name(&cluster_info, "missing-broker").unwrap_err();
 
-        assert_eq!(error.kind(), ErrorKind::BrokerNotFound);
+        assert_eq!(error.descriptor(), &rocketmq_error::BROKER_LOOKUP_NOT_FOUND);
     }
 
     #[test]

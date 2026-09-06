@@ -50,6 +50,12 @@ use crate::runtime::spawn_client_task_with_context;
 use cheetah_string::CheetahString;
 
 use crate::base::validators::Validators;
+use crate::common::retry_policy::RetryAction;
+use crate::common::retry_policy::RetryContext;
+use crate::common::retry_policy::RetryIdempotency;
+use crate::common::retry_policy::RetryInput;
+use crate::common::retry_policy::RetryOperation;
+use crate::common::retry_policy::RetryPolicy;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
@@ -260,7 +266,9 @@ use rocketmq_transport::api::ConnectionNetEvent;
 use rocketmq_transport::api::DefaultTopAddressing;
 use rocketmq_transport::api::HeartbeatV2Result;
 use rocketmq_transport::api::NameServerUpdateCallback;
+use rocketmq_transport::api::OutboundRequestOutcome;
 use rocketmq_transport::api::RemotingClient;
+use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::TopAddressing;
 
 use rocketmq_model::common::boundary_type::BoundaryType;
@@ -425,15 +433,19 @@ mod admin;
 mod callback_executor;
 mod consumer;
 mod producer;
+mod producer_client;
+mod producer_retry;
 mod request_builder;
 mod response_decoder;
 mod route;
+mod route_error;
 mod transaction;
 mod transport;
+mod transport_error;
 
 pub use admin::AdminClient;
 pub use consumer::ConsumerClient;
-pub use producer::ProducerClient;
+pub use producer_client::ProducerClient;
 pub use route::RouteClient;
 pub use transaction::TransactionClient;
 

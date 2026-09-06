@@ -40,8 +40,9 @@
 //! assert_eq!(error.code().as_str(), "runtime.io.failed");
 //! ```
 //!
-//! The public `RocketMQError` and related spec types remain available only for
-//! domains that have not yet migrated to the canonical envelope.
+//! [`RocketMQError`] remains the workspace-wide domain facade. Its `Shared`
+//! variant carries a canonical [`SharedError`], while retained domain enums
+//! preserve their explicitly owned variants and descriptor projections.
 
 mod auth_error;
 mod boundary;
@@ -54,11 +55,9 @@ mod domain;
 mod error;
 mod field;
 mod filter_error;
-mod kind;
 mod observability_error;
 mod projection;
 mod recovery;
-mod shared;
 mod unified;
 mod view;
 
@@ -112,12 +111,10 @@ pub use filter_error::FilterCompileErrorKind;
 pub use filter_error::FilterCompileSource;
 pub use filter_error::FilterCompileStage;
 pub use filter_error::FilterError;
-pub use kind::ErrorKind;
 pub use observability_error::ObservabilityError;
 pub use projection::ProjectionSpec;
 pub use recovery::CanonicalCondition;
 pub use recovery::RecoveryHint;
-pub use shared::SharedRocketMQError;
 pub use unified::AuthError;
 pub use unified::ProtocolError;
 pub use unified::RocketMQError;

@@ -1592,7 +1592,7 @@ mod tests {
             .with_text(rocketmq_error::fields::PHASE, "connect")
             .with_secret_presence(rocketmq_error::fields::REMOTE_ADDR_PRESENT)
             .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT);
-        RocketMQError::Network(std::sync::Arc::new(
+        RocketMQError::Shared(std::sync::Arc::new(
             rocketmq_error::Error::caused_by(
                 &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
                 std::io::Error::other(message),

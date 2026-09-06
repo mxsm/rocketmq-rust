@@ -197,7 +197,7 @@ impl KVConfigManager {
             load_config_table_with(config_path, |path| std::fs::read_to_string(path)).inspect_err(|error| {
                 error!(
                     path = %config_path.display(),
-                    error_kind = ?error.kind(),
+                    error_code = %error.descriptor().code(),
                     "Failed to load KV config"
                 );
             })?;

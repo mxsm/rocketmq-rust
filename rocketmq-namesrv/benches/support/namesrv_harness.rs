@@ -212,6 +212,7 @@ pub(crate) mod network {
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_transport::api::DefaultRequestProcessor;
+    use rocketmq_transport::api::OutboundRequestOutcome;
     use rocketmq_transport::api::ServerConfig;
     use rocketmq_transport::api::TransportClient;
     use rocketmq_transport::api::TransportClientConfig;
@@ -504,10 +505,19 @@ pub(crate) mod network {
 
         async fn invoke(&self, client_index: usize, request: RemotingCommand) -> Result<RemotingCommand> {
             let request = request.set_opaque(self.next_opaque.fetch_add(1, Ordering::Relaxed));
-            self.clients[client_index % self.clients.len()]
+            let outcome = self.clients[client_index % self.clients.len()]
                 .invoke_request(Some(&self.endpoint), request, REQUEST_TIMEOUT_MILLIS)
                 .await
-                .context("execute route benchmark request")
+                .context("execute route benchmark request")?;
+            match outcome {
+                OutboundRequestOutcome::Response(response) => Ok(response),
+                OutboundRequestOutcome::Rejected(rejection) => {
+                    bail!("route benchmark request was rejected: {rejection:?}")
+                }
+                OutboundRequestOutcome::Contract(contract) => {
+                    bail!("route benchmark request contract failed: {contract:?}")
+                }
+            }
         }
 
         fn route_request(&self, entry: WorkloadTraceEntry) -> RemotingCommand {

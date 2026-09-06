@@ -464,8 +464,8 @@ impl WriterReceivers {
         while let Ok(close) = self.close.try_recv() {
             let error = failure
                 .clone()
-                .into_network()
-                .unwrap_or(RocketMQError::ClientShuttingDown);
+                .into_shared_error()
+                .map_or(RocketMQError::ClientShuttingDown, RocketMQError::Shared);
             let _ = close.completion.send(Err(error));
         }
     }
@@ -524,15 +524,15 @@ pub(crate) async fn run_session_writer(
                         if let Some(close) = close_during_batch.take() {
                             let error = failure
                                 .clone()
-                                .into_network()
-                                .unwrap_or(RocketMQError::ClientShuttingDown);
+                                .into_shared_error()
+                                .map_or(RocketMQError::ClientShuttingDown, RocketMQError::Shared);
                             let _ = close.completion.send(Err(error));
                         }
                         if let Some(close) = closing.take() {
                             let error = failure
                                 .clone()
-                                .into_network()
-                                .unwrap_or(RocketMQError::ClientShuttingDown);
+                                .into_shared_error()
+                                .map_or(RocketMQError::ClientShuttingDown, RocketMQError::Shared);
                             let _ = close.completion.send(Err(error));
                         }
                         let _ = state.send(ConnectionState::Closed);

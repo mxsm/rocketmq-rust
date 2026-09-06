@@ -182,8 +182,8 @@ async fn blocked_socket_write_uses_the_original_deadline() {
         .expect("send task")
         .expect_err("blocked socket write must time out");
 
-    let RocketMQError::Network(source) = error else {
-        panic!("blocked write must use the canonical Network carrier")
+    let RocketMQError::Shared(source) = error else {
+        panic!("blocked write must use the canonical Shared carrier")
     };
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
     assert_eq!(
@@ -239,8 +239,8 @@ async fn full_outbound_admission_returns_queue_full_without_extending_deadline()
         .await
         .expect_err("full admission must reject immediately");
 
-    let RocketMQError::Network(source) = error else {
-        panic!("queue rejection must use the canonical Network carrier")
+    let RocketMQError::Shared(source) = error else {
+        panic!("queue rejection must use the canonical Shared carrier")
     };
     assert_eq!(
         source.code(),
@@ -352,8 +352,8 @@ async fn missing_response_uses_the_same_absolute_response_deadline() {
         Err(error) => error,
     };
 
-    let RocketMQError::Network(source) = error else {
-        panic!("response timeout must use the canonical Network carrier")
+    let RocketMQError::Shared(source) = error else {
+        panic!("response timeout must use the canonical Shared carrier")
     };
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());
     assert_eq!(

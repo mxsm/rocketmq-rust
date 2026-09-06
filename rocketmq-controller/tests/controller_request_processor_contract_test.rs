@@ -38,6 +38,7 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_transport::api::DefaultRequestProcessor;
+use rocketmq_transport::api::OutboundRequestOutcome;
 use rocketmq_transport::api::RemotingClient;
 use rocketmq_transport::api::TransportClientConfig;
 use tokio::time::sleep;
@@ -131,12 +132,21 @@ impl ProcessorHarness {
     async fn send(&mut self, mut request: RemotingCommand) -> RemotingCommand {
         request.make_custom_header_to_net();
         let endpoint = CheetahString::from_string(self.remoting_addr.to_string());
-        let mut response = self
+        let mut response = match self
             .client
             .transport_client()
             .invoke_request(Some(&endpoint), request, 5_000)
             .await
-            .expect("processor request should succeed");
+        {
+            Ok(OutboundRequestOutcome::Response(response)) => response,
+            Ok(OutboundRequestOutcome::Rejected(rejection)) => {
+                panic!("Controller processor request was rejected: {rejection:?}")
+            }
+            Ok(OutboundRequestOutcome::Contract(contract)) => {
+                panic!("Controller processor request contract failed: {contract:?}")
+            }
+            Err(error) => panic!("Controller processor request failed: {error:?}"),
+        };
         response.make_custom_header_to_net();
         response
     }

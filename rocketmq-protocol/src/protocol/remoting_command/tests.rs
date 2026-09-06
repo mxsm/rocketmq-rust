@@ -520,7 +520,7 @@ fn typed_dynamic_conflict_fails_json_and_rocketmq_with_full_rollback() {
 
         let error = command.try_fast_header_encode(&mut destination).unwrap_err();
 
-        assert_eq!(error.kind(), rocketmq_error::ErrorKind::RequestHeaderError);
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID);
         assert_eq!(destination.as_ref(), b"prefix");
         assert_eq!(
             command
@@ -1040,13 +1040,17 @@ fn required_header_decode_maps_missing_malformed_and_overflow_to_typed_error() {
         let standard = command
             .decode_required_header::<TestCustomHeader>("decode test header")
             .expect_err(case);
-        assert_eq!(standard.kind(), rocketmq_error::ErrorKind::RequestHeaderError, "{case}");
+        assert_eq!(
+            standard.descriptor(),
+            &rocketmq_error::PROTOCOL_HEADER_INVALID,
+            "{case}"
+        );
         assert!(std::error::Error::source(&standard).is_some(), "{case}");
 
         let fast = command
             .decode_required_header_fast::<TestCustomHeader>("decode test header")
             .expect_err(case);
-        assert_eq!(fast.kind(), rocketmq_error::ErrorKind::RequestHeaderError, "{case}");
+        assert_eq!(fast.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID, "{case}");
         assert!(std::error::Error::source(&fast).is_some(), "{case}");
     }
 }

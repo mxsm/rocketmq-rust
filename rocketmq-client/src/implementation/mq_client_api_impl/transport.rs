@@ -182,9 +182,11 @@ impl MQClientAPIImpl {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> RocketMQResult<RemotingCommand> {
-        self.remoting_client
-            .invoke_request(Some(broker_addr), request, timeout_millis)
-            .await
+        super::transport_error::direct_invoke_result(
+            self.remoting_client
+                .invoke_request(Some(broker_addr), request, timeout_millis)
+                .await,
+        )
     }
     pub async fn invoke_oneway(
         &self,

@@ -29,33 +29,72 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync,
     {
-        let retry_times = Self::get_retry_times(runtime, ctx.communication_mode);
-        let mut retry_state = RetryState::new(retry_times);
+        let max_attempts = Self::get_retry_times(runtime, ctx.communication_mode);
+        let mut retry_state = RetryState::new(max_attempts);
         let mut last_broker_name: Option<CheetahString> = None;
+        let mut current_publish_info = topic_publish_info.clone();
+        let mut queued_retry_queue: Option<MessageQueue> = None;
 
-        for attempt in 0..retry_times {
-            let reset_index = attempt > 0;
+        for attempt_index in 0..max_attempts {
+            if ctx.deadline.is_expired() {
+                return Err(retry_state
+                    .take_last_error()
+                    .unwrap_or_else(|| rocketmq_error::RocketMQError::Timeout {
+                        operation: "send_with_retry",
+                        timeout_ms: ctx.deadline.budget_millis(),
+                    }));
+            }
+
+            let attempt = attempt_index.saturating_add(1);
+            let reset_index = attempt_index > 0;
 
             // Select message queue
-            let mq = match self.select_one_message_queue(topic_publish_info, last_broker_name.as_ref(), reset_index) {
-                Some(mq) => mq,
-                None => break,
+            let mq = match self
+                .select_or_refresh_route_for_attempt(
+                    &mut queued_retry_queue,
+                    topic,
+                    &mut current_publish_info,
+                    last_broker_name.as_ref(),
+                    reset_index,
+                    runtime.producer_config.as_ref(),
+                    ctx.deadline,
+                )
+                .await
+            {
+                Ok(mq) => mq,
+                Err(input) => {
+                    self.apply_route_refresh_failure_policy(
+                        input,
+                        &ctx,
+                        attempt,
+                        max_attempts,
+                        topic,
+                        &mut retry_state,
+                    )
+                    .await?;
+                    continue;
+                }
             };
 
-            retry_state.record_broker(attempt as usize, mq.broker_name());
+            retry_state.record_broker(attempt_index as usize, mq.broker_name());
             last_broker_name = Some(mq.broker_name().clone());
 
             // Prepare message for retry
-            if attempt > 0 {
+            if attempt_index > 0 {
                 Self::prepare_message_for_retry(runtime, msg, topic);
             }
 
-            // Check timeout
-            ctx.check_timeout()?;
+            if ctx.deadline.is_expired() {
+                return Err(retry_state
+                    .take_last_error()
+                    .unwrap_or_else(|| rocketmq_error::RocketMQError::Timeout {
+                        operation: "send_with_retry",
+                        timeout_ms: ctx.deadline.budget_millis(),
+                    }));
+            }
 
             // Send to broker
-            let remaining_timeout = ctx.remaining_timeout();
-            let request_timeout = Self::send_timeout_for_attempt(runtime, remaining_timeout, attempt, retry_times);
+            let attempt_deadline = Self::send_deadline_for_attempt(runtime, ctx.deadline, attempt, max_attempts);
             let send_start = Instant::now();
             let result = self
                 .send_kernel_impl_with_runtime(
@@ -63,8 +102,8 @@ impl DefaultMQProducerImpl {
                     &mq,
                     ctx.communication_mode,
                     send_callback.clone(),
-                    Some(topic_publish_info),
-                    request_timeout,
+                    Some(&current_publish_info),
+                    attempt_deadline,
                     runtime,
                 )
                 .await;
@@ -76,28 +115,79 @@ impl DefaultMQProducerImpl {
                     // Update fault item - success
                     self.update_fault_item(mq.broker_name(), elapsed, false, true).await;
 
-                    // Check if need to retry based on send status
-                    if Self::should_retry_on_result(runtime, &result, ctx.communication_mode) {
-                        if let Some(result) = result {
-                            retry_state.record_send_result(result);
+                    let Some(send_result) = result else {
+                        return Ok(None);
+                    };
+                    let input = RetryInput::SendStatus(send_result.send_status);
+                    let action = RetryPolicy::decide(Self::retry_context(runtime, &ctx, attempt, max_attempts), &input);
+                    if action == RetryAction::Stop {
+                        return Ok(Some(send_result));
+                    }
+                    retry_state.record_send_result(send_result);
+                    retry_state.set_error(producer_retry_input_error(input, None));
+                    let completed = Self::execute_producer_retry_action(
+                        self,
+                        action,
+                        &ctx,
+                        topic,
+                        &mut current_publish_info,
+                        &mq,
+                        &mut queued_retry_queue,
+                    )
+                    .await;
+                    match completed {
+                        Ok(true) => {}
+                        Ok(false) => return Ok(retry_state.take_last_send_result()),
+                        Err(input) => {
+                            self.apply_route_refresh_failure_policy(
+                                input,
+                                &ctx,
+                                attempt,
+                                max_attempts,
+                                topic,
+                                &mut retry_state,
+                            )
+                            .await?;
                         }
-                        retry_state.set_error(mq_client_err!("Send status not OK"));
-                        continue;
                     }
-
-                    return Ok(result);
                 }
-                Err(e) => {
-                    let retry_decision = Self::retry_decision_on_error(runtime, &e);
-
+                Err(input) => {
                     // Handle send error
-                    self.handle_send_error(&mq, &e, elapsed, ctx.invoke_id).await;
+                    self.handle_send_error(&mq, &input, elapsed, ctx.invoke_id).await;
 
-                    if !retry_decision.should_retry() {
-                        return Err(e);
+                    let action = RetryPolicy::decide(Self::retry_context(runtime, &ctx, attempt, max_attempts), &input);
+                    let error = producer_retry_input_error(input, None);
+                    if action == RetryAction::Stop {
+                        return Err(error);
                     }
-
-                    retry_state.set_error(e);
+                    retry_state.set_error(error);
+                    let completed = Self::execute_producer_retry_action(
+                        self,
+                        action,
+                        &ctx,
+                        topic,
+                        &mut current_publish_info,
+                        &mq,
+                        &mut queued_retry_queue,
+                    )
+                    .await;
+                    match completed {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Err(retry_state.take_failure_error(topic, ctx.elapsed() as u128));
+                        }
+                        Err(input) => {
+                            self.apply_route_refresh_failure_policy(
+                                input,
+                                &ctx,
+                                attempt,
+                                max_attempts,
+                                topic,
+                                &mut retry_state,
+                            )
+                            .await?;
+                        }
+                    }
                 }
             }
         }
@@ -107,32 +197,32 @@ impl DefaultMQProducerImpl {
             return Ok(Some(send_result));
         }
 
-        Err(retry_state.build_failure_error(topic, ctx.elapsed() as u128))
+        Err(retry_state.take_failure_error(topic, ctx.elapsed() as u128))
     }
 
     /// Get retry times based on communication mode
     #[inline]
     pub(super) fn get_retry_times(runtime: &ProducerRuntimeSnapshot, mode: CommunicationMode) -> u32 {
         match mode {
-            CommunicationMode::Sync => runtime.producer_config.retry_times_when_send_failed() + 1,
+            CommunicationMode::Sync => runtime.producer_config.retry_times_when_send_failed().saturating_add(1),
             CommunicationMode::Async | CommunicationMode::Oneway => 1,
         }
     }
 
     #[inline]
-    pub(super) fn send_timeout_for_attempt(
+    pub(super) fn send_deadline_for_attempt(
         runtime: &ProducerRuntimeSnapshot,
-        remaining_timeout: u64,
+        deadline: RequestDeadline,
         attempt: u32,
         retry_times: u32,
-    ) -> u64 {
-        let can_retry_again = attempt < retry_times.saturating_sub(1);
+    ) -> RequestDeadline {
+        let can_retry_again = attempt < retry_times;
         if can_retry_again {
             if let Some(max_timeout_per_request) = runtime.producer_config.send_msg_max_timeout_per_request() {
-                return remaining_timeout.min(max_timeout_per_request as u64);
+                return deadline.capped(Duration::from_millis(max_timeout_per_request as u64));
             }
         }
-        remaining_timeout
+        deadline
     }
 
     /// Prepare message for retry (reset topic with namespace)
@@ -143,70 +233,5 @@ impl DefaultMQProducerImpl {
     ) {
         let namespace = runtime.client_config.resolved_namespace().unwrap_or_default();
         msg.set_topic(NamespaceUtil::wrap_namespace(namespace, topic));
-    }
-
-    /// Handle send error - update fault item and log
-    pub(super) async fn handle_send_error(
-        &self,
-        mq: &MessageQueue,
-        error: &rocketmq_error::RocketMQError,
-        elapsed: u64,
-        invoke_id: u64,
-    ) {
-        let broker_name = mq.broker_name();
-
-        let detector_enabled = self.mq_fault_strategy.read().is_start_detector_enable();
-        let Some(fault_decision) = producer_send_fault_decision(error, detector_enabled) else {
-            return;
-        };
-
-        self.update_fault_item(broker_name, elapsed, fault_decision.isolation, fault_decision.reachable)
-            .await;
-
-        if fault_decision.log_resend_immediately {
-            warn!(
-                "sendKernelImpl exception, resend at once, InvokeID: {}, RT: {}ms, Broker: {:?}, {}",
-                invoke_id, elapsed, mq, error
-            );
-        }
-    }
-
-    /// Build retry decision for producer send failures.
-    #[inline]
-    pub(super) fn retry_decision_on_error(
-        runtime: &ProducerRuntimeSnapshot,
-        error: &RocketMQError,
-    ) -> ClientRetryDecision {
-        producer_send_retry_decision(error, runtime.producer_config.retry_response_codes())
-    }
-
-    /// Check if should retry based on send result
-    #[inline]
-    pub(super) fn should_retry_on_result(
-        runtime: &ProducerRuntimeSnapshot,
-        result: &Option<SendResult>,
-        mode: CommunicationMode,
-    ) -> bool {
-        if mode != CommunicationMode::Sync {
-            return false;
-        }
-
-        result.as_ref().is_some_and(|r| {
-            r.send_status != SendStatus::SendOk && runtime.producer_config.retry_another_broker_when_not_store_ok()
-        })
-    }
-
-    #[inline]
-    pub async fn update_fault_item(
-        &self,
-        broker_name: &CheetahString,
-        current_latency: u64,
-        isolation: bool,
-        reachable: bool,
-    ) {
-        let strategy = self.mq_fault_strategy.read().clone();
-        strategy
-            .update_fault_item(broker_name.clone(), current_latency, isolation, reachable)
-            .await;
     }
 }

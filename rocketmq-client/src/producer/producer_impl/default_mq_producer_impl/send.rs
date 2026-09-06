@@ -33,7 +33,8 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync,
     {
-        self.send_default_impl(msg, CommunicationMode::Sync, None, timeout)
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
+        self.send_default_impl(msg, CommunicationMode::Sync, None, deadline)
             .await
     }
 
@@ -43,14 +44,9 @@ impl DefaultMQProducerImpl {
         T: MessageTrait + Send + Sync,
     {
         let runtime = self.runtime_snapshot();
-        self.send_default_impl_with_runtime(
-            msg,
-            CommunicationMode::Sync,
-            None,
-            runtime.producer_config.send_msg_timeout() as u64,
-            &runtime,
-        )
-        .await
+        let deadline = RequestDeadline::from_timeout_millis(runtime.producer_config.send_msg_timeout() as u64);
+        self.send_default_impl_with_runtime(msg, CommunicationMode::Sync, None, deadline, &runtime)
+            .await
     }
 
     #[inline]
@@ -87,14 +83,9 @@ impl DefaultMQProducerImpl {
         T: MessageTrait + Send + Sync,
     {
         let runtime = self.runtime_snapshot();
-        self.send_default_impl_with_runtime(
-            &mut msg,
-            CommunicationMode::Oneway,
-            None,
-            runtime.producer_config.send_msg_timeout() as u64,
-            &runtime,
-        )
-        .await?;
+        let deadline = RequestDeadline::from_timeout_millis(runtime.producer_config.send_msg_timeout() as u64);
+        self.send_default_impl_with_runtime(&mut msg, CommunicationMode::Oneway, None, deadline, &runtime)
+            .await?;
         Ok(())
     }
 
@@ -108,11 +99,12 @@ impl DefaultMQProducerImpl {
     {
         self.make_sure_state_ok()?;
         let runtime = self.runtime_snapshot();
+        let deadline = RequestDeadline::from_timeout_millis(runtime.producer_config.send_msg_timeout() as u64);
         Validators::check_message(Some(&msg), runtime.producer_config.as_ref())?;
 
-        let timeout = runtime.producer_config.send_msg_timeout() as u64;
-        self.send_kernel_impl_with_runtime(&mut msg, &mq, CommunicationMode::Oneway, None, None, timeout, &runtime)
-            .await?;
+        self.send_kernel_impl_with_runtime(&mut msg, &mq, CommunicationMode::Oneway, None, None, deadline, &runtime)
+            .await
+            .map_err(|input| producer_retry_input_error(input, None))?;
         Ok(())
     }
 
@@ -223,7 +215,7 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync,
     {
-        let begin_start_time = Instant::now();
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         self.make_sure_state_ok()?;
         let runtime = self.runtime_snapshot();
         Validators::check_message(Some(&msg), runtime.producer_config.as_ref())?;
@@ -231,16 +223,15 @@ impl DefaultMQProducerImpl {
         if msg.topic() != mq.topic_str() {
             return Err(mq_client_err!("message's topic not equal mq's topic"));
         }
-        let cost_time = begin_start_time.elapsed().as_millis() as u64;
-        if timeout < cost_time {
+        if deadline.is_expired() {
             return Err(rocketmq_error::RocketMQError::Timeout {
                 operation: "send_with_timeout",
                 timeout_ms: timeout,
             });
         }
-        // Java send(msg, mq, timeout) uses cost time only as a pre-check here.
-        self.send_kernel_impl_with_runtime(&mut msg, &mq, CommunicationMode::Sync, None, None, timeout, &runtime)
+        self.send_kernel_impl_with_runtime(&mut msg, &mq, CommunicationMode::Sync, None, None, deadline, &runtime)
             .await
+            .map_err(|input| producer_retry_input_error(input, None))
     }
 
     #[inline]
@@ -276,16 +267,15 @@ impl DefaultMQProducerImpl {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync + 'static,
     {
-        let begin_start_time = Instant::now();
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         let producer_impl = self.self_reference()?;
         let msg_len = Self::message_body_len_for_backpressure(&msg);
         let send_callback_clone = send_callback.clone();
         let future = async move {
-            let cost_time = begin_start_time.elapsed().as_millis() as u64;
-            let Some(remaining_timeout) = Self::remaining_async_timeout(timeout, cost_time) else {
+            if deadline.is_expired() {
                 Self::notify_callback_exception(&send_callback_clone, &Self::async_send_rejected_error("call timeout"));
                 return Ok(None);
-            };
+            }
 
             producer_impl
                 .send_select_impl(
@@ -294,11 +284,11 @@ impl DefaultMQProducerImpl {
                     arg,
                     CommunicationMode::Async,
                     send_callback_clone,
-                    remaining_timeout,
+                    deadline,
                 )
                 .await
         };
-        self.execute_async_message_send(future, send_callback, timeout, begin_start_time, msg_len)
+        self.execute_async_message_send(future, send_callback, deadline, msg_len)
             .await
     }
 
@@ -313,15 +303,10 @@ impl DefaultMQProducerImpl {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync,
     {
-        self.send_select_impl(
-            msg,
-            selector,
-            arg,
-            CommunicationMode::Oneway,
-            None,
-            self.runtime_snapshot().producer_config.send_msg_timeout() as u64,
-        )
-        .await?;
+        let runtime = self.runtime_snapshot();
+        let deadline = RequestDeadline::from_timeout_millis(runtime.producer_config.send_msg_timeout() as u64);
+        self.send_select_impl(msg, selector, arg, CommunicationMode::Oneway, None, deadline)
+            .await?;
         Ok(())
     }
 
@@ -332,14 +317,13 @@ impl DefaultMQProducerImpl {
         arg: T,
         communication_mode: CommunicationMode,
         send_message_callback: Option<ArcSendCallback>,
-        timeout: u64,
+        deadline: RequestDeadline,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
         T: Send + Sync,
     {
-        let begin_start_time = Instant::now();
         let runtime = self.runtime_snapshot();
         self.make_sure_state_ok()?;
         Validators::check_message(Some(&msg), runtime.producer_config.as_ref())?;
@@ -359,11 +343,10 @@ impl DefaultMQProducerImpl {
                     &selector,
                     &arg,
                 );
-                let cost_time = begin_start_time.elapsed().as_millis() as u64;
-                if timeout < cost_time {
+                if deadline.is_expired() {
                     return Err(rocketmq_error::RocketMQError::Timeout {
                         operation: "sendSelectImpl",
-                        timeout_ms: timeout,
+                        timeout_ms: deadline.budget_millis(),
                     });
                 }
                 if let Some(message_queue) = message_queue {
@@ -374,10 +357,11 @@ impl DefaultMQProducerImpl {
                             communication_mode,
                             send_message_callback,
                             None,
-                            timeout - cost_time,
+                            deadline,
                             &runtime,
                         )
-                        .await;
+                        .await
+                        .map_err(|input| producer_retry_input_error(input, None));
                 }
                 return Err(mq_client_err!("select message queue return null."));
             }
@@ -398,7 +382,7 @@ impl DefaultMQProducerImpl {
         T: MessageTrait + Send + Sync,
     {
         let producer_impl = self.self_reference()?;
-        let begin_start_time = Instant::now();
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         let send_callback_inner = send_callback.clone();
         let msg_len = Self::message_body_len_for_backpressure(&msg);
         let future = async move {
@@ -417,11 +401,10 @@ impl DefaultMQProducerImpl {
                 return;
             }
 
-            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            let Some(remaining_timeout) = Self::remaining_async_timeout(timeout, cost_time) else {
+            if deadline.is_expired() {
                 Self::notify_callback_exception(&send_callback_inner, &Self::async_send_rejected_error("call timeout"));
                 return;
-            };
+            }
             let result = producer_impl
                 .send_kernel_impl_with_runtime(
                     &mut msg,
@@ -429,19 +412,20 @@ impl DefaultMQProducerImpl {
                     CommunicationMode::Async,
                     send_callback_inner.clone(),
                     None,
-                    remaining_timeout,
+                    deadline,
                     &runtime,
                 )
                 .await;
             match result {
                 Ok(_) => {}
-                Err(err) => {
+                Err(input) => {
+                    let err = producer_retry_input_error(input, None);
                     Self::notify_callback_exception(&send_callback_inner, &err);
                 }
             }
         };
 
-        self.execute_async_message_send(future, send_callback, timeout, begin_start_time, msg_len)
+        self.execute_async_message_send(future, send_callback, deadline, msg_len)
             .await
     }
 
@@ -455,24 +439,23 @@ impl DefaultMQProducerImpl {
         T: MessageTrait + Send + Sync,
     {
         let producer_impl = self.self_reference()?;
-        let begin_start_time = Instant::now();
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         let send_callback_inner = send_callback.clone();
         let msg_len = Self::message_body_len_for_backpressure(&msg);
         let future = async move {
-            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            let Some(remaining_timeout) = Self::remaining_async_timeout(timeout, cost_time) else {
+            if deadline.is_expired() {
                 Self::notify_callback_exception(
                     &send_callback_inner,
                     &Self::async_send_rejected_error("asyncSend call timeout"),
                 );
                 return;
-            };
+            }
 
             let result = Box::pin(producer_impl.send_default_impl(
                 &mut msg,
                 CommunicationMode::Async,
                 send_callback_inner.clone(),
-                remaining_timeout,
+                deadline,
             ))
             .await;
             match result {
@@ -483,7 +466,7 @@ impl DefaultMQProducerImpl {
             }
         };
 
-        self.execute_async_message_send(future, send_callback, timeout, begin_start_time, msg_len)
+        self.execute_async_message_send(future, send_callback, deadline, msg_len)
             .await
     }
 
@@ -491,8 +474,7 @@ impl DefaultMQProducerImpl {
         &self,
         f: F,
         send_callback: Option<ArcSendCallback>,
-        timeout: u64,
-        begin_start_time: Instant,
+        deadline: RequestDeadline,
         msg_len: usize,
     ) -> rocketmq_error::RocketMQResult<()>
     where
@@ -504,19 +486,16 @@ impl DefaultMQProducerImpl {
 
         let (acquire_value_num, acquire_value_size) = if is_enable_backpressure_for_async_mode {
             //back pressure
-            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            let Some(remaining_timeout) = timeout.checked_sub(cost_time).filter(|remaining| *remaining > 0) else {
+            if deadline.is_expired() {
                 Self::notify_callback_exception(
                     &send_callback,
                     &Self::async_send_rejected_error("send message tryAcquire semaphoreAsyncNum timeout"),
                 );
                 return Ok(());
-            };
-            let result = tokio::time::timeout(
-                Duration::from_millis(remaining_timeout),
-                self.semaphore_async_send_num.clone().acquire_owned(),
-            )
-            .await;
+            }
+            let result = deadline
+                .timeout(self.semaphore_async_send_num.clone().acquire_owned())
+                .await;
             let acquire_value_num = match result {
                 Ok(acquire_value) => match acquire_value {
                     Ok(value) => Some(value),
@@ -538,21 +517,20 @@ impl DefaultMQProducerImpl {
             };
 
             //message size
-            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            let Some(remaining_timeout) = timeout.checked_sub(cost_time).filter(|remaining| *remaining > 0) else {
+            if deadline.is_expired() {
                 Self::notify_callback_exception(
                     &send_callback,
                     &Self::async_send_rejected_error("send message tryAcquire semaphoreAsyncSize timeout"),
                 );
                 return Ok(());
-            };
-            let result = tokio::time::timeout(
-                Duration::from_millis(remaining_timeout),
-                self.semaphore_async_send_size
-                    .clone()
-                    .acquire_many_owned(msg_len as u32),
-            )
-            .await;
+            }
+            let result = deadline
+                .timeout(
+                    self.semaphore_async_send_size
+                        .clone()
+                        .acquire_many_owned(msg_len as u32),
+                )
+                .await;
             let acquire_value_size = match result {
                 Ok(acquire_value) => match acquire_value {
                     Ok(value) => Some(value),
@@ -596,13 +574,13 @@ impl DefaultMQProducerImpl {
         msg: &mut T,
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
-        timeout: u64,
+        deadline: RequestDeadline,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
         let runtime = self.runtime_snapshot();
-        self.send_default_impl_with_runtime(msg, communication_mode, send_callback, timeout, &runtime)
+        self.send_default_impl_with_runtime(msg, communication_mode, send_callback, deadline, &runtime)
             .await
     }
 
@@ -611,7 +589,7 @@ impl DefaultMQProducerImpl {
         msg: &mut T,
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
-        timeout: u64,
+        deadline: RequestDeadline,
         runtime: &ProducerRuntimeSnapshot,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
@@ -621,26 +599,33 @@ impl DefaultMQProducerImpl {
         Validators::check_message(Some(&*msg), runtime.producer_config.as_ref())?;
 
         let topic = msg.topic().clone();
-        let topic_publish_info = self.try_to_find_topic_publish_info_with_runtime(&topic, runtime).await;
-
-        if let Some(topic_publish_info) = topic_publish_info {
-            if topic_publish_info.ok() {
-                let ctx = SendContext::new(timeout, communication_mode);
-                return self
-                    .send_with_retry(msg, &topic, &topic_publish_info, send_callback, ctx, runtime)
-                    .await;
+        if communication_mode == CommunicationMode::Oneway {
+            if let Some(topic_publish_info) = self.try_to_find_topic_publish_info_with_runtime(&topic, runtime).await {
+                if topic_publish_info.ok() {
+                    let ctx = SendContext::new(deadline, communication_mode);
+                    return self
+                        .send_with_retry(msg, &topic, &topic_publish_info, send_callback, ctx, runtime)
+                        .await;
+                }
             }
+            self.validate_name_server_setting()?;
+            return Err(mq_client_err!(
+                ClientErrorCode::NOT_FOUND_TOPIC_EXCEPTION,
+                format!(
+                    "No route info of this topic:{},{}",
+                    topic,
+                    FAQUrl::suggest_todo(FAQUrl::NO_TOPIC_ROUTE_INFO)
+                )
+            ));
         }
-
-        self.validate_name_server_setting()?;
-        Err(mq_client_err!(
-            ClientErrorCode::NOT_FOUND_TOPIC_EXCEPTION,
-            format!(
-                "No route info of this topic:{},{}",
-                topic,
-                FAQUrl::suggest_todo(FAQUrl::NO_TOPIC_ROUTE_INFO)
-            )
-        ))
+        let topic_publish_info = self
+            .topic_publish_info_table
+            .get(&topic)
+            .map(|entry| Arc::clone(entry.value()))
+            .unwrap_or_else(|| Arc::new(TopicPublishInfo::new()));
+        let ctx = SendContext::new(deadline, communication_mode);
+        self.send_with_retry(msg, &topic, &topic_publish_info, send_callback, ctx, runtime)
+            .await
     }
 }
 
@@ -659,6 +644,7 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync,
     {
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         let runtime = self.runtime_snapshot();
         #[cfg(feature = "observability")]
         {
@@ -671,11 +657,12 @@ impl DefaultMQProducerImpl {
                     communication_mode,
                     send_callback,
                     topic_publish_info,
-                    timeout,
+                    deadline,
                     &runtime,
                 )
                 .instrument(span)
-                .await;
+                .await
+                .map_err(|input| producer_retry_input_error(input, None));
         }
 
         #[cfg(not(feature = "observability"))]
@@ -685,10 +672,11 @@ impl DefaultMQProducerImpl {
             communication_mode,
             send_callback,
             topic_publish_info,
-            timeout,
+            deadline,
             &runtime,
         )
         .await
+        .map_err(|input| producer_retry_input_error(input, None))
     }
 
     pub(super) async fn send_kernel_impl_with_runtime<T>(
@@ -698,9 +686,9 @@ impl DefaultMQProducerImpl {
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
-        timeout: u64,
+        deadline: RequestDeadline,
         runtime: &ProducerRuntimeSnapshot,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> Result<Option<SendResult>, RetryInput>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -711,18 +699,9 @@ impl DefaultMQProducerImpl {
         let telemetry_handle = client_instance.telemetry_handle();
 
         // Get broker info with a single lookup path
-        let mut broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
-        let mut broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
-
-        if broker_addr.is_none() {
-            self.try_to_find_topic_publish_info_with_runtime(mq.topic(), runtime)
-                .await;
-            broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
-            broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
-        }
-
-        let Some(mut broker_addr) = broker_addr else {
-            return Err(mq_client_err!(format!("The broker[{}] not exist", broker_name,)));
+        let broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
+        let Some(mut broker_addr) = client_instance.find_broker_address_in_publish(broker_name.as_ref()) else {
+            return Err(RetryInput::RouteUnavailable);
         };
         broker_addr = mix_all::broker_vip_channel(runtime.client_config.vip_channel_enabled, broker_addr.as_str());
 
@@ -895,12 +874,12 @@ impl DefaultMQProducerImpl {
 
         let send_result = match communication_mode {
             CommunicationMode::Async => {
-                let cost_time_async = (Instant::now() - begin_start_time).as_millis() as u64;
-                if timeout < cost_time_async {
+                if deadline.is_expired() {
                     return Err(rocketmq_error::RocketMQError::Timeout {
                         operation: "sendKernelImpl",
-                        timeout_ms: timeout,
-                    });
+                        timeout_ms: deadline.budget_millis(),
+                    }
+                    .into());
                 }
                 client_instance
                     .get_mq_client_api_impl()?
@@ -909,7 +888,7 @@ impl DefaultMQProducerImpl {
                         &broker_name,
                         msg,
                         request_header,
-                        timeout - cost_time_async,
+                        deadline,
                         communication_mode,
                         send_callback,
                         topic_publish_info,
@@ -921,12 +900,12 @@ impl DefaultMQProducerImpl {
                     .await
             }
             CommunicationMode::Oneway | CommunicationMode::Sync => {
-                let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
-                if timeout < cost_time_sync {
+                if deadline.is_expired() {
                     return Err(rocketmq_error::RocketMQError::Timeout {
                         operation: "sendKernelImpl",
-                        timeout_ms: timeout,
-                    });
+                        timeout_ms: deadline.budget_millis(),
+                    }
+                    .into());
                 }
                 client_instance
                     .get_mq_client_api_impl()?
@@ -935,7 +914,7 @@ impl DefaultMQProducerImpl {
                         &broker_name,
                         msg,
                         request_header,
-                        timeout - cost_time_sync,
+                        deadline,
                         communication_mode,
                         &mut send_message_context,
                         self,
@@ -959,7 +938,7 @@ impl DefaultMQProducerImpl {
             Err(err) => {
                 if self.has_send_message_hook() {
                     if let Some(smc) = send_message_context.as_mut() {
-                        smc.exception = Some(Self::context_error(err.to_string()));
+                        smc.exception = Some(producer_retry_hook_error(&err));
                     }
                     self.execute_send_message_hook_after(&send_message_context);
                 }
@@ -1257,8 +1236,15 @@ impl DefaultMQProducerImpl {
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
         T: Send + Sync,
     {
-        self.send_select_impl(msg, selector, arg, CommunicationMode::Sync, None, timeout)
-            .await
+        self.send_select_impl(
+            msg,
+            selector,
+            arg,
+            CommunicationMode::Sync,
+            None,
+            RequestDeadline::from_timeout_millis(timeout),
+        )
+        .await
     }
 
     pub async fn fetch_publish_message_queues(
@@ -1383,11 +1369,10 @@ impl DefaultMQProducerImpl {
         T: Send + Sync,
         M: MessageTrait + Send + Sync,
     {
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await?;
         let correlation_id = Self::request_correlation_id(&msg)?;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
-        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         self.request_future_holder
             .put_request(correlation_id.to_string(), request_response_future.clone())
@@ -1412,13 +1397,21 @@ impl DefaultMQProducerImpl {
                 arg,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
-                remaining_timeout,
+                deadline,
             )
             .await;
         if let Err(error) = send_result {
             self.request_future_holder.remove_request(correlation_id.as_str()).await;
             return Err(error);
         }
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let remaining_timeout = match Self::remaining_request_timeout(timeout, cost) {
+            Ok(remaining_timeout) => remaining_timeout,
+            Err(error) => {
+                self.request_future_holder.remove_request(correlation_id.as_str()).await;
+                return Err(error);
+            }
+        };
         let result = self
             .wait_response(&topic, timeout, request_response_future, remaining_timeout)
             .await;
@@ -1440,11 +1433,9 @@ impl DefaultMQProducerImpl {
         T: Send + Sync,
         M: MessageTrait + Send + Sync,
     {
-        let begin_timestamp = Instant::now();
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         self.prepare_send_request(&mut msg, timeout).await?;
         let correlation_id = Self::request_correlation_id(&msg)?;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
-        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
             timeout,
@@ -1471,7 +1462,7 @@ impl DefaultMQProducerImpl {
                 arg,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
-                remaining_timeout,
+                deadline,
             )
             .await?;
         Ok(())
@@ -1486,11 +1477,10 @@ impl DefaultMQProducerImpl {
     where
         M: MessageTrait + Send + Sync,
     {
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await?;
         let correlation_id = Self::request_correlation_id(&msg)?;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
-        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         self.request_future_holder
             .put_request(correlation_id.to_string(), request_response_future.clone())
@@ -1508,20 +1498,31 @@ impl DefaultMQProducerImpl {
             }
         };
         let topic = msg.topic().clone();
+        let runtime = self.runtime_snapshot();
         let send_result = self
-            .send_kernel_impl(
+            .send_kernel_impl_with_runtime(
                 &mut msg,
                 &mq,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
                 None,
-                remaining_timeout,
+                deadline,
+                &runtime,
             )
-            .await;
+            .await
+            .map_err(|input| producer_retry_input_error(input, None));
         if let Err(error) = send_result {
             self.request_future_holder.remove_request(correlation_id.as_str()).await;
             return Err(error);
         }
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let remaining_timeout = match Self::remaining_request_timeout(timeout, cost) {
+            Ok(remaining_timeout) => remaining_timeout,
+            Err(error) => {
+                self.request_future_holder.remove_request(correlation_id.as_str()).await;
+                return Err(error);
+            }
+        };
         let result = self
             .wait_response(&topic, timeout, request_response_future, remaining_timeout)
             .await;
@@ -1540,11 +1541,9 @@ impl DefaultMQProducerImpl {
     where
         M: MessageTrait + Send + Sync,
     {
-        let begin_timestamp = Instant::now();
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         self.prepare_send_request(&mut msg, timeout).await?;
         let correlation_id = Self::request_correlation_id(&msg)?;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
-        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
             timeout,
@@ -1564,16 +1563,19 @@ impl DefaultMQProducerImpl {
                 request_future_holder.fail_request(correlation_id.to_string());
             }
         };
+        let runtime = self.runtime_snapshot();
         let _ = self
-            .send_kernel_impl(
+            .send_kernel_impl_with_runtime(
                 &mut msg,
                 &mq,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
                 None,
-                remaining_timeout,
+                deadline,
+                &runtime,
             )
-            .await?;
+            .await
+            .map_err(|input| producer_retry_input_error(input, None))?;
         Ok(())
     }
 
@@ -1586,11 +1588,9 @@ impl DefaultMQProducerImpl {
     where
         M: MessageTrait + Send + Sync,
     {
-        let begin_timestamp = Instant::now();
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         self.prepare_send_request(&mut msg, timeout).await?;
         let correlation_id = Self::request_correlation_id(&msg)?;
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
-        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
             timeout,
@@ -1615,7 +1615,7 @@ impl DefaultMQProducerImpl {
             &mut msg,
             CommunicationMode::Async,
             Some(Arc::new(send_callback)),
-            remaining_timeout,
+            deadline,
         )
         .await?;
         Ok(())
@@ -1629,12 +1629,11 @@ impl DefaultMQProducerImpl {
     where
         M: MessageTrait + Send + Sync,
     {
+        let deadline = RequestDeadline::from_timeout_millis(timeout);
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await?;
         let correlation_id = Self::request_correlation_id(&msg)?;
         let topic = msg.topic().clone();
-        let cost = begin_timestamp.elapsed().as_millis() as u64;
-        let remaining_timeout = Self::remaining_request_timeout(timeout, cost)?;
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         self.request_future_holder
             .put_request(correlation_id.to_string(), request_response_future.clone())
@@ -1656,13 +1655,22 @@ impl DefaultMQProducerImpl {
                 &mut msg,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
-                remaining_timeout,
+                deadline,
             )
             .await;
         if let Err(error) = send_result {
             self.request_future_holder.remove_request(correlation_id.as_str()).await;
             return Err(error);
         }
+
+        let cost = begin_timestamp.elapsed().as_millis() as u64;
+        let remaining_timeout = match Self::remaining_request_timeout(timeout, cost) {
+            Ok(remaining_timeout) => remaining_timeout,
+            Err(error) => {
+                self.request_future_holder.remove_request(correlation_id.as_str()).await;
+                return Err(error);
+            }
+        };
 
         let result = self
             .wait_response(&topic, timeout, request_response_future, remaining_timeout)
