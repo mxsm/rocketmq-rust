@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **fix(namesrv):** Exclude shutdown deadlines from NameServer trace spans ([#10099](https://github.com/mxsm/rocketmq-rust/issues/10099)).
 - **fix(namesrv):** Default the legacy public-listener compatibility setting to enabled while preserving an
   explicit secure opt-out and the secure-enforced profile rejection ([#10097](https://github.com/mxsm/rocketmq-rust/issues/10097)).
 - **docs(admin-cli):** Add missing copyright and Apache License 2.0 headers to three Rust files ([#10070](https://github.com/mxsm/rocketmq-rust/issues/10070)).
