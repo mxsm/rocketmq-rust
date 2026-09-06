@@ -62,7 +62,7 @@ performance while maintaining full compatibility with the RocketMQ protocol.
 ## 🏗️ Architecture
 
 <p align="center">
-  <img src="resources/architecture.png" alt="RocketMQ-Rust Architecture" width="80%"/>
+  <img src="resources/architecture-current-v4.png" alt="RocketMQ-Rust Architecture" width="80%"/>
 </p>
 
 RocketMQ-Rust implements a distributed architecture with the following core components:
