@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode as ProtocolResponseCode;
@@ -40,11 +41,13 @@ use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::RequestId;
@@ -234,19 +237,26 @@ impl RequestProcessor for StoreProbeProcessor {
                         )
                     }
                 }
-                Err(remark) => (
-                    crate::processor::system_error_response(
-                        &application_remoting_command_factory(),
-                        original_opaque,
-                        remark.to_string(),
-                    ),
-                    StoreHookCompletion::NoAfterHook,
-                    String::new(),
-                    0,
-                    0,
-                    None,
-                    None,
-                ),
+                Err(error) => {
+                    let view = error
+                        .public_view()
+                        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                    (
+                        error_response(
+                            view,
+                            RemotingErrorTarget::Reply {
+                                factory: &application_remoting_command_factory(),
+                                opaque: original_opaque,
+                            },
+                        ),
+                        StoreHookCompletion::NoAfterHook,
+                        String::new(),
+                        0,
+                        0,
+                        None,
+                        None,
+                    )
+                }
             };
             response.set_opaque_mut(original_opaque);
             *state_for_response.built.lock() = Some(BuiltResponse {
@@ -436,10 +446,7 @@ async fn structured_send_store_error_is_one_visible_reply() {
         let built = built.as_ref().expect("store error response built");
         assert_eq!(plan.response_code(), built.code);
         assert_eq!(built.opaque, OPAQUE);
-        assert_eq!(
-            built.remark.as_deref(),
-            Some("storage.backend.unavailable: Storage backend is unavailable")
-        );
+        assert_eq!(built.remark.as_deref(), Some("Storage backend is unavailable"));
     }
     assert_eq!(
         state.events.lock().as_slice(),

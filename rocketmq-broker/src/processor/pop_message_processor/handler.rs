@@ -16,6 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -29,11 +30,10 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::ArcMessageFilter;
 use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_transport::api::command_from_error_with_factory_remark_and_opaque;
-use rocketmq_transport::api::internal_error_with_factory_and_opaque;
-use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::error_response as remoting_error_response;
 use rocketmq_transport::api::DeferredResponderOutcome;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
@@ -84,27 +84,22 @@ where
         request: &mut RemotingRequest,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         if RequestCode::from(request.original_identity().original_code()) != RequestCode::PopMessage {
-            return BrokerResponseParts::command(request_code_not_supported_with_factory_remark_and_opaque(
-                &self.context.command_factory,
-                request.original_identity().original_code(),
-                "PopMessageProcessor request code is not supported",
-                request.original_identity().original_opaque(),
+            return BrokerResponseParts::command(remoting_error_response(
+                PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
+                RemotingErrorTarget::Reply {
+                    factory: &self.context.command_factory,
+                    opaque: request.original_identity().original_opaque(),
+                },
             ))?
             .into_handler_outcome();
         }
         if request.original_identity().is_one_way() {
-            return self.invalid_reply(
-                "POP does not support one-way requests",
-                request.original_identity().original_opaque(),
-            );
+            return self.invalid_reply(request.original_identity().original_opaque());
         }
         let effective_peer = match request.origin() {
             RequestOrigin::Network { peer } => peer.address(),
             _ => {
-                return self.invalid_reply(
-                    "POP requires a trusted network peer",
-                    request.original_identity().original_opaque(),
-                );
+                return self.invalid_reply(request.original_identity().original_opaque());
             }
         };
         let outcome = self.execute_pop_initial(request.command_mut(), effective_peer).await?;
@@ -145,7 +140,7 @@ where
         let request_header = match request.decode_command_custom_header::<PopMessageRequestHeader>() {
             Ok(header) => header,
             Err(_) => {
-                return self.initial_invalid_reply(opaque, "decode POP request header failed");
+                return self.initial_invalid_reply(opaque);
             }
         };
         let policy = self.context.policy.snapshot();
@@ -159,25 +154,13 @@ where
             );
         }
         if !PermName::is_readable(policy.broker_permission.get()) {
-            return self.initial_permission_denied(
-                opaque,
-                format!("the broker[{}] pop message is forbidden", policy.broker_ip),
-            );
+            return self.initial_permission_denied(opaque);
         }
         if request_header.max_msg_nums > 32 {
-            return self.initial_internal_reply(
-                opaque,
-                format!("the broker[{}] pop message's num is greater than 32", policy.broker_ip),
-            );
+            return self.initial_internal_reply(opaque);
         }
         if !policy.timer_wheel_enable {
-            return self.initial_internal_reply(
-                opaque,
-                format!(
-                    "the broker[{}] pop message is forbidden because timerWheelEnable is false",
-                    policy.broker_ip
-                ),
-            );
+            return self.initial_internal_reply(opaque);
         }
         let Some(topic_config) = self.context.topics.select_topic_config(&request_header.topic) else {
             return self.initial_reply(
@@ -191,19 +174,10 @@ where
             );
         };
         if !PermName::is_readable(topic_config.perm) {
-            return self.initial_permission_denied(
-                opaque,
-                format!("the topic[{}] peeking message is forbidden", request_header.topic),
-            );
+            return self.initial_permission_denied(opaque);
         }
         if request_header.queue_id >= topic_config.read_queue_nums as i32 {
-            return self.initial_internal_reply(
-                opaque,
-                format!(
-                    "the queueId[{}] is illegal, topic[{}] topicConfig readQueueNums[{}] consumer[{}]",
-                    request_header.queue_id, request_header.topic, topic_config.read_queue_nums, effective_peer
-                ),
-            );
+            return self.initial_internal_reply(opaque);
         }
         let Some(subscription_group_config) = self
             .context
@@ -221,13 +195,7 @@ where
             );
         };
         if !subscription_group_config.consume_enable() {
-            return self.initial_permission_denied(
-                opaque,
-                format!(
-                    "the consumer group[{}], not permitted to consume",
-                    request_header.consumer_group
-                ),
-            );
+            return self.initial_permission_denied(opaque);
         }
 
         let expression = request_header.exp.as_ref().filter(|value| !value.is_empty());
@@ -427,7 +395,7 @@ where
             }
             PopDeferredPrepareError::EmbeddedOrigin
             | PopDeferredPrepareError::Header(_)
-            | PopDeferredPrepareError::MissingCallerHost => self.invalid_reply("invalid deferred POP request", 0),
+            | PopDeferredPrepareError::MissingCallerHost => self.invalid_reply(0),
             PopDeferredPrepareError::ServiceClosed => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "the deferred POP service is unavailable",
@@ -435,9 +403,7 @@ where
             PopDeferredPrepareError::InvalidExpiryMargins
             | PopDeferredPrepareError::RetainedSizeOverflow
             | PopDeferredPrepareError::Index(_)
-            | PopDeferredPrepareError::Contract(_) => {
-                self.internal_reply("the deferred POP request could not be prepared", 0)
-            }
+            | PopDeferredPrepareError::Contract(_) => self.internal_reply(0),
         }
     }
 
@@ -451,9 +417,7 @@ where
                 ResponseCode::ServiceNotAvailable,
                 "the deferred POP service is unavailable",
             ),
-            PopDeferredRegisterError::ProvenanceMismatch => {
-                self.internal_reply("the deferred POP request could not be registered", head.opaque())
-            }
+            PopDeferredRegisterError::ProvenanceMismatch => self.internal_reply(head.opaque()),
             PopDeferredRegisterError::Responder(DeferredResponderOutcome::OneWayRequest) => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
                 BrokerResponseParts::command(head)?.into_handler_outcome()
@@ -464,21 +428,17 @@ where
             ),
             PopDeferredRegisterError::Responder(
                 DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
-            ) => self.internal_reply("the deferred POP request could not be registered", head.opaque()),
+            ) => self.internal_reply(head.opaque()),
             PopDeferredRegisterError::Responder(DeferredResponderOutcome::Taken(responder)) => {
                 drop(responder);
-                self.internal_reply("the deferred POP request could not be registered", head.opaque())
+                self.internal_reply(head.opaque())
             }
             PopDeferredRegisterError::Expiry { outcome: _, parts } => {
                 drop(parts);
-                self.internal_reply("the deferred POP request could not be registered", head.opaque())
+                self.internal_reply(head.opaque())
             }
-            PopDeferredRegisterError::RegistryRejected => {
-                self.internal_reply("the deferred POP request could not be registered", head.opaque())
-            }
-            PopDeferredRegisterError::RegistryIdentityExhausted => {
-                self.internal_reply("the deferred POP request exceeded registry capacity", head.opaque())
-            }
+            PopDeferredRegisterError::RegistryRejected => self.internal_reply(head.opaque()),
+            PopDeferredRegisterError::RegistryIdentityExhausted => self.internal_reply(head.opaque()),
             PopDeferredRegisterError::RegistryContract(violation) => {
                 Err(RocketMQError::internal("register deferred POP request", violation))
             }
@@ -506,39 +466,36 @@ where
         Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_invalid_reply(
-        &self,
-        opaque: i32,
-        remark: &'static str,
-    ) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
-        let error = RocketMQError::illegal_argument(remark);
-        self.initial_error_reply(opaque, &error, remark)
-    }
-
-    fn initial_permission_denied(
-        &self,
-        opaque: i32,
-        remark: String,
-    ) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
-        let error = RocketMQError::BrokerPermissionDenied {
-            operation: remark.clone(),
-        };
-        self.initial_error_reply(opaque, &error, remark)
-    }
-
-    fn initial_internal_reply(&self, opaque: i32, remark: String) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
-        let command = internal_error_with_factory_and_opaque(&self.context.command_factory, opaque, remark);
+    fn initial_invalid_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
+        let command = remoting_error_response(
+            PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
+            RemotingErrorTarget::Reply {
+                factory: &self.context.command_factory,
+                opaque,
+            },
+        );
         Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_error_reply(
-        &self,
-        opaque: i32,
-        error: &RocketMQError,
-        remark: impl Into<String>,
-    ) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
-        let command =
-            command_from_error_with_factory_remark_and_opaque(&self.context.command_factory, error, remark, opaque);
+    fn initial_permission_denied(&self, opaque: i32) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
+        let command = remoting_error_response(
+            PublicErrorView::descriptor_only(&rocketmq_error::AUTH_PERMISSION_DENIED),
+            RemotingErrorTarget::Reply {
+                factory: &self.context.command_factory,
+                opaque,
+            },
+        );
+        Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
+    }
+
+    fn initial_internal_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
+        let command = remoting_error_response(
+            PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
+            RemotingErrorTarget::Reply {
+                factory: &self.context.command_factory,
+                opaque,
+            },
+        );
         Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
     }
 
@@ -555,22 +512,24 @@ where
         .into_handler_outcome()
     }
 
-    fn invalid_reply(&self, remark: &'static str, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let error = RocketMQError::illegal_argument(remark);
-        BrokerResponseParts::command(command_from_error_with_factory_remark_and_opaque(
-            &self.context.command_factory,
-            &error,
-            remark,
-            opaque,
+    fn invalid_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        BrokerResponseParts::command(remoting_error_response(
+            PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
+            RemotingErrorTarget::Reply {
+                factory: &self.context.command_factory,
+                opaque,
+            },
         ))?
         .into_handler_outcome()
     }
 
-    fn internal_reply(&self, remark: &'static str, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        BrokerResponseParts::command(internal_error_with_factory_and_opaque(
-            &self.context.command_factory,
-            opaque,
-            remark,
+    fn internal_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        BrokerResponseParts::command(remoting_error_response(
+            PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
+            RemotingErrorTarget::Reply {
+                factory: &self.context.command_factory,
+                opaque,
+            },
         ))?
         .into_handler_outcome()
     }

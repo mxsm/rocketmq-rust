@@ -18,6 +18,8 @@ use std::sync::Arc;
 
 use crate::config::error::BrokerConfigError;
 use cheetah_string::CheetahString;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::constant::file_readahead_mode::READ_AHEAD_MODE;
 use rocketmq_model::common::message::MessageConst;
@@ -35,12 +37,14 @@ use rocketmq_protocol::protocol::header::get_broker_config_response_header::GetB
 use rocketmq_protocol::protocol::header::update_broker_config_request_header::UpdateBrokerConfigRequestHeader;
 use rocketmq_protocol::protocol::header::update_broker_config_response_header::UpdateBrokerConfigResponseHeader;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::CommitLogReadMode;
-use rocketmq_transport::api::request_code_not_supported_with_remark;
+use rocketmq_transport::api::error_response;
+use rocketmq_transport::api::RemotingErrorTarget;
 use sysinfo::Disks;
 use tracing::warn;
 
@@ -473,7 +477,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
 
     pub async fn export_rocksdb_config_to_json(
         &self,
-        request_code: RequestCode,
+        _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
@@ -542,14 +546,14 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         #[cfg(not(feature = "rocksdb_store"))]
         let _ = config_types;
 
-        Ok(Some(
-            request_code_not_supported_with_remark(
-                request_code.to_i32(),
-                "EXPORT_ROCKSDB_CONFIG_TO_JSON requires a real RocksDB config backend; current Rust broker uses \
-                 file-backed config managers",
-            )
-            .set_opaque(request.opaque()),
-        ))
+        let command_factory = application_remoting_command_factory();
+        Ok(Some(error_response(
+            PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+            RemotingErrorTarget::Reply {
+                factory: &command_factory,
+                opaque: request.opaque(),
+            },
+        )))
     }
 
     pub async fn get_timer_metrics(

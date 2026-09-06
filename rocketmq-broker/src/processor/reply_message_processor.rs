@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_error::PublicErrorView;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -41,9 +42,9 @@ use rocketmq_store::PutMessageStatus;
 use rocketmq_store::StatsType;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
-use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
-use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::error_response as remoting_error_response;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestControlView;
 use rocketmq_transport::api::RequestOrigin;
@@ -316,10 +317,15 @@ where
         match result {
             Ok(outcome) => Ok(outcome),
             Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
-                BrokerResponseParts::from_command(command_from_error_with_factory_and_opaque(
-                    &self.inner.context.command_factory,
-                    &error,
-                    original.original_opaque(),
+                let context = error.context();
+                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                    .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                BrokerResponseParts::from_command(remoting_error_response(
+                    view,
+                    RemotingErrorTarget::Reply {
+                        factory: &self.inner.context.command_factory,
+                        opaque: original.original_opaque(),
+                    },
                 ))?
                 .into_handler_outcome()
             }
@@ -364,11 +370,12 @@ where
                 self.process_reply_message(inbound_peer, control, original_opaque, request)
                     .await
             }
-            _ => BrokerResponseParts::from_command(request_code_not_supported_with_factory_remark_and_opaque(
-                &self.inner.context.command_factory,
-                original_code,
-                format!("ReplyMessageProcessor request code {original_code} not supported"),
-                original_opaque,
+            _ => BrokerResponseParts::from_command(remoting_error_response(
+                PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
+                RemotingErrorTarget::Reply {
+                    factory: &self.inner.context.command_factory,
+                    opaque: original_opaque,
+                },
             ))?
             .into_handler_outcome(),
         }
@@ -471,10 +478,11 @@ where
                     .execute_send_message_hook_after(Some(&mut response), &mut send_message_context);
                 (response, StoreHookCompletion::BeforeReply)
             }
-            Err(_) => {
-                response = response
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark("message store not available");
+            Err(error) => {
+                let view = error
+                    .public_view()
+                    .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                response = remoting_error_response(view, RemotingErrorTarget::Existing(response));
                 processor
                     .inner
                     .execute_send_message_hook_after(Some(&mut response), &mut send_message_context);

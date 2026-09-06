@@ -107,6 +107,7 @@ mod controller;
 mod core;
 mod observability;
 mod protocol;
+mod proxy;
 mod route;
 mod rpc;
 mod tools;
@@ -119,6 +120,7 @@ pub use controller::*;
 pub use core::*;
 pub use observability::*;
 pub use protocol::*;
+pub use proxy::*;
 pub use route::*;
 pub use rpc::*;
 pub use tools::*;
@@ -1021,6 +1023,9 @@ pub const ALL_DESCRIPTORS: &[ErrorDescriptor] = &[
     PROTOCOL_BODY_INVALID,
     PROTOCOL_ENCODING_UNSUPPORTED,
     PROTOCOL_REQUEST_UNSUPPORTED,
+    PROXY_REMOTING_REQUEST_INVALID,
+    PROXY_UPSTREAM_REQUEST_FAILED,
+    PROXY_DRAIN_UNAVAILABLE,
     RPC_BROKER_ADDRESS_NOT_FOUND,
     RPC_REQUEST_UNSUPPORTED,
     AUTH_OPERATION_FAILED,

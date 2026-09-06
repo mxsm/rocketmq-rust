@@ -104,6 +104,21 @@ PROCESSOR_GENERIC_RESPONSE_ALLOWLIST: dict[str, str] = {
     "rocketmq-broker/src/processor/send_message_processor.rs": "send message protocol keeps Java-compatible broker response codes",
 }
 
+PROCESSOR_FIXED_SAFE_RESPONSE_ALLOWLIST: dict[str, frozenset[tuple[str, str]]] = {
+    "rocketmq-namesrv/src/processor/default_request_processor.rs": frozenset(
+        {
+            (
+                "ResponseCode::QueryNotFound,",
+                '"NameServer KV configuration was not found",',
+            ),
+            (
+                "ResponseCode::QueryNotFound,",
+                '"NameServer KV namespace was not found",',
+            ),
+        }
+    ),
+}
+
 PROCESSOR_GENERIC_RESPONSE_TERMS = (
     "ResponseCode::SystemError",
     "ResponseCode::InvalidParameter",
@@ -111,6 +126,41 @@ PROCESSOR_GENERIC_RESPONSE_TERMS = (
     "ResponseCode::QueryNotFound",
     "RemotingSysResponseCode::SystemError",
     "RemotingSysResponseCode::NoPermission",
+)
+
+TRANSPORT_REMOTING_ERROR_LEGACY_FUNCTIONS = (
+    "command_from_error",
+    "remoting_response_from_error",
+    "command_from_error_with_factory",
+    "command_from_error_with_opaque",
+    "command_from_error_with_factory_and_opaque",
+    "command_from_error_with_remark",
+    "command_from_error_with_remark_and_factory",
+    "apply_error_to_response",
+    "command_from_error_with_remark_and_opaque",
+    "command_from_error_with_factory_remark_and_opaque",
+    "request_code_not_supported",
+    "request_code_not_supported_with_factory",
+    "request_code_not_supported_with_factory_and_opaque",
+    "request_code_not_supported_with_remark",
+    "request_code_not_supported_with_factory_and_remark",
+    "request_code_not_supported_with_opaque",
+    "request_code_not_supported_with_remark_and_opaque",
+    "request_code_not_supported_with_factory_remark_and_opaque",
+    "invalid_parameter_with_remark",
+    "invalid_parameter_with_remark_and_opaque",
+    "no_permission_with_remark",
+    "no_permission_with_remark_and_opaque",
+    "query_not_found_with_remark",
+    "query_not_found_with_remark_and_opaque",
+    "internal_error",
+    "internal_error_with_opaque",
+    "internal_error_with_factory_and_opaque",
+)
+
+PROTOCOL_REMOTING_ERROR_LEGACY_FUNCTIONS = (
+    "create_response_command_from_error",
+    "create_response_command_from_error_with_remark",
 )
 
 SOURCE_STRINGIFICATION_ALLOWLIST: dict[str, str] = {
@@ -335,6 +385,19 @@ def is_processor_generic_response_allowlisted(path: Path) -> bool:
     return any(rel == prefix or rel.startswith(prefix) for prefix in PROCESSOR_GENERIC_RESPONSE_ALLOWLIST)
 
 
+def is_processor_fixed_safe_response_allowlisted(path: Path, lines: list[str], line_index: int) -> bool:
+    allowed = PROCESSOR_FIXED_SAFE_RESPONSE_ALLOWLIST.get(rel_path(path))
+    if allowed is None:
+        return False
+
+    previous = next((line.strip() for line in reversed(lines[:line_index]) if line.strip()), "")
+    following = next((line.strip() for line in lines[line_index + 1 :] if line.strip()), "")
+    return (
+        previous.endswith("create_response_command_with_code_remark(")
+        and (lines[line_index].strip(), following) in allowed
+    )
+
+
 def scan_forbidden_terms(paths: Iterable[Path], forbidden: dict[str, str]) -> list[Finding]:
     findings: list[Finding] = []
     for path in paths:
@@ -488,13 +551,17 @@ def check_processor_generic_response_allowlist() -> list[Finding]:
             paths.extend(rust_files_under(*root.relative_to(ROOT).parts))
 
     for path in sorted(set(paths)):
-        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+        lines = read_text(path).splitlines()
+        for line_index, line in enumerate(lines):
+            line_number = line_index + 1
             stripped = line.strip()
             if stripped.startswith("//") or is_test_context(path, line_number):
                 continue
             if not any(term in line for term in PROCESSOR_GENERIC_RESPONSE_TERMS):
                 continue
-            if not is_processor_generic_response_allowlisted(path):
+            if not is_processor_generic_response_allowlisted(path) and not is_processor_fixed_safe_response_allowlisted(
+                path, lines, line_index
+            ):
                 findings.append(
                     Finding(
                         path,
@@ -505,15 +572,29 @@ def check_processor_generic_response_allowlist() -> list[Finding]:
     return findings
 
 
+def public_response_policy_functions(source: str) -> list[str]:
+    return re.findall(r"(?m)^\s*pub(?:\(crate\))?\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)\b", source)
+
+
+def deleted_function_tokens(source: str, function_names: Iterable[str]) -> list[str]:
+    return [name for name in function_names if re.search(rf"\b{re.escape(name)}\b", source)]
+
+
 def check_required_mapping_adapters() -> list[Finding]:
+    transport_adapter_path = ROOT / "rocketmq-transport" / "src" / "error_response.rs"
+    protocol_factory_path = ROOT / "rocketmq-protocol" / "src" / "protocol" / "remoting_command_defaults.rs"
     checks = {
-        ROOT / "rocketmq-transport" / "src" / "error_response.rs": [
-            "error.boundary_view()",
-            "apply_error_to_response",
-            "invalid_parameter_with_remark",
-            "request_code_not_supported_with_remark",
-            "query_not_found_with_remark",
-            "internal_error_with_opaque",
+        transport_adapter_path: [
+            "use rocketmq_error::PublicErrorView;",
+            "pub enum RemotingErrorTarget<'a>",
+            "Fresh(&'a RemotingCommandFactory)",
+            "Existing(RemotingCommand)",
+            "pub fn error_response(view: PublicErrorView<'_>, target: RemotingErrorTarget<'_>) -> RemotingCommand",
+            "let code = view.projection().remoting().code.as_i32();",
+            "let message = view.message();",
+            "RemotingErrorTarget::Fresh(factory) =>",
+            "RemotingErrorTarget::Reply { factory, opaque } =>",
+            "RemotingErrorTarget::Existing(response) =>",
         ],
         PROXY_STATUS_MAPPER: [
             "ProxyErrorKind",
@@ -577,20 +658,33 @@ def check_required_mapping_adapters() -> list[Finding]:
         if not path.exists():
             findings.append(Finding(path, 1, "required error boundary adapter file is missing"))
             continue
-        text = read_text(path)
+        text = (
+            "\n".join(line for _, line in iter_non_test_lines(path))
+            if path == transport_adapter_path
+            else read_text(path)
+        )
         for needle in needles:
             if needle not in text:
                 findings.append(Finding(path, 1, f"required mapping adapter token missing: {needle}"))
-        if path == ROOT / "rocketmq-transport" / "src" / "error_response.rs":
-            for line_number, line in enumerate(text.splitlines(), start=1):
-                if "command_from_error_with_remark(error, error.to_string())" in line:
-                    findings.append(
-                        Finding(
-                            path,
-                            line_number,
-                            "remoting default error response must use public_message(), not raw Display",
-                        )
+        if path == transport_adapter_path:
+            public_functions = public_response_policy_functions(text)
+            if public_functions != ["error_response"]:
+                findings.append(
+                    Finding(
+                        path,
+                        1,
+                        f"Transport public remoting response-policy functions must be exactly ['error_response']; found {public_functions}",
                     )
+                )
+            for removed in deleted_function_tokens(text, TRANSPORT_REMOTING_ERROR_LEGACY_FUNCTIONS):
+                findings.append(Finding(path, 1, f"deleted remoting error adapter returned: {removed}"))
+
+    if not protocol_factory_path.exists():
+        findings.append(Finding(protocol_factory_path, 1, "required remoting command factory file is missing"))
+    else:
+        protocol_source = "\n".join(line for _, line in iter_non_test_lines(protocol_factory_path))
+        for removed in deleted_function_tokens(protocol_source, PROTOCOL_REMOTING_ERROR_LEGACY_FUNCTIONS):
+            findings.append(Finding(protocol_factory_path, 1, f"deleted Protocol error factory returned: {removed}"))
     return findings
 
 
@@ -770,7 +864,7 @@ def check_error_descriptor_contract() -> list[Finding]:
             "BoundaryErrorView::new(self.descriptor(), self.context())",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_descriptor_catalog.rs": [
-            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 97",
+            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 100",
             "descriptor_catalog_snapshot_is_exact",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [

@@ -17,7 +17,9 @@
 use std::future::Future;
 use std::net::SocketAddr;
 
+use rocketmq_error::PublicErrorView;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 
 use super::remoting_request::RemotingRequestBuilder;
 use super::HandlerOutcome;
@@ -458,12 +460,19 @@ where
                     let candidate = self.process_embedded(request).await?;
                     apply_after_hook(request, candidate, hook_snapshot, remote_address)?
                 }
-                Err(error) => InternalProcessorCandidate::failure(
-                    InternalProcessorOutcome::Handled(HandlerOutcome::Reply(
-                        crate::error_response::remoting_response_from_error(&error)?,
-                    )),
-                    InternalFailureOrigin::BeforeHook,
-                ),
+                Err(error) => {
+                    let context = error.context();
+                    let view = PublicErrorView::try_new(error.descriptor(), &context)
+                        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                    let command = crate::error_response::error_response(
+                        view,
+                        crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
+                    );
+                    InternalProcessorCandidate::failure(
+                        InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(command)?)),
+                        InternalFailureOrigin::BeforeHook,
+                    )
+                }
             };
             Ok(candidate)
         }
@@ -506,10 +515,15 @@ fn apply_after_hook(
             let failure = failure
                 .map(InternalFailureOrigin::after_hook_error)
                 .unwrap_or(InternalFailureOrigin::AfterHook);
+            let context = error.context();
+            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+            let command = crate::error_response::error_response(
+                view,
+                crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
+            );
             Ok(InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(
-                    crate::error_response::remoting_response_from_error(&error)?,
-                )),
+                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(command)?)),
                 failure,
             ))
         }

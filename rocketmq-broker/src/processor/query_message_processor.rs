@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::PublicErrorView;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -33,9 +34,9 @@ use rocketmq_store::QueryMessageResult;
 use rocketmq_store::SelectMappedBufferResult;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
-use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
-use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::error_response as remoting_error_response;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
 use tracing::info;
@@ -182,10 +183,15 @@ where
         {
             Ok(outcome) => Ok(outcome),
             Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
-                BrokerResponseParts::from_command(command_from_error_with_factory_and_opaque(
-                    &self.command_factory,
-                    &error,
-                    original.original_opaque(),
+                let context = error.context();
+                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                    .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                BrokerResponseParts::from_command(remoting_error_response(
+                    view,
+                    RemotingErrorTarget::Reply {
+                        factory: &self.command_factory,
+                        opaque: original.original_opaque(),
+                    },
                 ))?
                 .into_handler_outcome()
             }
@@ -246,11 +252,12 @@ where
                     "QueryMessageProcessor received unknown request code: {:?}",
                     request_code
                 );
-                QueryResponseParts::command(request_code_not_supported_with_factory_remark_and_opaque(
-                    &self.command_factory,
-                    original_code,
-                    format!("QueryMessageProcessor request code {original_code} not supported"),
-                    original_opaque,
+                QueryResponseParts::command(remoting_error_response(
+                    PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.command_factory,
+                        opaque: original_opaque,
+                    },
                 ))
             }
         };

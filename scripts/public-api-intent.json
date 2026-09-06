@@ -7293,219 +7293,21 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::error_response::apply_error_to_response",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::apply_error_to_response",
+          "declaration": "pub use crate::error_response::RemotingErrorTarget",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::RemotingErrorTarget",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
+          "rationale": "closed owner-preservation context for descriptor-backed remoting error responses",
+          "removal_condition": "retain while Transport owns the sole descriptor-backed remoting error adapter"
         },
         {
           "category": "stable",
-          "declaration": "pub use crate::error_response::command_from_error",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::command_from_error",
+          "declaration": "pub use crate::error_response::error_response",
+          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::error_response",
           "owner": "transport",
           "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::command_from_error_with_factory_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::command_from_error_with_factory_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::command_from_error_with_factory_remark_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::command_from_error_with_factory_remark_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::command_from_error_with_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::command_from_error_with_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::command_from_error_with_remark",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::command_from_error_with_remark",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::command_from_error_with_remark_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::command_from_error_with_remark_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::internal_error",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::internal_error",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::internal_error_with_factory_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::internal_error_with_factory_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::internal_error_with_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::internal_error_with_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::invalid_parameter_with_remark",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::invalid_parameter_with_remark",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::invalid_parameter_with_remark_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::invalid_parameter_with_remark_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::no_permission_with_remark",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::no_permission_with_remark",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::no_permission_with_remark_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::no_permission_with_remark_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::query_not_found_with_remark",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::query_not_found_with_remark",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::query_not_found_with_remark_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::query_not_found_with_remark_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::request_code_not_supported",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::request_code_not_supported",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::request_code_not_supported_with_factory",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::request_code_not_supported_with_factory",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::request_code_not_supported_with_factory_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::request_code_not_supported_with_factory_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::request_code_not_supported_with_factory_and_remark",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::request_code_not_supported_with_factory_and_remark",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::request_code_not_supported_with_factory_remark_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::request_code_not_supported_with_factory_remark_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::request_code_not_supported_with_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::request_code_not_supported_with_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::request_code_not_supported_with_remark",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::request_code_not_supported_with_remark",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use crate::error_response::request_code_not_supported_with_remark_and_opaque",
-          "identity": "rocketmq-transport/src/public_api.rs:pub use crate::error_response::request_code_not_supported_with_remark_and_opaque",
-          "owner": "transport",
-          "path": "rocketmq-transport/src/public_api.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
+          "rationale": "sole descriptor-backed remoting error response adapter accepting only PublicErrorView",
+          "removal_condition": "retain while server remoting boundaries project canonical public views"
         },
         {
           "category": "stable",
@@ -8156,7 +7958,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 215
+      "maximum_exports": 193
     }
   },
   "policy": "Every deliberate export is classified; additions and count growth fail closed.",

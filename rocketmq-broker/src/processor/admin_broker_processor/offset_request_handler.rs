@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::config::config_manager::ConfigManager;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
@@ -24,10 +26,12 @@ use rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOf
 use rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
 use rocketmq_protocol::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 use rocketmq_store::BrokerAdminStore;
-use rocketmq_transport::api::request_code_not_supported_with_remark;
+use rocketmq_transport::api::error_response;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RpcClient;
 use rocketmq_transport::api::RpcRequest;
 use tracing::error;
@@ -314,18 +318,18 @@ impl OffsetRequestHandler {
 
     pub async fn check_rocksdb_cq_write_progress(
         &self,
-        request_code: RequestCode,
+        _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let _request_header = request.decode_command_custom_header::<CheckRocksdbCqWriteProgressRequestHeader>()?;
-        Ok(Some(
-            request_code_not_supported_with_remark(
-                request_code.to_i32(),
-                "CHECK_ROCKSDB_CQ_WRITE_PROGRESS requires a real RocksDB consume queue backend; current Rust broker \
-                 uses file-backed consume queues",
-            )
-            .set_opaque(request.opaque()),
-        ))
+        let command_factory = application_remoting_command_factory();
+        Ok(Some(error_response(
+            PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+            RemotingErrorTarget::Reply {
+                factory: &command_factory,
+                opaque: request.opaque(),
+            },
+        )))
     }
 
     pub async fn get_all_subscription_group_config<MS: BrokerAdminStore>(

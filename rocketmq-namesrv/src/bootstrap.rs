@@ -4790,7 +4790,7 @@ mod tests {
         );
         assert_eq!(
             response.remark().map(|remark| remark.as_str()),
-            Some(" request type 10 not supported")
+            Some("Protocol request is unsupported")
         );
     }
 
@@ -5051,7 +5051,7 @@ mod tests {
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
         assert_eq!(
             response.remark().map(|remark| remark.as_str()),
-            Some("Cannot update config in blacklist.")
+            Some("Permission was denied")
         );
         assert_ne!(
             bootstrap.name_server_runtime.inner.name_server_config().rocketmq_home,
@@ -5117,6 +5117,10 @@ mod tests {
         assert_eq!(
             ResponseCode::from(get_after_delete_response.code()),
             ResponseCode::QueryNotFound
+        );
+        assert_eq!(
+            get_after_delete_response.remark().map(|remark| remark.as_str()),
+            Some("NameServer KV configuration was not found")
         );
     }
 

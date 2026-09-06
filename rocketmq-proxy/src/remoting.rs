@@ -22,7 +22,20 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use rocketmq_auth::RemotingAuthContext;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::ErrorDescriptor;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::RemotingResponseCode;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::CORE_INTERNAL_FAILURE;
+use rocketmq_error::CORE_SERIALIZATION_FAILED;
+use rocketmq_error::PROTOCOL_BODY_INVALID;
+use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
+use rocketmq_error::PROXY_DRAIN_UNAVAILABLE;
+use rocketmq_error::PROXY_REMOTING_REQUEST_INVALID;
+use rocketmq_error::PROXY_UPSTREAM_REQUEST_FAILED;
 use rocketmq_model::common::entity::ClientGroup;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -94,9 +107,11 @@ use rocketmq_proxy_core::ProxyDrainPhase;
 use rocketmq_proxy_core::ProxyDrainSnapshot;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownReport;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::HandlerOutcome;
 use rocketmq_transport::api::RejectRequestDecision;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
@@ -290,9 +305,10 @@ where
             let auth_context = match RemotingAuthContext::from_request(request) {
                 Ok(auth_context) => auth_context,
                 Err(error) => {
-                    return remoting_response(auth_error_response(
+                    return remoting_response(proxy_operation_error_response(
                         &self.dispatcher.command_factory,
                         request.original_identity().original_opaque(),
+                        "parse remoting authentication context",
                         ProxyError::from(error),
                     ));
                 }
@@ -301,9 +317,10 @@ where
                 Ok(Some(principal)) => context.set_authenticated_principal(principal),
                 Ok(None) => {}
                 Err(error) => {
-                    return remoting_response(auth_error_response(
+                    return remoting_response(proxy_operation_error_response(
                         &self.dispatcher.command_factory,
                         request.original_identity().original_opaque(),
+                        "authenticate remoting request",
                         error,
                     ));
                 }
@@ -315,9 +332,10 @@ where
                 ));
             }
             if let Err(error) = auth_runtime.authorize_remoting(&auth_context, &auth_command).await {
-                return remoting_response(auth_error_response(
+                return remoting_response(proxy_operation_error_response(
                     &self.dispatcher.command_factory,
                     request.original_identity().original_opaque(),
+                    "authorize remoting request",
                     error,
                 ));
             }
@@ -342,7 +360,7 @@ where
 
         if RequestCode::from(original_code) == RequestCode::HeartBeat {
             if let Err(error) = auth_command.decode_command_custom_header::<HeartbeatRequestHeader>() {
-                return remoting_response(decode_error_response(
+                return remoting_response(request_invalid_response(
                     &self.dispatcher.command_factory,
                     request.original_identity().original_opaque(),
                     "decode heartbeat header",
@@ -350,17 +368,17 @@ where
                 ));
             }
             let Some(body) = auth_command.body() else {
-                return remoting_response(transport_error_response(
+                let error = owner_error(&PROXY_REMOTING_REQUEST_INVALID, "decode heartbeat body");
+                return remoting_response(descriptor_error_response(
                     &self.dispatcher.command_factory,
                     request.original_identity().original_opaque(),
-                    "decode heartbeat body",
-                    "heartbeat request body is missing",
+                    &error,
                 ));
             };
             let heartbeat = match SerdeJsonUtils::from_json_bytes::<HeartbeatData>(body.as_ref()) {
                 Ok(heartbeat) => heartbeat,
                 Err(error) => {
-                    return remoting_response(transport_error_response(
+                    return remoting_response(request_invalid_response(
                         &self.dispatcher.command_factory,
                         request.original_identity().original_opaque(),
                         "decode heartbeat body",
@@ -887,10 +905,12 @@ where
             RemotingIngressRoute::NotifyConsumerIdsChanged => self.dispatch_notify_consumer_ids_changed(request).await,
             RemotingIngressRoute::NotifyUnsubscribeLite => self.dispatch_notify_unsubscribe_lite(request).await,
             RemotingIngressRoute::LockBatchMessageQueue | RemotingIngressRoute::UnlockBatchMessageQueue => {
-                unsupported_response(
-                    &self.command_factory,
-                    request.opaque(),
-                    "backend forwarding requires the request dispatch boundary",
+                error_response(
+                    PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.command_factory,
+                        opaque: request.opaque(),
+                    },
                 )
             }
             RemotingIngressRoute::CheckClientConfig => self.dispatch_check_client_config(request).await,
@@ -907,27 +927,14 @@ where
             RemotingIngressRoute::GetProxyDrainState => self.dispatch_get_proxy_drain_state(request),
             RemotingIngressRoute::BeginProxyDrain => self.dispatch_begin_proxy_drain(request),
             RemotingIngressRoute::CancelProxyDrain => self.dispatch_cancel_proxy_drain(request),
-            RemotingIngressRoute::ForwardBackend => unsupported_response(
-                &self.command_factory,
-                request.opaque(),
-                "backend forwarding requires the request dispatch boundary",
-            ),
-            RemotingIngressRoute::AuthAdminUnsupported => unsupported_response(
-                &self.command_factory,
-                request.opaque(),
-                format!(
-                    "proxy remoting ingress does not support request code {}; auth admin request, send it to broker \
-                     admin",
-                    request.code()
-                ),
-            ),
-            RemotingIngressRoute::Unsupported => unsupported_response(
-                &self.command_factory,
-                request.opaque(),
-                format!(
-                    "proxy remoting ingress does not support request code {}",
-                    request.code()
-                ),
+            RemotingIngressRoute::ForwardBackend
+            | RemotingIngressRoute::AuthAdminUnsupported
+            | RemotingIngressRoute::Unsupported => error_response(
+                PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+                RemotingErrorTarget::Reply {
+                    factory: &self.command_factory,
+                    opaque: request.opaque(),
+                },
             ),
         }
     }
@@ -955,13 +962,12 @@ where
                 | RemotingIngressRoute::UnlockBatchMessageQueue
         ) {
             let Some(backend) = self.remoting_backend.as_ref() else {
-                return remoting_response(unsupported_response(
-                    &self.command_factory,
-                    request.original_identity().original_opaque(),
-                    format!(
-                        "proxy remoting backend is unavailable for request code {}",
-                        request.original_identity().original_code()
-                    ),
+                return remoting_response(error_response(
+                    PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.command_factory,
+                        opaque: request.original_identity().original_opaque(),
+                    },
                 ));
             };
             let mut backend_command = request.command().clone();
@@ -979,9 +985,10 @@ where
                 Ok(EmbeddedDispatchOutcome::Deferred { .. }) => Err(RocketMQError::invariant_violated(
                     "terminal Proxy backend route returned an unresolved deferred outcome",
                 )),
-                Err(error) => remoting_response(proxy_error_response(
+                Err(error) => remoting_response(proxy_operation_error_response(
                     &self.command_factory,
                     request.original_identity().original_opaque(),
+                    "dispatch remoting backend request",
                     error,
                 )),
                 Ok(_) => Err(RocketMQError::invariant_violated(
@@ -1000,7 +1007,7 @@ where
         let header = match request.decode_command_custom_header::<GetConsumerConnectionListRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode getConsumerConnectionList header",
@@ -1039,7 +1046,7 @@ where
                 .create_response_command_with_code(ResponseCode::Success)
                 .set_body(encoded)
                 .set_opaque(request.opaque()),
-            Err(error) => transport_error_response(
+            Err(error) => serialization_error_response(
                 &self.command_factory,
                 request.opaque(),
                 "encode getConsumerConnectionList response",
@@ -1090,7 +1097,7 @@ where
         let header = match request.decode_command_custom_header::<GetRouteInfoRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode queryRoute header",
@@ -1110,13 +1117,15 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return proxy_operation_error_response(&self.command_factory, request.opaque(), "query route", error);
+            }
         };
 
         let body = match plan.route.encode() {
             Ok(body) => body,
             Err(error) => {
-                return transport_error_response(
+                return serialization_error_response(
                     &self.command_factory,
                     request.opaque(),
                     "encode topic route response",
@@ -1146,7 +1155,7 @@ where
         let request_body = match QueryAssignmentRequestBody::decode(body.as_ref()) {
             Ok(body) => body,
             Err(error) => {
-                return transport_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode queryAssignment request body",
@@ -1167,7 +1176,14 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return proxy_operation_error_response(
+                    &self.command_factory,
+                    request.opaque(),
+                    "query assignment",
+                    error,
+                );
+            }
         };
 
         let response_body = QueryAssignmentResponseBody {
@@ -1176,7 +1192,7 @@ where
         let encoded = match response_body.encode() {
             Ok(body) => body,
             Err(error) => {
-                return transport_error_response(
+                return serialization_error_response(
                     &self.command_factory,
                     request.opaque(),
                     "encode queryAssignment response",
@@ -1198,7 +1214,7 @@ where
         let header = match request.decode_command_custom_header::<UnregisterClientRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode unregisterClient header",
@@ -1244,7 +1260,7 @@ where
         let header = match request.decode_command_custom_header::<GetConsumerListByGroupRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode getConsumerListByGroup header",
@@ -1269,7 +1285,7 @@ where
         {
             Ok(body) => body,
             Err(error) => {
-                return transport_error_response(
+                return serialization_error_response(
                     &self.command_factory,
                     request.opaque(),
                     "encode getConsumerListByGroup response",
@@ -1287,7 +1303,7 @@ where
         let header = match request.decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode notifyConsumerIdsChanged header",
@@ -1337,11 +1353,11 @@ where
                     );
                 }
                 Err(error) => {
-                    return response_with_code(
+                    return upstream_failure_response(
                         &self.command_factory,
                         request.opaque(),
-                        ResponseCode::SystemError,
-                        format!("server push failed: {error}"),
+                        "notify consumer ids changed",
+                        error,
                     );
                 }
             }
@@ -1367,7 +1383,7 @@ where
         let header = match request.decode_command_custom_header::<NotifyUnsubscribeLiteRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode notifyUnsubscribeLite header",
@@ -1412,11 +1428,11 @@ where
                 );
             }
             Err(error) => {
-                return response_with_code(
+                return upstream_failure_response(
                     &self.command_factory,
                     request.opaque(),
-                    ResponseCode::SystemError,
-                    format!("server push failed: {error}"),
+                    "notify unsubscribe lite",
+                    error,
                 );
             }
         }
@@ -1436,7 +1452,7 @@ where
         let header = match parse_request_header(request, request_code) {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode sendMessage header",
@@ -1447,7 +1463,14 @@ where
 
         let mut send_request = match build_send_message_request(request, &header) {
             Ok(send_request) => send_request,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return request_invalid_response(
+                    &self.command_factory,
+                    request.opaque(),
+                    "build sendMessage request",
+                    error,
+                );
+            }
         };
         send_request.validate_message_type = self.validate_message_type;
         let fallback_queue_id = send_request
@@ -1461,15 +1484,13 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return proxy_operation_error_response(&self.command_factory, request.opaque(), "send message", error);
+            }
         };
         let Some(entry) = plan.entries.into_iter().next() else {
-            return transport_error_response(
-                &self.command_factory,
-                request.opaque(),
-                "build sendMessage response",
-                "processor returned no send results",
-            );
+            let error = owner_error(&CORE_INTERNAL_FAILURE, "build sendMessage response");
+            return descriptor_error_response(&self.command_factory, request.opaque(), &error);
         };
         if let Some(send_result) = entry.send_result.as_ref() {
             let response_header = build_send_message_response_header(send_result, fallback_queue_id);
@@ -1495,7 +1516,7 @@ where
         let header = match request.decode_command_custom_header::<PullMessageRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode pullMessage header",
@@ -1510,7 +1531,9 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return proxy_operation_error_response(&self.command_factory, request.opaque(), "pull message", error);
+            }
         };
 
         let body = if plan.messages.is_empty() {
@@ -1519,7 +1542,14 @@ where
             let messages = plan.messages.iter().map(message_ext_from_core).collect::<Vec<_>>();
             match encode_message_ext_batch(messages.as_slice()) {
                 Ok(body) => Some(body),
-                Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+                Err(error) => {
+                    return serialization_error_response(
+                        &self.command_factory,
+                        request.opaque(),
+                        "encode pullMessage response body",
+                        error,
+                    );
+                }
             }
         };
         let response_header = PullMessageResponseHeader {
@@ -1550,7 +1580,7 @@ where
         let header = match request.decode_command_custom_header::<UpdateConsumerOffsetRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode updateConsumerOffset header",
@@ -1564,7 +1594,9 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return proxy_operation_error_response(&self.command_factory, request.opaque(), "update offset", error);
+            }
         };
         response_with_header(
             &self.command_factory,
@@ -1584,7 +1616,7 @@ where
         let header = match request.decode_command_custom_header::<QueryConsumerOffsetRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode queryConsumerOffset header",
@@ -1598,7 +1630,9 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return proxy_operation_error_response(&self.command_factory, request.opaque(), "get offset", error);
+            }
         };
         response_with_header(
             &self.command_factory,
@@ -1616,7 +1650,7 @@ where
         let header = match request.decode_command_custom_header::<GetMaxOffsetRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode getMaxOffset header",
@@ -1639,7 +1673,14 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return proxy_operation_error_response(
+                    &self.command_factory,
+                    request.opaque(),
+                    "get maximum offset",
+                    error,
+                );
+            }
         };
         response_with_header(
             &self.command_factory,
@@ -1657,7 +1698,7 @@ where
         let header = match request.decode_command_custom_header::<GetMinOffsetRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode getMinOffset header",
@@ -1680,7 +1721,14 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return proxy_operation_error_response(
+                    &self.command_factory,
+                    request.opaque(),
+                    "get minimum offset",
+                    error,
+                );
+            }
         };
         response_with_header(
             &self.command_factory,
@@ -1698,7 +1746,7 @@ where
         let header = match request.decode_command_custom_header::<SearchOffsetRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode searchOffset header",
@@ -1721,7 +1769,9 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(error) => return proxy_error_response(&self.command_factory, request.opaque(), error),
+            Err(error) => {
+                return proxy_operation_error_response(&self.command_factory, request.opaque(), "search offset", error);
+            }
         };
         response_with_header(
             &self.command_factory,
@@ -1740,7 +1790,7 @@ where
         let encoded = match body.encode() {
             Ok(body) => body,
             Err(error) => {
-                return transport_error_response(
+                return serialization_error_response(
                     &self.command_factory,
                     request.opaque(),
                     "encode getBrokerLiteInfo response",
@@ -1758,7 +1808,7 @@ where
         let header = match request.decode_command_custom_header::<GetParentTopicInfoRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode getParentTopicInfo header",
@@ -1784,7 +1834,7 @@ where
         let encoded = match body.encode() {
             Ok(body) => body,
             Err(error) => {
-                return transport_error_response(
+                return serialization_error_response(
                     &self.command_factory,
                     request.opaque(),
                     "encode getParentTopicInfo response",
@@ -1802,7 +1852,7 @@ where
         let header = match request.decode_command_custom_header::<GetLiteTopicInfoRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode getLiteTopicInfo header",
@@ -1825,7 +1875,7 @@ where
         let encoded = match body.encode() {
             Ok(body) => body,
             Err(error) => {
-                return transport_error_response(
+                return serialization_error_response(
                     &self.command_factory,
                     request.opaque(),
                     "encode getLiteTopicInfo response",
@@ -1843,7 +1893,7 @@ where
         let header = match request.decode_command_custom_header::<GetLiteGroupInfoRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
-                return decode_error_response(
+                return request_invalid_response(
                     &self.command_factory,
                     request.opaque(),
                     "decode getLiteGroupInfo header",
@@ -1872,7 +1922,7 @@ where
         let encoded = match body.encode() {
             Ok(body) => body,
             Err(error) => {
-                return transport_error_response(
+                return serialization_error_response(
                     &self.command_factory,
                     request.opaque(),
                     "encode getLiteGroupInfo response",
@@ -1982,8 +2032,8 @@ fn authentication_required_response(command_factory: &RemotingCommandFactory, op
 
 enum ProxyDrainRequestError {
     MissingBody,
-    InvalidBody(String),
-    UnsupportedSchema(String),
+    InvalidBody(RocketMQError),
+    UnsupportedSchema,
 }
 
 fn decode_proxy_drain_operation(
@@ -1992,10 +2042,10 @@ fn decode_proxy_drain_operation(
     let Some(body) = request.body() else {
         return Err(ProxyDrainRequestError::MissingBody);
     };
-    let operation = ProxyDrainOperationRequestBody::decode(body.as_ref())
-        .map_err(|error| ProxyDrainRequestError::InvalidBody(error.to_string()))?;
+    let operation =
+        ProxyDrainOperationRequestBody::decode(body.as_ref()).map_err(ProxyDrainRequestError::InvalidBody)?;
     if operation.schema_version != PROXY_DRAIN_SCHEMA_VERSION {
-        return Err(ProxyDrainRequestError::UnsupportedSchema(operation.schema_version));
+        return Err(ProxyDrainRequestError::UnsupportedSchema);
     }
     Ok(operation)
 }
@@ -2005,19 +2055,15 @@ fn proxy_drain_request_error_response(
     opaque: i32,
     error: ProxyDrainRequestError,
 ) -> RemotingCommand {
-    let remark = match error {
-        ProxyDrainRequestError::MissingBody => "Proxy drain operation body is required".to_owned(),
-        ProxyDrainRequestError::InvalidBody(error) => {
-            format!("invalid Proxy drain operation body: {error}")
+    let error = match error {
+        ProxyDrainRequestError::MissingBody | ProxyDrainRequestError::UnsupportedSchema => {
+            owner_error(&PROTOCOL_BODY_INVALID, "validate proxy drain request body")
         }
-        ProxyDrainRequestError::UnsupportedSchema(schema) => {
-            format!("unsupported Proxy drain schema '{schema}'; expected '{PROXY_DRAIN_SCHEMA_VERSION}'")
+        ProxyDrainRequestError::InvalidBody(source) => {
+            owner_error_with_source(&PROTOCOL_BODY_INVALID, "decode proxy drain request body", source)
         }
     };
-    command_factory
-        .create_response_command_with_code(ResponseCode::InvalidParameter)
-        .set_remark(remark)
-        .set_opaque(opaque)
+    descriptor_error_response(command_factory, opaque, &error)
 }
 
 fn proxy_drain_success_response(
@@ -2054,10 +2100,10 @@ fn proxy_drain_success_response(
             .create_response_command_with_code(ResponseCode::Success)
             .set_body(body)
             .set_opaque(opaque),
-        Err(error) => command_factory
-            .create_response_command_with_code(ResponseCode::SystemError)
-            .set_remark(format!("failed to encode Proxy drain state: {error}"))
-            .set_opaque(opaque),
+        Err(source) => {
+            let error = owner_error_with_source(&CORE_SERIALIZATION_FAILED, "encode proxy drain state", source);
+            descriptor_error_response(command_factory, opaque, &error)
+        }
     }
 }
 
@@ -2066,20 +2112,42 @@ fn proxy_drain_error_response(
     opaque: i32,
     error: ProxyDrainError,
 ) -> RemotingCommand {
-    let code = match error {
-        ProxyDrainError::LifecycleUnavailable | ProxyDrainError::ReadinessTransition { .. } => {
-            ResponseCode::ServiceNotAvailable
+    match error {
+        source @ (ProxyDrainError::LifecycleUnavailable | ProxyDrainError::ReadinessTransition { .. }) => {
+            let error = owner_error_with_source(&PROXY_DRAIN_UNAVAILABLE, "change proxy drain state", source);
+            descriptor_error_response(command_factory, opaque, &error)
         }
-        ProxyDrainError::AdmissionClosed
-        | ProxyDrainError::CounterOverflow
-        | ProxyDrainError::InvalidOperationId
-        | ProxyDrainError::OperationConflict { .. }
-        | ProxyDrainError::OperationMismatch => ResponseCode::InvalidParameter,
-    };
-    command_factory
-        .create_response_command_with_code(code)
-        .set_remark(error.to_string())
-        .set_opaque(opaque)
+        ProxyDrainError::AdmissionClosed => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::InvalidParameter,
+            "Proxy drain admission is closed",
+        ),
+        ProxyDrainError::CounterOverflow => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::InvalidParameter,
+            "Proxy drain counter overflow",
+        ),
+        ProxyDrainError::InvalidOperationId => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::InvalidParameter,
+            "Proxy drain operation id is invalid",
+        ),
+        ProxyDrainError::OperationConflict { .. } => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::InvalidParameter,
+            "Proxy drain operation conflicts with an active operation",
+        ),
+        ProxyDrainError::OperationMismatch => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::InvalidParameter,
+            "Proxy drain operation does not match the active operation",
+        ),
+    }
 }
 
 fn build_lite_topic_meta(subscriptions: &[crate::session::LiteSubscriptionSnapshot]) -> HashMap<CheetahString, i32> {
@@ -2381,69 +2449,156 @@ fn response_with_code(
         .set_opaque(opaque)
 }
 
-fn unsupported_response(
-    command_factory: &RemotingCommandFactory,
-    opaque: i32,
-    remark: impl Into<String>,
-) -> RemotingCommand {
-    response_with_code(command_factory, opaque, ResponseCode::RequestCodeNotSupported, remark)
+fn owner_error(descriptor: &'static ErrorDescriptor, operation: &'static str) -> Error {
+    Error::new(descriptor).with_context(ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation))
 }
 
-fn decode_error_response(
+fn owner_error_with_source(
+    descriptor: &'static ErrorDescriptor,
+    operation: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> Error {
+    Error::caused_by(descriptor, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+fn descriptor_error_response(command_factory: &RemotingCommandFactory, opaque: i32, error: &Error) -> RemotingCommand {
+    let view = error
+        .public_view()
+        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+    error_response(
+        view,
+        RemotingErrorTarget::Reply {
+            factory: command_factory,
+            opaque,
+        },
+    )
+}
+
+fn request_invalid_response(
     command_factory: &RemotingCommandFactory,
     opaque: i32,
     operation: &'static str,
-    error: RocketMQError,
+    source: impl std::error::Error + Send + Sync + 'static,
 ) -> RemotingCommand {
-    command_factory
-        .create_response_command_with_code_remark(ResponseCode::SystemError, format!("{operation} failed: {error}"))
-        .set_opaque(opaque)
+    let error = owner_error_with_source(&PROXY_REMOTING_REQUEST_INVALID, operation, source);
+    descriptor_error_response(command_factory, opaque, &error)
 }
 
-fn transport_error_response(
+fn serialization_error_response(
     command_factory: &RemotingCommandFactory,
     opaque: i32,
     operation: &'static str,
-    error: impl std::fmt::Display,
+    source: impl std::error::Error + Send + Sync + 'static,
 ) -> RemotingCommand {
-    command_factory
-        .create_response_command_with_code_remark(ResponseCode::SystemError, format!("{operation} failed: {error}"))
-        .set_opaque(opaque)
+    let error = owner_error_with_source(&CORE_SERIALIZATION_FAILED, operation, source);
+    descriptor_error_response(command_factory, opaque, &error)
 }
 
-fn proxy_error_response(command_factory: &RemotingCommandFactory, opaque: i32, error: ProxyError) -> RemotingCommand {
-    let code = match &error {
-        ProxyError::RocketMQ(RocketMQError::TopicNotExist { .. })
-        | ProxyError::RocketMQ(RocketMQError::RouteNotFound { .. }) => ResponseCode::TopicNotExist,
-        ProxyError::RocketMQ(RocketMQError::SubscriptionGroupNotExist { .. }) => {
-            ResponseCode::SubscriptionGroupNotExist
+fn upstream_failure_response(
+    command_factory: &RemotingCommandFactory,
+    opaque: i32,
+    operation: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> RemotingCommand {
+    let error = owner_error_with_source(&PROXY_UPSTREAM_REQUEST_FAILED, operation, source);
+    descriptor_error_response(command_factory, opaque, &error)
+}
+
+fn proxy_operation_error_response(
+    command_factory: &RemotingCommandFactory,
+    opaque: i32,
+    operation: &'static str,
+    error: ProxyError,
+) -> RemotingCommand {
+    match error {
+        ProxyError::RocketMQ(error @ RocketMQError::TopicNotExist { .. })
+        | ProxyError::RocketMQ(error @ RocketMQError::RouteNotFound { .. })
+        | ProxyError::RocketMQ(error @ RocketMQError::SubscriptionGroupNotExist { .. })
+        | ProxyError::RocketMQ(error @ RocketMQError::BrokerPermissionDenied { .. })
+        | ProxyError::RocketMQ(error @ RocketMQError::TopicSendingForbidden { .. }) => {
+            let context = error.context();
+            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+            error_response(
+                view,
+                RemotingErrorTarget::Reply {
+                    factory: command_factory,
+                    opaque,
+                },
+            )
         }
-        ProxyError::RocketMQ(error) if is_auth_error(error) => ResponseCode::NoPermission,
-        ProxyError::RocketMQ(RocketMQError::BrokerPermissionDenied { .. })
-        | ProxyError::RocketMQ(RocketMQError::TopicSendingForbidden { .. }) => ResponseCode::NoPermission,
-        ProxyError::TooManyRequests { .. } => ResponseCode::SystemBusy,
-        ProxyError::IllegalOffset { .. } => ResponseCode::PullOffsetMoved,
-        ProxyError::IllegalFilterExpression { .. } => ResponseCode::SubscriptionParseFailed,
-        ProxyError::NotImplemented { .. } => ResponseCode::RequestCodeNotSupported,
+        ProxyError::RocketMQ(error) if is_auth_error(&error) => {
+            let context = error.context();
+            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+            error_response(
+                view,
+                RemotingErrorTarget::Reply {
+                    factory: command_factory,
+                    opaque,
+                },
+            )
+        }
+        ProxyError::RocketMQ(error)
+            if error.descriptor().projection().remoting().code == RemotingResponseCode::SystemError =>
+        {
+            let context = error.context();
+            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+            error_response(
+                view,
+                RemotingErrorTarget::Reply {
+                    factory: command_factory,
+                    opaque,
+                },
+            )
+        }
+        ProxyError::TooManyRequests { .. } => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::SystemBusy,
+            "Proxy request capacity is exhausted",
+        ),
+        ProxyError::IllegalOffset { .. } => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::PullOffsetMoved,
+            "Proxy request offset is invalid",
+        ),
+        ProxyError::IllegalFilterExpression { .. } => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::SubscriptionParseFailed,
+            "Proxy filter expression is invalid",
+        ),
+        ProxyError::NotImplemented { .. } => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::RequestCodeNotSupported,
+            "Proxy operation is unsupported",
+        ),
         ProxyError::IllegalMessageId { .. }
         | ProxyError::IllegalMessageGroup { .. }
         | ProxyError::IllegalDeliveryTime { .. }
-        | ProxyError::MessagePropertyConflictWithType { .. } => ResponseCode::MessageIllegal,
-        _ => ResponseCode::SystemError,
-    };
-    command_factory
-        .create_response_command_with_code_remark(code, error.to_string())
-        .set_opaque(opaque)
-}
-
-fn auth_error_response(command_factory: &RemotingCommandFactory, opaque: i32, error: ProxyError) -> RemotingCommand {
-    proxy_error_response(command_factory, opaque, error)
+        | ProxyError::MessagePropertyConflictWithType { .. } => response_with_code(
+            command_factory,
+            opaque,
+            ResponseCode::MessageIllegal,
+            "Proxy message is invalid",
+        ),
+        source => upstream_failure_response(command_factory, opaque, operation, source),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
+    use std::error::Error as StdError;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -2595,14 +2750,232 @@ mod tests {
         let error = RocketMQError::Shared(Arc::new(rocketmq_error::Error::new(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
         )));
-        let response = super::proxy_error_response(
+        let response = super::proxy_operation_error_response(
             &super::application_remoting_command_factory(),
             17,
+            "dispatch upstream request",
             ProxyError::RocketMQ(error),
         );
 
-        assert_eq!(response.code(), ResponseCode::SystemError as i32);
+        assert_eq!(response.code(), 1);
         assert_eq!(response.opaque(), 17);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("Proxy upstream request failed")
+        );
+    }
+
+    #[test]
+    fn safe_canonical_r1_cause_is_projected_without_blanket_proxy_wrapper() {
+        let response = super::proxy_operation_error_response(
+            &super::application_remoting_command_factory(),
+            19,
+            "dispatch upstream request",
+            ProxyError::RocketMQ(RocketMQError::Shared(Arc::new(rocketmq_error::Error::new(
+                &rocketmq_error::CORE_INTERNAL_FAILURE,
+            )))),
+        );
+
+        assert_eq!(response.code(), 1);
+        assert_eq!(response.remark().map(CheetahString::as_str), Some("Internal error"));
+    }
+
+    #[test]
+    fn upstream_owner_retains_same_shared_cause_and_physical_leaf() {
+        let physical = Arc::new(rocketmq_error::Error::caused_by(
+            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+            std::io::Error::other("password=plain-text"),
+        ));
+        let owner = super::owner_error_with_source(
+            &rocketmq_error::PROXY_UPSTREAM_REQUEST_FAILED,
+            "dispatch upstream request",
+            ProxyError::RocketMQ(RocketMQError::Shared(Arc::clone(&physical))),
+        );
+
+        assert_eq!(owner.descriptor(), &rocketmq_error::PROXY_UPSTREAM_REQUEST_FAILED);
+        let stored = owner
+            .source()
+            .and_then(|source| source.downcast_ref::<ProxyError>())
+            .expect("typed Proxy cause");
+        let ProxyError::RocketMQ(RocketMQError::Shared(retained)) = stored else {
+            panic!("expected retained shared transport cause");
+        };
+        assert!(Arc::ptr_eq(retained, &physical));
+        assert!(retained
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
+    }
+
+    #[test]
+    fn request_invalid_owner_retains_typed_r29_cause_while_emitting_r1() {
+        let owner = super::owner_error_with_source(
+            &rocketmq_error::PROXY_REMOTING_REQUEST_INVALID,
+            "build sendMessage request",
+            ProxyError::RocketMQ(RocketMQError::request_body_invalid("sendMessage", "secret body detail")),
+        );
+        let response = super::descriptor_error_response(&super::application_remoting_command_factory(), 29, &owner);
+
+        assert_eq!(response.code(), 1);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("Proxy remoting request is invalid")
+        );
+        let stored = owner
+            .source()
+            .and_then(|source| source.downcast_ref::<ProxyError>())
+            .expect("typed Proxy cause");
+        let ProxyError::RocketMQ(cause) = stored else {
+            panic!("expected typed RocketMQ request cause");
+        };
+        assert_eq!(cause.descriptor().projection().remoting().code.as_i32(), 29);
+    }
+
+    #[test]
+    fn proxy_drain_unavailable_is_r14_with_fixed_message() {
+        let response = super::proxy_drain_error_response(
+            &super::application_remoting_command_factory(),
+            14,
+            rocketmq_proxy_core::ProxyDrainError::ReadinessTransition {
+                message: "password=plain-text".to_owned(),
+            },
+        );
+
+        assert_eq!(response.code(), 14);
+        assert_eq!(response.opaque(), 14);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("Proxy drain service is unavailable")
+        );
+        assert!(!response.remark().expect("fixed remark").contains("plain-text"));
+    }
+
+    #[test]
+    fn proxy_drain_invalid_body_is_r29_with_fixed_message() {
+        let response = super::proxy_drain_request_error_response(
+            &super::application_remoting_command_factory(),
+            29,
+            super::ProxyDrainRequestError::InvalidBody(RocketMQError::request_body_invalid(
+                "beginProxyDrain",
+                "password=plain-text",
+            )),
+        );
+
+        assert_eq!(response.code(), 29);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("Request body is invalid")
+        );
+        assert!(!response.remark().expect("fixed remark").contains("plain-text"));
+    }
+
+    #[test]
+    fn serialization_failure_is_r1_with_fixed_message() {
+        let response = super::serialization_error_response(
+            &super::application_remoting_command_factory(),
+            1,
+            "encode remoting response",
+            std::io::Error::other("C:\\secret\\response.json"),
+        );
+
+        assert_eq!(response.code(), 1);
+        assert_eq!(
+            response.remark().map(CheetahString::as_str),
+            Some("Serialization failed")
+        );
+        assert!(!response.remark().expect("fixed remark").contains("secret"));
+    }
+
+    #[test]
+    fn local_proxy_business_mappings_keep_frozen_codes_and_safe_messages() {
+        let cases = [
+            (
+                ProxyError::TooManyRequests {
+                    resource: "secret queue",
+                },
+                2,
+                "Proxy request capacity is exhausted",
+            ),
+            (
+                ProxyError::NotImplemented {
+                    feature: "secret feature",
+                },
+                3,
+                "Proxy operation is unsupported",
+            ),
+            (
+                ProxyError::IllegalMessageId {
+                    message: "secret id".to_owned(),
+                },
+                13,
+                "Proxy message is invalid",
+            ),
+            (
+                ProxyError::IllegalOffset {
+                    message: "secret offset".to_owned(),
+                },
+                21,
+                "Proxy request offset is invalid",
+            ),
+            (
+                ProxyError::IllegalFilterExpression {
+                    message: "secret filter".to_owned(),
+                },
+                23,
+                "Proxy filter expression is invalid",
+            ),
+        ];
+
+        for (error, code, message) in cases {
+            let response = super::proxy_operation_error_response(
+                &super::application_remoting_command_factory(),
+                7,
+                "execute Proxy operation",
+                error,
+            );
+            assert_eq!(response.code(), code);
+            assert_eq!(response.remark().map(CheetahString::as_str), Some(message));
+            assert!(!response.remark().expect("fixed remark").contains("secret"));
+        }
+    }
+
+    #[test]
+    fn canonical_proxy_mappings_keep_frozen_codes_and_catalog_messages() {
+        let cases = [
+            (
+                RocketMQError::TopicNotExist {
+                    topic: "secret topic".to_owned(),
+                },
+                17,
+                "Topic does not exist",
+            ),
+            (
+                RocketMQError::SubscriptionGroupNotExist {
+                    group: "secret group".to_owned(),
+                },
+                26,
+                "Subscription group does not exist",
+            ),
+            (
+                RocketMQError::BrokerPermissionDenied {
+                    operation: "secret operation".to_owned(),
+                },
+                16,
+                "Permission was denied",
+            ),
+        ];
+
+        for (error, code, message) in cases {
+            let response = super::proxy_operation_error_response(
+                &super::application_remoting_command_factory(),
+                8,
+                "execute Proxy operation",
+                ProxyError::RocketMQ(error),
+            );
+            assert_eq!(response.code(), code);
+            assert_eq!(response.remark().map(CheetahString::as_str), Some(message));
+            assert!(!response.remark().expect("fixed remark").contains("secret"));
+        }
     }
 
     fn test_dispatcher() -> ProxyRemotingDispatcher<DefaultMessagingProcessor> {
@@ -2733,6 +3106,10 @@ mod tests {
             assert_eq!(
                 ResponseCode::from(unsupported.code()),
                 ResponseCode::RequestCodeNotSupported
+            );
+            assert_eq!(
+                unsupported.remark().map(CheetahString::as_str),
+                Some("Protocol request is unsupported")
             );
         }
     }
@@ -3013,10 +3390,11 @@ mod tests {
                 ResponseCode::from(response.code()),
                 ResponseCode::RequestCodeNotSupported
             );
-            assert!(response
-                .remark()
-                .expect("unsupported auth admin response should carry remark")
-                .contains("send it to broker admin"));
+            assert_eq!(response.code(), 3);
+            assert_eq!(
+                response.remark().map(CheetahString::as_str),
+                Some("Protocol request is unsupported")
+            );
         }
     }
 
@@ -3732,6 +4110,11 @@ mod tests {
                 ResponseCode::RequestCodeNotSupported
             );
             assert_eq!(response.opaque(), opaque);
+            assert_eq!(response.code(), 3);
+            assert_eq!(
+                response.remark().map(CheetahString::as_str),
+                Some("Protocol request is unsupported")
+            );
         }
 
         assert!(backend.seen_requests.lock().expect("backend mutex poisoned").is_empty());

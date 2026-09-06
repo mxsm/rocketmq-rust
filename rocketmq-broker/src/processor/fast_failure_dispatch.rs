@@ -14,8 +14,12 @@
 
 use std::sync::Arc;
 
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
+use rocketmq_transport::api::error_response;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestControlView;
 use rocketmq_transport::api::TransportContractViolation;
@@ -98,10 +102,9 @@ impl FastFailureAdmission {
     ) -> Result<FastFailureRunGuard, FastFailureAwaitError> {
         let Some(mut response_rx) = self.response_rx.take() else {
             self.armed = false;
-            return Err(FastFailureAwaitError::Rejected(self.missing_response_rejection(
-                FastFailureRejectionKind::Internal,
-                "fast failure admission lost its response receiver before dispatch",
-            )));
+            return Err(FastFailureAwaitError::Rejected(
+                self.missing_response_rejection(FastFailureRejectionKind::Internal),
+            ));
         };
         if control.is_cancelled() {
             self.cancel_for_control();
@@ -121,7 +124,6 @@ impl FastFailureAdmission {
                     &self.service.command_factory(),
                     self.opaque,
                     FastFailureRejectionKind::QueueCancelled,
-                    "fast failure request was cancelled without a response",
                 )));
             }
             () = control.cancelled() => {
@@ -134,10 +136,12 @@ impl FastFailureAdmission {
         };
 
         let Some(permit) = permit else {
-            self.cancel_with_response(super::system_error_response(
-                &self.service.command_factory(),
-                self.opaque,
-                "fast failure queue permit acquisition failed",
+            self.cancel_with_response(error_response(
+                PublicErrorView::descriptor_only(&CORE_INTERNAL_FAILURE),
+                RemotingErrorTarget::Reply {
+                    factory: &self.service.command_factory(),
+                    opaque: self.opaque,
+                },
             ));
             self.armed = false;
             return Err(FastFailureAwaitError::Rejected(rejection_from_result(
@@ -145,7 +149,6 @@ impl FastFailureAdmission {
                 &self.service.command_factory(),
                 self.opaque,
                 FastFailureRejectionKind::PermitClosed,
-                "fast failure queue permit acquisition failed before a response was produced",
             )));
         };
         if !self.service.try_mark_running(self.queue_kind, &self.task) {
@@ -155,7 +158,6 @@ impl FastFailureAdmission {
                 &self.service.command_factory(),
                 self.opaque,
                 FastFailureRejectionKind::QueueCancelled,
-                "fast failure request was cancelled before processor execution",
             )));
         }
 
@@ -179,10 +181,12 @@ impl FastFailureAdmission {
     }
 
     fn cancel_for_control(&self) {
-        self.cancel_with_response(super::system_error_response(
-            &self.service.command_factory(),
-            self.opaque,
-            "request lifecycle ended before fast-failure dispatch",
+        self.cancel_with_response(error_response(
+            PublicErrorView::descriptor_only(&CORE_INTERNAL_FAILURE),
+            RemotingErrorTarget::Reply {
+                factory: &self.service.command_factory(),
+                opaque: self.opaque,
+            },
         ));
     }
 
@@ -190,10 +194,16 @@ impl FastFailureAdmission {
         self.service.cancel(self.queue_kind, &self.task, response);
     }
 
-    fn missing_response_rejection(&self, kind: FastFailureRejectionKind, remark: &'static str) -> FastFailureRejection {
+    fn missing_response_rejection(&self, kind: FastFailureRejectionKind) -> FastFailureRejection {
         FastFailureRejection::new(
             kind,
-            super::system_error_response(&self.service.command_factory(), self.opaque, remark),
+            error_response(
+                PublicErrorView::descriptor_only(&CORE_INTERNAL_FAILURE),
+                RemotingErrorTarget::Reply {
+                    factory: &self.service.command_factory(),
+                    opaque: self.opaque,
+                },
+            ),
         )
     }
 }
@@ -203,10 +213,12 @@ impl Drop for FastFailureAdmission {
         if !self.armed {
             return;
         }
-        self.cancel_with_response(super::system_error_response(
-            &self.service.command_factory(),
-            self.opaque,
-            "fast failure admission owner was dropped before processor execution",
+        self.cancel_with_response(error_response(
+            PublicErrorView::descriptor_only(&CORE_INTERNAL_FAILURE),
+            RemotingErrorTarget::Reply {
+                factory: &self.service.command_factory(),
+                opaque: self.opaque,
+            },
         ));
     }
 }
@@ -231,20 +243,24 @@ impl FastFailureRunGuard {
         let Some(response_rx) = self.response_rx.take() else {
             return Err(FastFailureRejection::new(
                 FastFailureRejectionKind::Internal,
-                super::system_error_response(
-                    &self.service.command_factory(),
-                    self.opaque,
-                    "fast failure run owner lost its response receiver",
+                error_response(
+                    PublicErrorView::descriptor_only(&CORE_INTERNAL_FAILURE),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.service.command_factory(),
+                        opaque: self.opaque,
+                    },
                 ),
             ));
         };
         response_rx.await.map_err(|_| {
             FastFailureRejection::new(
                 FastFailureRejectionKind::Internal,
-                super::system_error_response(
-                    &self.service.command_factory(),
-                    self.opaque,
-                    "fast failure response channel closed before request completed",
+                error_response(
+                    PublicErrorView::descriptor_only(&CORE_INTERNAL_FAILURE),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.service.command_factory(),
+                        opaque: self.opaque,
+                    },
                 ),
             )
         })
@@ -368,13 +384,18 @@ fn rejection_from_result(
     command_factory: &RemotingCommandFactory,
     opaque: i32,
     kind: FastFailureRejectionKind,
-    missing_response_remark: &'static str,
 ) -> FastFailureRejection {
     match result {
         Ok(Some(response)) => FastFailureRejection::new(kind, response),
         Ok(None) | Err(_) => FastFailureRejection::new(
             FastFailureRejectionKind::Internal,
-            super::system_error_response(command_factory, opaque, missing_response_remark),
+            error_response(
+                PublicErrorView::descriptor_only(&CORE_INTERNAL_FAILURE),
+                RemotingErrorTarget::Reply {
+                    factory: command_factory,
+                    opaque,
+                },
+            ),
         ),
     }
 }

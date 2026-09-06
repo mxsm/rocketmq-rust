@@ -21,15 +21,6 @@ const STATIC_BUSINESS_CONSTRUCTORS: [&str; 3] = [
     "RemotingCommand::new_response",
 ];
 
-const APPLICATION_FACTORY_HELPERS: [&str; 6] = [
-    "command_from_error_with_opaque(",
-    "command_from_error_with_remark_and_opaque(",
-    "internal_error_with_opaque(",
-    "request_code_not_supported_with_opaque(",
-    "request_code_not_supported_with_remark(",
-    "request_code_not_supported_with_remark_and_opaque(",
-];
-
 const OWNER_BYPASS_CONSTRUCTORS: [&str; 2] = [
     "Broker2Client::default()",
     "RpcClientUtils::create_command_for_rpc_response(",
@@ -89,7 +80,6 @@ fn broker_request_processor_owners_do_not_bypass_the_injected_factory() {
             if STATIC_BUSINESS_CONSTRUCTORS
                 .iter()
                 .any(|constructor| line.contains(constructor))
-                || APPLICATION_FACTORY_HELPERS.iter().any(|helper| line.contains(helper))
                 || OWNER_BYPASS_CONSTRUCTORS
                     .iter()
                     .any(|constructor| line.contains(constructor))

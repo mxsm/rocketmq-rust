@@ -18,7 +18,9 @@ use std::time::Instant;
 
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::RemotingAuthContext;
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_observability::metrics::namesrv::NameServerAdmissionOutcome;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_observability::metrics::namesrv::NameServerRequestOutcome;
@@ -32,7 +34,9 @@ use rocketmq_security_api::combine_layered_authorization;
 use rocketmq_security_api::DetailedDecision;
 use rocketmq_security_api::IngressDecision;
 use rocketmq_security_api::LayerRequirement;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RemotingResponse;
 use rocketmq_transport::api::RequestProcessor;
@@ -46,7 +50,6 @@ pub(crate) use self::cluster_test_request_processor::TransportClusterTestRouteLo
 use crate::bootstrap::InFlightRequestTracker;
 use crate::bootstrap::NameServerRuntimeHandle;
 use crate::processor::default_request_processor::DefaultRequestProcessor;
-use crate::processor::response_factory::NameServerResponseFactoryExt;
 use crate::processor::workload_admission::NameServerWorkloadAdmission;
 use crate::processor::workload_admission::WorkloadAdmissionClass;
 use crate::security::classify_namesrv_request;
@@ -54,7 +57,6 @@ use crate::security::classify_namesrv_request;
 pub(crate) mod client_request_processor;
 mod cluster_test_request_processor;
 pub mod default_request_processor;
-mod response_factory;
 #[doc(hidden)]
 pub mod workload_admission;
 
@@ -186,10 +188,15 @@ impl NameServerRequestProcessor {
             None => {
                 let error = RocketMQError::authentication_failed("request code is not authorized by NameServer");
                 self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
-                return Ok(Some(self.command_factory.command_from_error_with_remark_and_opaque(
-                    &error,
-                    "NameServer request is not authorized",
-                    request.opaque(),
+                let context = error.context();
+                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                    .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                return Ok(Some(error_response(
+                    view,
+                    RemotingErrorTarget::Reply {
+                        factory: &self.command_factory,
+                        opaque: request.opaque(),
+                    },
                 )));
             }
         };
@@ -227,10 +234,15 @@ impl NameServerRequestProcessor {
                 request_started.elapsed(),
                 0,
             );
-            return Ok(Some(self.command_factory.command_from_error_with_remark_and_opaque(
-                &error,
-                error.to_string(),
-                request.opaque(),
+            let context = error.context();
+            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+            return Ok(Some(error_response(
+                view,
+                RemotingErrorTarget::Reply {
+                    factory: &self.command_factory,
+                    opaque: request.opaque(),
+                },
             )));
         }
         let admission_class = WorkloadAdmissionClass::from(request_class);
@@ -302,9 +314,13 @@ impl NameServerRequestProcessor {
         let response = match self.processor_table.get(&original_code).cloned() {
             None => match self.default_request_processor.clone() {
                 None => {
-                    let response = self
-                        .command_factory
-                        .request_code_not_supported_with_opaque(original_code, request.opaque());
+                    let response = error_response(
+                        PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+                        RemotingErrorTarget::Reply {
+                            factory: &self.command_factory,
+                            opaque: request.opaque(),
+                        },
+                    );
                     Ok(Some(response))
                 }
                 Some(mut processor) => processor_response(&mut processor, request, broker_session).await,

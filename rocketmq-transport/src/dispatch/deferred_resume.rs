@@ -717,7 +717,16 @@ where
             result
         }
         HandlerOutcome::Completed(Err(error)) => {
-            let response = match crate::error_response::remoting_response_from_error(&error) {
+            let context = error.context();
+            let view = rocketmq_error::PublicErrorView::try_new(error.descriptor(), &context)
+                .unwrap_or_else(|_| rocketmq_error::PublicErrorView::descriptor_only(error.descriptor()));
+            let command = crate::error_response::error_response(
+                view,
+                crate::error_response::RemotingErrorTarget::Fresh(
+                    &rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory(),
+                ),
+            );
+            let response = match RemotingResponse::command(command) {
                 Ok(response) => response,
                 Err(source) => {
                     drop(responder.take());

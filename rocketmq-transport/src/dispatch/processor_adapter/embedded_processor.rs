@@ -16,6 +16,9 @@
 
 use std::time::Duration;
 
+use rocketmq_error::PublicErrorView;
+use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
+
 use crate::contract::TransportContractViolation;
 use crate::dispatch::DeferredRegistration;
 use crate::dispatch::HandlerOutcome;
@@ -75,12 +78,19 @@ where
             Ok(Ok(outcome)) => Ok(InternalProcessorCandidate::success(InternalProcessorOutcome::Handled(
                 outcome,
             ))),
-            Ok(Err(error)) => Ok(InternalProcessorCandidate::failure(
-                InternalProcessorOutcome::Handled(HandlerOutcome::Reply(
-                    crate::error_response::remoting_response_from_error(&error)?,
-                )),
-                InternalFailureOrigin::ProcessorError,
-            )),
+            Ok(Err(error)) => {
+                let context = error.context();
+                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                    .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                let command = crate::error_response::error_response(
+                    view,
+                    crate::error_response::RemotingErrorTarget::Fresh(&application_remoting_command_factory()),
+                );
+                Ok(InternalProcessorCandidate::failure(
+                    InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(command)?)),
+                    InternalFailureOrigin::ProcessorError,
+                ))
+            }
             Err(_) => Ok(InternalProcessorCandidate::failure(
                 InternalProcessorOutcome::Handled(HandlerOutcome::Reply(RemotingResponse::command(
                     super::super::authorized_dispatcher::deadline_response(

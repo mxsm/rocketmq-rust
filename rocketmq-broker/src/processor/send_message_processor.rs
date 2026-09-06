@@ -24,6 +24,7 @@ use crate::send_message_constants::has_valid_compaction_key;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rand::RngExt;
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
@@ -80,9 +81,9 @@ use rocketmq_store::StoreHealthSnapshot;
 use rocketmq_store::SyncFlushRuntimeInfo;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreHealth;
-use rocketmq_transport::api::command_from_error_with_factory_and_opaque;
-use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::error_response as remoting_error_response;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestId;
 use rocketmq_transport::api::RequestOrigin;
@@ -280,10 +281,15 @@ where
         match result {
             Ok(outcome) => Ok(outcome),
             Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
-                BrokerResponseParts::from_command(command_from_error_with_factory_and_opaque(
-                    &self.inner.context.command_factory,
-                    &error,
-                    original.original_opaque(),
+                let context = error.context();
+                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                    .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                BrokerResponseParts::from_command(remoting_error_response(
+                    view,
+                    RemotingErrorTarget::Reply {
+                        factory: &self.inner.context.command_factory,
+                        opaque: original.original_opaque(),
+                    },
                 ))?
                 .into_handler_outcome()
             }
@@ -327,11 +333,12 @@ where
                     "SendMessageProcessor consumer send-back completed without a response",
                 )
             }
-            _ => BrokerResponseParts::from_command(request_code_not_supported_with_factory_remark_and_opaque(
-                &self.inner.context.command_factory,
-                original_code,
-                format!("request code {original_code} not supported"),
-                original_opaque,
+            _ => BrokerResponseParts::from_command(remoting_error_response(
+                PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
+                RemotingErrorTarget::Reply {
+                    factory: &self.inner.context.command_factory,
+                    opaque: original_opaque,
+                },
             ))?
             .into_handler_outcome(),
         }
@@ -667,10 +674,15 @@ where
                     send_message_context,
                 )
             }
-            Err(error) => (
-                map_store_api_error(error).apply_to(response),
-                StoreHookCompletion::NoAfterHook,
-            ),
+            Err(error) => {
+                let view = error
+                    .public_view()
+                    .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                (
+                    remoting_error_response(view, RemotingErrorTarget::Existing(response)),
+                    StoreHookCompletion::NoAfterHook,
+                )
+            }
         })
         .await
         .map_err(|error| RocketMQError::internal("send-message-store", error))?;
@@ -824,10 +836,15 @@ where
                             send_message_context,
                         )
                     }
-                    Err(error) => (
-                        map_store_api_error(error).apply_to(response),
-                        StoreHookCompletion::NoAfterHook,
-                    ),
+                    Err(error) => {
+                        let view = error
+                            .public_view()
+                            .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                        (
+                            remoting_error_response(view, RemotingErrorTarget::Existing(response)),
+                            StoreHookCompletion::NoAfterHook,
+                        )
+                    }
                 },
             )
             .await
@@ -857,10 +874,15 @@ where
                         send_message_context,
                     )
                 }
-                Err(error) => (
-                    map_store_api_error(error).apply_to(response),
-                    StoreHookCompletion::NoAfterHook,
-                ),
+                Err(error) => {
+                    let view = error
+                        .public_view()
+                        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                    (
+                        remoting_error_response(view, RemotingErrorTarget::Existing(response)),
+                        StoreHookCompletion::NoAfterHook,
+                    )
+                }
             })
             .await
         }

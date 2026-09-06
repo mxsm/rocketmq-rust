@@ -24,6 +24,8 @@ use crate::topic::manager::topic_route_info_manager::TopicRouteInfoManager;
 use crate::config::broker_config::BrokerConfig;
 use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_model::allocation::AllocateMessageQueueAveragely;
 use rocketmq_model::allocation::AllocateMessageQueueAveragelyByCircle;
 use rocketmq_model::allocation::AllocateMessageQueueStrategy;
@@ -55,8 +57,9 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_store::MessageStoreConfig;
-use rocketmq_transport::api::request_code_not_supported_with_factory_remark_and_opaque;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
 use rocketmq_transport::api::RequestProcessor;
@@ -135,11 +138,12 @@ impl QueryAssignmentProcessor {
                     "QueryAssignmentProcessor received unknown request code: {:?}",
                     request_code
                 );
-                let response = request_code_not_supported_with_factory_remark_and_opaque(
-                    &self.command_factory,
-                    request.code(),
-                    format!("QueryAssignmentProcessor request code {} not supported", request.code()),
-                    request.opaque(),
+                let response = error_response(
+                    PublicErrorView::descriptor_only(&PROTOCOL_REQUEST_UNSUPPORTED),
+                    RemotingErrorTarget::Reply {
+                        factory: &self.command_factory,
+                        opaque: request.opaque(),
+                    },
                 );
                 Ok(Some(response))
             }

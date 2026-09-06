@@ -18,7 +18,9 @@ use std::sync::Arc;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::RPC_RESPONSE_FAILED;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::MessageTrait;
@@ -43,11 +45,13 @@ use rocketmq_store::StoreAppendReceipt;
 use rocketmq_store_api::MessageAppender;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
+use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::AdmissionController;
 use rocketmq_transport::api::AdmissionLimits;
 use rocketmq_transport::api::AuthorizedCommandDispatcher;
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::HandlerOutcome;
+use rocketmq_transport::api::RemotingErrorTarget;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestProcessor;
 use rocketmq_transport::api::ResponseObservation;
@@ -154,10 +158,12 @@ impl ReplyPushPort for ProbePushPort {
             PushBehavior::Success => Ok(RemotingCommand::create_response_command_with_code(
                 ProtocolResponseCode::Success,
             )),
-            PushBehavior::NonSuccess => Ok(crate::processor::system_error_response(
-                &application_remoting_command_factory(),
-                0,
-                "probe remote non-success",
+            PushBehavior::NonSuccess => Ok(error_response(
+                PublicErrorView::descriptor_only(&RPC_RESPONSE_FAILED),
+                RemotingErrorTarget::Reply {
+                    factory: &application_remoting_command_factory(),
+                    opaque: 0,
+                },
             )),
             PushBehavior::MissingChannel => unreachable!("missing channels stop before message mutation"),
             PushBehavior::CallError => Err(ReplyPushPortError::TestCall),
@@ -276,16 +282,23 @@ impl RequestProcessor for ReplyProbeProcessor {
                         queue_offset,
                     )
                 }
-                Err(remark) => (
-                    crate::processor::system_error_response(
-                        &application_remoting_command_factory(),
-                        opaque,
-                        remark.to_string(),
-                    ),
-                    String::new(),
-                    0,
-                    0,
-                ),
+                Err(error) => {
+                    let view = error
+                        .public_view()
+                        .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
+                    (
+                        error_response(
+                            view,
+                            RemotingErrorTarget::Reply {
+                                factory: &application_remoting_command_factory(),
+                                opaque,
+                            },
+                        ),
+                        String::new(),
+                        0,
+                        0,
+                    )
+                }
             };
             response.set_opaque_mut(opaque);
             add_reply_response_metadata(&mut response, "region-r", true);
@@ -410,10 +423,7 @@ async fn structured_reply_store_leaf_preserves_push_hook_metadata_and_error_visi
         let built = built.as_ref().expect("Reply store error response built");
         assert_eq!(error_plan.response_code(), built.code);
         assert_eq!(built.opaque, OPAQUE);
-        assert_eq!(
-            built.remark.as_deref(),
-            Some("storage.backend.unavailable: Storage backend is unavailable")
-        );
+        assert_eq!(built.remark.as_deref(), Some("Storage backend is unavailable"));
     }
     assert_eq!(
         failed.events.lock().as_slice(),
