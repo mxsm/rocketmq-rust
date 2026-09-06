@@ -202,6 +202,7 @@ impl RequestProcessor for PostTakeFaultProcessor {
             }
         };
         let kind = rejection.kind();
+        drop(rejection);
         self.observed
             .send(kind)
             .map_err(|_| RocketMQError::illegal_argument("post-take observer closed"))?;

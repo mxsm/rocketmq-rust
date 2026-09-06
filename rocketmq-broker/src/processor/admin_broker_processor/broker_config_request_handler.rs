@@ -1986,11 +1986,8 @@ mod tests {
             ResponseCode::RequestCodeNotSupported
         );
         assert_eq!(
-            response
-                .remark()
-                .expect("export rocksdb config should explain unsupported backend"),
-            "EXPORT_ROCKSDB_CONFIG_TO_JSON requires a real RocksDB config backend; current Rust broker uses \
-             file-backed config managers"
+            response.remark().map(|remark| remark.as_str()),
+            Some("Protocol request is unsupported")
         );
 
         let _ = fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());

@@ -108,7 +108,7 @@ impl RequestProcessor for ArcHeldPullProcessor {
                 false,
             );
         }
-        self.inner.process_shared(request).await
+        Box::pin(self.inner.process_shared(request)).await
     }
 }
 
@@ -128,7 +128,7 @@ impl TraitPullProcessor {
 impl RequestProcessor for TraitPullProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let mut processor = self.inner.lock().await;
-        RequestProcessor::process(&mut *processor, request).await
+        Box::pin(RequestProcessor::process(&mut *processor, request)).await
     }
 }
 

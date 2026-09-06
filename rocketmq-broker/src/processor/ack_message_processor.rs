@@ -903,7 +903,7 @@ mod tests {
         P: RequestProcessor + Send,
     {
         async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
-            self.processor.lock().await.process(request).await
+            Box::pin(self.processor.lock().await.process(request)).await
         }
     }
 

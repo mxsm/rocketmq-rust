@@ -484,13 +484,13 @@ where
             },
         };
 
-        let result = self
-            .process_with_optional_fast_failure(
-                fast_failure_queue_kind(request_code, default_processor),
-                processor,
-                request,
-            )
-            .await;
+        // Keep the large handler future out of the transport dispatch future.
+        let result = Box::pin(self.process_with_optional_fast_failure(
+            fast_failure_queue_kind(request_code, default_processor),
+            processor,
+            request,
+        ))
+        .await;
         map_request_header_error(&self.command_factory, result, opaque)
     }
 

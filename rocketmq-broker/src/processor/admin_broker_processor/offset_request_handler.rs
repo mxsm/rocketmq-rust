@@ -593,11 +593,8 @@ mod tests {
             ResponseCode::RequestCodeNotSupported
         );
         assert_eq!(
-            response
-                .remark()
-                .expect("check rocksdb cq write progress should explain unsupported backend"),
-            "CHECK_ROCKSDB_CQ_WRITE_PROGRESS requires a real RocksDB consume queue backend; current Rust broker uses \
-             file-backed consume queues"
+            response.remark().map(|remark| remark.as_str()),
+            Some("Protocol request is unsupported")
         );
 
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());

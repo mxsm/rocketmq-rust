@@ -31,6 +31,7 @@ impl RequestProcessor for ExpiryAttachmentFaultProcessor {
             }
         };
         let kind = rejection.kind();
+        drop(rejection);
         self.observed
             .send(kind)
             .map_err(|_| RocketMQError::illegal_argument("post-take expiry observer closed"))?;

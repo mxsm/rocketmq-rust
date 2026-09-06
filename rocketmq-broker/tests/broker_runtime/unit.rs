@@ -1061,22 +1061,17 @@ async fn blocking_shutdown_hook_cannot_extend_the_absolute_deadline() {
     runtime.lifecycle.shutdown_hook = Some(Arc::new(BlockingHook {
         release: Arc::clone(&release),
     }));
-    let release_after_test = Arc::clone(&release);
-    let release_thread = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(150));
-        let (released, signal) = &*release_after_test;
-        *released.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
-        signal.notify_all();
-    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        runtime.shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_millis(20))),
+    )
+    .await;
+    let (released, signal) = &*release;
+    *released.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+    signal.notify_all();
 
-    let started = Instant::now();
-    let report = runtime
-        .shutdown_basic_service_until(ShutdownDeadline::after(Duration::from_millis(20)))
-        .await;
-
-    assert!(started.elapsed() < Duration::from_millis(100));
+    let report = result.expect("shutdown must return while the hook remains blocked");
     assert!(report.deadline.timed_out);
-    release_thread.join().expect("release blocking shutdown hook");
     let _ = context.shutdown_tasks(Duration::from_secs(1)).await;
 }
 
@@ -4458,11 +4453,10 @@ async fn java_definition_only_g8_request_codes_return_explicit_unsupported() {
             ResponseCode::RequestCodeNotSupported,
             "{request_code:?} should keep an explicit unsupported contract"
         );
-        assert!(
-            response
-                .remark()
-                .is_some_and(|remark| remark.contains(&request_code.to_i32().to_string())),
-            "{request_code:?} unsupported response should mention the request code"
+        assert_eq!(
+            response.remark().map(|remark| remark.as_str()),
+            Some("Protocol request is unsupported"),
+            "{request_code:?} should use the canonical unsupported remark"
         );
     }
 
@@ -4488,9 +4482,10 @@ async fn add_remove_broker_without_container_returns_request_code_not_supported(
         ResponseCode::from(add_response.code()),
         ResponseCode::RequestCodeNotSupported
     );
-    assert!(add_response
-        .remark()
-        .is_some_and(|remark| remark.contains(&RequestCode::AddBroker.to_i32().to_string())));
+    assert_eq!(
+        add_response.remark().map(|remark| remark.as_str()),
+        Some("Protocol request is unsupported")
+    );
 
     let mut remove_request = RemotingCommand::create_request_command(
         RequestCode::RemoveBroker,
@@ -4506,9 +4501,10 @@ async fn add_remove_broker_without_container_returns_request_code_not_supported(
         ResponseCode::from(remove_response.code()),
         ResponseCode::RequestCodeNotSupported
     );
-    assert!(remove_response
-        .remark()
-        .is_some_and(|remark| remark.contains(&RequestCode::RemoveBroker.to_i32().to_string())));
+    assert_eq!(
+        remove_response.remark().map(|remark| remark.as_str()),
+        Some("Protocol request is unsupported")
+    );
 
     let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
 }
