@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicUsize;
@@ -158,31 +160,41 @@ pub(crate) struct PullArrivalContinuation {
     _permit: PullContinuationPermit,
 }
 
+#[must_use]
+pub(crate) enum PullContinuationOutcome {
+    Admitted(PullArrivalContinuation),
+    Rejected(PullContinuationRejection),
+}
+
 impl PullArrivalContinuation {
     pub(super) fn arrival(
         admission: &Arc<PullContinuationAdmission>,
         arrival: PullArrivalView<'_>,
         cursor: PullScanCursor,
-    ) -> Result<Self, PullContinuationError> {
+    ) -> Result<PullContinuationOutcome, PullContinuationError> {
         let pending = PullPendingArrival::arrival(arrival, cursor)?;
         let retained_bytes = pending.retained_bytes();
-        let permit = admission.reserve(retained_bytes)?;
-        Ok(Self {
-            pending,
-            _permit: permit,
-        })
+        match admission.reserve(retained_bytes)? {
+            PullContinuationReserveOutcome::Reserved(permit) => Ok(PullContinuationOutcome::Admitted(Self {
+                pending,
+                _permit: permit,
+            })),
+            PullContinuationReserveOutcome::Rejected(rejection) => Ok(PullContinuationOutcome::Rejected(rejection)),
+        }
     }
 
     pub(super) fn forced(
         admission: &Arc<PullContinuationAdmission>,
         cursor: PullScanCursor,
-    ) -> Result<Self, PullContinuationError> {
+    ) -> Result<PullContinuationOutcome, PullContinuationError> {
         let pending = PullPendingArrival::forced(cursor);
-        let permit = admission.reserve(pending.retained_bytes())?;
-        Ok(Self {
-            pending,
-            _permit: permit,
-        })
+        match admission.reserve(pending.retained_bytes())? {
+            PullContinuationReserveOutcome::Reserved(permit) => Ok(PullContinuationOutcome::Admitted(Self {
+                pending,
+                _permit: permit,
+            })),
+            PullContinuationReserveOutcome::Rejected(rejection) => Ok(PullContinuationOutcome::Rejected(rejection)),
+        }
     }
 
     pub(super) fn reserve_next(
@@ -214,12 +226,17 @@ impl PullContinuationAdmission {
         }
     }
 
-    pub(super) fn reserve(self: &Arc<Self>, bytes: usize) -> Result<PullContinuationPermit, PullContinuationError> {
+    pub(super) fn reserve(
+        self: &Arc<Self>,
+        bytes: usize,
+    ) -> Result<PullContinuationReserveOutcome, PullContinuationError> {
         let count = self.count.fetch_add(1, Ordering::AcqRel);
         if count >= self.max_count {
             self.count.fetch_sub(1, Ordering::AcqRel);
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            return Err(PullContinuationError::CountFull);
+            return Ok(PullContinuationReserveOutcome::Rejected(
+                PullContinuationRejection::CountFull,
+            ));
         }
         let mut current = self.bytes.load(Ordering::Acquire);
         loop {
@@ -229,7 +246,9 @@ impl PullContinuationAdmission {
             };
             if next > self.max_bytes {
                 self.reject_count();
-                return Err(PullContinuationError::BytesFull);
+                return Ok(PullContinuationReserveOutcome::Rejected(
+                    PullContinuationRejection::BytesFull,
+                ));
             }
             match self
                 .bytes
@@ -239,10 +258,10 @@ impl PullContinuationAdmission {
                 Err(observed) => current = observed,
             }
         }
-        Ok(PullContinuationPermit {
+        Ok(PullContinuationReserveOutcome::Reserved(PullContinuationPermit {
             admission: Arc::clone(self),
             bytes,
-        })
+        }))
     }
 
     fn reject_count(&self) {
@@ -264,6 +283,11 @@ pub(super) struct PullContinuationPermit {
     bytes: usize,
 }
 
+pub(super) enum PullContinuationReserveOutcome {
+    Reserved(PullContinuationPermit),
+    Rejected(PullContinuationRejection),
+}
+
 impl Drop for PullContinuationPermit {
     fn drop(&mut self) {
         self.admission.count.fetch_sub(1, Ordering::AcqRel);
@@ -278,11 +302,33 @@ pub(super) struct PullContinuationSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PullContinuationError {
+pub(crate) enum PullContinuationRejection {
     CountFull,
     BytesFull,
+}
+
+#[derive(Debug)]
+pub(crate) enum PullContinuationError {
     SizeOverflow,
-    Allocation,
+    Allocation(std::collections::TryReserveError),
+}
+
+impl fmt::Display for PullContinuationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SizeOverflow => formatter.write_str("Pull continuation retained size overflowed"),
+            Self::Allocation(_) => formatter.write_str("Pull continuation allocation failed"),
+        }
+    }
+}
+
+impl Error for PullContinuationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(source) => Some(source),
+            Self::SizeOverflow => None,
+        }
+    }
 }
 
 fn retained_arrival_bytes(
@@ -328,7 +374,7 @@ fn copy_bitmap(bitmap: Option<&[u8]>) -> Result<Option<Vec<u8>>, PullContinuatio
     let mut owned = Vec::new();
     owned
         .try_reserve_exact(bitmap.len())
-        .map_err(|_| PullContinuationError::Allocation)?;
+        .map_err(PullContinuationError::Allocation)?;
     owned.extend_from_slice(bitmap);
     Ok(Some(owned))
 }
@@ -342,7 +388,7 @@ fn copy_properties(
     let mut owned = HashMap::new();
     owned
         .try_reserve(properties.len())
-        .map_err(|_| PullContinuationError::Allocation)?;
+        .map_err(PullContinuationError::Allocation)?;
     owned.extend(properties.iter().map(|(key, value)| (key.clone(), value.clone())));
     Ok(Some(owned))
 }

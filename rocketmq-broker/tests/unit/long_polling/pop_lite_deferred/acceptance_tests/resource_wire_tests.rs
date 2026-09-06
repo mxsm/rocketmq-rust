@@ -17,8 +17,8 @@ use rocketmq_protocol::protocol::header::pop_lite_message_response_header::PopLi
 use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
 
 use super::*;
-use crate::long_polling::pop_lite_deferred::index::PopLiteIndexErrorKind;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareError;
+use crate::long_polling::pop_lite_deferred::index::PopLiteIndexReserveRejection;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareRejection;
 use crate::long_polling::pop_lite_deferred::prepare::PreparedPopLiteRegistration;
 use crate::processor::pop_lite_message_processor::core::PopLiteCoreResult;
 use crate::processor::pop_lite_message_processor::response::compose_pop_lite_response;
@@ -26,25 +26,25 @@ use crate::processor::pop_lite_message_processor::response::PopLiteResponseKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CapacityFailure {
-    Index(PopLiteIndexErrorKind),
+    Index(PopLiteIndexReserveRejection),
     WaiterCapacity,
     RetainedByteCapacity,
     ParentCapacity,
 }
 
-fn capacity_failure(error: PopLiteDeferredPrepareError) -> CapacityFailure {
-    match error {
-        PopLiteDeferredPrepareError::Index(error) => CapacityFailure::Index(error.kind()),
-        PopLiteDeferredPrepareError::Admission(DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)) => {
+fn capacity_failure(rejection: PopLiteDeferredPrepareRejection) -> CapacityFailure {
+    match rejection {
+        PopLiteDeferredPrepareRejection::IndexCapacity(rejection) => CapacityFailure::Index(rejection),
+        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)) => {
             CapacityFailure::WaiterCapacity
         }
-        PopLiteDeferredPrepareError::Admission(DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)) => {
-            CapacityFailure::RetainedByteCapacity
-        }
-        PopLiteDeferredPrepareError::Admission(DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_)) => {
+        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(
+            _,
+        )) => CapacityFailure::RetainedByteCapacity,
+        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_)) => {
             CapacityFailure::ParentCapacity
         }
-        PopLiteDeferredPrepareError::Admission(DeferredAdmissionAcquireOutcome::Acquired(permit)) => {
+        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::Acquired(permit)) => {
             drop(permit);
             panic!("PopLite capacity preparation must not return an acquired permit as an error")
         }
@@ -87,14 +87,15 @@ struct CapacityWireProcessor {
 impl RequestProcessor for CapacityWireProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(prepared) => {
-                self.held.lock().push(prepared);
+            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => {
+                self.held.lock().push(*prepared);
                 held_reply()
             }
-            Err(error) => {
-                self.failures.lock().push(capacity_failure(error));
+            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
+                self.failures.lock().push(capacity_failure(rejection));
                 polling_full_reply(request)
             }
+            Err(error) => Err(RocketMQError::illegal_argument(error.to_string())),
         }
     }
 }
@@ -129,19 +130,19 @@ async fn pop_lite_deferred_capacity_matrix_writes_exact_polling_full_frame() {
             index_limits: PopLiteIndexLimits::new(nonzero(1), nonzero(4), nonzero(4)),
             wait_limits: DeferredWaitLimits::new(4, 4 * 1024 * 1024),
             clients: &["global-a", "global-b"],
-            expected: CapacityFailure::Index(PopLiteIndexErrorKind::GlobalCapacity),
+            expected: CapacityFailure::Index(PopLiteIndexReserveRejection::Global),
         },
         CapacityCase {
             index_limits: PopLiteIndexLimits::new(nonzero(4), nonzero(1), nonzero(4)),
             wait_limits: DeferredWaitLimits::new(4, 4 * 1024 * 1024),
             clients: &["client-a", "client-b"],
-            expected: CapacityFailure::Index(PopLiteIndexErrorKind::ClientCapacity),
+            expected: CapacityFailure::Index(PopLiteIndexReserveRejection::Client),
         },
         CapacityCase {
             index_limits: PopLiteIndexLimits::new(nonzero(4), nonzero(4), nonzero(1)),
             wait_limits: DeferredWaitLimits::new(4, 4 * 1024 * 1024),
             clients: &["per-client", "per-client"],
-            expected: CapacityFailure::Index(PopLiteIndexErrorKind::PerClientCapacity),
+            expected: CapacityFailure::Index(PopLiteIndexReserveRejection::PerClient),
         },
         CapacityCase {
             index_limits: PopLiteIndexLimits::new(nonzero(4), nonzero(4), nonzero(4)),

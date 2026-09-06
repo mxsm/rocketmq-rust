@@ -26,8 +26,8 @@ use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
 use super::*;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareErrorKind;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterErrorKind;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareRejectionKind;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterRejectionKind;
 use crate::long_polling::pop_lite_deferred::prepare::PreparedPopLiteRegistration;
 
 fn success_reply() -> rocketmq_error::RocketMQResult<HandlerOutcome> {
@@ -52,17 +52,19 @@ struct ProvenanceProcessor {
 impl RequestProcessor for ProvenanceProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         if let Some(prepared) = self.state.lock().prepared.take() {
-            let error = self
-                .service
-                .register(prepared, request)
-                .expect_err("a prepared PopLite proof cannot move to another request");
-            assert_eq!(error.kind(), PopLiteDeferredRegisterErrorKind::ProvenanceMismatch);
+            let rejection = match self.service.register(prepared, request) {
+                Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
+                Ok(PopLiteDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                    panic!("a prepared PopLite proof cannot move to another request")
+                }
+            };
+            assert_eq!(
+                rejection.kind(),
+                PopLiteDeferredRegisterRejectionKind::ProvenanceMismatch
+            );
             return success_reply();
         }
-        let prepared = self
-            .service
-            .prepare(request, PopLiteRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         self.state.lock().prepared = Some(prepared);
         success_reply()
     }
@@ -71,16 +73,18 @@ impl RequestProcessor for ProvenanceProcessor {
 #[derive(Clone)]
 struct EmbeddedOriginProcessor {
     service: Arc<PopLiteDeferredService>,
-    observed: Arc<Mutex<Option<PopLiteDeferredPrepareErrorKind>>>,
+    observed: Arc<Mutex<Option<PopLiteDeferredPrepareRejectionKind>>>,
 }
 
 impl RequestProcessor for EmbeddedOriginProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let error = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Err(error) => error,
-            Ok(_) => panic!("embedded PopLite must fail before allocating deferred resources"),
+        let rejection = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
+            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => rejection,
+            Ok(PopLiteDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+                panic!("embedded PopLite must fail before allocating deferred resources")
+            }
         };
-        *self.observed.lock() = Some(error.kind());
+        *self.observed.lock() = Some(rejection.kind());
         success_reply()
     }
 }
@@ -166,7 +170,10 @@ async fn pop_lite_deferred_embedded_origin_is_rejected_before_capacity_take() {
         .await
         .expect("embedded PopLite inline response");
     assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_)));
-    assert_eq!(*observed.lock(), Some(PopLiteDeferredPrepareErrorKind::EmbeddedOrigin));
+    assert_eq!(
+        *observed.lock(),
+        Some(PopLiteDeferredPrepareRejectionKind::EmbeddedOrigin)
+    );
     assert_empty(&service);
 
     drop(harness);
@@ -179,14 +186,17 @@ async fn pop_lite_deferred_embedded_origin_is_rejected_before_capacity_take() {
 struct CapacityProbeProcessor {
     service: Arc<PopLiteDeferredService>,
     held: Arc<Mutex<Vec<PreparedPopLiteRegistration>>>,
-    observed: Arc<Mutex<Vec<PopLiteDeferredPrepareErrorKind>>>,
+    observed: Arc<Mutex<Vec<PopLiteDeferredPrepareRejectionKind>>>,
 }
 
 impl RequestProcessor for CapacityProbeProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(prepared) => self.held.lock().push(prepared),
-            Err(error) => self.observed.lock().push(error.kind()),
+            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => self.held.lock().push(*prepared),
+            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
+                self.observed.lock().push(rejection.kind());
+            }
+            Err(error) => return Err(RocketMQError::illegal_argument(error.to_string())),
         }
         success_reply()
     }
@@ -233,7 +243,7 @@ async fn pop_lite_deferred_wait_admission_enforces_count_and_bytes_before_take()
         }
         assert_eq!(
             observed.lock().as_slice(),
-            &[PopLiteDeferredPrepareErrorKind::Admission]
+            &[PopLiteDeferredPrepareRejectionKind::Admission]
         );
         held.lock().clear();
         assert_empty(&service);

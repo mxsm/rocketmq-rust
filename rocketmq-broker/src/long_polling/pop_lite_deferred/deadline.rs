@@ -34,46 +34,46 @@ impl PopLiteWaitDeadline {
         admission_wall_now: u64,
         monotonic_now: tokio::time::Instant,
         max_age: Duration,
-    ) -> Result<Self, PopLiteWaitDeadlineError> {
+    ) -> Result<PopLiteWaitDeadlineOutcome, PopLiteWaitDeadlineOperationalError> {
         if born_time < 0 {
-            return Err(PopLiteWaitDeadlineError::new(
-                PopLiteWaitDeadlineErrorKind::NegativeBornTime,
-            ));
+            return Ok(PopLiteWaitDeadlineOutcome::Rejected(PopLiteWaitDeadlineRejection::new(
+                PopLiteWaitDeadlineRejectionReason::NegativeBornTime,
+            )));
         }
         if poll_time <= 0 {
-            return Err(PopLiteWaitDeadlineError::new(
-                PopLiteWaitDeadlineErrorKind::NonPositivePollTime,
-            ));
+            return Ok(PopLiteWaitDeadlineOutcome::Rejected(PopLiteWaitDeadlineRejection::new(
+                PopLiteWaitDeadlineRejectionReason::NonPositivePollTime,
+            )));
         }
         let requested_end = born_time
             .checked_add(poll_time)
-            .ok_or_else(|| PopLiteWaitDeadlineError::new(PopLiteWaitDeadlineErrorKind::RequestedEndOverflow))?;
-        let requested_end = u64::try_from(requested_end)
-            .map_err(|_| PopLiteWaitDeadlineError::new(PopLiteWaitDeadlineErrorKind::RequestedEndOverflow))?;
+            .ok_or(PopLiteWaitDeadlineOperationalError::RequestedEnd)?;
+        let requested_end =
+            u64::try_from(requested_end).map_err(|_| PopLiteWaitDeadlineOperationalError::RequestedEnd)?;
         let max_age_millis = u64::try_from(max_age.as_millis()).unwrap_or(u64::MAX);
         let cap_end = admission_wall_now.saturating_add(max_age_millis);
         let effective_end_millis = requested_end.min(cap_end);
         let cutoff = effective_end_millis.saturating_sub(EARLY_WAKE_MILLIS);
         if admission_wall_now > cutoff {
-            return Err(PopLiteWaitDeadlineError::new(
-                PopLiteWaitDeadlineErrorKind::AlreadyExpired,
-            ));
+            return Ok(PopLiteWaitDeadlineOutcome::Rejected(PopLiteWaitDeadlineRejection::new(
+                PopLiteWaitDeadlineRejectionReason::AlreadyExpired,
+            )));
         }
         let remaining_millis = cutoff
             .checked_sub(admission_wall_now)
             .and_then(|remaining| remaining.checked_add(1))
-            .ok_or_else(|| PopLiteWaitDeadlineError::new(PopLiteWaitDeadlineErrorKind::ProtocolOverflow))?;
+            .ok_or(PopLiteWaitDeadlineOperationalError::Protocol)?;
         let protocol_millis = cutoff
             .checked_add(1)
-            .ok_or_else(|| PopLiteWaitDeadlineError::new(PopLiteWaitDeadlineErrorKind::ProtocolOverflow))?;
+            .ok_or(PopLiteWaitDeadlineOperationalError::Protocol)?;
         let protocol_at = monotonic_now
             .checked_add(Duration::from_millis(remaining_millis))
-            .ok_or_else(|| PopLiteWaitDeadlineError::new(PopLiteWaitDeadlineErrorKind::MonotonicOverflow))?;
-        Ok(Self {
+            .ok_or(PopLiteWaitDeadlineOperationalError::Monotonic)?;
+        Ok(PopLiteWaitDeadlineOutcome::Pending(Self {
             effective_end_millis,
             protocol_millis,
             protocol_at,
-        })
+        }))
     }
 
     pub(crate) const fn effective_end_millis(self) -> u64 {
@@ -89,56 +89,74 @@ impl PopLiteWaitDeadline {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum PopLiteWaitDeadlineErrorKind {
-    NegativeBornTime,
-    NonPositivePollTime,
-    RequestedEndOverflow,
-    AlreadyExpired,
-    ProtocolOverflow,
-    MonotonicOverflow,
+#[derive(Debug)]
+#[must_use]
+pub(crate) enum PopLiteWaitDeadlineOutcome {
+    Pending(PopLiteWaitDeadline),
+    Rejected(PopLiteWaitDeadlineRejection),
 }
 
-impl PopLiteWaitDeadlineErrorKind {
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum PopLiteWaitDeadlineRejectionReason {
+    NegativeBornTime,
+    NonPositivePollTime,
+    AlreadyExpired,
+}
+
+impl PopLiteWaitDeadlineRejectionReason {
     const fn as_str(self) -> &'static str {
         match self {
             Self::NegativeBornTime => "negative_born_time",
             Self::NonPositivePollTime => "non_positive_poll_time",
-            Self::RequestedEndOverflow => "requested_end_overflow",
             Self::AlreadyExpired => "already_expired",
-            Self::ProtocolOverflow => "protocol_overflow",
-            Self::MonotonicOverflow => "monotonic_overflow",
         }
     }
 }
 
-pub(crate) struct PopLiteWaitDeadlineError {
-    kind: PopLiteWaitDeadlineErrorKind,
+pub(crate) struct PopLiteWaitDeadlineRejection {
+    reason: PopLiteWaitDeadlineRejectionReason,
 }
 
-impl PopLiteWaitDeadlineError {
-    const fn new(kind: PopLiteWaitDeadlineErrorKind) -> Self {
-        Self { kind }
+impl PopLiteWaitDeadlineRejection {
+    const fn new(reason: PopLiteWaitDeadlineRejectionReason) -> Self {
+        Self { reason }
     }
 
-    pub(crate) const fn kind(&self) -> PopLiteWaitDeadlineErrorKind {
-        self.kind
+    pub(crate) const fn reason(&self) -> PopLiteWaitDeadlineRejectionReason {
+        self.reason
     }
 }
 
-impl fmt::Debug for PopLiteWaitDeadlineError {
+impl fmt::Debug for PopLiteWaitDeadlineRejection {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("PopLiteWaitDeadlineError")
-            .field("kind", &self.kind.as_str())
+            .debug_struct("PopLiteWaitDeadlineRejection")
+            .field("reason", &self.reason.as_str())
             .finish_non_exhaustive()
     }
 }
 
-impl fmt::Display for PopLiteWaitDeadlineError {
+impl fmt::Display for PopLiteWaitDeadlineRejection {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "PopLite wait deadline failed: {}", self.kind.as_str())
+        write!(formatter, "PopLite wait deadline rejected: {}", self.reason.as_str())
     }
 }
 
-impl Error for PopLiteWaitDeadlineError {}
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum PopLiteWaitDeadlineOperationalError {
+    RequestedEnd,
+    Protocol,
+    Monotonic,
+}
+
+impl fmt::Display for PopLiteWaitDeadlineOperationalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::RequestedEnd => "PopLite requested deadline overflowed",
+            Self::Protocol => "PopLite protocol deadline overflowed",
+            Self::Monotonic => "PopLite monotonic deadline overflowed",
+        })
+    }
+}
+
+impl Error for PopLiteWaitDeadlineOperationalError {}

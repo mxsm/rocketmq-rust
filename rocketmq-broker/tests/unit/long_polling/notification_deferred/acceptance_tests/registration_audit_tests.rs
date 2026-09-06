@@ -23,8 +23,10 @@ use rocketmq_transport::api::TransportSecurity;
 use rocketmq_transport::test_support::EmbeddedRequestHarness;
 
 use super::*;
-use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareErrorKind;
-use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterErrorKind;
+use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareOutcome;
+use crate::long_polling::notification_deferred::service::NotificationDeferredPrepareRejectionKind;
+use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterOutcome;
+use crate::long_polling::notification_deferred::service::NotificationDeferredRegisterRejectionKind;
 use crate::long_polling::notification_deferred::service::NotificationRegisterFault;
 use crate::long_polling::notification_deferred::service::PreparedNotificationRegistration;
 
@@ -83,17 +85,28 @@ struct ProvenanceProcessor {
 impl RequestProcessor for ProvenanceProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         if let Some(prepared) = self.state.lock().prepared.take() {
-            let error = self
-                .service
-                .register(prepared, request)
-                .expect_err("a prepared Notification proof cannot move to another request");
-            assert_eq!(error.kind(), NotificationDeferredRegisterErrorKind::ProvenanceMismatch);
+            let rejection = match self.service.register(prepared, request) {
+                Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => rejection,
+                Ok(NotificationDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                    panic!("a prepared Notification proof cannot move to another request")
+                }
+            };
+            assert_eq!(
+                rejection.kind(),
+                NotificationDeferredRegisterRejectionKind::ProvenanceMismatch
+            );
             return success_reply(false);
         }
-        let prepared = self
+        let prepared = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        {
+            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
+            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+                return Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())));
+            }
+            Err(error) => return Err(RocketMQError::illegal_argument(error.to_string())),
+        };
         self.state.lock().prepared = Some(prepared);
         success_reply(false)
     }
@@ -102,7 +115,7 @@ impl RequestProcessor for ProvenanceProcessor {
 #[derive(Clone)]
 struct EmbeddedOriginProcessor {
     service: Arc<NotificationDeferredService>,
-    observed: Arc<Mutex<Option<NotificationDeferredPrepareErrorKind>>>,
+    observed: Arc<Mutex<Option<NotificationDeferredPrepareRejectionKind>>>,
 }
 
 impl RequestProcessor for EmbeddedOriginProcessor {
@@ -111,8 +124,10 @@ impl RequestProcessor for EmbeddedOriginProcessor {
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Err(error) => error,
-            Ok(_) => panic!("embedded Notification must fail before allocating deferred resources"),
+            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => rejection,
+            Ok(NotificationDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+                panic!("embedded Notification must fail before allocating deferred resources")
+            }
         };
         *self.observed.lock() = Some(error.kind());
         success_reply(false)
@@ -131,7 +146,7 @@ impl RequestPolicy for AllowEmbeddedPolicy {
 struct CapacityProcessor {
     service: Arc<NotificationDeferredService>,
     held: Arc<Mutex<Vec<PreparedNotificationRegistration>>>,
-    observed: Arc<Mutex<Vec<NotificationDeferredPrepareErrorKind>>>,
+    observed: Arc<Mutex<Vec<NotificationDeferredPrepareRejectionKind>>>,
 }
 
 impl RequestProcessor for CapacityProcessor {
@@ -140,14 +155,15 @@ impl RequestProcessor for CapacityProcessor {
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Ok(prepared) => {
-                self.held.lock().push(prepared);
+            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => {
+                self.held.lock().push(*prepared);
                 false
             }
-            Err(error) => {
-                self.observed.lock().push(error.kind());
+            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+                self.observed.lock().push(rejection.kind());
                 true
             }
+            Err(error) => return Err(RocketMQError::illegal_argument(error.to_string())),
         };
         success_reply(polling_full)
     }
@@ -156,48 +172,58 @@ impl RequestProcessor for CapacityProcessor {
 #[derive(Clone)]
 struct OneWayProcessor {
     service: Arc<NotificationDeferredService>,
-    observed: mpsc::UnboundedSender<NotificationDeferredPrepareErrorKind>,
+    observed: mpsc::UnboundedSender<NotificationDeferredPrepareRejectionKind>,
 }
 
 #[derive(Clone)]
 struct PostTakeFaultProcessor {
     service: Arc<NotificationDeferredService>,
     fault: NotificationRegisterFault,
-    observed: mpsc::UnboundedSender<NotificationDeferredRegisterErrorKind>,
+    observed: mpsc::UnboundedSender<NotificationDeferredRegisterRejectionKind>,
 }
 
 impl RequestProcessor for PostTakeFaultProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let prepared = self
+        let prepared = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        self.service.force_register_fault(self.fault);
-        let error = match self.service.register(prepared, request) {
-            Err(error) => error,
-            Ok(_) => panic!("injected post-take Notification fault must fail registration"),
+        {
+            Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
+            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
+                return Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())));
+            }
+            Err(error) => return Err(RocketMQError::illegal_argument(error.to_string())),
         };
-        let kind = error.kind();
-        let message = error.to_string();
-        drop(error);
+        self.service.force_register_fault(self.fault);
+        let rejection = match self.service.register(prepared, request) {
+            Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => rejection,
+            Ok(NotificationDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                panic!("injected post-take Notification fault must fail registration")
+            }
+        };
+        let kind = rejection.kind();
         self.observed
             .send(kind)
             .map_err(|_| RocketMQError::illegal_argument("post-take observer closed"))?;
-        Err(RocketMQError::illegal_argument(message))
+        Err(RocketMQError::illegal_argument(
+            "injected post-take Notification rejection",
+        ))
     }
 }
 
 impl RequestProcessor for OneWayProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let error = match self
+        let rejection = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
-            Err(error) => error,
-            Ok(_) => panic!("one-way Notification must fail before deferred allocation"),
+            Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => rejection,
+            Ok(NotificationDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+                panic!("one-way Notification must fail before deferred allocation")
+            }
         };
         self.observed
-            .send(error.kind())
+            .send(rejection.kind())
             .map_err(|_| RocketMQError::illegal_argument("one-way observer closed"))?;
         success_reply(false)
     }
@@ -219,7 +245,7 @@ async fn notification_deferred_one_way_is_rejected_before_capacity_take_and_writ
         .expect("send one-way Notification");
     assert_eq!(
         observed_rx.recv().await,
-        Some(NotificationDeferredPrepareErrorKind::OneWay)
+        Some(NotificationDeferredPrepareRejectionKind::OneWay)
     );
     assert_empty(&service);
     running.finish().await;
@@ -293,7 +319,7 @@ async fn notification_deferred_embedded_origin_is_rejected_before_capacity_take(
     assert!(matches!(outcome, EmbeddedDispatchOutcome::Reply(_)));
     assert_eq!(
         *observed.lock(),
-        Some(NotificationDeferredPrepareErrorKind::EmbeddedOrigin)
+        Some(NotificationDeferredPrepareRejectionKind::EmbeddedOrigin)
     );
     assert_empty(&service);
 
@@ -311,28 +337,28 @@ async fn notification_deferred_global_per_key_wait_and_bytes_full_map_to_polling
             DeferredWaitLimits::new(4, 1024 * 1024),
             NotificationCriteriaLimits::new(nonzero(1), 3, 1),
             vec![("GroupA", 10_201), ("GroupB", 10_202)],
-            NotificationDeferredPrepareErrorKind::Index,
+            NotificationDeferredPrepareRejectionKind::Index,
         ),
         (
             "per-key",
             DeferredWaitLimits::new(4, 1024 * 1024),
             NotificationCriteriaLimits::new(nonzero(4), 0, 1),
             vec![("GroupA", 10_203), ("GroupA", 10_204)],
-            NotificationDeferredPrepareErrorKind::Index,
+            NotificationDeferredPrepareRejectionKind::Index,
         ),
         (
             "wait-count",
             DeferredWaitLimits::new(1, 1024 * 1024),
             NotificationCriteriaLimits::new(nonzero(4), 3, 1),
             vec![("GroupA", 10_205), ("GroupB", 10_206)],
-            NotificationDeferredPrepareErrorKind::Admission,
+            NotificationDeferredPrepareRejectionKind::Admission,
         ),
         (
             "wait-bytes",
             DeferredWaitLimits::new(4, 1),
             NotificationCriteriaLimits::new(nonzero(4), 3, 1),
             vec![("GroupA", 10_207)],
-            NotificationDeferredPrepareErrorKind::Admission,
+            NotificationDeferredPrepareRejectionKind::Admission,
         ),
     ];
 
@@ -377,17 +403,17 @@ async fn notification_deferred_post_take_close_expiry_and_registry_fail_closed_w
         (
             "service-close",
             NotificationRegisterFault::Close,
-            NotificationDeferredRegisterErrorKind::ServiceClosedAfterTake,
+            NotificationDeferredRegisterRejectionKind::ServiceClosedAfterTake,
         ),
         (
             "expiry",
             NotificationRegisterFault::Expiry,
-            NotificationDeferredRegisterErrorKind::Expiry,
+            NotificationDeferredRegisterRejectionKind::Expiry,
         ),
         (
             "registry",
             NotificationRegisterFault::Builder,
-            NotificationDeferredRegisterErrorKind::Registry,
+            NotificationDeferredRegisterRejectionKind::Registry,
         ),
     ];
 

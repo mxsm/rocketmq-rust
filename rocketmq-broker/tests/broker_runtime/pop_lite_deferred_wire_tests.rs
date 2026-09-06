@@ -14,7 +14,9 @@
 
 use std::num::NonZeroUsize;
 
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_model::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
@@ -39,6 +41,8 @@ use tokio::sync::oneshot;
 
 use super::*;
 use crate::long_polling::pop_lite_deferred::index::PopLiteIndexLimits;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareOutcome;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterOutcome;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteRetainedEstimate;
 use crate::long_polling::pop_lite_deferred::service::PopLiteDeferredService;
 
@@ -91,14 +95,34 @@ struct RegisteringProcessor {
 
 impl RequestProcessor for RegisteringProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let prepared = self
-            .service
-            .prepare(request, PopLiteRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let registration = self
-            .service
-            .register(prepared, request)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let prepared = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
+            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
+            Ok(PopLiteDeferredPrepareOutcome::Rejected(_)) => {
+                return Err(RocketMQError::Shared(Arc::new(CanonicalError::new(
+                    &CORE_ARGUMENT_INVALID,
+                ))));
+            }
+            Err(error) => {
+                return Err(RocketMQError::Shared(Arc::new(CanonicalError::caused_by(
+                    &CORE_ARGUMENT_INVALID,
+                    error,
+                ))));
+            }
+        };
+        let registration = match self.service.register(prepared, request) {
+            Ok(PopLiteDeferredRegisterOutcome::Registered(registration)) => *registration,
+            Ok(PopLiteDeferredRegisterOutcome::Rejected(_)) => {
+                return Err(RocketMQError::Shared(Arc::new(CanonicalError::new(
+                    &CORE_ARGUMENT_INVALID,
+                ))));
+            }
+            Err(error) => {
+                return Err(RocketMQError::Shared(Arc::new(CanonicalError::caused_by(
+                    &CORE_ARGUMENT_INVALID,
+                    error,
+                ))));
+            }
+        };
         self.registrations
             .send(registration.deferred_id())
             .map_err(|_| RocketMQError::illegal_argument("PopLite registration observer closed"))?;

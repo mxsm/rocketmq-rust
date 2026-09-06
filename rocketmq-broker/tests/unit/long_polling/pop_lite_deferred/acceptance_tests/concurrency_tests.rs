@@ -48,14 +48,8 @@ struct OpaqueRegistrationProcessor {
 impl RequestProcessor for OpaqueRegistrationProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
         let opaque = request.command().opaque();
-        let prepared = self
-            .service
-            .prepare(request, PopLiteRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let registration = self
-            .service
-            .register(prepared, request)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
+        let registration = registration_or_test_error(self.service.register(prepared, request))?;
         self.registrations
             .send((opaque, registration.deferred_id()))
             .map_err(|_| RocketMQError::illegal_argument("opaque registration observer closed"))?;
@@ -316,14 +310,8 @@ struct CommitWindowProcessor {
 
 impl RequestProcessor for CommitWindowProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let prepared = self
-            .service
-            .prepare(request, PopLiteRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let registration = self
-            .service
-            .register(prepared, request)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
+        let registration = registration_or_test_error(self.service.register(prepared, request))?;
         self.registrations
             .send(registration.deferred_id())
             .map_err(|_| RocketMQError::illegal_argument("commit-window observer closed"))?;

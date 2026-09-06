@@ -58,9 +58,13 @@ where
             _ => None,
         };
         let (header, effective_peer) = request.into_parts();
-        let outcome = self
+        let outcome = match self
             .execute_notification_core(&header, effective_peer, 0, frozen_filter)
-            .await;
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => return Ok(self.notification_error_response(&error, 0)),
+        };
         match outcome {
             NotificationCoreOutcome::Reply(command) => Ok(command),
             NotificationCoreOutcome::Ready(ready) => Ok(super::response::compose_notification_response(

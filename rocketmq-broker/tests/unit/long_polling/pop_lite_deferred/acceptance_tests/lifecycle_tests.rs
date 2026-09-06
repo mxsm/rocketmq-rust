@@ -13,32 +13,31 @@
 // limitations under the License.
 
 use super::*;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareErrorKind;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterErrorKind;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareRejectionKind;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterRejectionKind;
 
 #[derive(Clone)]
 struct AfterTakeCloseProcessor {
     service: Arc<PopLiteDeferredService>,
-    observed: mpsc::UnboundedSender<PopLiteDeferredRegisterErrorKind>,
+    observed: mpsc::UnboundedSender<PopLiteDeferredRegisterRejectionKind>,
 }
 
 impl RequestProcessor for AfterTakeCloseProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let prepared = self
-            .service
-            .prepare(request, PopLiteRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let error = self
-            .service
-            .register(prepared, request)
-            .expect_err("the service closes after responder transfer");
-        let kind = error.kind();
-        let message = error.to_string();
-        drop(error);
+        let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
+        let rejection = match self.service.register(prepared, request) {
+            Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
+            Ok(PopLiteDeferredRegisterOutcome::Registered(_)) | Err(_) => {
+                panic!("the service closes after responder transfer")
+            }
+        };
+        let kind = rejection.kind();
         self.observed
             .send(kind)
             .map_err(|_| RocketMQError::illegal_argument("after-take observer closed"))?;
-        Err(RocketMQError::illegal_argument(message))
+        Err(RocketMQError::illegal_argument(
+            "service closed after responder transfer",
+        ))
     }
 }
 
@@ -69,7 +68,7 @@ async fn pop_lite_deferred_close_after_responder_take_rolls_back_builder_resourc
         .expect("release after-take registration");
     assert_eq!(
         observed_rx.recv().await.expect("after-take close result"),
-        PopLiteDeferredRegisterErrorKind::ServiceClosedAfterTake
+        PopLiteDeferredRegisterRejectionKind::ServiceClosedAfterTake
     );
     let snapshot = service.resource_snapshot();
     assert_eq!(snapshot.admission.waiting_count(), 0);
@@ -89,17 +88,19 @@ async fn pop_lite_deferred_close_after_responder_take_rolls_back_builder_resourc
 #[derive(Clone)]
 struct OneWayProbeProcessor {
     service: Arc<PopLiteDeferredService>,
-    observed: mpsc::UnboundedSender<PopLiteDeferredPrepareErrorKind>,
+    observed: mpsc::UnboundedSender<PopLiteDeferredPrepareRejectionKind>,
 }
 
 impl RequestProcessor for OneWayProbeProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let error = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Err(error) => error,
-            Ok(_) => panic!("one-way PopLite must fail before allocating deferred resources"),
+        let rejection = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
+            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => rejection,
+            Ok(PopLiteDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
+                panic!("one-way PopLite must fail before allocating deferred resources")
+            }
         };
         self.observed
-            .send(error.kind())
+            .send(rejection.kind())
             .map_err(|_| RocketMQError::illegal_argument("one-way observer closed"))?;
         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
             ResponseCode::Success,
@@ -123,7 +124,7 @@ async fn pop_lite_deferred_one_way_is_rejected_before_capacity_and_emits_no_fram
     client.send_command(command).await.expect("send one-way PopLite probe");
     assert_eq!(
         observed_rx.recv().await.expect("one-way PopLite prepare result"),
-        PopLiteDeferredPrepareErrorKind::OneWay
+        PopLiteDeferredPrepareRejectionKind::OneWay
     );
     let snapshot = service.resource_snapshot();
     assert_eq!(snapshot.admission.waiting_count(), 0);

@@ -36,20 +36,16 @@ impl LongPollingDeadline {
         poll_time: u64,
         wall_now: u64,
         monotonic_now: tokio::time::Instant,
-    ) -> Result<Self, LongPollingDeadlineError> {
+    ) -> Result<LongPollingDeadlineOutcome, LongPollingDeadlineError> {
         if poll_time == 0 {
-            return Err(LongPollingDeadlineError::new(
-                LongPollingDeadlineErrorKind::ZeroPollTime,
-            ));
+            return Ok(LongPollingDeadlineOutcome::Immediate);
         }
         let expires = born_time
             .checked_add(poll_time)
             .ok_or_else(|| LongPollingDeadlineError::new(LongPollingDeadlineErrorKind::ProtocolOverflow))?;
         let legacy_threshold = expires.saturating_sub(EARLY_WAKE_MILLIS);
         if wall_now > legacy_threshold {
-            return Err(LongPollingDeadlineError::new(
-                LongPollingDeadlineErrorKind::AlreadyExpired,
-            ));
+            return Ok(LongPollingDeadlineOutcome::Immediate);
         }
         let remaining_millis = legacy_threshold
             .checked_sub(wall_now)
@@ -61,10 +57,10 @@ impl LongPollingDeadline {
         let protocol_at = monotonic_now
             .checked_add(Duration::from_millis(remaining_millis))
             .ok_or_else(|| LongPollingDeadlineError::new(LongPollingDeadlineErrorKind::MonotonicOverflow))?;
-        Ok(Self {
+        Ok(LongPollingDeadlineOutcome::Pending(Self {
             protocol_millis,
             protocol_at,
-        })
+        }))
     }
 
     #[must_use]
@@ -78,12 +74,17 @@ impl LongPollingDeadline {
     }
 }
 
+#[must_use]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LongPollingDeadlineOutcome {
+    Pending(LongPollingDeadline),
+    Immediate,
+}
+
 /// Stable category for a checked POP protocol-deadline conversion failure.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum LongPollingDeadlineErrorKind {
-    ZeroPollTime,
     ProtocolOverflow,
-    AlreadyExpired,
     MonotonicOverflow,
 }
 
@@ -91,9 +92,7 @@ impl LongPollingDeadlineErrorKind {
     #[must_use]
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::ZeroPollTime => "zero_poll_time",
             Self::ProtocolOverflow => "protocol_overflow",
-            Self::AlreadyExpired => "already_expired",
             Self::MonotonicOverflow => "monotonic_overflow",
         }
     }

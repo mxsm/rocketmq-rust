@@ -19,7 +19,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
@@ -59,6 +61,7 @@ use tokio::sync::Notify;
 use super::super::*;
 use crate::long_polling::pop_deferred::index::PopArrivalView;
 use crate::long_polling::pop_deferred::service::PopDeferredWakeupObserver;
+use crate::long_polling::pop_deferred::service::PopPendingArrivalOutcome;
 
 const SENTINEL_CODE: i32 = 98_281;
 const ORDERING_KEY: u64 = 9_828;
@@ -207,14 +210,25 @@ impl RequestProcessor for DeferredTestProcessor {
         let filter_tag = header.exp.as_ref().and_then(|value| value.parse::<i64>().ok());
         let filter = filter_tag.map(|tag| Arc::new(MatchTagFilter(tag)) as rocketmq_store::ArcMessageFilter);
         let subscription = filter.as_ref().map(|_| SubscriptionData::default());
-        let prepared = self
+        let prepared = match self
             .service
             .prepare(request, subscription, filter, PopRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let registration = self
-            .service
-            .register(prepared, request)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+            .map_err(|error| {
+                RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+            })? {
+            PopDeferredPrepareOutcome::Prepared(prepared) => *prepared,
+            PopDeferredPrepareOutcome::Rejected(_) => {
+                return Err(RocketMQError::illegal_argument("unexpected POP preparation rejection"));
+            }
+        };
+        let registration = match self.service.register(prepared, request).map_err(|error| {
+            RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+        })? {
+            PopDeferredRegisterOutcome::Registered(registration) => *registration,
+            PopDeferredRegisterOutcome::Rejected(_) => {
+                return Err(RocketMQError::illegal_argument("unexpected POP registration rejection"));
+            }
+        };
         let id = registration.deferred_id();
         self.registrations
             .send(RegistrationObservation { id, caller })
@@ -475,9 +489,10 @@ async fn legacy_route_rearms_a_real_waiter_for_the_next_tick_without_a_new_arriv
     let registered = registrations.recv().await.expect("observe real POP waiter");
 
     let topic = CheetahString::from_static_str("TopicA");
-    service
-        .latch_arrival(&topic, 0, None, 0, None, None, service.fanout_cursor())
-        .expect("retain one arrival before the Legacy route is observed");
+    assert!(matches!(
+        service.latch_arrival(&topic, 0, None, 0, None, None, service.fanout_cursor()),
+        Ok(PopPendingArrivalOutcome::Latched)
+    ));
     let mut first_tick = service
         .pending_arrival_reservations()
         .pop()

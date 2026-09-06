@@ -58,7 +58,12 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use super::index::PopLiteIndexLimits;
+use super::prepare::PopLiteDeferredPrepareFailure;
+use super::prepare::PopLiteDeferredPrepareOutcome;
+use super::prepare::PopLiteDeferredRegisterFailure;
+use super::prepare::PopLiteDeferredRegisterOutcome;
 use super::prepare::PopLiteRetainedEstimate;
+use super::prepare::PreparedPopLiteRegistration;
 use super::service::PopLiteDeferredService;
 use super::service::PopLiteReplayObservation;
 use crate::lite::lite_event_dispatcher::LiteEventDispatcher;
@@ -198,16 +203,34 @@ struct DeferredTestProcessor {
     registrations: mpsc::UnboundedSender<DeferredId>,
 }
 
+fn prepared_or_test_error(
+    result: Result<PopLiteDeferredPrepareOutcome, PopLiteDeferredPrepareFailure>,
+) -> rocketmq_error::RocketMQResult<PreparedPopLiteRegistration> {
+    match result {
+        Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => Ok(*prepared),
+        Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
+            Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())))
+        }
+        Err(error) => Err(RocketMQError::illegal_argument(error.to_string())),
+    }
+}
+
+fn registration_or_test_error(
+    result: Result<PopLiteDeferredRegisterOutcome, PopLiteDeferredRegisterFailure>,
+) -> rocketmq_error::RocketMQResult<rocketmq_transport::api::DeferredRegistration> {
+    match result {
+        Ok(PopLiteDeferredRegisterOutcome::Registered(registration)) => Ok(*registration),
+        Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => {
+            Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())))
+        }
+        Err(error) => Err(RocketMQError::illegal_argument(error.to_string())),
+    }
+}
+
 impl RequestProcessor for DeferredTestProcessor {
     async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let prepared = self
-            .service
-            .prepare(request, PopLiteRetainedEstimate::default())
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
-        let registration = self
-            .service
-            .register(prepared, request)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
+        let registration = registration_or_test_error(self.service.register(prepared, request))?;
         let id = registration.deferred_id();
         self.registrations
             .send(id)

@@ -29,9 +29,12 @@ use rocketmq_transport::api::RequestProcessor;
 use super::core::PopLiteCoreResult;
 use super::response::PopLiteResponseKind;
 use super::PopLiteMessageProcessor;
-use crate::long_polling::pop_lite_deferred::index::PopLiteIndexErrorKind;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareError;
-use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterError;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareFailure;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareOutcome;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareRejection;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterFailure;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterOutcome;
+use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterRejection;
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteRetainedEstimate;
 use crate::processor::response_assembly::BrokerResponseParts;
 
@@ -101,12 +104,18 @@ where
             );
         };
         let prepared = match service.prepare(request, PopLiteRetainedEstimate::default()) {
-            Ok(prepared) => prepared,
-            Err(error) => return self.prepare_error_outcome(&request_header, error),
+            Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
+            Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
+                return self.prepare_rejection_outcome(&request_header, rejection);
+            }
+            Err(failure) => return self.prepare_failure_outcome(&request_header, failure),
         };
         match service.register(prepared, request) {
-            Ok(registration) => Ok(HandlerOutcome::Deferred(registration)),
-            Err(error) => self.register_error_outcome(&request_header, error),
+            Ok(PopLiteDeferredRegisterOutcome::Registered(registration)) => Ok(HandlerOutcome::Deferred(*registration)),
+            Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => {
+                self.register_rejection_outcome(&request_header, *rejection)
+            }
+            Err(failure) => self.register_failure_outcome(failure),
         }
     }
 }
@@ -115,81 +124,98 @@ impl<MS> PopLiteMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore,
 {
-    fn prepare_error_outcome(
+    fn prepare_rejection_outcome(
         &self,
         request_header: &PopLiteMessageRequestHeader,
-        error: PopLiteDeferredPrepareError,
+        rejection: PopLiteDeferredPrepareRejection,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        match error {
-            PopLiteDeferredPrepareError::Deadline(_) | PopLiteDeferredPrepareError::OneWay => {
+        match rejection {
+            PopLiteDeferredPrepareRejection::Deadline(_) | PopLiteDeferredPrepareRejection::OneWay => {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingTimeout)
             }
-            PopLiteDeferredPrepareError::Index(error)
-                if matches!(
-                    error.kind(),
-                    PopLiteIndexErrorKind::GlobalCapacity
-                        | PopLiteIndexErrorKind::ClientCapacity
-                        | PopLiteIndexErrorKind::PerClientCapacity
-                ) =>
-            {
+            PopLiteDeferredPrepareRejection::IndexCapacity(_) => {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingFull)
             }
-            PopLiteDeferredPrepareError::Admission(_) => {
+            PopLiteDeferredPrepareRejection::Admission(_) => {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingFull)
             }
-            PopLiteDeferredPrepareError::EmbeddedOrigin
-            | PopLiteDeferredPrepareError::Header(_)
-            | PopLiteDeferredPrepareError::InvalidHeader => self.invalid_reply(0),
-            PopLiteDeferredPrepareError::ServiceClosed => self.reply_with_code(
+            PopLiteDeferredPrepareRejection::EmbeddedOrigin | PopLiteDeferredPrepareRejection::InvalidHeader => {
+                self.invalid_reply(0)
+            }
+            PopLiteDeferredPrepareRejection::ServiceClosed => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "the deferred POP Lite service is unavailable",
             ),
-            PopLiteDeferredPrepareError::InvalidExpiryMargins
-            | PopLiteDeferredPrepareError::RetainedSizeOverflow
-            | PopLiteDeferredPrepareError::Index(_)
-            | PopLiteDeferredPrepareError::Contract(_) => self.internal_reply(0),
         }
     }
 
-    fn register_error_outcome(
+    fn prepare_failure_outcome(
         &self,
         request_header: &PopLiteMessageRequestHeader,
-        error: PopLiteDeferredRegisterError,
+        failure: PopLiteDeferredPrepareFailure,
     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        match error {
-            PopLiteDeferredRegisterError::ServiceClosed | PopLiteDeferredRegisterError::ServiceClosedAfterTake => self
-                .reply_with_code(
-                    ResponseCode::ServiceNotAvailable,
-                    "the deferred POP Lite service is unavailable",
-                ),
-            PopLiteDeferredRegisterError::ProvenanceMismatch => self.internal_reply(0),
-            PopLiteDeferredRegisterError::Responder(DeferredResponderOutcome::OneWayRequest) => {
+        match failure {
+            PopLiteDeferredPrepareFailure::Header(_) => self.invalid_reply(0),
+            PopLiteDeferredPrepareFailure::Deadline(_) => {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingTimeout)
             }
-            PopLiteDeferredRegisterError::Responder(DeferredResponderOutcome::Unavailable) => self.reply_with_code(
+            PopLiteDeferredPrepareFailure::InvalidExpiryMargins
+            | PopLiteDeferredPrepareFailure::RetainedSizeOverflow
+            | PopLiteDeferredPrepareFailure::Index(_)
+            | PopLiteDeferredPrepareFailure::Contract(_) => self.internal_reply(0),
+        }
+    }
+
+    fn register_rejection_outcome(
+        &self,
+        request_header: &PopLiteMessageRequestHeader,
+        rejection: PopLiteDeferredRegisterRejection,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        match rejection {
+            PopLiteDeferredRegisterRejection::ServiceClosed
+            | PopLiteDeferredRegisterRejection::ServiceClosedAfterTake => self.reply_with_code(
+                ResponseCode::ServiceNotAvailable,
+                "the deferred POP Lite service is unavailable",
+            ),
+            PopLiteDeferredRegisterRejection::ProvenanceMismatch => self.internal_reply(0),
+            PopLiteDeferredRegisterRejection::Responder(DeferredResponderOutcome::OneWayRequest) => {
+                self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingTimeout)
+            }
+            PopLiteDeferredRegisterRejection::Responder(DeferredResponderOutcome::Unavailable) => self.reply_with_code(
                 ResponseCode::ServiceNotAvailable,
                 "a deferred POP Lite responder is unavailable",
             ),
-            PopLiteDeferredRegisterError::Responder(
+            PopLiteDeferredRegisterRejection::Responder(
                 DeferredResponderOutcome::AlreadyTaken | DeferredResponderOutcome::OutcomeCompleted,
             ) => self.internal_reply(0),
-            PopLiteDeferredRegisterError::Responder(DeferredResponderOutcome::Taken(responder)) => {
+            PopLiteDeferredRegisterRejection::Responder(DeferredResponderOutcome::Taken(responder)) => {
                 drop(responder);
                 self.internal_reply(0)
             }
-            PopLiteDeferredRegisterError::Expiry { outcome: _, parts } => {
+            PopLiteDeferredRegisterRejection::Expiry { outcome: _, parts } => {
                 drop(parts);
                 self.internal_reply(0)
             }
-            PopLiteDeferredRegisterError::RegistryRejected => self.internal_reply(0),
-            PopLiteDeferredRegisterError::RegistryIdentityExhausted => self.internal_reply(0),
-            PopLiteDeferredRegisterError::RegistryContract(violation) => {
+            PopLiteDeferredRegisterRejection::DuplicateRequest
+            | PopLiteDeferredRegisterRejection::ParentCancelled
+            | PopLiteDeferredRegisterRejection::SessionClosed
+            | PopLiteDeferredRegisterRejection::DeadlineExpired => self.internal_reply(0),
+        }
+    }
+
+    fn register_failure_outcome(
+        &self,
+        failure: PopLiteDeferredRegisterFailure,
+    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        match failure {
+            PopLiteDeferredRegisterFailure::IdentityExhausted => self.internal_reply(0),
+            PopLiteDeferredRegisterFailure::RegistryContract(violation) => {
                 Err(RocketMQError::internal("register deferred POP Lite request", violation))
             }
-            PopLiteDeferredRegisterError::RegistryOperational(error) => {
+            PopLiteDeferredRegisterFailure::RegistryOperational(error) => {
                 Err(RocketMQError::internal("register deferred POP Lite request", error))
             }
-            PopLiteDeferredRegisterError::Contract { violation, parts } => {
+            PopLiteDeferredRegisterFailure::Contract { violation, parts } => {
                 drop(parts);
                 Err(RocketMQError::internal("register deferred POP Lite request", violation))
             }

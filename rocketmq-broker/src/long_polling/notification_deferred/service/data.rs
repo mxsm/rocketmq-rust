@@ -25,7 +25,7 @@ use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestId;
 use rocketmq_transport::api::SessionId;
 
-use super::NotificationDeferredPrepareError;
+use super::NotificationDeferredPrepareFailure;
 use crate::long_polling::notification_deferred::deadline::NotificationWaitDeadline;
 use crate::long_polling::notification_deferred::index::NotificationIndexLease;
 use crate::long_polling::notification_deferred::index::NotificationIndexReservation;
@@ -70,13 +70,13 @@ impl NotificationRequestData {
         (self.header, self.effective_peer)
     }
 
-    pub(super) fn estimated_dynamic_bytes(&self) -> Result<usize, NotificationDeferredPrepareError> {
+    pub(super) fn estimated_dynamic_bytes(&self) -> Result<usize, NotificationDeferredPrepareFailure> {
         let mut bytes = self
             .header
             .topic
             .len()
             .checked_add(self.header.consumer_group.len())
-            .ok_or(NotificationDeferredPrepareError::RetainedSizeOverflow)?;
+            .ok_or(NotificationDeferredPrepareFailure::RetainedSizeOverflow)?;
         for value in [
             self.header.attempt_id.as_ref(),
             self.header.exp_type.as_ref(),
@@ -88,7 +88,7 @@ impl NotificationRequestData {
         {
             bytes = bytes
                 .checked_add(value.len())
-                .ok_or(NotificationDeferredPrepareError::RetainedSizeOverflow)?;
+                .ok_or(NotificationDeferredPrepareFailure::RetainedSizeOverflow)?;
         }
         if let Some(rpc) = self
             .header
@@ -99,7 +99,7 @@ impl NotificationRequestData {
             for value in [rpc.namespace.as_ref(), rpc.broker_name.as_ref()].into_iter().flatten() {
                 bytes = bytes
                     .checked_add(value.len())
-                    .ok_or(NotificationDeferredPrepareError::RetainedSizeOverflow)?;
+                    .ok_or(NotificationDeferredPrepareFailure::RetainedSizeOverflow)?;
             }
         }
         Ok(bytes)

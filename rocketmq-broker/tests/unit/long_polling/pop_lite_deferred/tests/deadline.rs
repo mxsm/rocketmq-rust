@@ -15,13 +15,42 @@
 use std::time::Duration;
 
 use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadline;
-use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineErrorKind;
+use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineOperationalError;
+use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineOutcome;
+use crate::long_polling::pop_lite_deferred::deadline::PopLiteWaitDeadlineRejectionReason;
+
+fn expect_deadline(
+    result: Result<PopLiteWaitDeadlineOutcome, PopLiteWaitDeadlineOperationalError>,
+) -> PopLiteWaitDeadline {
+    match result {
+        Ok(PopLiteWaitDeadlineOutcome::Pending(deadline)) => deadline,
+        Ok(PopLiteWaitDeadlineOutcome::Rejected(rejection)) => {
+            panic!("expected pending PopLite deadline, got {:?}", rejection.reason())
+        }
+        Err(error) => panic!("expected pending PopLite deadline: {error}"),
+    }
+}
+
+fn expect_deadline_rejection(
+    result: Result<PopLiteWaitDeadlineOutcome, PopLiteWaitDeadlineOperationalError>,
+) -> PopLiteWaitDeadlineRejectionReason {
+    match result {
+        Ok(PopLiteWaitDeadlineOutcome::Rejected(rejection)) => rejection.reason(),
+        Ok(PopLiteWaitDeadlineOutcome::Pending(_)) => panic!("expected rejected PopLite deadline"),
+        Err(error) => panic!("expected rejected PopLite deadline: {error}"),
+    }
+}
 
 #[test]
 fn pop_lite_deferred_deadline_applies_30_second_business_cap() {
     let monotonic = tokio::time::Instant::now();
-    let deadline = PopLiteWaitDeadline::checked(1_000, 90_000, 1_000, monotonic, Duration::from_secs(30))
-        .expect("30 second cap should be representable");
+    let deadline = expect_deadline(PopLiteWaitDeadline::checked(
+        1_000,
+        90_000,
+        1_000,
+        monotonic,
+        Duration::from_secs(30),
+    ));
 
     assert_eq!(deadline.effective_end_millis(), 31_000);
     assert_eq!(deadline.protocol_millis(), 30_951);
@@ -31,40 +60,49 @@ fn pop_lite_deferred_deadline_applies_30_second_business_cap() {
 #[test]
 fn pop_lite_deferred_deadline_preserves_strict_50ms_boundary() {
     let monotonic = tokio::time::Instant::now();
-    let equal = PopLiteWaitDeadline::checked(1_000, 1_000, 1_950, monotonic, Duration::from_secs(30))
-        .expect("equal cutoff remains live for one millisecond");
-    let expired = PopLiteWaitDeadline::checked(1_000, 1_000, 1_951, monotonic, Duration::from_secs(30))
-        .expect_err("first millisecond after cutoff is expired");
+    let equal = expect_deadline(PopLiteWaitDeadline::checked(
+        1_000,
+        1_000,
+        1_950,
+        monotonic,
+        Duration::from_secs(30),
+    ));
+    let expired = expect_deadline_rejection(PopLiteWaitDeadline::checked(
+        1_000,
+        1_000,
+        1_951,
+        monotonic,
+        Duration::from_secs(30),
+    ));
 
     assert_eq!(equal.protocol_at(), monotonic + Duration::from_millis(1));
-    assert_eq!(expired.kind(), PopLiteWaitDeadlineErrorKind::AlreadyExpired);
+    assert_eq!(expired, PopLiteWaitDeadlineRejectionReason::AlreadyExpired);
 }
 
 #[test]
 fn pop_lite_deferred_deadline_rejects_signed_invalid_and_overflow_inputs() {
     let now = tokio::time::Instant::now();
     assert_eq!(
-        PopLiteWaitDeadline::checked(-1, 1, 0, now, Duration::from_secs(30))
-            .expect_err("negative born time")
-            .kind(),
-        PopLiteWaitDeadlineErrorKind::NegativeBornTime
+        expect_deadline_rejection(PopLiteWaitDeadline::checked(-1, 1, 0, now, Duration::from_secs(30))),
+        PopLiteWaitDeadlineRejectionReason::NegativeBornTime
     );
     assert_eq!(
-        PopLiteWaitDeadline::checked(0, 0, 0, now, Duration::from_secs(30))
-            .expect_err("zero poll time")
-            .kind(),
-        PopLiteWaitDeadlineErrorKind::NonPositivePollTime
+        expect_deadline_rejection(PopLiteWaitDeadline::checked(0, 0, 0, now, Duration::from_secs(30))),
+        PopLiteWaitDeadlineRejectionReason::NonPositivePollTime
     );
     assert_eq!(
         PopLiteWaitDeadline::checked(i64::MAX, 1, 0, now, Duration::from_secs(30))
-            .expect_err("signed requested end overflow")
-            .kind(),
-        PopLiteWaitDeadlineErrorKind::RequestedEndOverflow
+            .expect_err("signed requested end overflow is operational"),
+        PopLiteWaitDeadlineOperationalError::RequestedEnd
     );
     assert_eq!(
-        PopLiteWaitDeadline::checked(i64::MAX - 1, 1, u64::MAX - 5, now, Duration::from_secs(30),)
-            .expect_err("saturating admission cap still observes an expired requested end")
-            .kind(),
-        PopLiteWaitDeadlineErrorKind::AlreadyExpired
+        expect_deadline_rejection(PopLiteWaitDeadline::checked(
+            i64::MAX - 1,
+            1,
+            u64::MAX - 5,
+            now,
+            Duration::from_secs(30),
+        )),
+        PopLiteWaitDeadlineRejectionReason::AlreadyExpired
     );
 }

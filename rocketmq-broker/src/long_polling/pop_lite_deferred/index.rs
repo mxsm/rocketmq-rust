@@ -14,6 +14,7 @@
 
 use std::alloc::Layout;
 use std::collections::HashMap;
+use std::collections::TryReserveError;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
@@ -101,55 +102,80 @@ where
         &self,
         client_id: CheetahString,
         registered_at: tokio::time::Instant,
-    ) -> Result<PopLiteIndexReservation<I>, PopLiteIndexError> {
+    ) -> Result<PopLiteIndexReserveOutcome<I>, PopLiteIndexOperationalError> {
         let mut state = self.inner.state.lock();
         let occupied = state
             .live
             .checked_add(state.reserved)
-            .ok_or_else(|| PopLiteIndexError::new(PopLiteIndexErrorKind::GlobalCapacity))?;
+            .ok_or(PopLiteIndexOperationalError::AccountingOverflow)?;
         if occupied >= self.inner.limits.max_entries.get() {
-            return Err(PopLiteIndexError::new(PopLiteIndexErrorKind::GlobalCapacity));
+            return Ok(PopLiteIndexReserveOutcome::Rejected(
+                PopLiteIndexReserveRejection::Global,
+            ));
         }
         let bucket_missing = !state.clients.contains_key(&client_id);
         if bucket_missing && state.clients.len() >= self.inner.limits.max_clients.get() {
-            return Err(PopLiteIndexError::new(PopLiteIndexErrorKind::ClientCapacity));
+            return Ok(PopLiteIndexReserveOutcome::Rejected(
+                PopLiteIndexReserveRejection::Client,
+            ));
         }
-        let client_occupied = state.clients.get(&client_id).map_or(0, |bucket| {
-            bucket
+        let client_occupied = match state.clients.get(&client_id) {
+            Some(bucket) => bucket
                 .entries
                 .len()
-                .saturating_add(bucket.candidates)
-                .saturating_add(bucket.reserved)
-        });
+                .checked_add(bucket.candidates)
+                .and_then(|occupied| occupied.checked_add(bucket.reserved))
+                .ok_or(PopLiteIndexOperationalError::AccountingOverflow)?,
+            None => 0,
+        };
         if client_occupied >= self.inner.limits.max_entries_per_client.get() {
-            return Err(PopLiteIndexError::new(PopLiteIndexErrorKind::PerClientCapacity));
+            return Ok(PopLiteIndexReserveOutcome::Rejected(
+                PopLiteIndexReserveRejection::PerClient,
+            ));
         }
         let next_sequence = state
             .next_sequence
             .checked_add(1)
-            .ok_or_else(|| PopLiteIndexError::new(PopLiteIndexErrorKind::SequenceExhausted))?;
+            .ok_or(PopLiteIndexOperationalError::SequenceExhausted)?;
         if bucket_missing {
             state
                 .clients
                 .try_reserve(1)
-                .map_err(|_| PopLiteIndexError::new(PopLiteIndexErrorKind::Allocation))?;
+                .map_err(PopLiteIndexOperationalError::Allocation)?;
         }
-        let bucket = state.clients.entry(client_id.clone()).or_default();
-        bucket
-            .entries
-            .try_reserve(1)
-            .map_err(|_| PopLiteIndexError::new(PopLiteIndexErrorKind::Allocation))?;
+        let mut new_bucket = bucket_missing.then(PopLiteClientBucket::default);
+        if let Some(bucket) = new_bucket.as_mut() {
+            bucket
+                .entries
+                .try_reserve(1)
+                .map_err(PopLiteIndexOperationalError::Allocation)?;
+        } else {
+            state
+                .clients
+                .get_mut(&client_id)
+                .expect("existing PopLite client bucket remains present")
+                .entries
+                .try_reserve(1)
+                .map_err(PopLiteIndexOperationalError::Allocation)?;
+        }
+        if let Some(bucket) = new_bucket {
+            state.clients.insert(client_id.clone(), bucket);
+        }
+        let bucket = state
+            .clients
+            .get_mut(&client_id)
+            .expect("reserved PopLite client bucket exists");
         bucket.reserved += 1;
         state.reserved += 1;
         state.next_sequence = next_sequence;
         drop(state);
-        Ok(PopLiteIndexReservation {
+        Ok(PopLiteIndexReserveOutcome::Reserved(PopLiteIndexReservation {
             inner: Some(Arc::clone(&self.inner)),
             client_id: Some(client_id),
             sequence: next_sequence - 1,
             registered_at,
             membership: Arc::new(PopLiteIndexMembership::default()),
-        })
+        }))
     }
 
     pub(crate) fn reserve_oldest(&self, client_id: &CheetahString) -> Option<PopLiteCandidateReservation<I>> {
@@ -416,38 +442,49 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum PopLiteIndexErrorKind {
-    GlobalCapacity,
-    ClientCapacity,
-    PerClientCapacity,
+pub(crate) enum PopLiteIndexReserveRejection {
+    Global,
+    Client,
+    PerClient,
+}
+
+#[must_use]
+pub(crate) enum PopLiteIndexReserveOutcome<I> {
+    Reserved(PopLiteIndexReservation<I>),
+    Rejected(PopLiteIndexReserveRejection),
+}
+
+pub(crate) enum PopLiteIndexOperationalError {
+    AccountingOverflow,
     SequenceExhausted,
-    Allocation,
+    Allocation(TryReserveError),
 }
 
-pub(crate) struct PopLiteIndexError {
-    kind: PopLiteIndexErrorKind,
-}
-
-impl PopLiteIndexError {
-    const fn new(kind: PopLiteIndexErrorKind) -> Self {
-        Self { kind }
-    }
-
-    pub(crate) const fn kind(&self) -> PopLiteIndexErrorKind {
-        self.kind
-    }
-}
-
-impl fmt::Debug for PopLiteIndexError {
+impl fmt::Debug for PopLiteIndexOperationalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_tuple("PopLiteIndexError").field(&self.kind).finish()
+        formatter.write_str(match self {
+            Self::AccountingOverflow => "PopLiteIndexOperationalError::AccountingOverflow",
+            Self::SequenceExhausted => "PopLiteIndexOperationalError::SequenceExhausted",
+            Self::Allocation(_) => "PopLiteIndexOperationalError::Allocation",
+        })
     }
 }
 
-impl fmt::Display for PopLiteIndexError {
+impl fmt::Display for PopLiteIndexOperationalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "PopLite deferred index failed: {:?}", self.kind)
+        formatter.write_str(match self {
+            Self::AccountingOverflow => "PopLite deferred index accounting overflowed",
+            Self::SequenceExhausted => "PopLite deferred index sequence exhausted",
+            Self::Allocation(_) => "PopLite deferred index allocation failed",
+        })
     }
 }
 
-impl Error for PopLiteIndexError {}
+impl Error for PopLiteIndexOperationalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(source) => Some(source),
+            Self::AccountingOverflow | Self::SequenceExhausted => None,
+        }
+    }
+}

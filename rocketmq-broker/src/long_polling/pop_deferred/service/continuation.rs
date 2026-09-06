@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicUsize;
@@ -151,12 +153,18 @@ pub(crate) struct PopArrivalContinuation {
     _permit: PopContinuationPermit,
 }
 
+#[must_use]
+pub(crate) enum PopContinuationOutcome {
+    Admitted(PopArrivalContinuation),
+    Rejected(PopContinuationRejection),
+}
+
 impl PopArrivalContinuation {
     #[allow(
         clippy::too_many_arguments,
         reason = "the continuation retains the exact Store arrival callback metadata"
     )]
-    pub(super) fn new(
+    pub(super) fn try_admit(
         admission: &Arc<PopContinuationAdmission>,
         topic: &CheetahString,
         queue_id: i32,
@@ -165,7 +173,7 @@ impl PopArrivalContinuation {
         filter_bitmap: Option<&[u8]>,
         properties: Option<&HashMap<CheetahString, CheetahString>>,
         cursor: PopFanoutCursor,
-    ) -> Result<Self, PopContinuationError> {
+    ) -> Result<PopContinuationOutcome, PopContinuationError> {
         let pending = PopPendingArrival::new(
             topic,
             queue_id,
@@ -176,11 +184,13 @@ impl PopArrivalContinuation {
             cursor,
         )?;
         let retained_bytes = pending.retained_bytes();
-        let permit = admission.reserve(retained_bytes)?;
-        Ok(Self {
-            pending,
-            _permit: permit,
-        })
+        match admission.reserve(retained_bytes)? {
+            PopContinuationReserveOutcome::Reserved(permit) => Ok(PopContinuationOutcome::Admitted(Self {
+                pending,
+                _permit: permit,
+            })),
+            PopContinuationReserveOutcome::Rejected(rejection) => Ok(PopContinuationOutcome::Rejected(rejection)),
+        }
     }
 
     pub(crate) fn view<'a>(&'a self, consumer_group: &'a CheetahString) -> PopArrivalView<'a> {
@@ -211,11 +221,16 @@ impl PopContinuationAdmission {
         }
     }
 
-    pub(super) fn reserve(self: &Arc<Self>, bytes: usize) -> Result<PopContinuationPermit, PopContinuationError> {
+    pub(super) fn reserve(
+        self: &Arc<Self>,
+        bytes: usize,
+    ) -> Result<PopContinuationReserveOutcome, PopContinuationError> {
         let count = self.count.fetch_add(1, Ordering::AcqRel);
         if count >= self.max_count {
             self.reject_count();
-            return Err(PopContinuationError::CountFull);
+            return Ok(PopContinuationReserveOutcome::Rejected(
+                PopContinuationRejection::CountFull,
+            ));
         }
         let mut current = self.bytes.load(Ordering::Acquire);
         loop {
@@ -225,7 +240,9 @@ impl PopContinuationAdmission {
             };
             if next > self.max_bytes {
                 self.reject_count();
-                return Err(PopContinuationError::BytesFull);
+                return Ok(PopContinuationReserveOutcome::Rejected(
+                    PopContinuationRejection::BytesFull,
+                ));
             }
             match self
                 .bytes
@@ -235,10 +252,10 @@ impl PopContinuationAdmission {
                 Err(observed) => current = observed,
             }
         }
-        Ok(PopContinuationPermit {
+        Ok(PopContinuationReserveOutcome::Reserved(PopContinuationPermit {
             admission: Arc::clone(self),
             bytes,
-        })
+        }))
     }
 
     fn reject_count(&self) {
@@ -260,6 +277,11 @@ pub(super) struct PopContinuationPermit {
     bytes: usize,
 }
 
+pub(super) enum PopContinuationReserveOutcome {
+    Reserved(PopContinuationPermit),
+    Rejected(PopContinuationRejection),
+}
+
 impl Drop for PopContinuationPermit {
     fn drop(&mut self) {
         self.admission.count.fetch_sub(1, Ordering::AcqRel);
@@ -274,11 +296,33 @@ pub(super) struct PopContinuationSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PopContinuationError {
+pub(crate) enum PopContinuationRejection {
     CountFull,
     BytesFull,
+}
+
+#[derive(Debug)]
+pub(crate) enum PopContinuationError {
     SizeOverflow,
-    Allocation,
+    Allocation(std::collections::TryReserveError),
+}
+
+impl fmt::Display for PopContinuationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SizeOverflow => formatter.write_str("POP continuation retained size overflowed"),
+            Self::Allocation(_) => formatter.write_str("POP continuation allocation failed"),
+        }
+    }
+}
+
+impl Error for PopContinuationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Allocation(source) => Some(source),
+            Self::SizeOverflow => None,
+        }
+    }
 }
 
 fn retained_arrival_bytes(
@@ -323,7 +367,7 @@ fn copy_bitmap(bitmap: Option<&[u8]>) -> Result<Option<Vec<u8>>, PopContinuation
     let mut owned = Vec::new();
     owned
         .try_reserve_exact(bitmap.len())
-        .map_err(|_| PopContinuationError::Allocation)?;
+        .map_err(PopContinuationError::Allocation)?;
     owned.extend_from_slice(bitmap);
     Ok(Some(owned))
 }
@@ -337,7 +381,7 @@ fn copy_properties(
     let mut owned = HashMap::new();
     owned
         .try_reserve(properties.len())
-        .map_err(|_| PopContinuationError::Allocation)?;
+        .map_err(PopContinuationError::Allocation)?;
     owned.extend(properties.iter().map(|(key, value)| (key.clone(), value.clone())));
     Ok(Some(owned))
 }
