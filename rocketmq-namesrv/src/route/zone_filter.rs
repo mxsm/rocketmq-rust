@@ -123,6 +123,8 @@ pub(crate) fn filter_route_by_zone<'a>(
 mod tests {
     use std::collections::HashMap;
 
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
     use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 
@@ -194,5 +196,125 @@ mod tests {
             .any(|broker| broker.broker_name() == "master-down"));
         assert_eq!(filtered.queue_datas.len(), 2);
         assert!(!filtered.filter_server_table.contains_key("other:10911"));
+    }
+
+    fn route_request() -> RemotingCommand {
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new("TestTopic", None),
+        );
+        request.make_custom_header_to_net();
+        request
+    }
+
+    #[test]
+    fn from_command_without_ext_fields_returns_the_default_request() {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::GetRouteinfoByTopic,
+            GetRouteInfoRequestHeader::new("TestTopic", None),
+        );
+        assert!(
+            request.get_ext_fields().is_none(),
+            "a freshly created request should carry no ext fields"
+        );
+
+        let zone_request = ZoneRequest::from_command(&request);
+
+        assert_eq!(zone_request, ZoneRequest::default());
+        assert!(!zone_request.is_enabled());
+    }
+
+    #[test]
+    fn from_command_with_missing_zone_mode_returns_the_default_request() {
+        let mut request = route_request();
+        request.add_ext_field(mix_all::ZONE_NAME, "zone-a");
+
+        let zone_request = ZoneRequest::from_command(&request);
+
+        assert_eq!(zone_request, ZoneRequest::default());
+        assert!(!zone_request.is_enabled());
+    }
+
+    #[test]
+    fn from_command_with_non_boolean_zone_mode_returns_the_default_request() {
+        for malformed in ["yes", "1", "TRUE"] {
+            let mut request = route_request();
+            request.add_ext_field(mix_all::ZONE_MODE, malformed);
+            request.add_ext_field(mix_all::ZONE_NAME, "zone-a");
+
+            let zone_request = ZoneRequest::from_command(&request);
+
+            assert_eq!(
+                zone_request,
+                ZoneRequest::default(),
+                "ZONE_MODE={malformed:?} must fall back to a disabled request"
+            );
+            assert!(!zone_request.is_enabled());
+        }
+    }
+
+    #[test]
+    fn from_command_with_zone_mode_and_missing_zone_name_is_disabled() {
+        let mut request = route_request();
+        request.add_ext_field(mix_all::ZONE_MODE, "true");
+
+        let zone_request = ZoneRequest::from_command(&request);
+
+        assert_eq!(zone_request, ZoneRequest::default());
+        assert!(!zone_request.is_enabled());
+    }
+
+    #[test]
+    fn from_command_with_zone_mode_and_blank_zone_name_is_disabled() {
+        for blank in ["", "   ", "\t "] {
+            let mut request = route_request();
+            request.add_ext_field(mix_all::ZONE_MODE, "true");
+            request.add_ext_field(mix_all::ZONE_NAME, blank);
+
+            let zone_request = ZoneRequest::from_command(&request);
+
+            assert!(
+                !zone_request.is_enabled(),
+                "ZONE_NAME={blank:?} must fall back to a disabled request"
+            );
+        }
+    }
+
+    #[test]
+    fn from_command_with_zone_mode_and_zone_name_parses_an_enabled_request() {
+        let mut request = route_request();
+        request.add_ext_field(mix_all::ZONE_MODE, "true");
+        request.add_ext_field(mix_all::ZONE_NAME, "zone-a");
+
+        let zone_request = ZoneRequest::from_command(&request);
+
+        assert!(zone_request.is_enabled());
+        assert_eq!(zone_request.zone_name.as_deref(), Some("zone-a"));
+
+        let route = route();
+        let filtered = filter_route_by_zone(&route, &zone_request);
+        assert_eq!(filtered.broker_datas.len(), 2);
+        assert!(filtered
+            .broker_datas
+            .iter()
+            .any(|broker| broker.broker_name() == "same"));
+        assert!(filtered
+            .broker_datas
+            .iter()
+            .any(|broker| broker.broker_name() == "master-down"));
+        assert!(!filtered
+            .broker_datas
+            .iter()
+            .any(|broker| broker.broker_name() == "other"));
+    }
+
+    #[test]
+    fn enabled_builder_rejects_blank_zone_names() {
+        assert!(!ZoneRequest::enabled(CheetahString::from_static_str("")).is_enabled());
+        assert!(!ZoneRequest::enabled(CheetahString::from_static_str("   ")).is_enabled());
+
+        let enabled = ZoneRequest::enabled(CheetahString::from_static_str("zone-a"));
+        assert!(enabled.is_enabled());
+        assert_eq!(enabled.zone_name.as_deref(), Some("zone-a"));
     }
 }
