@@ -30,6 +30,7 @@ use rocketmq_error::CORE_SERIALIZATION_FAILED;
 use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
 use rocketmq_error::STORAGE_READ_FAILED;
 use rocketmq_error::STORAGE_WRITE_FAILED;
+use rocketmq_security_api::SecurityProviderError;
 
 /// Closed, low-cardinality classification of an authentication service failure.
 ///
@@ -142,6 +143,32 @@ impl AuthServiceError {
             kind,
             source: Some(Box::new(source)),
         }
+    }
+
+    /// Adapts a catalog-backed security-provider failure at an Auth operation boundary.
+    ///
+    /// Provider classification is derived from its canonical condition so every
+    /// Auth and composition-root consumer uses the same mapping.
+    #[must_use]
+    pub fn provider(operation: AuthOperation, source: SecurityProviderError) -> Self {
+        let kind = match source.condition() {
+            rocketmq_error::CanonicalCondition::InvalidArgument
+            | rocketmq_error::CanonicalCondition::FailedPrecondition => AuthFailureKind::InvalidConfiguration,
+            rocketmq_error::CanonicalCondition::NotFound => AuthFailureKind::NotFound,
+            rocketmq_error::CanonicalCondition::AlreadyExists | rocketmq_error::CanonicalCondition::Aborted => {
+                AuthFailureKind::Conflict
+            }
+            rocketmq_error::CanonicalCondition::Unauthenticated => AuthFailureKind::Unauthenticated,
+            rocketmq_error::CanonicalCondition::PermissionDenied => AuthFailureKind::Internal,
+            rocketmq_error::CanonicalCondition::ResourceExhausted
+            | rocketmq_error::CanonicalCondition::Unavailable
+            | rocketmq_error::CanonicalCondition::Cancelled => AuthFailureKind::Unavailable,
+            rocketmq_error::CanonicalCondition::DeadlineExceeded => AuthFailureKind::Timeout,
+            rocketmq_error::CanonicalCondition::DataLoss => AuthFailureKind::InvalidData,
+            rocketmq_error::CanonicalCondition::Unimplemented => AuthFailureKind::Unsupported,
+            rocketmq_error::CanonicalCondition::Internal => AuthFailureKind::Internal,
+        };
+        Self::with_source(operation, kind, source)
     }
 
     #[must_use]
@@ -449,6 +476,51 @@ mod tests {
 
         for (error, descriptor) in cases {
             assert_eq!(RocketMQError::from(error).descriptor(), descriptor);
+        }
+    }
+
+    #[test]
+    fn provider_mapping_uses_canonical_conditions_and_preserves_source() {
+        let cases = [
+            (
+                rocketmq_security_api::SecurityProviderFailure::NotFound,
+                AuthFailureKind::NotFound,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::Conflict,
+                AuthFailureKind::Conflict,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::Unsupported,
+                AuthFailureKind::Unsupported,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::InvalidData,
+                AuthFailureKind::InvalidData,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::ContractViolation,
+                AuthFailureKind::InvalidConfiguration,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::Unavailable,
+                AuthFailureKind::Unavailable,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::OperationFailed,
+                AuthFailureKind::Internal,
+            ),
+        ];
+
+        for (provider_kind, auth_kind) in cases {
+            let provider =
+                SecurityProviderError::new(provider_kind, rocketmq_security_api::SecurityOperation::ReadSecret);
+            let error = AuthServiceError::provider(AuthOperation::LoadSecret, provider);
+            assert_eq!(error.kind(), auth_kind);
+            assert!(error
+                .source()
+                .and_then(|source| source.downcast_ref::<SecurityProviderError>())
+                .is_some());
         }
     }
 }

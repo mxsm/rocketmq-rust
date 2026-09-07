@@ -70,14 +70,3 @@ fn factory_trait_object_typed_failures_preserve_safe_metadata_and_unified_kind()
         assert!(!rendered.contains("秘密"));
     }
 }
-
-#[test]
-#[allow(
-    deprecated,
-    reason = "This external contract fixture verifies that the 1.x Filter::compile facade remains available."
-)]
-fn factory_trait_object_keeps_the_1_x_compile_facade_available() {
-    let filter = sql92_filter_from_factory();
-
-    assert!(filter.compile("color = 'blue'").is_ok());
-}

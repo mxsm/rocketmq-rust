@@ -634,16 +634,7 @@ fn provider_error(kind: SecurityProviderFailure, operation: SecurityOperation) -
 }
 
 fn auth_provider_error(source: SecurityProviderError) -> AuthServiceError {
-    let kind = match source.kind() {
-        SecurityProviderFailure::NotFound => AuthFailureKind::NotFound,
-        SecurityProviderFailure::Conflict => AuthFailureKind::Conflict,
-        SecurityProviderFailure::Unsupported => AuthFailureKind::Unsupported,
-        SecurityProviderFailure::InvalidData => AuthFailureKind::InvalidData,
-        SecurityProviderFailure::ContractViolation => AuthFailureKind::InvalidConfiguration,
-        SecurityProviderFailure::Unavailable => AuthFailureKind::Unavailable,
-        SecurityProviderFailure::OperationFailed => AuthFailureKind::Internal,
-    };
-    AuthServiceError::with_source(AuthOperation::LoadSecret, kind, source)
+    AuthServiceError::provider(AuthOperation::LoadSecret, source)
 }
 
 #[cfg(test)]

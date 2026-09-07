@@ -114,6 +114,13 @@ const EXPECTED_DESCRIPTOR_SNAPSHOTS: &[&str] = &[
     "rpc.broker_address.not_found|routing|NotFound|Dependency|client|RPC broker address was not found|Error|backoff|Never|Generic|1|NotFound|NotFound|404|66|broker:Diagnostic:Text:Some(127)",
     "rpc.request.unsupported|unsupported|Unimplemented|Caller|client|RPC request is unsupported|Error|never|Never|Generic|1|Unsupported|Unimplemented|400|64|request_code:Public:I64:None",
     "auth.operation.failed|internal|Internal|Dependency|auth|Authentication operation failed|Error|never|OnDemand|Generic|16|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
+    "auth.security_provider.not_found|unavailable|NotFound|Dependency|auth|Security material was not found|Error|operator_action|Never|Generic|29|NotFound|NotFound|404|66|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "auth.security_provider.conflict|internal|Aborted|Dependency|auth|Security provider state conflicts with the request|Error|never|Never|Generic|16|BadRequest|Aborted|409|65|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "auth.security_provider.unsupported|unsupported|Unimplemented|Configuration|auth|Security provider operation is unsupported|Error|never|Never|Generic|29|Unsupported|Unimplemented|501|78|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "auth.security_provider.invalid_data|data_corruption|DataLoss|Dependency|auth|Security provider data is invalid|Error|operator_action|OnDemand|Generic|16|InternalError|DataLoss|500|65|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "auth.security_provider.contract_violation|validation|InvalidArgument|Configuration|auth|Security provider contract was violated|Error|never|Never|Generic|29|BadRequest|InvalidArgument|400|78|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "auth.security_provider.unavailable|unavailable|Unavailable|Dependency|auth|Security provider is unavailable|Error|backoff|Never|Generic|16|InternalError|Unavailable|503|69|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
+    "auth.security_provider.operation_failed|internal|Internal|Dependency|auth|Security provider operation failed|Error|never|OnDemand|Generic|16|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
     "controller.internal.failure|internal|Internal|Unknown|controller|Controller operation failed|Error|never|OnDemand|Generic|2015|InternalError|Internal|500|70|operation:Diagnostic:Text:Some(64),phase:Diagnostic:Text:Some(32),source_present:SecretPresenceOnly:Presence:None",
     "controller.request.invalid|validation|InvalidArgument|Caller|controller|Controller request is invalid|Info|never|Never|Generic|2015|BadRequest|InvalidArgument|400|64|operation:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
     "controller.configuration.invalid|validation|InvalidArgument|Configuration|controller|Controller configuration is invalid|Error|never|Never|Generic|2015|BadRequest|InvalidArgument|400|78|key:Diagnostic:Text:Some(64),reason:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
@@ -206,7 +213,7 @@ fn descriptor_snapshot(descriptor: &ErrorDescriptor) -> String {
 
 #[test]
 fn descriptor_catalog_snapshot_is_exact() {
-    assert_eq!(EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 128);
+    assert_eq!(EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 135);
     assert_eq!(ALL_DESCRIPTORS.len(), EXPECTED_DESCRIPTOR_SNAPSHOTS.len());
 
     for (descriptor, expected) in ALL_DESCRIPTORS.iter().zip(EXPECTED_DESCRIPTOR_SNAPSHOTS) {

@@ -15,7 +15,7 @@
 | 领域 | 提供能力 |
 |------|----------|
 | SQL92 过滤 | `SqlFilter` 将 SQL92 风格的属性表达式编译为可复用的 `Expression` 对象。 |
-| Filter SPI | `Filter`、`FilterSpi`、`FilterError` 和 `FilterFactory` 提供可插拔的过滤器注册与查找模型。 |
+| Filter SPI | `Filter`、`FilterSpi` 和 `FilterFactory` 提供可插拔的过滤器注册与查找模型。 |
 | 表达式运行时 | `Expression`、`Value`、`EvaluationContext` 和 `MessageEvaluationContext` 用于基于消息属性求值并返回类型化结果。 |
 | 布尔表达式 | 提供 `AlwaysTrueExpression`、`AlwaysFalseExpression`、`PropertyEqualsExpression`、`AndExpression`、`OrExpression` 和 `NotExpression` 等基础表达式。 |
 | Bloom Filter 工具 | 基于 byte 对齐 bit array 和 MurmurHash3 double hashing，生成并校验与 Java RocketMQ 兼容的 Bloom filter 数据。 |
@@ -47,7 +47,7 @@ SQL runtime，返回 object-safe 的表达式实例，调用方可以缓存编�
 |------|------|
 | [`src/lib.rs`](src/lib.rs) | 常量、表达式、过滤器和工具模块的公共导出。 |
 | [`src/filter.rs`](src/filter.rs) | Filter 模块 facade 和公共导出。 |
-| [`src/filter/filter_spi.rs`](src/filter/filter_spi.rs) | 核心 `Filter` trait、Java 兼容的 `FilterSpi` alias 和 `FilterError`。 |
+| [`src/filter/filter_spi.rs`](src/filter/filter_spi.rs) | 核心 `Filter` trait 和 Java 兼容的 `FilterSpi` alias。 |
 | [`src/filter/filter_factory.rs`](src/filter/filter_factory.rs) | 基于 `DashMap` 的全局 filter registry，并默认注册 `SQL92`。 |
 | [`src/filter/filter_sql_filter.rs`](src/filter/filter_sql_filter.rs) | 无状态 SQL92 filter 实现。 |
 | [`src/filter/sql_runtime.rs`](src/filter/sql_runtime.rs) | SQL 表达式 lexer、parser、evaluator 和三值逻辑求值行为。 |
@@ -106,22 +106,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### 类型化 filter 编译
 
-新代码必须调用 `Filter::try_compile` 并处理 `FilterCompileError`。它的 kind、stage、可选的原始 UTF-8 字节偏移量和
-SQL92 source 分类均为稳定且可安全脱敏的元数据；被拒绝的表达式可以转换为带有 `ErrorKind::Filter` 的
-`RocketMQError`。
+实现方和调用方统一使用 `Filter::try_compile` 并处理 `FilterCompileError`。它的 kind、stage、可选的原始 UTF-8 字节偏移量和
+SQL92 source 分类均为稳定且可安全脱敏的元数据；编译失败统一使用 `protocol.filter.invalid` catalog descriptor。
 
-已废弃的 1.x `Filter::compile` facade 及其本地字符串 `FilterError` 仍为现有实现和调用方保留。本次变更不会删除
-任一 API，也不构成删除授权。任何未来删除都必须经过完整 release cycle、明确的 2.0 breaking window，并为每个受影响的
-冻结 public item 取得逐项 reviewed post-freeze approval。
+自定义 `Filter` 实现直接提供同一个结构化方法：
 
-#### 未来 custom filter implementer 迁移
-
-只有在未来获得批准的 2.0 breaking window 中，custom `Filter` implementer 才会将 required trait implementation
-从返回本地字符串 `FilterError` 的 `compile` 迁移为返回 `FilterCompileError` 的 `try_compile`。当前 1.x trait 仍要求
-legacy `compile` 方法。以下仅为 future 2.0 sketch，仍须遵守上述 approvals，且不是当前 1.x 可编译代码：
-
-```rust,ignore
-// 仅为未来 2.0 sketch；不适用于当前 1.x Filter trait。
+```rust
 impl Filter for CustomFilter {
     fn try_compile(&self, expression: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
         // 编译自定义表达式，并返回类型化、可安全脱敏的失败信息。

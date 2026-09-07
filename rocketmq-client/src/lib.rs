@@ -724,9 +724,7 @@ mod cluster_session {
                     request.body().map(AsRef::as_ref),
                     None,
                 ))
-                .map_err(|source| {
-                    rocketmq_error::RocketMQError::authentication_source("outbound request signing", source)
-                })?;
+                .map_err(|source| rocketmq_error::RocketMQError::Shared(source.into_shared_error()))?;
 
             request.ensure_ext_fields_initialized();
             for (key, value) in signature.fields() {
@@ -823,12 +821,13 @@ mod cluster_session {
                 .do_before_request("127.0.0.1:9876".parse().unwrap(), &mut request)
                 .expect_err("signing failure must fail closed");
             let message = error.to_string();
-            assert!(message.contains("outbound request signing failed"));
+            assert!(message.contains("auth.security_provider.operation_failed"));
             assert!(!message.contains("secret signing diagnostic"));
-            let signer = std::error::Error::source(&error)
-                .and_then(|source| source.downcast_ref::<SecurityProviderError>())
-                .expect("signer failure must remain typed");
-            let io = std::error::Error::source(signer).expect("I/O cause must remain available");
+            assert_eq!(error.descriptor(), &rocketmq_error::SECURITY_PROVIDER_OPERATION_FAILED);
+            let rocketmq_error::RocketMQError::Shared(canonical) = error else {
+                panic!("signer failure must use the shared canonical carrier")
+            };
+            let io = std::error::Error::source(canonical.as_ref()).expect("I/O cause must remain available");
             assert!(io.downcast_ref::<std::io::Error>().is_some());
         }
 

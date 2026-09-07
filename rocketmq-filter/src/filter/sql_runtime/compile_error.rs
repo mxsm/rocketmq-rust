@@ -76,12 +76,3 @@ pub(super) const fn semantic_error(kind: FilterCompileErrorKind, position: usize
         FilterCompileSource::Sql92,
     )
 }
-
-#[allow(
-    deprecated,
-    reason = "Only SqlFilter's deprecated compile wrapper projects typed errors to the legacy string error."
-)]
-pub(in crate::filter) fn legacy_projection(error: FilterCompileError) -> super::super::filter_spi::FilterError {
-    let _ = error;
-    super::super::filter_spi::FilterError::new("SQL92 expression compilation failed")
-}

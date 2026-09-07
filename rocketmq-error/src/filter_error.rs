@@ -17,7 +17,6 @@ use std::fmt;
 use crate::fields;
 use crate::ErrorContext;
 use crate::ErrorDescriptor;
-use crate::CORE_INTERNAL_FAILURE;
 use crate::CORE_LIFECYCLE_NOT_INITIALIZED;
 use crate::PROTOCOL_FILTER_INVALID;
 
@@ -40,8 +39,6 @@ pub enum FilterCompileErrorKind {
     InvalidBetweenBounds,
     /// An operator was used with an unsupported operand form.
     UnsupportedOperand,
-    /// A legacy filter implementation returned only an untyped error.
-    LegacyAdapter,
 }
 
 /// The SQL compilation stage at which a filter failure occurred.
@@ -53,8 +50,6 @@ pub enum FilterCompileStage {
     Parse,
     /// Validating expression semantics.
     Semantic,
-    /// Mapping a legacy filter error into the typed API.
-    Compatibility,
 }
 
 /// A fixed, redaction-safe source classification for filter compilation.
@@ -80,10 +75,7 @@ pub struct FilterCompileError {
 impl FilterCompileError {
     /// Returns the canonical descriptor for this compile failure.
     pub const fn descriptor(&self) -> &'static ErrorDescriptor {
-        match self.kind {
-            FilterCompileErrorKind::LegacyAdapter => &CORE_INTERNAL_FAILURE,
-            _ => &PROTOCOL_FILTER_INVALID,
-        }
+        &PROTOCOL_FILTER_INVALID
     }
 
     /// Creates a redaction-safe compile error at an original UTF-8 byte offset.
@@ -133,10 +125,6 @@ impl FilterCompileError {
 
     /// Returns structured, redaction-safe context for this compile failure.
     pub fn context(&self) -> ErrorContext {
-        if matches!(self.kind, FilterCompileErrorKind::LegacyAdapter) {
-            return ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "filter.compile.compatibility");
-        }
-
         let context = ErrorContext::new()
             .with_text(fields::FILTER_COMPILE_KIND, format!("{:?}", self.kind))
             .with_text(fields::FILTER_COMPILE_STAGE, format!("{:?}", self.stage));

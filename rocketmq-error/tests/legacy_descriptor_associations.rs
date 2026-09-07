@@ -839,15 +839,6 @@ fn filter_compile_and_bits_array_leaves_use_their_final_conditions() {
         assert_filter(label, error, invalid("protocol.filter.invalid", 1));
     }
 
-    let legacy = FilterCompileError::new(
-        FilterCompileErrorKind::LegacyAdapter,
-        FilterCompileStage::Compatibility,
-        None,
-    );
-    let legacy_expected = internal("core.internal.failure", 1);
-    assert_descriptor("LegacyAdapter", legacy.descriptor(), legacy_expected);
-    assert_filter("LegacyAdapter", FilterError::Compile(legacy), legacy_expected);
-
     assert_filter(
         "Uninitialized",
         FilterError::Uninitialized,

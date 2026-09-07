@@ -139,10 +139,10 @@ impl BrokerRequestPipeline {
     ) -> Result<(), BrokerStartupError> {
         match self.admission_controller.as_ref() {
             Some(installed) if Arc::ptr_eq(installed, &admission_controller) => Ok(()),
-            Some(_) => Err(BrokerStartupError::Initialization {
-                component: "authorized_dispatcher",
-                detail: "Broker admission boundary was initialized with a different owner".to_owned(),
-            }),
+            Some(_) => Err(BrokerStartupError::initialization(
+                "authorized_dispatcher",
+                "Broker admission boundary was initialized with a different owner".to_owned(),
+            )),
             None => {
                 self.admission_controller = Some(admission_controller);
                 Ok(())
@@ -182,9 +182,11 @@ impl BrokerRuntime {
             .transactional_message_service
             .as_ref()
             .cloned()
-            .ok_or_else(|| BrokerStartupError::Initialization {
-                component: "transactional_message_service",
-                detail: "request processors require an initialized transactional message service".to_owned(),
+            .ok_or_else(|| {
+                BrokerStartupError::initialization(
+                    "transactional_message_service",
+                    "request processors require an initialized transactional message service".to_owned(),
+                )
             })?;
         self.detach_message_store_provider();
         let processors = self.init_processor_with_exclusive_store(transactional_message_service);
@@ -193,10 +195,10 @@ impl BrokerRuntime {
         if self.composition.request_pipeline.processor_wiring_complete {
             Ok(processors)
         } else {
-            Err(BrokerStartupError::Initialization {
-                component: "request_processors",
-                detail: "message-arrival listener could not be installed on the exclusively owned Store".to_owned(),
-            })
+            Err(BrokerStartupError::initialization(
+                "request_processors",
+                "message-arrival listener could not be installed on the exclusively owned Store".to_owned(),
+            ))
         }
     }
 
@@ -250,39 +252,39 @@ impl BrokerRuntime {
             pull_message_result_handler,
             Arc::clone(&pull_message_context),
         ));
-        let deferred =
-            self.composition
-                .data_plane
-                .deferred
-                .as_ref()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "deferred_services",
-                    detail: "Broker deferred lifecycle must be initialized before request processors".to_owned(),
-                })?;
+        let deferred = self.composition.data_plane.deferred.as_ref().ok_or_else(|| {
+            BrokerStartupError::initialization(
+                "deferred_services",
+                "Broker deferred lifecycle must be initialized before request processors".to_owned(),
+            )
+        })?;
         let pop_deferred = Arc::clone(&deferred.pop);
         let pull_deferred = Arc::clone(&deferred.pull);
         let notification_deferred = Arc::clone(&deferred.notification);
         let pop_lite_deferred = Arc::clone(&deferred.pop_lite);
-        let deferred_handoff =
-            self.composition
-                .deferred_generation_handoff()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "deferred_generation_handoff",
-                    detail: "Broker deferred handoff must be initialized before request processors".to_owned(),
-                })?;
+        let deferred_handoff = self.composition.deferred_generation_handoff().ok_or_else(|| {
+            BrokerStartupError::initialization(
+                "deferred_generation_handoff",
+                "Broker deferred handoff must be initialized before request processors".to_owned(),
+            )
+        })?;
         let session_client_lookup: Arc<dyn crate::long_polling::pull_deferred::PullSessionClientLookup> =
             Arc::new(self.composition.state.consumer_manager().session_registry());
         pull_message_processor
             .install_session_client_lookup(session_client_lookup)
-            .map_err(|_| BrokerStartupError::Initialization {
-                component: "pull_session_client_lookup",
-                detail: "Pull session client lookup was already installed".to_owned(),
+            .map_err(|_| {
+                BrokerStartupError::initialization(
+                    "pull_session_client_lookup",
+                    "Pull session client lookup was already installed".to_owned(),
+                )
             })?;
         pull_message_processor
             .install_pull_deferred_service(Arc::clone(&pull_deferred))
-            .map_err(|_| BrokerStartupError::Initialization {
-                component: "pull_deferred_service",
-                detail: "Pull deferred service was already installed".to_owned(),
+            .map_err(|_| {
+                BrokerStartupError::initialization(
+                    "pull_deferred_service",
+                    "Pull deferred service was already installed".to_owned(),
+                )
             })?;
         #[cfg(test)]
         {
@@ -292,17 +294,18 @@ impl BrokerRuntime {
 
         let consumer_manage_processor = self.composition.state.build_consumer_manage_processor();
 
-        let pop_message_processor = self.composition.state.build_pop_message_processor().map_err(|error| {
-            BrokerStartupError::Initialization {
-                component: "pop_consumer_profile",
-                detail: error.to_string(),
-            }
-        })?;
+        let pop_message_processor = self
+            .composition
+            .state
+            .build_pop_message_processor()
+            .map_err(|error| BrokerStartupError::initialization_source("pop_consumer_profile", error))?;
         pop_message_processor
             .install_pop_deferred_service(Arc::clone(&pop_deferred))
-            .map_err(|_| BrokerStartupError::Initialization {
-                component: "pop_deferred_service",
-                detail: "POP deferred service was already installed".to_owned(),
+            .map_err(|_| {
+                BrokerStartupError::initialization(
+                    "pop_deferred_service",
+                    "POP deferred service was already installed".to_owned(),
+                )
             })?;
         let polling_count_provider = {
             let provider: Arc<dyn PollingCountProvider> = Arc::clone(&pop_deferred) as Arc<dyn PollingCountProvider>;
@@ -336,9 +339,11 @@ impl BrokerRuntime {
         );
         pop_lite_message_processor
             .install_pop_lite_deferred_service(Arc::clone(&pop_lite_deferred))
-            .map_err(|_| BrokerStartupError::Initialization {
-                component: "pop_lite_deferred_service",
-                detail: "PopLite deferred service was already installed".to_owned(),
+            .map_err(|_| {
+                BrokerStartupError::initialization(
+                    "pop_lite_deferred_service",
+                    "PopLite deferred service was already installed".to_owned(),
+                )
             })?;
         let pop_lite_message_processor_provider = Arc::downgrade(&pop_lite_message_processor);
         self.composition.state.pop_lite_message_processor = Some(pop_lite_message_processor.clone());
@@ -428,9 +433,11 @@ impl BrokerRuntime {
         );
         notification_processor
             .install_notification_deferred_service(Arc::clone(&notification_deferred))
-            .map_err(|_| BrokerStartupError::Initialization {
-                component: "notification_deferred_service",
-                detail: "Notification deferred service was already installed".to_owned(),
+            .map_err(|_| {
+                BrokerStartupError::initialization(
+                    "notification_deferred_service",
+                    "Notification deferred service was already installed".to_owned(),
+                )
             })?;
         self.composition.state.notification_processor = Some(notification_processor.clone());
         let deferred_producer_context = self
@@ -438,15 +445,14 @@ impl BrokerRuntime {
             .state
             .service_context
             .as_ref()
-            .ok_or_else(|| BrokerStartupError::Initialization {
-                component: "deferred_producers",
-                detail: "Broker deferred producers require an injected service context".to_owned(),
+            .ok_or_else(|| {
+                BrokerStartupError::initialization(
+                    "deferred_producers",
+                    "Broker deferred producers require an injected service context".to_owned(),
+                )
             })?
             .try_component("broker.deferred-producers")
-            .map_err(|error| BrokerStartupError::Initialization {
-                component: "deferred_producers",
-                detail: error.to_string(),
-            })?;
+            .map_err(|error| BrokerStartupError::initialization_source("deferred_producers", error))?;
         let deferred_producer_task_group = deferred_producer_context.task_group().clone();
         let deferred_producer = BrokerDeferredProducer::new(
             deferred_handoff,
@@ -462,17 +468,16 @@ impl BrokerRuntime {
             deferred_producer_task_group.clone(),
             Duration::from_millis(self.composition.state.broker_config().short_polling_time_mills),
         )
-        .map_err(|error| BrokerStartupError::Initialization {
-            component: "deferred_producers",
-            detail: error.to_string(),
-        })?;
+        .map_err(|error| BrokerStartupError::initialization_source("deferred_producers", error))?;
         self.composition
             .data_plane
             .deferred
             .as_mut()
-            .ok_or_else(|| BrokerStartupError::Initialization {
-                component: "deferred_producers",
-                detail: "Broker deferred lifecycle must outlive its producers".to_owned(),
+            .ok_or_else(|| {
+                BrokerStartupError::initialization(
+                    "deferred_producers",
+                    "Broker deferred lifecycle must outlive its producers".to_owned(),
+                )
             })?
             .install_producer(Arc::clone(&deferred_producer), deferred_producer_task_group)?;
         let message_arriving_listener = NotifyMessageArrivingListener::new(
@@ -501,26 +506,23 @@ impl BrokerRuntime {
             }
         };
         if listener_installed {
-            let deferred_replay_store =
-                self.composition
-                    .state
-                    .message_store_weak()
-                    .ok_or_else(|| BrokerStartupError::Initialization {
-                        component: "deferred_producers",
-                        detail: "Broker deferred replay requires the Broker-owned Store".to_owned(),
-                    })?;
+            let deferred_replay_store = self.composition.state.message_store_weak().ok_or_else(|| {
+                BrokerStartupError::initialization(
+                    "deferred_producers",
+                    "Broker deferred replay requires the Broker-owned Store".to_owned(),
+                )
+            })?;
             deferred_producer
                 .bind_message_store(deferred_replay_store)
-                .map_err(|_| BrokerStartupError::Initialization {
-                    component: "deferred_producers",
-                    detail: "Broker deferred replay Store was already bound or unavailable".to_owned(),
+                .map_err(|_| {
+                    BrokerStartupError::initialization(
+                        "deferred_producers",
+                        "Broker deferred replay Store was already bound or unavailable".to_owned(),
+                    )
                 })?;
             deferred_producer
                 .start()
-                .map_err(|error| BrokerStartupError::Initialization {
-                    component: "deferred_producers",
-                    detail: error.to_string(),
-                })?;
+                .map_err(|error| BrokerStartupError::initialization_source("deferred_producers", error))?;
             self.composition.request_pipeline.processor_wiring_complete = true;
         }
         let mut broker_request_processor =
@@ -544,9 +546,11 @@ impl BrokerRuntime {
                 .auth_runtime
                 .as_ref()
                 .cloned()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "maintenance_request_processor",
-                    detail: "maintenance API requires an initialized auth runtime".to_string(),
+                .ok_or_else(|| {
+                    BrokerStartupError::initialization(
+                        "maintenance_request_processor",
+                        "maintenance API requires an initialized auth runtime".to_string(),
+                    )
                 })?;
             let authorizer = self
                 .composition
@@ -554,27 +558,29 @@ impl BrokerRuntime {
                 .maintenance_authorizer
                 .as_ref()
                 .cloned()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "maintenance_request_processor",
-                    detail: "maintenance API requires a validated maintenance policy".to_string(),
+                .ok_or_else(|| {
+                    BrokerStartupError::initialization(
+                        "maintenance_request_processor",
+                        "maintenance API requires a validated maintenance policy".to_string(),
+                    )
                 })?;
-            let store =
-                self.composition
-                    .state
-                    .message_store_weak()
-                    .ok_or_else(|| BrokerStartupError::Initialization {
-                        component: "maintenance_request_processor",
-                        detail: "maintenance API requires the Broker-owned Store".to_string(),
-                    })?;
+            let store = self.composition.state.message_store_weak().ok_or_else(|| {
+                BrokerStartupError::initialization(
+                    "maintenance_request_processor",
+                    "maintenance API requires the Broker-owned Store".to_string(),
+                )
+            })?;
             let service_context = self
                 .composition
                 .state
                 .service_context
                 .as_ref()
                 .cloned()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "maintenance_request_processor",
-                    detail: "maintenance API requires a lifecycle-owned service context".to_string(),
+                .ok_or_else(|| {
+                    BrokerStartupError::initialization(
+                        "maintenance_request_processor",
+                        "maintenance API requires a lifecycle-owned service context".to_string(),
+                    )
                 })?;
             let checkpoint_service = Arc::new(rocketmq_store::StoreReleaseCheckpointService::new(
                 store,
@@ -907,9 +913,11 @@ impl BrokerRuntime {
             .request_pipeline
             .auth_admin_service
             .clone()
-            .ok_or_else(|| BrokerStartupError::Initialization {
-                component: "auth_admin_service",
-                detail: "auth admin service must be initialized before request processors".to_owned(),
+            .ok_or_else(|| {
+                BrokerStartupError::initialization(
+                    "auth_admin_service",
+                    "auth admin service must be initialized before request processors".to_owned(),
+                )
             })?;
         let admin_broker_processor = Arc::new(AdminBrokerProcessor::new_with_factory(
             self.admin_runtime(),

@@ -52,30 +52,29 @@ impl BrokerRuntime {
             .with_replicas_mut(ReplicasManager::start);
 
         if self.composition.state.transactional_message_service.is_none() {
-            return Err(BrokerStartupError::Initialization {
-                component: "transactional_message_service",
-                detail: "request processors require an initialized transactional message service".to_owned(),
-            });
+            return Err(BrokerStartupError::initialization(
+                "transactional_message_service",
+                "request processors require an initialized transactional message service".to_owned(),
+            ));
         }
         self.initialize_deferred_lifecycle()?;
         let (mut prepared_processor, _fast_request_processor) = self.init_processor_checked()?;
         self.initialize_consumer_lag_observability();
-        let service_context =
-            self.composition
-                .state
-                .service_context
-                .as_ref()
-                .ok_or_else(|| BrokerStartupError::Initialization {
-                    component: "service_context",
-                    detail: "broker remoting servers require an injected service context".to_owned(),
-                })?;
+        let service_context = self.composition.state.service_context.as_ref().ok_or_else(|| {
+            BrokerStartupError::initialization(
+                "service_context",
+                "broker remoting servers require an injected service context".to_owned(),
+            )
+        })?;
         let admission = self
             .composition
             .request_pipeline
             .admission_controller()
-            .ok_or_else(|| BrokerStartupError::Initialization {
-                component: "authorized_dispatcher",
-                detail: "shared Broker admission boundary was not initialized".to_owned(),
+            .ok_or_else(|| {
+                BrokerStartupError::initialization(
+                    "authorized_dispatcher",
+                    "shared Broker admission boundary was not initialized".to_owned(),
+                )
             })?;
         let prepared_transport_security = prepared_transport_security();
         let broker_config = self.composition.state.broker_config();
@@ -83,11 +82,10 @@ impl BrokerRuntime {
             prepared_processor.set_auth_disabled_by_validated_config();
         }
         if !prepared_processor.is_auth_configured() {
-            return Err(BrokerStartupError::Initialization {
-                component: "broker_auth",
-                detail: "prepared Broker dispatcher requires an explicit AuthRuntime or validated disabled state"
-                    .to_owned(),
-            });
+            return Err(BrokerStartupError::initialization(
+                "broker_auth",
+                "prepared Broker dispatcher requires an explicit AuthRuntime or validated disabled state".to_owned(),
+            ));
         }
         let prepared_dispatcher = Arc::new(
             rocketmq_transport::api::AuthorizedCommandDispatcher::try_new_with_telemetry_and_budget(
@@ -98,25 +96,26 @@ impl BrokerRuntime {
                 self.composition.state.transport_telemetry.clone(),
                 self.composition.state.resource_budget(),
             )
-            .map_err(|error| BrokerStartupError::Initialization {
-                component: "server_request_pending",
-                detail: error.to_string(),
-            })?,
+            .map_err(|error| BrokerStartupError::initialization_source("server_request_pending", error))?,
         );
         self.composition
             .request_pipeline
             .publish_canonical_dispatcher(prepared_dispatcher)
-            .map_err(|error| BrokerStartupError::Initialization {
-                component: "broker_dispatcher",
-                detail: format!("canonical dispatcher publication failed: {error:?}"),
+            .map_err(|error| {
+                BrokerStartupError::initialization(
+                    "broker_dispatcher",
+                    format!("canonical dispatcher publication failed: {error:?}"),
+                )
             })?;
         let canonical_dispatcher = self
             .composition
             .request_pipeline
             .canonical_dispatcher()
-            .ok_or_else(|| BrokerStartupError::Initialization {
-                component: "broker_dispatcher",
-                detail: "canonical dispatcher was not visible after successful publication".to_owned(),
+            .ok_or_else(|| {
+                BrokerStartupError::initialization(
+                    "broker_dispatcher",
+                    "canonical dispatcher was not visible after successful publication".to_owned(),
+                )
             })?;
         self.lifecycle
             .startup_journal
@@ -126,10 +125,10 @@ impl BrokerRuntime {
             "rocketmq-broker.remoting-server",
             "failed to start broker remoting servers outside Tokio runtime",
         ) else {
-            return Err(BrokerStartupError::ComponentStart {
-                component: "remoting_servers",
-                detail: "a Tokio runtime and owned task group are required".to_owned(),
-            });
+            return Err(BrokerStartupError::component_start_detail(
+                "remoting_servers",
+                "a Tokio runtime and owned task group are required",
+            ));
         };
         self.lifecycle.remoting_server_task_group = Some(remoting_server_task_group.clone());
 

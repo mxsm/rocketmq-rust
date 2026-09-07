@@ -59,42 +59,41 @@ impl BrokerDeferredLifecycle {
         lite_event_dispatcher: LiteEventDispatcher,
     ) -> Result<Self, BrokerStartupError> {
         let admission_controller = Arc::new(
-            AdmissionController::try_new_with_budget(Default::default(), admission_budget).map_err(|error| {
-                BrokerStartupError::Initialization {
-                    component: "authorized_dispatcher",
-                    detail: format!("failed to create shared Broker admission boundary: {error}"),
-                }
-            })?,
+            AdmissionController::try_new_with_budget(Default::default(), admission_budget)
+                .map_err(|error| BrokerStartupError::initialization_source("authorized_dispatcher", error))?,
         );
         let max_entries = usize::try_from(config.max_pop_polling_size).unwrap_or(usize::MAX);
-        let max_entries = NonZeroUsize::new(max_entries).ok_or_else(|| BrokerStartupError::Initialization {
-            component: "deferred_services",
-            detail: "maxPopPollingSize must be greater than zero".to_owned(),
+        let max_entries = NonZeroUsize::new(max_entries).ok_or_else(|| {
+            BrokerStartupError::initialization(
+                "deferred_services",
+                "maxPopPollingSize must be greater than zero".to_owned(),
+            )
         })?;
         let legacy_per_key = config.pop_polling_size.saturating_add(1);
-        let per_key = NonZeroUsize::new(legacy_per_key).ok_or_else(|| BrokerStartupError::Initialization {
-            component: "deferred_services",
-            detail: "popPollingSize must be greater than zero".to_owned(),
+        let per_key = NonZeroUsize::new(legacy_per_key).ok_or_else(|| {
+            BrokerStartupError::initialization(
+                "deferred_services",
+                "popPollingSize must be greater than zero".to_owned(),
+            )
         })?;
-        let continuation_count =
-            NonZeroUsize::new(config.pop_polling_map_size).ok_or_else(|| BrokerStartupError::Initialization {
-                component: "deferred_services",
-                detail: "popPollingMapSize must be greater than zero".to_owned(),
-            })?;
+        let continuation_count = NonZeroUsize::new(config.pop_polling_map_size).ok_or_else(|| {
+            BrokerStartupError::initialization(
+                "deferred_services",
+                "popPollingMapSize must be greater than zero".to_owned(),
+            )
+        })?;
         let admission = DeferredAdmission::try_configure(
             admission_controller.as_ref(),
             DeferredWaitLimits::new(max_entries.get(), retained_bytes),
         )
-        .map_err(|error| BrokerStartupError::Initialization {
-            component: "deferred_admission",
-            detail: error.to_string(),
-        })?;
+        .map_err(|error| BrokerStartupError::initialization_source("deferred_admission", error))?;
         let expiry_margins = DeferredExpiryMargins::new(DEFERRED_RECOVERY_MARGIN, DEFERRED_WRITE_MARGIN);
-        let pop_lite_policy =
-            PopLiteDeferredPolicy::from_config(config).ok_or_else(|| BrokerStartupError::Initialization {
-                component: "pop_lite_deferred",
-                detail: "PopLite deferred limits must be greater than zero".to_owned(),
-            })?;
+        let pop_lite_policy = PopLiteDeferredPolicy::from_config(config).ok_or_else(|| {
+            BrokerStartupError::initialization(
+                "pop_lite_deferred",
+                "PopLite deferred limits must be greater than zero".to_owned(),
+            )
+        })?;
 
         let pop = Arc::new(PopDeferredService::new(
             admission.clone(),
@@ -146,10 +145,10 @@ impl BrokerDeferredLifecycle {
         task_group: TaskGroup,
     ) -> Result<(), BrokerStartupError> {
         if self.producer.is_some() || self.producer_task_group.is_some() {
-            return Err(BrokerStartupError::Initialization {
-                component: "deferred_producers",
-                detail: "Broker deferred producers were already installed".to_owned(),
-            });
+            return Err(BrokerStartupError::initialization(
+                "deferred_producers",
+                "Broker deferred producers were already installed".to_owned(),
+            ));
         }
         self.producer = Some(producer);
         self.producer_task_group = Some(task_group);
@@ -500,9 +499,11 @@ impl BrokerRuntime {
             .state
             .service_context
             .as_ref()
-            .ok_or_else(|| BrokerStartupError::Initialization {
-                component: "deferred_admission",
-                detail: "Broker deferred admission requires an injected service context".to_owned(),
+            .ok_or_else(|| {
+                BrokerStartupError::initialization(
+                    "deferred_admission",
+                    "Broker deferred admission requires an injected service context".to_owned(),
+                )
             })?
             .process_budget();
         let retained_bytes = usize::try_from(

@@ -50,58 +50,6 @@ use thiserror::Error;
 
 pub type ProxyResult<T> = std::result::Result<T, ProxyError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ProxyErrorKind {
-    ClientIdRequired,
-    UnrecognizedClientType,
-    NotImplemented,
-    TooManyRequests,
-    Draining,
-    InvalidMetadata,
-    Transport,
-    IllegalMessageId,
-    InvalidTransactionId,
-    IllegalMessageGroup,
-    IllegalDeliveryTime,
-    IllegalPollingTime,
-    IllegalOffset,
-    IllegalInvisibleTime,
-    IllegalFilterExpression,
-    InvalidReceiptHandle,
-    IllegalLiteTopic,
-    LiteSubscriptionQuotaExceeded,
-    MessagePropertyConflictWithType,
-    SettingsUnavailable,
-}
-
-impl ProxyErrorKind {
-    /// Returns the catalog descriptor that owns every external projection for this kind.
-    pub const fn descriptor(self) -> &'static ErrorDescriptor {
-        match self {
-            Self::ClientIdRequired => &PROXY_CLIENT_ID_REQUIRED,
-            Self::UnrecognizedClientType => &PROXY_CLIENT_TYPE_UNRECOGNIZED,
-            Self::NotImplemented => &PROXY_CAPABILITY_UNSUPPORTED,
-            Self::TooManyRequests => &PROXY_CAPACITY_EXHAUSTED,
-            Self::Draining => &PROXY_REQUEST_DRAINING,
-            Self::InvalidMetadata => &PROXY_METADATA_INVALID,
-            Self::Transport => &PROXY_TRANSPORT_UNAVAILABLE,
-            Self::IllegalMessageId => &PROXY_MESSAGE_ID_INVALID,
-            Self::InvalidTransactionId => &PROXY_TRANSACTION_ID_INVALID,
-            Self::IllegalMessageGroup => &PROXY_MESSAGE_GROUP_INVALID,
-            Self::IllegalDeliveryTime => &PROXY_DELIVERY_TIME_INVALID,
-            Self::IllegalPollingTime => &PROXY_POLLING_TIME_INVALID,
-            Self::IllegalOffset => &PROXY_OFFSET_INVALID,
-            Self::IllegalInvisibleTime => &PROXY_INVISIBLE_TIME_INVALID,
-            Self::IllegalFilterExpression => &PROXY_FILTER_EXPRESSION_INVALID,
-            Self::InvalidReceiptHandle => &PROXY_RECEIPT_HANDLE_INVALID,
-            Self::IllegalLiteTopic => &PROXY_LITE_TOPIC_INVALID,
-            Self::LiteSubscriptionQuotaExceeded => &PROXY_LITE_SUBSCRIPTION_QUOTA_EXCEEDED,
-            Self::MessagePropertyConflictWithType => &PROXY_MESSAGE_PROPERTY_CONFLICT,
-            Self::SettingsUnavailable => &PROXY_SETTINGS_UNAVAILABLE,
-        }
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum ProxyError {
     #[error("{0}")]
@@ -172,59 +120,31 @@ pub enum ProxyError {
 }
 
 impl ProxyError {
-    pub fn local_kind(&self) -> Option<ProxyErrorKind> {
-        Some(match self {
-            Self::RocketMQ(_) | Self::BrokerResponse(_) => return None,
-            Self::ClientIdRequired => ProxyErrorKind::ClientIdRequired,
-            Self::UnrecognizedClientType(_) => ProxyErrorKind::UnrecognizedClientType,
-            Self::NotImplemented { .. } => ProxyErrorKind::NotImplemented,
-            Self::TooManyRequests { .. } => ProxyErrorKind::TooManyRequests,
-            Self::Draining => ProxyErrorKind::Draining,
-            Self::InvalidMetadata { .. } => ProxyErrorKind::InvalidMetadata,
-            Self::Transport { .. } => ProxyErrorKind::Transport,
-            Self::IllegalMessageId { .. } => ProxyErrorKind::IllegalMessageId,
-            Self::InvalidTransactionId { .. } => ProxyErrorKind::InvalidTransactionId,
-            Self::IllegalMessageGroup { .. } => ProxyErrorKind::IllegalMessageGroup,
-            Self::IllegalDeliveryTime { .. } => ProxyErrorKind::IllegalDeliveryTime,
-            Self::IllegalPollingTime { .. } => ProxyErrorKind::IllegalPollingTime,
-            Self::IllegalOffset { .. } => ProxyErrorKind::IllegalOffset,
-            Self::IllegalInvisibleTime { .. } => ProxyErrorKind::IllegalInvisibleTime,
-            Self::IllegalFilterExpression { .. } => ProxyErrorKind::IllegalFilterExpression,
-            Self::InvalidReceiptHandle { .. } => ProxyErrorKind::InvalidReceiptHandle,
-            Self::IllegalLiteTopic { .. } => ProxyErrorKind::IllegalLiteTopic,
-            Self::LiteSubscriptionQuotaExceeded { .. } => ProxyErrorKind::LiteSubscriptionQuotaExceeded,
-            Self::MessagePropertyConflictWithType { .. } => ProxyErrorKind::MessagePropertyConflictWithType,
-            Self::SettingsUnavailable { .. } => ProxyErrorKind::SettingsUnavailable,
-        })
-    }
-
     /// Returns the single catalog descriptor that owns this error's boundary behavior.
     pub fn descriptor(&self) -> &'static ErrorDescriptor {
         match self {
             Self::RocketMQ(error) => error.descriptor(),
             Self::BrokerResponse(error) => error.descriptor(),
-            Self::ClientIdRequired => ProxyErrorKind::ClientIdRequired.descriptor(),
-            Self::UnrecognizedClientType(_) => ProxyErrorKind::UnrecognizedClientType.descriptor(),
-            Self::NotImplemented { .. } => ProxyErrorKind::NotImplemented.descriptor(),
-            Self::TooManyRequests { .. } => ProxyErrorKind::TooManyRequests.descriptor(),
-            Self::Draining => ProxyErrorKind::Draining.descriptor(),
-            Self::InvalidMetadata { .. } => ProxyErrorKind::InvalidMetadata.descriptor(),
-            Self::Transport { .. } => ProxyErrorKind::Transport.descriptor(),
-            Self::IllegalMessageId { .. } => ProxyErrorKind::IllegalMessageId.descriptor(),
-            Self::InvalidTransactionId { .. } => ProxyErrorKind::InvalidTransactionId.descriptor(),
-            Self::IllegalMessageGroup { .. } => ProxyErrorKind::IllegalMessageGroup.descriptor(),
-            Self::IllegalDeliveryTime { .. } => ProxyErrorKind::IllegalDeliveryTime.descriptor(),
-            Self::IllegalPollingTime { .. } => ProxyErrorKind::IllegalPollingTime.descriptor(),
-            Self::IllegalOffset { .. } => ProxyErrorKind::IllegalOffset.descriptor(),
-            Self::IllegalInvisibleTime { .. } => ProxyErrorKind::IllegalInvisibleTime.descriptor(),
-            Self::IllegalFilterExpression { .. } => ProxyErrorKind::IllegalFilterExpression.descriptor(),
-            Self::InvalidReceiptHandle { .. } => ProxyErrorKind::InvalidReceiptHandle.descriptor(),
-            Self::IllegalLiteTopic { .. } => ProxyErrorKind::IllegalLiteTopic.descriptor(),
-            Self::LiteSubscriptionQuotaExceeded { .. } => ProxyErrorKind::LiteSubscriptionQuotaExceeded.descriptor(),
-            Self::MessagePropertyConflictWithType { .. } => {
-                ProxyErrorKind::MessagePropertyConflictWithType.descriptor()
-            }
-            Self::SettingsUnavailable { .. } => ProxyErrorKind::SettingsUnavailable.descriptor(),
+            Self::ClientIdRequired => &PROXY_CLIENT_ID_REQUIRED,
+            Self::UnrecognizedClientType(_) => &PROXY_CLIENT_TYPE_UNRECOGNIZED,
+            Self::NotImplemented { .. } => &PROXY_CAPABILITY_UNSUPPORTED,
+            Self::TooManyRequests { .. } => &PROXY_CAPACITY_EXHAUSTED,
+            Self::Draining => &PROXY_REQUEST_DRAINING,
+            Self::InvalidMetadata { .. } => &PROXY_METADATA_INVALID,
+            Self::Transport { .. } => &PROXY_TRANSPORT_UNAVAILABLE,
+            Self::IllegalMessageId { .. } => &PROXY_MESSAGE_ID_INVALID,
+            Self::InvalidTransactionId { .. } => &PROXY_TRANSACTION_ID_INVALID,
+            Self::IllegalMessageGroup { .. } => &PROXY_MESSAGE_GROUP_INVALID,
+            Self::IllegalDeliveryTime { .. } => &PROXY_DELIVERY_TIME_INVALID,
+            Self::IllegalPollingTime { .. } => &PROXY_POLLING_TIME_INVALID,
+            Self::IllegalOffset { .. } => &PROXY_OFFSET_INVALID,
+            Self::IllegalInvisibleTime { .. } => &PROXY_INVISIBLE_TIME_INVALID,
+            Self::IllegalFilterExpression { .. } => &PROXY_FILTER_EXPRESSION_INVALID,
+            Self::InvalidReceiptHandle { .. } => &PROXY_RECEIPT_HANDLE_INVALID,
+            Self::IllegalLiteTopic { .. } => &PROXY_LITE_TOPIC_INVALID,
+            Self::LiteSubscriptionQuotaExceeded { .. } => &PROXY_LITE_SUBSCRIPTION_QUOTA_EXCEEDED,
+            Self::MessagePropertyConflictWithType { .. } => &PROXY_MESSAGE_PROPERTY_CONFLICT,
+            Self::SettingsUnavailable { .. } => &PROXY_SETTINGS_UNAVAILABLE,
         }
     }
 

@@ -703,7 +703,7 @@ def check_required_mapping_adapters() -> list[Finding]:
             "RemotingErrorTarget::Existing(response) =>",
         ],
         PROXY_STATUS_MAPPER: [
-            "ProxyErrorKind",
+            "descriptor == &PROXY_METADATA_INVALID",
             "let descriptor = error.descriptor();",
             "descriptor.projection().grpc()",
             "descriptor.public_message()",
@@ -862,7 +862,8 @@ def check_proxy_remoting_boundary() -> list[Finding]:
             findings.append(Finding(path, line_number, message))
     source = "\n".join(line for _, line in iter_non_test_lines(path))
     for token in (
-        "local if local.local_kind().is_some()",
+        "source @ ProxyError::RocketMQ(_) => upstream_failure_response",
+        "local =>",
         "PublicErrorView::try_new(local.descriptor(), &context)",
     ):
         if token not in source:

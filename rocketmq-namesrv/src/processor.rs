@@ -300,7 +300,7 @@ impl NameServerRequestProcessor {
                         if let Some(started) = route_request_started {
                             self.metrics.record_route_request(started.elapsed());
                             self.metrics.record_route_error(
-                                rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Rejected,
+                                rocketmq_observability::metrics::namesrv::NameServerRouteFailureLabel::Rejected,
                             );
                         }
                         let response =
@@ -343,19 +343,19 @@ impl NameServerRequestProcessor {
                     if command.code() == rocketmq_protocol::code::response_code::ResponseCode::TopicNotExist as i32 =>
                 {
                     self.metrics.record_route_error(
-                        rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::NotFound,
+                        rocketmq_observability::metrics::namesrv::NameServerRouteFailureLabel::NotFound,
                     );
                 }
                 Ok(Some(command))
                     if command.code() != rocketmq_protocol::code::response_code::ResponseCode::Success as i32 =>
                 {
                     self.metrics.record_route_error(
-                        rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Rejected,
+                        rocketmq_observability::metrics::namesrv::NameServerRouteFailureLabel::Rejected,
                     );
                 }
                 Err(_) => {
                     self.metrics.record_route_error(
-                        rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Internal,
+                        rocketmq_observability::metrics::namesrv::NameServerRouteFailureLabel::Internal,
                     );
                 }
                 Ok(_) => {}

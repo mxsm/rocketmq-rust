@@ -379,15 +379,9 @@ async fn await_remoting_server_startup(
 ) -> Result<SocketAddr, BrokerStartupError> {
     let startup = tokio::time::timeout(timeout, receiver)
         .await
-        .map_err(|_| BrokerStartupError::ListenerStartup {
-            listener,
-            detail: format!("startup acknowledgement exceeded {} ms", timeout.as_millis()),
-        })?
-        .map_err(|_| BrokerStartupError::ListenerStartupDropped { listener })?;
-    startup.map_err(|error| BrokerStartupError::ListenerStartup {
-        listener,
-        detail: error.to_string(),
-    })
+        .map_err(|error| BrokerStartupError::listener_startup_source(listener, error))?
+        .map_err(|error| BrokerStartupError::listener_readiness_source(listener, error))?;
+    BrokerStartupError::listener_startup(listener, startup)
 }
 
 async fn run_shutdown_blocking_operation<T, F>(

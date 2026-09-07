@@ -14,13 +14,15 @@
 
 use rocketmq_error::GrpcPayloadCode;
 use rocketmq_error::GrpcStatusCode;
+use rocketmq_error::PROXY_METADATA_INVALID;
+use rocketmq_error::PROXY_SETTINGS_UNAVAILABLE;
+use rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
 use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
 
 use crate::error::ProxyError;
-use crate::error::ProxyErrorKind;
 use crate::proto::v2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,10 +65,10 @@ pub struct ProxyStatusMapper;
 
 impl ProxyStatusMapper {
     pub fn should_use_tonic_status(error: &ProxyError) -> bool {
-        matches!(
-            error.local_kind(),
-            Some(ProxyErrorKind::InvalidMetadata | ProxyErrorKind::Transport | ProxyErrorKind::SettingsUnavailable)
-        )
+        let descriptor = error.descriptor();
+        descriptor == &PROXY_METADATA_INVALID
+            || descriptor == &PROXY_TRANSPORT_UNAVAILABLE
+            || descriptor == &PROXY_SETTINGS_UNAVAILABLE
     }
 
     pub fn ok_payload() -> ProxyPayloadStatus {
@@ -181,7 +183,6 @@ mod tests {
 
     use super::ProxyStatusMapper;
     use crate::error::ProxyError;
-    use crate::error::ProxyErrorKind;
     use crate::proto::v2;
 
     #[test]
@@ -408,42 +409,42 @@ mod tests {
         let cases = vec![
             (
                 ProxyError::ClientIdRequired,
-                ProxyErrorKind::ClientIdRequired,
+                "proxy.client.id.required",
                 v2::Code::ClientIdRequired,
                 tonic::Code::InvalidArgument,
                 1,
             ),
             (
                 ProxyError::UnrecognizedClientType(31337),
-                ProxyErrorKind::UnrecognizedClientType,
+                "proxy.client.type.unrecognized",
                 v2::Code::UnrecognizedClientType,
                 tonic::Code::InvalidArgument,
                 1,
             ),
             (
                 ProxyError::not_implemented(MALICIOUS),
-                ProxyErrorKind::NotImplemented,
+                "proxy.capability.unsupported",
                 v2::Code::NotImplemented,
                 tonic::Code::Unimplemented,
                 3,
             ),
             (
                 ProxyError::too_many_requests(MALICIOUS),
-                ProxyErrorKind::TooManyRequests,
+                "proxy.capacity.exhausted",
                 v2::Code::TooManyRequests,
                 tonic::Code::ResourceExhausted,
                 2,
             ),
             (
                 ProxyError::Draining,
-                ProxyErrorKind::Draining,
+                "proxy.request.draining",
                 v2::Code::InternalError,
                 tonic::Code::Unavailable,
                 1,
             ),
             (
                 ProxyError::invalid_metadata(MALICIOUS),
-                ProxyErrorKind::InvalidMetadata,
+                "proxy.metadata.invalid",
                 v2::Code::BadRequest,
                 tonic::Code::InvalidArgument,
                 1,
@@ -452,144 +453,147 @@ mod tests {
                 ProxyError::Transport {
                     message: MALICIOUS.to_owned(),
                 },
-                ProxyErrorKind::Transport,
+                "proxy.transport.unavailable",
                 v2::Code::InternalError,
                 tonic::Code::Unavailable,
                 1,
             ),
             (
                 ProxyError::illegal_message_id(MALICIOUS),
-                ProxyErrorKind::IllegalMessageId,
+                "proxy.message.id.invalid",
                 v2::Code::IllegalMessageId,
                 tonic::Code::InvalidArgument,
                 13,
             ),
             (
                 ProxyError::invalid_transaction_id(MALICIOUS),
-                ProxyErrorKind::InvalidTransactionId,
+                "proxy.transaction.id.invalid",
                 v2::Code::InvalidTransactionId,
                 tonic::Code::InvalidArgument,
                 1,
             ),
             (
                 ProxyError::illegal_message_group(MALICIOUS),
-                ProxyErrorKind::IllegalMessageGroup,
+                "proxy.message.group.invalid",
                 v2::Code::IllegalMessageGroup,
                 tonic::Code::InvalidArgument,
                 13,
             ),
             (
                 ProxyError::illegal_delivery_time(MALICIOUS),
-                ProxyErrorKind::IllegalDeliveryTime,
+                "proxy.delivery.time.invalid",
                 v2::Code::IllegalDeliveryTime,
                 tonic::Code::InvalidArgument,
                 13,
             ),
             (
                 ProxyError::illegal_polling_time(MALICIOUS),
-                ProxyErrorKind::IllegalPollingTime,
+                "proxy.polling.time.invalid",
                 v2::Code::IllegalPollingTime,
                 tonic::Code::InvalidArgument,
                 1,
             ),
             (
                 ProxyError::illegal_offset(MALICIOUS),
-                ProxyErrorKind::IllegalOffset,
+                "proxy.offset.invalid",
                 v2::Code::IllegalOffset,
                 tonic::Code::InvalidArgument,
                 21,
             ),
             (
                 ProxyError::illegal_invisible_time(MALICIOUS),
-                ProxyErrorKind::IllegalInvisibleTime,
+                "proxy.invisible.time.invalid",
                 v2::Code::IllegalInvisibleTime,
                 tonic::Code::InvalidArgument,
                 1,
             ),
             (
                 ProxyError::illegal_filter_expression(MALICIOUS),
-                ProxyErrorKind::IllegalFilterExpression,
+                "proxy.filter.expression.invalid",
                 v2::Code::IllegalFilterExpression,
                 tonic::Code::InvalidArgument,
                 23,
             ),
             (
                 ProxyError::invalid_receipt_handle(MALICIOUS),
-                ProxyErrorKind::InvalidReceiptHandle,
+                "proxy.receipt.handle.invalid",
                 v2::Code::InvalidReceiptHandle,
                 tonic::Code::InvalidArgument,
                 1,
             ),
             (
                 ProxyError::illegal_lite_topic(MALICIOUS),
-                ProxyErrorKind::IllegalLiteTopic,
+                "proxy.lite_topic.invalid",
                 v2::Code::IllegalLiteTopic,
                 tonic::Code::InvalidArgument,
                 1,
             ),
             (
                 ProxyError::lite_subscription_quota_exceeded(MALICIOUS),
-                ProxyErrorKind::LiteSubscriptionQuotaExceeded,
+                "proxy.lite_subscription.quota_exceeded",
                 v2::Code::LiteSubscriptionQuotaExceeded,
                 tonic::Code::ResourceExhausted,
                 1,
             ),
             (
                 ProxyError::message_property_conflict(MALICIOUS),
-                ProxyErrorKind::MessagePropertyConflictWithType,
+                "proxy.message.property_conflict",
                 v2::Code::MessagePropertyConflictWithType,
                 tonic::Code::InvalidArgument,
                 13,
             ),
             (
                 ProxyError::settings_unavailable(MALICIOUS),
-                ProxyErrorKind::SettingsUnavailable,
+                "proxy.settings.unavailable",
                 v2::Code::InternalError,
                 tonic::Code::FailedPrecondition,
                 1,
             ),
         ];
 
-        for (error, kind, expected_payload, expected_tonic, expected_remoting) in cases {
-            assert_eq!(error.local_kind(), Some(kind));
-            assert_eq!(error.descriptor(), kind.descriptor());
+        for (error, expected_code, expected_payload, expected_tonic, expected_remoting) in cases {
+            assert_eq!(error.descriptor().code().as_str(), expected_code);
             assert_eq!(
                 error.descriptor().projection().remoting().code.as_i32(),
                 expected_remoting,
-                "{kind:?}"
+                "{expected_code}"
             );
 
             let context = error.context();
             let public = PublicErrorView::try_new(error.descriptor(), &context)
                 .expect("Proxy local context must match its catalog descriptor");
-            assert_eq!(public.fields().count(), 0, "{kind:?}");
+            assert_eq!(public.fields().count(), 0, "{expected_code}");
 
             let payload = ProxyStatusMapper::from_error_payload(&error);
             let tonic = ProxyStatusMapper::to_tonic_status(&error);
-            assert_eq!(payload.code(), expected_payload as i32, "{kind:?}");
-            assert_eq!(tonic.code(), expected_tonic, "{kind:?}");
-            assert_eq!(payload.message(), error.descriptor().public_message(), "{kind:?}");
-            assert_eq!(tonic.message(), error.descriptor().public_message(), "{kind:?}");
+            assert_eq!(payload.code(), expected_payload as i32, "{expected_code}");
+            assert_eq!(tonic.code(), expected_tonic, "{expected_code}");
+            assert_eq!(
+                payload.message(),
+                error.descriptor().public_message(),
+                "{expected_code}"
+            );
+            assert_eq!(tonic.message(), error.descriptor().public_message(), "{expected_code}");
             for output in [payload.message(), tonic.message()] {
-                assert!(!output.contains("secret-token"), "{kind:?}");
-                assert!(!output.contains("private"), "{kind:?}");
-                assert!(!output.chars().any(char::is_control), "{kind:?}");
+                assert!(!output.contains("secret-token"), "{expected_code}");
+                assert!(!output.contains("private"), "{expected_code}");
+                assert!(!output.chars().any(char::is_control), "{expected_code}");
             }
             assert_eq!(
                 ProxyStatusMapper::should_use_tonic_status(&error),
                 matches!(
-                    kind,
-                    ProxyErrorKind::InvalidMetadata | ProxyErrorKind::Transport | ProxyErrorKind::SettingsUnavailable
+                    expected_code,
+                    "proxy.metadata.invalid" | "proxy.transport.unavailable" | "proxy.settings.unavailable"
                 ),
-                "{kind:?}"
+                "{expected_code}"
             );
         }
     }
 
     #[test]
-    fn local_proxy_errors_use_local_only_kind_mapping() {
+    fn local_proxy_errors_use_catalog_descriptor_mapping() {
         let lite_topic = ProxyError::illegal_lite_topic("not an LMQ");
-        assert_eq!(lite_topic.local_kind(), Some(ProxyErrorKind::IllegalLiteTopic));
+        assert_eq!(lite_topic.descriptor().code().as_str(), "proxy.lite_topic.invalid");
         let lite_topic_status = ProxyStatusMapper::from_error(&lite_topic);
         assert_eq!(lite_topic_status.code, v2::Code::IllegalLiteTopic as i32);
         assert_eq!(
@@ -598,7 +602,10 @@ mod tests {
         );
 
         let quota = ProxyError::lite_subscription_quota_exceeded("subscription limit reached");
-        assert_eq!(quota.local_kind(), Some(ProxyErrorKind::LiteSubscriptionQuotaExceeded));
+        assert_eq!(
+            quota.descriptor().code().as_str(),
+            "proxy.lite_subscription.quota_exceeded"
+        );
         let quota_status = ProxyStatusMapper::from_error(&quota);
         assert_eq!(quota_status.code, v2::Code::LiteSubscriptionQuotaExceeded as i32);
         assert_eq!(

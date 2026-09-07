@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use rocketmq_error::RocketMQError;
-use rocketmq_filter::expression::Expression;
 use rocketmq_filter::filter::Filter;
 use rocketmq_filter::filter::FilterCompileErrorKind;
 use rocketmq_filter::filter::FilterCompileSource;
@@ -191,50 +190,4 @@ fn compilation_preserves_trimmed_sql_compatibility_and_original_offsets() {
     let utf8_with_leading_whitespace = "  name = '秘密' @";
     let error = rejected(filter.try_compile(utf8_with_leading_whitespace));
     assert_eq!(error.position(), utf8_with_leading_whitespace.find('@'));
-}
-
-#[derive(Debug)]
-struct LegacyOnlyFilter;
-
-#[allow(
-    deprecated,
-    reason = "This dedicated contract test verifies the default legacy Filter compatibility adapter."
-)]
-impl Filter for LegacyOnlyFilter {
-    fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, rocketmq_filter::filter::FilterError> {
-        Err(rocketmq_filter::filter::FilterError::new("legacy secret expression"))
-    }
-
-    fn of_type(&self) -> &str {
-        "LEGACY_ONLY"
-    }
-}
-
-#[test]
-fn legacy_filters_map_failures_without_leaking_their_message() {
-    let error = rejected(LegacyOnlyFilter.try_compile("legacy secret expression"));
-    assert_eq!(error.kind(), FilterCompileErrorKind::LegacyAdapter);
-    assert_eq!(error.stage(), FilterCompileStage::Compatibility);
-    assert_eq!(error.position(), None);
-    assert_eq!(error.source(), None);
-    assert!(!error.to_string().contains("legacy secret expression"));
-}
-
-#[test]
-#[allow(
-    deprecated,
-    reason = "This dedicated contract test verifies deprecated compile behavior."
-)]
-fn deprecated_compile_preserves_success_and_uses_a_fixed_failure_projection() {
-    let filter = SqlFilter::new();
-    assert!(filter.try_compile("name = 'blue'").is_ok());
-    assert!(filter.compile("name = 'blue'").is_ok());
-    let legacy_error = match filter.compile("name = 'secret") {
-        Ok(_) => panic!("invalid expression should not compile"),
-        Err(error) => error,
-    };
-    assert_eq!(
-        legacy_error.to_string(),
-        "FilterError: SQL92 expression compilation failed"
-    );
 }

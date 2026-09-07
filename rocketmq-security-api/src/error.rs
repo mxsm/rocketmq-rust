@@ -14,12 +14,25 @@
 
 //! Security contract and provider failure types.
 
+use std::backtrace::Backtrace;
 use std::error::Error as StdError;
 use std::fmt;
+use std::panic::Location;
+
+use rocketmq_error::fields;
+use rocketmq_error::CanonicalCondition;
+use rocketmq_error::DiagnosticView;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::ErrorCode;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::ErrorDescriptor;
+use rocketmq_error::ErrorSeverity;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::RecoveryHint;
+use rocketmq_error::SharedError;
+use rocketmq_error::ViewContextViolation;
 
 use crate::SecurityBootstrapMaterial;
-
-type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 
 /// Closed validation rules for provider identifiers and logical secret names.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -270,34 +283,40 @@ impl fmt::Display for SecurityOperation {
 /// Formatting is intentionally fixed and never renders the typed source. The
 /// source remains available for internal downcasting through [`Self::source`]
 /// and [`std::error::Error::source`].
+#[derive(Clone)]
 pub struct SecurityProviderError {
+    error: SharedError,
     kind: SecurityProviderFailure,
     operation: SecurityOperation,
-    source: Option<BoxError>,
 }
 
 impl SecurityProviderError {
     /// Creates a source-free provider failure.
     #[must_use]
-    pub const fn new(kind: SecurityProviderFailure, operation: SecurityOperation) -> Self {
+    #[track_caller]
+    pub fn new(kind: SecurityProviderFailure, operation: SecurityOperation) -> Self {
+        let error = CanonicalError::new(provider_descriptor(kind)).with_context(provider_context(operation, false));
         Self {
+            error: std::sync::Arc::new(error),
             kind,
             operation,
-            source: None,
         }
     }
 
     /// Creates a provider failure while retaining its typed source.
     #[must_use]
+    #[track_caller]
     pub fn caused_by(
         kind: SecurityProviderFailure,
         operation: SecurityOperation,
         source: impl StdError + Send + Sync + 'static,
     ) -> Self {
+        let error = CanonicalError::caused_by(provider_descriptor(kind), source)
+            .with_context(provider_context(operation, true));
         Self {
+            error: std::sync::Arc::new(error),
             kind,
             operation,
-            source: Some(Box::new(source)),
         }
     }
 
@@ -319,11 +338,111 @@ impl SecurityProviderError {
         self.operation
     }
 
+    /// Borrows the canonical error retained by this provider failure.
+    #[must_use]
+    pub fn shared_error(&self) -> &SharedError {
+        &self.error
+    }
+
+    /// Consumes this facade and returns its canonical error allocation.
+    #[must_use]
+    pub fn into_shared_error(self) -> SharedError {
+        self.error
+    }
+
+    /// Returns the catalog descriptor that owns this failure's identity.
+    #[must_use]
+    pub fn descriptor(&self) -> &'static ErrorDescriptor {
+        self.error.descriptor()
+    }
+
+    /// Returns the stable dotted catalog code.
+    #[must_use]
+    pub fn code(&self) -> ErrorCode {
+        self.error.code()
+    }
+
+    /// Returns the descriptor-owned canonical condition.
+    #[must_use]
+    pub fn condition(&self) -> CanonicalCondition {
+        self.error.condition()
+    }
+
+    /// Returns the descriptor-owned severity.
+    #[must_use]
+    pub fn severity(&self) -> ErrorSeverity {
+        self.error.severity()
+    }
+
+    /// Returns the descriptor-owned recovery hint.
+    #[must_use]
+    pub fn recovery_hint(&self) -> RecoveryHint {
+        self.error.recovery_hint()
+    }
+
+    /// Returns the bounded diagnostic context.
+    #[must_use]
+    pub fn context(&self) -> &ErrorContext {
+        self.error.context()
+    }
+
+    /// Returns the first-promotion caller location.
+    #[must_use]
+    pub fn location(&self) -> &'static Location<'static> {
+        self.error.location()
+    }
+
+    /// Returns the catalog-controlled captured backtrace, when enabled.
+    #[must_use]
+    pub fn backtrace(&self) -> Option<&Backtrace> {
+        self.error.backtrace()
+    }
+
+    /// Creates the descriptor-validated public projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema violation only if the owner-generated context no longer
+    /// matches the selected provider descriptor.
+    pub fn public_view(&self) -> Result<PublicErrorView<'_>, ViewContextViolation> {
+        self.error.public_view()
+    }
+
+    /// Creates the descriptor-validated controlled diagnostic projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a schema violation only if the owner-generated context no longer
+    /// matches the selected provider descriptor.
+    pub fn diagnostic_view(&self) -> Result<DiagnosticView<'_>, ViewContextViolation> {
+        self.error.diagnostic_view()
+    }
+
     /// Returns the typed source without formatting it.
     #[must_use]
-    pub fn source(&self) -> Option<&(dyn StdError + Send + Sync + 'static)> {
-        self.source.as_deref()
+    pub fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.error.source()
     }
+}
+
+fn provider_descriptor(kind: SecurityProviderFailure) -> &'static ErrorDescriptor {
+    match kind {
+        SecurityProviderFailure::NotFound => &rocketmq_error::SECURITY_PROVIDER_NOT_FOUND,
+        SecurityProviderFailure::Conflict => &rocketmq_error::SECURITY_PROVIDER_CONFLICT,
+        SecurityProviderFailure::Unsupported => &rocketmq_error::SECURITY_PROVIDER_UNSUPPORTED,
+        SecurityProviderFailure::InvalidData => &rocketmq_error::SECURITY_PROVIDER_INVALID_DATA,
+        SecurityProviderFailure::ContractViolation => &rocketmq_error::SECURITY_PROVIDER_CONTRACT_VIOLATION,
+        SecurityProviderFailure::Unavailable => &rocketmq_error::SECURITY_PROVIDER_UNAVAILABLE,
+        SecurityProviderFailure::OperationFailed => &rocketmq_error::SECURITY_PROVIDER_OPERATION_FAILED,
+    }
+}
+
+fn provider_context(operation: SecurityOperation, source_present: bool) -> ErrorContext {
+    let mut context = ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation.as_str());
+    if source_present {
+        context = context.with_secret_presence(fields::SOURCE_PRESENT);
+    }
+    context
 }
 
 impl From<SecurityContractViolation> for SecurityProviderError {
@@ -334,15 +453,7 @@ impl From<SecurityContractViolation> for SecurityProviderError {
 
 impl fmt::Display for SecurityProviderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self.kind {
-            SecurityProviderFailure::NotFound => "security material was not found",
-            SecurityProviderFailure::Conflict => "security provider state conflict",
-            SecurityProviderFailure::Unsupported => "security provider operation is unsupported",
-            SecurityProviderFailure::InvalidData => "security provider data is invalid",
-            SecurityProviderFailure::ContractViolation => "security provider contract was violated",
-            SecurityProviderFailure::Unavailable => "security provider is unavailable",
-            SecurityProviderFailure::OperationFailed => "security provider operation failed",
-        })
+        fmt::Display::fmt(self.error.as_ref(), formatter)
     }
 }
 
@@ -350,16 +461,18 @@ impl fmt::Debug for SecurityProviderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("SecurityProviderError")
+            .field("code", &self.code())
+            .field("condition", &self.condition())
             .field("kind", &self.kind)
             .field("operation", &self.operation)
-            .field("source_present", &self.source.is_some())
+            .field("source_present", &self.error.source().is_some())
             .finish()
     }
 }
 
 impl StdError for SecurityProviderError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        self.source.as_deref().map(|source| source as &(dyn StdError + 'static))
+        self.error.source()
     }
 }
 
@@ -384,6 +497,11 @@ mod tests {
         assert!(!format!("{error:?}").contains(sentinel));
         assert_eq!(error.kind(), SecurityProviderFailure::Unavailable);
         assert_eq!(error.operation(), SecurityOperation::ReadSecret);
+        assert_eq!(error.descriptor(), &rocketmq_error::SECURITY_PROVIDER_UNAVAILABLE);
+        assert_eq!(error.condition(), CanonicalCondition::Unavailable);
+        assert_eq!(error.context().len(), 2);
+        assert!(error.public_view().is_ok());
+        assert!(error.diagnostic_view().is_ok());
         assert!(Error::source(&error).unwrap().downcast_ref::<io::Error>().is_some());
     }
 
@@ -393,11 +511,57 @@ mod tests {
 
         assert_eq!(error.kind(), SecurityProviderFailure::ContractViolation);
         assert_eq!(error.operation(), SecurityOperation::Validate);
+        assert_eq!(
+            error.descriptor(),
+            &rocketmq_error::SECURITY_PROVIDER_CONTRACT_VIOLATION
+        );
         assert!(error
             .source()
             .unwrap()
             .downcast_ref::<SecurityContractViolation>()
             .is_some());
         assert!(size_of::<SecurityProviderError>() <= 4 * size_of::<usize>());
+    }
+
+    #[test]
+    fn every_provider_failure_has_one_catalog_identity() {
+        let cases = [
+            (
+                SecurityProviderFailure::NotFound,
+                &rocketmq_error::SECURITY_PROVIDER_NOT_FOUND,
+            ),
+            (
+                SecurityProviderFailure::Conflict,
+                &rocketmq_error::SECURITY_PROVIDER_CONFLICT,
+            ),
+            (
+                SecurityProviderFailure::Unsupported,
+                &rocketmq_error::SECURITY_PROVIDER_UNSUPPORTED,
+            ),
+            (
+                SecurityProviderFailure::InvalidData,
+                &rocketmq_error::SECURITY_PROVIDER_INVALID_DATA,
+            ),
+            (
+                SecurityProviderFailure::ContractViolation,
+                &rocketmq_error::SECURITY_PROVIDER_CONTRACT_VIOLATION,
+            ),
+            (
+                SecurityProviderFailure::Unavailable,
+                &rocketmq_error::SECURITY_PROVIDER_UNAVAILABLE,
+            ),
+            (
+                SecurityProviderFailure::OperationFailed,
+                &rocketmq_error::SECURITY_PROVIDER_OPERATION_FAILED,
+            ),
+        ];
+
+        for (kind, descriptor) in cases {
+            let error = SecurityProviderError::new(kind, SecurityOperation::ReadSecret);
+            assert_eq!(error.descriptor(), descriptor);
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.context().len(), 1);
+            assert!(error.source().is_none());
+        }
     }
 }

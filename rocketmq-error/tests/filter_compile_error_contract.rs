@@ -18,7 +18,6 @@ use rocketmq_error::FilterCompileErrorKind;
 use rocketmq_error::FilterCompileSource;
 use rocketmq_error::FilterCompileStage;
 use rocketmq_error::RocketMQError;
-use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_error::PROTOCOL_FILTER_INVALID;
 
 #[test]
@@ -52,17 +51,4 @@ fn compile_error_contract_is_typed_and_redaction_safe() {
     assert!(!unified_context.contains("UnexpectedToken"));
     assert!(!unified_context.contains("Sql92"));
     assert!(!unified_context.contains("secret_expression"));
-}
-
-#[test]
-fn legacy_compile_adapter_has_no_source_position() {
-    let error = FilterCompileError::new(
-        FilterCompileErrorKind::LegacyAdapter,
-        FilterCompileStage::Compatibility,
-        None,
-    );
-
-    assert_eq!(error.position(), None);
-    assert_eq!(error.source(), None);
-    assert_eq!(DomainError::descriptor(&error), &CORE_INTERNAL_FAILURE);
 }

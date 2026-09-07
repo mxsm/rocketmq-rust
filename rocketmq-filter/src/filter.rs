@@ -18,13 +18,8 @@
 //! It includes the core `Filter` trait (SPI), a factory for filter management, and
 //! default implementations like SQL-92 filtering.
 //!
-//! New callers should use [`Filter::try_compile`] and handle the structured,
-//! redaction-safe [`FilterCompileError`]. The deprecated 1.x
-//! [`Filter::compile`] facade and local string [`FilterError`] remain available
-//! for compatibility. Their future removal requires a complete release cycle,
-//! an explicit 2.0 breaking window, and individual reviewed post-freeze
-//! approvals for each affected frozen public item; this module does not
-//! authorize removal.
+//! Filter implementations expose [`Filter::try_compile`] and return the
+//! structured, redaction-safe [`FilterCompileError`].
 //!
 //! # Architecture
 //!
@@ -80,11 +75,6 @@ mod sql_runtime;
 
 pub use filter_factory::FilterFactory;
 pub use filter_spi::Filter;
-#[allow(
-    deprecated,
-    reason = "The re-export preserves the legacy FilterError compatibility surface."
-)]
-pub use filter_spi::FilterError;
 pub use filter_spi::FilterSpi;
 pub use filter_sql_filter::SqlFilter;
 pub use rocketmq_error::FilterCompileError;

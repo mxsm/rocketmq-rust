@@ -2603,7 +2603,8 @@ fn proxy_operation_error_response(
                 },
             )
         }
-        local if local.local_kind().is_some() => {
+        source @ ProxyError::RocketMQ(_) => upstream_failure_response(command_factory, opaque, operation, source),
+        local => {
             let context = local.context();
             let view = PublicErrorView::try_new(local.descriptor(), &context)
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(local.descriptor()));
@@ -2615,7 +2616,6 @@ fn proxy_operation_error_response(
                 },
             )
         }
-        source => upstream_failure_response(command_factory, opaque, operation, source),
     }
 }
 
