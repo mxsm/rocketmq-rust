@@ -47,6 +47,8 @@ use rocketmq_security_api::SecretProviderCapabilities;
 use rocketmq_security_api::SecretProviderId;
 use rocketmq_security_api::SecretVersion;
 use rocketmq_security_api::SecretVersioning;
+#[cfg(unix)]
+use rocketmq_security_api::SecurityContractViolation;
 use rocketmq_security_api::SecurityOperation;
 use rocketmq_security_api::SecurityProviderError;
 use rocketmq_security_api::SecurityProviderFailure;
