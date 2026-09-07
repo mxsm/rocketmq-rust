@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Namespaced key-value configuration storage and persistence.
+//!
+//! [`kvconfig_mananger::KVConfigManager`] manages configuration values, while
+//! [`KVConfigSerializeWrapper`] defines their serialized representation.
+
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;

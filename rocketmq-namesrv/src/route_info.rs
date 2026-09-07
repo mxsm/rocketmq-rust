@@ -12,5 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Broker identity and housekeeping support used by the route tables.
+//!
+//! The module contains [`broker_addr_info::BrokerAddrInfo`] and the broker
+//! housekeeping service that removes inactive route entries.
+
 pub(crate) mod broker_addr_info;
 pub(crate) mod broker_housekeeping_service;

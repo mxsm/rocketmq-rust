@@ -12,6 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! RocketMQ NameServer implementation.
+//!
+//! This crate provides broker registration and liveness tracking, topic route metadata,
+//! zone-aware route filtering, KV configuration, and shutdown and observability support.
+//! The main entry points are [`NamesrvConfig`], [`bootstrap`], [`RouteInfoManager`],
+//! [`KVConfigManager`], and [`parse_command_and_config_file`].
+//!
+//! TLS support is enabled by default with `tls`. Optional features include
+//! `embedded-controller` and the `observability`, `otel-*`, and `otlp-*` integrations.
+
 #![allow(clippy::result_large_err)]
 #![recursion_limit = "512"]
 
