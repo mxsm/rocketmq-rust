@@ -6,19 +6,33 @@ paths removed by the architecture migration.
 
 ## Public API snapshot
 
-- Scope: every core-release library target (`library_targets=26`); excluded
-  Dashboard, MCP, and SRE projects are not part of this denominator
+- Scope: every core-release library target (`library_targets=26`); Dashboard,
+  MCP, and SRE projects are not part of this denominator. Cargo metadata
+  currently reports 27 root-workspace library targets; the core-release scope
+  deliberately excludes `rocketmq-dashboard-common`, which is included only
+  in the complete-root denominator.
 - Structural profiles: `profiles=50` (26 workspace defaults plus the 24 frozen
   public-feature matrix entries)
-- Snapshot comparison: `differences=0`
-- Current classified source-export counts:
+- Last accepted pinned snapshot comparison: `differences=0`
+- Current public API intent counts (`scripts/public-api-intent.json`):
 
-  | Package | Classified exports |
+  | Package | Intent entries |
   |---|---:|
-  | `rocketmq-client-rust` | 224 |
-  | `rocketmq-runtime` | 134 |
-  | `rocketmq-transport` | 219 |
-  | `rocketmq-store` | 211 |
+  | `rocketmq-client-rust` | 251 |
+  | `rocketmq-model` | 20 |
+  | `rocketmq-protocol` | 21 |
+  | `rocketmq-runtime` | 145 |
+  | `rocketmq-store` | 204 |
+  | `rocketmq-store-local` | 19 |
+  | `rocketmq-store-rocksdb` | 27 |
+  | `rocketmq-transport` | 193 |
+
+- The intent guard's eight crates are a different denominator from the E8-3
+  historical eight priority crates (`store`, `store-api`, `store-local`,
+  `transport`, `runtime`, `broker`, `auth`, and `security-api`). The manifest
+  contains exactly five supported `*Error` exports: `RocketMQError`,
+  `InfrastructureObservationReadError`, `RuntimeError`, `StoreError`, and
+  `TransportError`; this count must not be mixed with the live Error inventory.
 
 - The current Transport surface has one unversioned `api` module, one
   `RequestProcessor` contract, one authorized dispatcher facade, and one
@@ -45,6 +59,22 @@ unreleased source and observation surfaces.
 
 The package count is derived from `cargo metadata`; the guard rejects a
 baseline that is missing a current library target or retains a removed one.
+
+### E8-3 fresh pinned-nightly snapshot review
+
+The fresh pinned `nightly-2026-07-05` structural check covered the
+core-release's 26 packages and 50 profiles. It exited 1 with
+`status=review-required`, not pass: `197` differences consist of `58 allowed
+additions + 139 incompatible removals`. Manual review classifies the 139
+removals as `admin-cli=1`, `protocol=6`, Windows `store-local` sendfile=12,
+and Transport old helpers=120. They touch 39 unique paths, and there is no
+`Error`/`ErrorKind` identity difference. The nonzero result is drift from
+earlier completed API-removal stages, not a new Error identity change.
+
+E8-3 therefore does not refresh the checked-in baseline. After E9-1 completes
+the final old-API deletion, the repository will perform one reconciliation to
+avoid double churn; this review-required snapshot must not be recorded as a
+passing gate.
 
 ## Canonical-path cutover inventory
 

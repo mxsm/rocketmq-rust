@@ -2,7 +2,7 @@
 title: "Error Architecture Inventory"
 permalink: /docs/error-inventory/
 excerpt: "Current RocketMQ Rust error ownership and migration inventory."
-last_modified_at: 2026-09-05T00:00:00+08:00
+last_modified_at: 2026-09-06T00:00:00+08:00
 toc: true
 classes: wide
 ---
@@ -862,6 +862,98 @@ This table is separate from the 301 `Error` rows. `Keep public` is intentionally
 | `rocketmq_tieredstore::error::TieredStoreErrorKind` | none; local semantic table | removed | none | Delete | Storage / rocketmq-tieredstore | 2 (Storage vertical) | implemented by issue #9969 | the kind table and eight arbitrary-string helpers were deleted; owner operations now select the canonical descriptor and retain typed provider sources |
 
 The itemized tables above are the Wave 0B audit trail. A later implementation change may update a row only after rechecking its producer, every listed consumer, typed-source behavior, and applicable protocol or persistence evidence.
+
+## E8-3 current-main live audit addendum
+
+Audit date: 2026-09-06. This addendum is a separate current-main review and
+does not rewrite the frozen inventory above. The historical `301/104`
+denominator remains frozen: 301 lexical non-central `*Error` enum/struct
+candidates in the implementation-plan scan, and 104 lexical public `*Error`
+candidates in the historical eight high-priority crates
+(`rocketmq-store`, `rocketmq-store-api`, `rocketmq-store-local`,
+`rocketmq-transport`, `rocketmq-runtime`, `rocketmq-broker`, `rocketmq-auth`,
+and `rocketmq-security-api`). Lexical `pub` is only a candidate signal;
+Rustdoc reachability through the module chain and re-exports is the supported
+API authority.
+
+### Current public `Error` counts
+
+| Reviewed scope | Lexical enum/struct declarations | Rustdoc-reachable supported types | Disposition |
+| --- | ---: | ---: | --- |
+| Historical eight high-priority crates | 9 | 8 | Below the 16-type target; the ninth is the private-module `ConsumerAttrError` false positive |
+| Complete root workspace outside `rocketmq-error` | 24 | 23 | Below the 40-type target; includes four `rocketmq-dashboard-common` types and one feature-gated observability export |
+| `rocketmq-store-local` | — | 0 public `Error` | No supported public Error remains |
+| Supported public Error with neither a checked consumer nor public-signature purpose | — | 0 | No orphan supported public Error |
+
+The complete-root 24/23 count includes the historical-eight candidates plus
+the current client, controller, dashboard-common, filter, observability, and
+proxy-core surfaces. `ConsumerAttrError` is the only lexical false positive:
+its declaration is `pub`, but `rocketmq-broker::metrics` is private and the
+type has no public re-export or Rustdoc path. `InfrastructureObservationReadError`
+is public only under the Client `admin-read` feature, and
+`ReleaseIdentityRegistrationError` is public only under Observability's
+`otel-metrics` feature; both are reachable in their enabled profiles. Private
+implementation modules that are explicitly re-exported at a crate root are
+counted as reachable.
+
+### Manually reviewed reachable candidates
+
+The 23 rows below are the complete reachable set outside `rocketmq-error`.
+Each row has a code-checked consumer or a public signature; test-only uses are
+listed only as supporting evidence and do not create a public API by
+themselves.
+
+| Candidate declaration | Reachability | Checked consumer or public-signature purpose |
+| --- | --- | --- |
+| [`AdminError`](../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/error.rs#L20) (`rocketmq-admin-core`) | root re-export; reachable | `AdminResult`/`AdminFuture`; Dashboard GPUI, Tauri, and Web adapters consume and project it |
+| [`AuthServiceError`](../../rocketmq-auth/src/error.rs#L120) (`rocketmq-auth`) | root re-export; reachable | `AuthServiceResult<T>` and authentication/authorization, secret-provider, broker, and proxy paths |
+| [`BrokerArgsError`](../../rocketmq-broker/src/command.rs#L26) (`rocketmq-broker`) | public `command` module; reachable | `Args::validate() -> Result<(), BrokerArgsError>` and broker CLI argument validation |
+| [`BrokerConfigError`](../../rocketmq-broker/src/config/error.rs#L46) (`rocketmq-broker`) | public `config::error` module; reachable | Broker config load/validation APIs return it and preserve typed config causes |
+| [`BrokerStartupError`](../../rocketmq-broker/src/lifecycle.rs#L52) (`rocketmq-broker`) | root re-export; reachable | `BrokerBootstrap`/broker-runtime startup, readiness, and rollback paths |
+| [`InfrastructureObservationReadError`](../../rocketmq-client/src/admin/mq_admin_infrastructure_observation_read_ext.rs#L41) (`rocketmq-client-rust`) | `admin-read` feature re-export; reachable when enabled | Four `MQAdminInfrastructureObservationReadExt` methods return `Result<_, InfrastructureObservationReadError>` |
+| [`QualificationError`](../../rocketmq-controller/src/qualification.rs#L605) (`rocketmq-controller`) | root re-export; reachable | Public failover timeline, PutOk audit, and confirm-offset audit methods return it |
+| [`DashboardCommonError`](../../rocketmq-dashboard/rocketmq-dashboard-common/src/error.rs#L24) (`rocketmq-dashboard-common`) | public module/root re-export; reachable | Dashboard Tauri and Web backend services consume the shared facade |
+| [`ProducerValidationError`](../../rocketmq-dashboard/rocketmq-dashboard-common/src/producer/domain.rs#L229) (`rocketmq-dashboard-common`) | public module/root re-export; reachable | Producer domain validation and GPUI producer store consume the typed contract |
+| [`ConsumerValidationError`](../../rocketmq-dashboard/rocketmq-dashboard-common/src/consumer/domain.rs#L967) (`rocketmq-dashboard-common`) | public module/root re-export; reachable | Consumer domain validation returns the typed contract for group/client/config rules |
+| [`TopicValidationError`](../../rocketmq-dashboard/rocketmq-dashboard-common/src/topic/domain.rs#L640) (`rocketmq-dashboard-common`) | public module/root re-export; reachable | Topic domain validation returns the typed contract for topic/target/queue rules |
+| [`EvaluationError`](../../rocketmq-filter/src/expression.rs#L126) (`rocketmq-filter`) | public `expression` module; reachable | Expression evaluation returns `Result<_, EvaluationError>`; broker filter paths consume it |
+| [`FilterError`](../../rocketmq-filter/src/filter/filter_spi.rs#L51) (`rocketmq-filter`) | public `filter` module; reachable | Filter SPI result paths and broker filter manager consume the legacy string-based facade |
+| [`TelemetryQueueConfigError`](../../rocketmq-observability/src/exporter/outage.rs#L134) (`rocketmq-observability`) | re-exported from exporter; reachable | Telemetry outage queue construction validates record/queue byte limits |
+| [`ReleaseIdentityError`](../../rocketmq-observability/src/metrics/release_identity.rs#L119) (`rocketmq-observability`) | reachable through release-identity APIs | Release identity resolution/validation returns the typed contract |
+| [`ProcessTelemetryConfigError`](../../rocketmq-observability/src/metrics/release_identity.rs#L355) (`rocketmq-observability`) | reachable through process-telemetry configuration APIs | Environment/config selection returns it and preserves `ReleaseIdentityError` detail |
+| [`ReleaseIdentityRegistrationError`](../../rocketmq-observability/src/handle.rs#L180) (`rocketmq-observability`) | `otel-metrics` feature re-export; reachable when enabled | Telemetry handle release-identity registration returns the outcome/error type |
+| [`ProxyDrainError`](../../rocketmq-proxy-core/src/drain.rs#L80) (`rocketmq-proxy-core`) | root re-export; reachable | `ProxyDrainController::{attach_lifecycle,try_admit,begin,cancel}` return it; proxy consumes it |
+| [`ProxyError`](../../rocketmq-proxy-core/src/error.rs#L106) (`rocketmq-proxy-core`) | root re-export; reachable | `ProxyResult<T>` and proxy, proxy-cluster, and proxy-local ingress paths consume it |
+| [`RuntimeError`](../../rocketmq-runtime/src/error.rs#L471) (`rocketmq-runtime`) | root re-export; reachable | `RuntimeResult<T>` plus auth, broker, controller, dashboard Web, proxy, store, and transport signatures |
+| [`SecurityProviderError`](../../rocketmq-security-api/src/error.rs#L273) (`rocketmq-security-api`) | root re-export; reachable | `SecretProvider`/signing and `read_secret_file` signatures; auth, client, proxy, and transport consume it |
+| [`StoreError`](../../rocketmq-store-api/src/error.rs#L150) (`rocketmq-store-api`) | store-api root and Store public API re-exports; reachable | Store capability/message/timer/checkpoint operations return `Result<_, StoreError>` across store and RocksDB consumers |
+| [`TransportError`](../../rocketmq-transport/src/error.rs#L105) (`rocketmq-transport`) | curated `api` re-export; reachable | Transport server/session/dispatcher APIs and broker/client/proxy callers return or consume it |
+
+### Exact public `ErrorKind` set
+
+The live review finds exactly five public `ErrorKind` declarations. These are
+classification/metric or compatibility surfaces, not an additional Error
+denominator.
+
+| Declaration | Reachability and checked use |
+| --- | --- |
+| [`FilterCompileErrorKind`](../../rocketmq-error/src/filter_error.rs#L26) | `rocketmq-error` root export and `rocketmq-filter` compile APIs/tests use `kind()` and its variants |
+| [`DashboardStorageErrorKind`](../../rocketmq-observability/src/metrics/dashboard.rs#L89) | observability root export; Dashboard Web storage metrics map `DashboardError`/`PersistenceError` to it |
+| [`McpErrorKind`](../../rocketmq-observability/src/metrics/mcp.rs#L76) | observability metric API; MCP executor/protocol server map rejection/resource errors to it |
+| [`NameServerRouteErrorKind`](../../rocketmq-observability/src/metrics/namesrv.rs#L68) | observability metric API; NameServer processor records route rejection/not-found/internal outcomes |
+| [`ProxyErrorKind`](../../rocketmq-proxy-core/src/error.rs#L54) | proxy-core error/status mapping exhaustively classifies `ProxyError` for gRPC projection |
+
+### Catalog-facade boundary
+
+The reviewed catalog-facade set is 5/9 directly or owner mapped:
+`StoreError`, `RuntimeError`, `TransportError`, `AuthServiceError`, and
+`ProxyError`. The literal bodies of `AdminError`, `BrokerStartupError`,
+`DashboardCommonError`, and `SecurityProviderError` are not directly
+catalog-backed; they remain explicit E9-1 owner/deletion work and are not
+changed in this documentation-only stage. Separately, the deprecated
+string-based `rocketmq_filter::FilterError` remains an E9-1 deletion
+candidate; it is not counted as one of the nine opaque facades above. The
+final master catalog-facade acceptance item is intentionally not checked.
 
 ## Compatibility constraints
 
