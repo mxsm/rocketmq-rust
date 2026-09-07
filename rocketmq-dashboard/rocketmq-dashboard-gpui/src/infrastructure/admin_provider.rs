@@ -14,7 +14,7 @@
 
 //! Revision-aware Admin provider with concurrent queries and serialized CAS writes.
 
-use std::{future::Future, sync::Arc, time::SystemTime};
+use std::{error::Error as StdError, fmt, future::Future, sync::Arc, time::SystemTime};
 
 use rocketmq_admin_core::{client_adapter::ClientRuntime, core::AdminError};
 use rocketmq_dashboard_common::{
@@ -27,7 +27,7 @@ use super::{
     admin_session::{
         DashboardMutationSession, DashboardQuerySession, DashboardSessionFactory, RealDashboardSessionFactory,
     },
-    auth_state::{AuthStateError, DesktopAuthState},
+    auth_state::{AuthRejection, DesktopAuthState},
 };
 
 #[path = "admin_provider/consumers.rs"]
@@ -98,7 +98,7 @@ struct RevisionedMutationSession {
 
 /// Stable safe provider failure categories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProviderErrorCode {
+pub(crate) enum ProviderFailureCode {
     /// A NameServer has not been selected.
     NotConfigured,
     /// Environment-backed credentials are absent or invalid.
@@ -113,61 +113,232 @@ pub enum ProviderErrorCode {
     Runtime,
 }
 
-/// Redacted provider error. Backend bodies and connection snapshots are never retained.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("{summary}")]
-pub struct ProviderError {
-    code: ProviderErrorCode,
-    summary: &'static str,
-    retryable: bool,
+/// Provider result that separates deterministic rejections from operational errors.
+#[derive(Clone)]
+pub(crate) struct ProviderFailure {
+    kind: ProviderFailureKind,
 }
 
-impl ProviderError {
+#[derive(Clone)]
+enum ProviderFailureKind {
+    Rejected(ProviderRejection),
+    Operational(ProviderError),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ProviderRejection {
+    NotConfigured(&'static str),
+    Authentication(AuthRejection),
+    Cancelled,
+    StaleRevision,
+    SessionUnavailable(&'static str),
+    InvalidRequest(&'static str),
+    InvalidData(&'static str),
+    NotFound(&'static str),
+}
+
+/// Redacted operational provider error. Backend bodies and snapshots stay behind the source chain.
+#[derive(Clone)]
+pub(crate) struct ProviderError {
+    inner: Arc<ProviderErrorInner>,
+}
+
+struct ProviderErrorInner {
+    code: ProviderFailureCode,
+    summary: &'static str,
+    retryable: bool,
+    source: Arc<dyn StdError + Send + Sync>,
+}
+
+impl ProviderFailure {
     /// Returns the stable category.
-    pub fn code(&self) -> ProviderErrorCode {
-        self.code
+    pub(crate) fn code(&self) -> ProviderFailureCode {
+        match &self.kind {
+            ProviderFailureKind::Rejected(ProviderRejection::NotConfigured(_)) => ProviderFailureCode::NotConfigured,
+            ProviderFailureKind::Rejected(ProviderRejection::Authentication(_)) => ProviderFailureCode::Authentication,
+            ProviderFailureKind::Rejected(ProviderRejection::Cancelled) => ProviderFailureCode::Cancelled,
+            ProviderFailureKind::Rejected(ProviderRejection::StaleRevision) => ProviderFailureCode::StaleRevision,
+            ProviderFailureKind::Rejected(
+                ProviderRejection::InvalidRequest(_)
+                | ProviderRejection::InvalidData(_)
+                | ProviderRejection::NotFound(_)
+                | ProviderRejection::SessionUnavailable(_),
+            ) => ProviderFailureCode::Unavailable,
+            ProviderFailureKind::Operational(error) => error.inner.code,
+        }
     }
 
     /// Returns whether the user may retry without changing input.
-    pub fn is_retryable(&self) -> bool {
-        self.retryable
+    pub(crate) fn is_retryable(&self) -> bool {
+        match &self.kind {
+            ProviderFailureKind::Rejected(ProviderRejection::NotConfigured(_) | ProviderRejection::StaleRevision) => {
+                false
+            }
+            ProviderFailureKind::Rejected(ProviderRejection::Authentication(rejection)) => {
+                matches!(
+                    rejection,
+                    AuthRejection::MissingEnvironment { .. } | AuthRejection::InvalidAdminCredential
+                )
+            }
+            ProviderFailureKind::Rejected(ProviderRejection::Cancelled) => true,
+            ProviderFailureKind::Rejected(
+                ProviderRejection::InvalidRequest(_)
+                | ProviderRejection::InvalidData(_)
+                | ProviderRejection::NotFound(_),
+            ) => false,
+            ProviderFailureKind::Rejected(ProviderRejection::SessionUnavailable(_)) => true,
+            ProviderFailureKind::Operational(error) => error.inner.retryable,
+        }
     }
 
-    fn new(code: ProviderErrorCode, summary: &'static str, retryable: bool) -> Self {
+    fn caused_by(
+        code: ProviderFailureCode,
+        summary: &'static str,
+        retryable: bool,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            code,
-            summary,
-            retryable,
+            kind: ProviderFailureKind::Operational(ProviderError {
+                inner: Arc::new(ProviderErrorInner {
+                    code,
+                    summary,
+                    retryable,
+                    source: Arc::new(source),
+                }),
+            }),
+        }
+    }
+
+    pub(crate) fn summary(&self) -> &'static str {
+        match &self.kind {
+            ProviderFailureKind::Rejected(ProviderRejection::NotConfigured(summary)) => summary,
+            ProviderFailureKind::Rejected(ProviderRejection::Authentication(_)) => {
+                "The environment-backed Admin credential is unavailable."
+            }
+            ProviderFailureKind::Rejected(ProviderRejection::Cancelled) => "The Admin operation was cancelled.",
+            ProviderFailureKind::Rejected(ProviderRejection::StaleRevision) => {
+                "A newer connection revision is already active."
+            }
+            ProviderFailureKind::Rejected(
+                ProviderRejection::InvalidRequest(summary)
+                | ProviderRejection::InvalidData(summary)
+                | ProviderRejection::NotFound(summary)
+                | ProviderRejection::SessionUnavailable(summary),
+            ) => summary,
+            ProviderFailureKind::Operational(error) => error.inner.summary,
+        }
+    }
+
+    pub(crate) fn into_operational(self) -> Option<ProviderError> {
+        match self.kind {
+            ProviderFailureKind::Operational(error) => Some(error),
+            ProviderFailureKind::Rejected(_) => None,
         }
     }
 
     fn cancelled() -> Self {
-        Self::new(ProviderErrorCode::Cancelled, "The Admin operation was cancelled.", true)
+        Self {
+            kind: ProviderFailureKind::Rejected(ProviderRejection::Cancelled),
+        }
     }
 
-    fn runtime() -> Self {
-        Self::new(
-            ProviderErrorCode::Runtime,
+    fn runtime(source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::caused_by(
+            ProviderFailureCode::Runtime,
             "The dashboard runtime is shutting down.",
             false,
+            source,
         )
     }
 
     fn stale() -> Self {
-        Self::new(
-            ProviderErrorCode::StaleRevision,
-            "A newer connection revision is already active.",
-            false,
-        )
+        Self {
+            kind: ProviderFailureKind::Rejected(ProviderRejection::StaleRevision),
+        }
+    }
+
+    pub(super) fn not_configured(summary: &'static str) -> Self {
+        Self {
+            kind: ProviderFailureKind::Rejected(ProviderRejection::NotConfigured(summary)),
+        }
+    }
+
+    pub(super) fn invalid_request(summary: &'static str) -> Self {
+        Self {
+            kind: ProviderFailureKind::Rejected(ProviderRejection::InvalidRequest(summary)),
+        }
+    }
+
+    pub(super) fn invalid_data(summary: &'static str) -> Self {
+        Self {
+            kind: ProviderFailureKind::Rejected(ProviderRejection::InvalidData(summary)),
+        }
+    }
+
+    pub(super) fn not_found(summary: &'static str) -> Self {
+        Self {
+            kind: ProviderFailureKind::Rejected(ProviderRejection::NotFound(summary)),
+        }
+    }
+
+    fn session_unavailable(summary: &'static str) -> Self {
+        Self {
+            kind: ProviderFailureKind::Rejected(ProviderRejection::SessionUnavailable(summary)),
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn unavailable_for_test() -> Self {
-        Self::new(
-            ProviderErrorCode::Unavailable,
+        Self::caused_by(
+            ProviderFailureCode::Unavailable,
             "The injected Admin connection is unavailable.",
             true,
+            std::io::Error::other("injected Admin connection failure"),
         )
+    }
+}
+
+impl PartialEq for ProviderFailure {
+    fn eq(&self, other: &Self) -> bool {
+        self.code() == other.code() && self.summary() == other.summary() && self.is_retryable() == other.is_retryable()
+    }
+}
+
+impl Eq for ProviderFailure {}
+
+impl fmt::Debug for ProviderFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderFailure")
+            .field("code", &self.code())
+            .field("retryable", &self.is_retryable())
+            .field(
+                "operational",
+                &matches!(&self.kind, ProviderFailureKind::Operational(_)),
+            )
+            .finish()
+    }
+}
+
+impl fmt::Debug for ProviderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderError")
+            .field("code", &self.inner.code)
+            .field("retryable", &self.inner.retryable)
+            .finish()
+    }
+}
+
+impl fmt::Display for ProviderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.inner.summary)
+    }
+}
+
+impl StdError for ProviderError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.inner.source.as_ref())
     }
 }
 
@@ -222,7 +393,10 @@ impl GpuiAdminProvider {
     }
 
     /// Replaces both session scopes for a persisted connection revision.
-    pub async fn switch(self: &Arc<Self>, snapshot: ConnectionSnapshot) -> Result<AdminSessionSummary, ProviderError> {
+    pub async fn switch(
+        self: &Arc<Self>,
+        snapshot: ConnectionSnapshot,
+    ) -> Result<AdminSessionSummary, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-provider-switch", move |cancellation| async move {
             this.switch_inner(snapshot, cancellation).await
@@ -231,7 +405,7 @@ impl GpuiAdminProvider {
     }
 
     /// Checks the current NameServer through the concurrent query session.
-    pub async fn check_health(self: &Arc<Self>) -> Result<EndpointHealth, ProviderError> {
+    pub async fn check_health(self: &Arc<Self>) -> Result<EndpointHealth, ProviderFailure> {
         let revision = self.current_snapshot()?.revision;
         let this = Arc::clone(self);
         self.run_owned("gpui-provider-health", move |cancellation| async move {
@@ -244,13 +418,13 @@ impl GpuiAdminProvider {
     async fn check_health_with_cancellation(
         self: &Arc<Self>,
         cancellation: CancellationToken,
-    ) -> Result<EndpointHealth, ProviderError> {
+    ) -> Result<EndpointHealth, ProviderFailure> {
         let revision = self.current_snapshot()?.revision;
         let this = Arc::clone(self);
         self.run_owned("gpui-provider-health", move |owned_cancellation| async move {
             tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => Err(ProviderError::cancelled()),
+                _ = cancellation.cancelled() => Err(ProviderFailure::cancelled()),
                 result = this.health_inner(revision, owned_cancellation) => result,
             }
         })
@@ -261,13 +435,13 @@ impl GpuiAdminProvider {
     pub async fn check_endpoints(
         self: &Arc<Self>,
         snapshots: Vec<ConnectionSnapshot>,
-    ) -> Result<Vec<EndpointHealth>, ProviderError> {
+    ) -> Result<Vec<EndpointHealth>, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-provider-check-all", move |cancellation| async move {
             let mut results = Vec::with_capacity(snapshots.len());
             for snapshot in snapshots {
                 if cancellation.is_cancelled() {
-                    return Err(ProviderError::cancelled());
+                    return Err(ProviderFailure::cancelled());
                 }
                 results.push(this.check_snapshot_inner(snapshot, cancellation.clone()).await?);
             }
@@ -289,7 +463,7 @@ impl GpuiAdminProvider {
         &self,
         snapshot: ConnectionSnapshot,
         cancellation: CancellationToken,
-    ) -> Result<AdminSessionSummary, ProviderError> {
+    ) -> Result<AdminSessionSummary, ProviderFailure> {
         let _switch = self.switch_gate.lock().await;
         {
             let mut state = self.state.write();
@@ -298,7 +472,7 @@ impl GpuiAdminProvider {
                     return Ok(state.summary.clone());
                 }
                 if snapshot.revision <= current.revision {
-                    return Err(ProviderError::stale());
+                    return Err(ProviderFailure::stale());
                 }
             }
             state.snapshot = Some(snapshot.clone());
@@ -328,8 +502,8 @@ impl GpuiAdminProvider {
         };
         let created = tokio::select! {
             biased;
-            _ = cancellation.cancelled() => Err(ProviderError::cancelled()),
-            created = self.factory.create_query(snapshot.clone(), credentials) => created.map_err(|error| map_admin_error(&error)),
+            _ = cancellation.cancelled() => Err(ProviderFailure::cancelled()),
+            created = self.factory.create_query(snapshot.clone(), credentials) => created.map_err(map_admin_error),
         };
         match created {
             Ok(session) => {
@@ -351,7 +525,7 @@ impl GpuiAdminProvider {
         &self,
         revision: u64,
         cancellation: CancellationToken,
-    ) -> Result<EndpointHealth, ProviderError> {
+    ) -> Result<EndpointHealth, ProviderFailure> {
         let snapshot = self.snapshot_for_revision(revision)?;
         if snapshot.scope == ConnectionScope::Proxy {
             let endpoint = snapshot.proxy.clone().ok_or_else(not_configured)?;
@@ -374,13 +548,13 @@ impl GpuiAdminProvider {
                 checked_at_epoch_ms: self.clock.now_epoch_ms(),
                 failure_summary: None,
             }),
-            Err(error) if error.code() == ProviderErrorCode::Cancelled => Err(error),
+            Err(error) if error.code() == ProviderFailureCode::Cancelled => Err(error),
             Err(error) => Ok(EndpointHealth {
                 endpoint,
                 revision,
                 availability: EndpointAvailability::Unavailable,
                 checked_at_epoch_ms: self.clock.now_epoch_ms(),
-                failure_summary: Some(error.to_string()),
+                failure_summary: Some(error.summary().to_owned()),
             }),
         }
     }
@@ -389,7 +563,7 @@ impl GpuiAdminProvider {
         &self,
         snapshot: ConnectionSnapshot,
         cancellation: CancellationToken,
-    ) -> Result<EndpointHealth, ProviderError> {
+    ) -> Result<EndpointHealth, ProviderFailure> {
         if snapshot.scope == ConnectionScope::Proxy {
             return Ok(EndpointHealth {
                 endpoint: snapshot.proxy.clone().unwrap_or_default(),
@@ -413,7 +587,7 @@ impl GpuiAdminProvider {
         };
         let created = tokio::select! {
             biased;
-            _ = cancellation.cancelled() => return Err(ProviderError::cancelled()),
+            _ = cancellation.cancelled() => return Err(ProviderFailure::cancelled()),
             created = self.factory.create_query(snapshot.clone(), credentials) => created,
         };
         let session = match created {
@@ -422,7 +596,7 @@ impl GpuiAdminProvider {
                 return Ok(unavailable_health(
                     &snapshot,
                     endpoint,
-                    map_admin_error(&error),
+                    map_admin_error(error),
                     self.clock.as_ref(),
                 ));
             }
@@ -437,7 +611,7 @@ impl GpuiAdminProvider {
                 checked_at_epoch_ms: self.clock.now_epoch_ms(),
                 failure_summary: None,
             }),
-            Err(error) if error.code() == ProviderErrorCode::Cancelled => Err(error),
+            Err(error) if error.code() == ProviderFailureCode::Cancelled => Err(error),
             Err(error) => Ok(unavailable_health(&snapshot, endpoint, error, self.clock.as_ref())),
         }
     }
@@ -447,7 +621,7 @@ impl GpuiAdminProvider {
         slot: &mut Option<RevisionedMutationSession>,
         revision: u64,
         cancellation: CancellationToken,
-    ) -> Result<(), ProviderError> {
+    ) -> Result<(), ProviderFailure> {
         if slot.as_ref().is_some_and(|session| session.revision == revision) {
             return Ok(());
         }
@@ -461,31 +635,31 @@ impl GpuiAdminProvider {
             .map_err(map_auth_error)?;
         let session = tokio::select! {
             biased;
-            _ = cancellation.cancelled() => return Err(ProviderError::cancelled()),
-            created = self.factory.create_mutation(snapshot, credentials) => created.map_err(|error| map_admin_error(&error))?,
+            _ = cancellation.cancelled() => return Err(ProviderFailure::cancelled()),
+            created = self.factory.create_mutation(snapshot, credentials) => created.map_err(map_admin_error)?,
         };
         *slot = Some(RevisionedMutationSession { revision, session });
         Ok(())
     }
 
-    fn current_snapshot(&self) -> Result<ConnectionSnapshot, ProviderError> {
+    fn current_snapshot(&self) -> Result<ConnectionSnapshot, ProviderFailure> {
         self.state.read().snapshot.clone().ok_or_else(not_configured)
     }
 
-    fn snapshot_for_revision(&self, revision: u64) -> Result<ConnectionSnapshot, ProviderError> {
+    fn snapshot_for_revision(&self, revision: u64) -> Result<ConnectionSnapshot, ProviderFailure> {
         let snapshot = self.current_snapshot()?;
         if snapshot.revision == revision {
             Ok(snapshot)
         } else {
-            Err(ProviderError::stale())
+            Err(ProviderFailure::stale())
         }
     }
 
-    async fn run_owned<T, Build, OwnedFuture>(&self, name: &'static str, build: Build) -> Result<T, ProviderError>
+    async fn run_owned<T, Build, OwnedFuture>(&self, name: &'static str, build: Build) -> Result<T, ProviderFailure>
     where
         T: Send + 'static,
         Build: FnOnce(CancellationToken) -> OwnedFuture,
-        OwnedFuture: Future<Output = Result<T, ProviderError>> + Send + 'static,
+        OwnedFuture: Future<Output = Result<T, ProviderFailure>> + Send + 'static,
     {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let owner_cancellation = self.context.task_spawner().cancellation_token();
@@ -506,22 +680,20 @@ impl GpuiAdminProvider {
                 };
                 let _ = sender.send(result);
             })
-            .map_err(|_| ProviderError::runtime())?;
-        receiver.await.map_err(|_| ProviderError::runtime())?
+            .map_err(ProviderFailure::runtime)?;
+        receiver.await.map_err(ProviderFailure::runtime)?
     }
 }
 
 fn query_for_revision(
     slot: &Option<RevisionedQuerySession>,
     revision: u64,
-) -> Result<&dyn DashboardQuerySession, ProviderError> {
+) -> Result<&dyn DashboardQuerySession, ProviderFailure> {
     match slot {
         Some(session) if session.revision == revision => Ok(session.session.as_ref()),
-        Some(_) => Err(ProviderError::stale()),
-        None => Err(ProviderError::new(
-            ProviderErrorCode::Unavailable,
+        Some(_) => Err(ProviderFailure::stale()),
+        None => Err(ProviderFailure::session_unavailable(
             "The Admin query session is unavailable.",
-            true,
         )),
     }
 }
@@ -529,14 +701,12 @@ fn query_for_revision(
 fn mutation_for_revision(
     slot: &mut Option<RevisionedMutationSession>,
     revision: u64,
-) -> Result<&mut dyn DashboardMutationSession, ProviderError> {
+) -> Result<&mut dyn DashboardMutationSession, ProviderFailure> {
     match slot {
         Some(session) if session.revision == revision => Ok(session.session.as_mut()),
-        Some(_) => Err(ProviderError::stale()),
-        None => Err(ProviderError::new(
-            ProviderErrorCode::Unavailable,
+        Some(_) => Err(ProviderFailure::stale()),
+        None => Err(ProviderFailure::session_unavailable(
             "The Admin mutation session is unavailable.",
-            true,
         )),
     }
 }
@@ -544,11 +714,11 @@ fn mutation_for_revision(
 async fn select_admin<T>(
     cancellation: CancellationToken,
     future: impl Future<Output = Result<T, AdminError>>,
-) -> Result<T, ProviderError> {
+) -> Result<T, ProviderFailure> {
     tokio::select! {
         biased;
-        _ = cancellation.cancelled() => Err(ProviderError::cancelled()),
-        result = future => result.map_err(|error| map_admin_error(&error)),
+        _ = cancellation.cancelled() => Err(ProviderFailure::cancelled()),
+        result = future => result.map_err(map_admin_error),
     }
 }
 
@@ -564,7 +734,7 @@ async fn shutdown_sessions(query: Option<RevisionedQuerySession>, mutation: Opti
 fn unavailable_health(
     snapshot: &ConnectionSnapshot,
     endpoint: String,
-    error: ProviderError,
+    error: ProviderFailure,
     clock: &dyn HealthClock,
 ) -> EndpointHealth {
     EndpointHealth {
@@ -572,34 +742,37 @@ fn unavailable_health(
         revision: snapshot.revision,
         availability: EndpointAvailability::Unavailable,
         checked_at_epoch_ms: clock.now_epoch_ms(),
-        failure_summary: Some(error.to_string()),
+        failure_summary: Some(error.summary().to_owned()),
     }
 }
 
-fn not_configured() -> ProviderError {
-    ProviderError::new(ProviderErrorCode::NotConfigured, "No NameServer is configured.", false)
+fn not_configured() -> ProviderFailure {
+    ProviderFailure::not_configured("No NameServer is configured.")
 }
 
-fn map_auth_error(_error: AuthStateError) -> ProviderError {
-    ProviderError::new(
-        ProviderErrorCode::Authentication,
-        "The environment-backed Admin credential is unavailable.",
-        true,
-    )
+fn map_auth_error(rejection: AuthRejection) -> ProviderFailure {
+    ProviderFailure {
+        kind: ProviderFailureKind::Rejected(ProviderRejection::Authentication(rejection)),
+    }
 }
 
-fn map_admin_error(error: &AdminError) -> ProviderError {
+fn map_admin_error(error: AdminError) -> ProviderFailure {
+    let retryable = error.is_retryable() || matches!(error, AdminError::SessionClosed);
     match error {
-        AdminError::InvalidArgument { .. } => ProviderError::new(
-            ProviderErrorCode::Unavailable,
+        error @ AdminError::InvalidArgument { .. } => ProviderFailure::caused_by(
+            ProviderFailureCode::Unavailable,
             "The Admin operation configuration is invalid.",
             false,
+            error,
         ),
-        AdminError::NotFound { .. } | AdminError::Backend { .. } | AdminError::SessionClosed => ProviderError::new(
-            ProviderErrorCode::Unavailable,
-            "The RocketMQ Admin operation failed.",
-            error.is_retryable() || matches!(error, AdminError::SessionClosed),
-        ),
+        error @ (AdminError::NotFound { .. } | AdminError::Backend { .. } | AdminError::SessionClosed) => {
+            ProviderFailure::caused_by(
+                ProviderFailureCode::Unavailable,
+                "The RocketMQ Admin operation failed.",
+                retryable,
+                error,
+            )
+        }
     }
 }
 

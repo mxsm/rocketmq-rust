@@ -165,9 +165,7 @@ export const SideSheet = ({ isOpen, onClose, title, data, type }: SideSheetProps
       await navigator.clipboard.writeText(value);
       setCopiedKey(key);
       window.setTimeout(() => setCopiedKey(''), 1200);
-    } catch (error) {
-      console.error('Failed to copy detail value', error);
-    }
+    } catch {}
   };
 
   const handleCopyAll = async () => {

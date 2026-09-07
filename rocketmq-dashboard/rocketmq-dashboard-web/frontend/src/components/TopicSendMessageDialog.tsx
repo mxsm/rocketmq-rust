@@ -1,7 +1,7 @@
 import { Send } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { topicApi } from '../api/topic_api';
-import { handleAppliedAuditFailure } from '../api/client';
+import { userErrorMessage } from '../api/client';
 import type { TopicSendResultView, TopicTestMessageRequest } from '../types/topic';
 import {
   AlertDialog,
@@ -20,7 +20,6 @@ interface TopicSendMessageDialogProps {
   topic: string;
   onOpenChange: (open: boolean) => void;
   onSucceeded: (result: TopicSendResultView) => void;
-  onAppliedAuditFailure?: () => Promise<void> | void;
 }
 
 interface SendForm {
@@ -42,8 +41,7 @@ export default function TopicSendMessageDialog({
   open,
   topic,
   onOpenChange,
-  onSucceeded,
-  onAppliedAuditFailure
+  onSucceeded
 }: TopicSendMessageDialogProps) {
   const [form, setForm] = useState<SendForm>(emptyForm);
   const [error, setError] = useState<string | null>(null);
@@ -141,17 +139,8 @@ export default function TopicSendMessageDialog({
     } catch (requestError) {
       if (!isCurrentPresentation(snapshot)) return;
 
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          invalidateAndClose();
-          setError(null);
-          setResult(null);
-        },
-        refresh: onAppliedAuditFailure
-      })) return;
-
       setConfirmation(null);
-      setError(requestError instanceof Error ? requestError.message : 'Unable to send the test message.');
+      setError(userErrorMessage(requestError, 'Unable to send the test message.'));
       focusReview();
     } finally {
       if (pendingRef.current === requestId) {

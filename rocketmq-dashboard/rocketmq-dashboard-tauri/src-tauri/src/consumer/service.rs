@@ -15,12 +15,12 @@
 use crate::consumer::admin::ManagedConsumerAdmin;
 use crate::consumer::types::ConsumerConfigView;
 use crate::consumer::types::ConsumerConnectionView;
-use crate::consumer::types::ConsumerError;
 use crate::consumer::types::ConsumerGroupListItem;
 use crate::consumer::types::ConsumerGroupListResponse;
 use crate::consumer::types::ConsumerMutationResult;
 use crate::consumer::types::ConsumerResult;
 use crate::consumer::types::ConsumerTopicDetailView;
+use crate::error::DashboardError as ConsumerError;
 use crate::nameserver::NameServerRuntimeState;
 use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_admin_core::core::AdminError;
@@ -105,8 +105,8 @@ impl ConsumerManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_consumer_groups` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_consumer_groups` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -144,8 +144,8 @@ impl ConsumerManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `refresh_consumer_group` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `refresh_consumer_group` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -188,8 +188,8 @@ impl ConsumerManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_consumer_connection` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_consumer_connection` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -225,8 +225,8 @@ impl ConsumerManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_consumer_topic_detail` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_consumer_topic_detail` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -262,8 +262,8 @@ impl ConsumerManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_consumer_config` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_consumer_config` after reconnect");
                 }
                 Err(error) => return Err(error),
             }

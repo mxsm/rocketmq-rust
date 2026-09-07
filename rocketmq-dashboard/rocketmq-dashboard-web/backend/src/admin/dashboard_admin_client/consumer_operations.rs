@@ -144,11 +144,25 @@ fn map_consumer_batch_result(
     let targets = result
         .targets
         .into_iter()
-        .map(|target| ConsumerTargetResult {
-            target: target.target,
-            kind: target.kind,
-            success: target.success,
-            message: target.message,
+        .map(|target| {
+            let (message, error) = if target.success {
+                (Some("Consumer target operation completed".to_string()), None)
+            } else {
+                (
+                    None,
+                    Some(OperationErrorView::fixed(
+                        "CONSUMER_TARGET_OPERATION_FAILED",
+                        "Consumer target operation failed",
+                    )),
+                )
+            };
+            ConsumerTargetResult {
+                target: target.target,
+                kind: target.kind,
+                success: target.success,
+                message,
+                error,
+            }
         })
         .collect::<Vec<_>>();
     let success = result.success && targets.iter().all(|target| target.success);
@@ -200,7 +214,7 @@ mod tests {
                     message: if success {
                         "ok".to_string()
                     } else {
-                        "failed".to_string()
+                        "sensitive-rejection-detail".to_string()
                     },
                 })
                 .collect(),
@@ -219,5 +233,15 @@ mod tests {
         assert_eq!(view.target_count, 2);
         assert_eq!(view.targets[1].target, "broker-b");
         assert!(!view.targets[1].success);
+        assert_eq!(view.targets[1].message, None);
+        assert_eq!(
+            view.targets[1].error.as_ref().map(|error| error.code.as_str()),
+            Some("CONSUMER_TARGET_OPERATION_FAILED")
+        );
+        assert!(
+            !serde_json::to_string(&view)
+                .expect("serialize result")
+                .contains("sensitive-rejection-detail")
+        );
     }
 }

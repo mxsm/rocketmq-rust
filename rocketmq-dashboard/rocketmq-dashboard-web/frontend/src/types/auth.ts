@@ -7,7 +7,6 @@ export interface SessionView {
   loginRequired: boolean;
   authenticated: boolean;
   username?: string | null;
-  sessionId?: string | null;
   loginTime?: number | null;
   authReason?: 'invalid' | 'expired' | 'revoked' | null;
 }

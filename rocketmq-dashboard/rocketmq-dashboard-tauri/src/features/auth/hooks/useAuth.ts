@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AuthService } from '../../../services/auth.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import { SessionStorageService } from '../../../services/session.storage';
 import { useAppStore } from '../../../stores/app.store';
 import type { ChangePasswordPayload, LoginCredentials } from '../types/auth.types';
@@ -18,18 +19,11 @@ export const useAuth = () => {
         try {
             const result = await AuthService.login(credentials);
 
-            if (result.success && result.sessionId && result.currentUser) {
-                SessionStorageService.setSessionId(result.sessionId);
-                setAuthSession(result.sessionId, result.currentUser);
-                return { success: true, mustChangePassword: result.mustChangePassword };
-            }
-
-            const errorMessage = result.message || 'Invalid username or password';
-            setError(errorMessage);
-            triggerShake();
-            return { success: false, error: errorMessage };
+            SessionStorageService.setSessionId(result.sessionId);
+            setAuthSession(result.sessionId, result.currentUser);
+            return { success: true, mustChangePassword: result.currentUser.mustChangePassword };
         } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : 'Failed to connect to authentication service';
+            const errorMessage = dashboardErrorMessage(err, 'Failed to connect to authentication service');
             setError(errorMessage);
             triggerShake();
             return { success: false, error: errorMessage };
@@ -38,7 +32,7 @@ export const useAuth = () => {
         }
     };
 
-    const changePassword = async (payload: Omit<ChangePasswordPayload, 'sessionId'>) => {
+    const changePassword = async (payload: ChangePasswordPayload) => {
         if (!sessionId) {
             const errorMessage = 'Session not found';
             setError(errorMessage);
@@ -49,20 +43,11 @@ export const useAuth = () => {
         setError('');
 
         try {
-            const result = await AuthService.changePassword({
-                sessionId,
-                ...payload,
-            });
-
-            if (result.success) {
-                markPasswordChanged();
-                return { success: true };
-            }
-
-            setError(result.message);
-            return { success: false, error: result.message };
+            await AuthService.changePassword(payload);
+            markPasswordChanged();
+            return { success: true };
         } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : 'Failed to update password';
+            const errorMessage = dashboardErrorMessage(err, 'Failed to update password');
             setError(errorMessage);
             return { success: false, error: errorMessage };
         } finally {
@@ -75,8 +60,8 @@ export const useAuth = () => {
             if (sessionId) {
                 await AuthService.logout(sessionId);
             }
-        } catch (error) {
-            console.error('Logout failed', error);
+        } catch {
+            // Local session state must still be cleared when the backend session is unavailable.
         } finally {
             SessionStorageService.clearSessionId();
             clearAuthSession();

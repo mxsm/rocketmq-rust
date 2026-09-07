@@ -390,7 +390,14 @@ impl TopicDialogForm {
                     ordered,
                 },
             ) => {
-                let identity = TopicIdentity::parse(value(topic, cx)).map_err(validation)?;
+                let identity = TopicIdentity::parse(value(topic, cx)).map_err(|source| {
+                    UiError::caused_by(
+                        "The requested Topic operation is invalid.",
+                        UiErrorCode::Validation,
+                        false,
+                        source,
+                    )
+                })?;
                 let targets = draft
                     .targets
                     .iter()
@@ -856,7 +863,14 @@ fn value(input: &Entity<InputState>, cx: &gpui::App) -> String {
 }
 
 fn queue_count(input: &Entity<InputState>, cx: &gpui::App) -> Result<u32, UiError> {
-    let count = value(input, cx).parse::<u32>().map_err(validation)?;
+    let count = value(input, cx).parse::<u32>().map_err(|source| {
+        UiError::caused_by(
+            "The requested Topic operation is invalid.",
+            UiErrorCode::Validation,
+            false,
+            source,
+        )
+    })?;
     if !(1..=128).contains(&count) {
         return Err(validation("queue count must be between 1 and 128"));
     }
@@ -864,7 +878,14 @@ fn queue_count(input: &Entity<InputState>, cx: &gpui::App) -> Result<u32, UiErro
 }
 
 fn timestamp_value(input: &Entity<InputState>, cx: &gpui::App) -> Result<u64, UiError> {
-    let timestamp = value(input, cx).parse::<u64>().map_err(validation)?;
+    let timestamp = value(input, cx).parse::<u64>().map_err(|source| {
+        UiError::caused_by(
+            "The requested Topic operation is invalid.",
+            UiErrorCode::Validation,
+            false,
+            source,
+        )
+    })?;
     if !(946_684_800_000..=4_102_444_800_000).contains(&timestamp) {
         return Err(validation(
             "timestamp must be an epoch-millisecond value between 2000 and 2100",
@@ -889,9 +910,9 @@ fn exact_cluster(clusters: &[String], selected: Option<&str>) -> Result<String, 
     }
 }
 
-fn validation(error: impl fmt::Display) -> UiError {
+fn validation(_reason: &'static str) -> UiError {
     UiError::new(
-        format!("Invalid Topic operation: {error}"),
+        "The requested Topic operation is invalid.",
         UiErrorCode::Validation,
         false,
     )

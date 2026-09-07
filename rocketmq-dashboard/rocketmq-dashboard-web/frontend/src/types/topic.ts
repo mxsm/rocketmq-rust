@@ -138,7 +138,11 @@ export interface TopicOffsetResult {
 export interface TopicTargetResult {
   target: string;
   success: boolean;
-  message: string;
+  message?: string | null;
+  error?: {
+    code: string;
+    message: string;
+  } | null;
 }
 
 export interface TopicOperationResult {

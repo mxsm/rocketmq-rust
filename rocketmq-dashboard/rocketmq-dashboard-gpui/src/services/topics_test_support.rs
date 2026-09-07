@@ -311,10 +311,6 @@ fn offset_call(scope: TopicRequestScope, command: TopicOffsetCommand) -> TopicOf
     }
 }
 
-fn unexpected_call(operation: &str) -> UiError {
-    UiError::new(
-        format!("Unexpected Topic {operation} test call."),
-        UiErrorCode::CapabilityUnavailable,
-        false,
-    )
+fn unexpected_call(_operation: &str) -> UiError {
+    UiError::new("Unexpected Topic test call.", UiErrorCode::CapabilityUnavailable, false)
 }

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeAuthenticatedCommand } from './invoke';
 import type {
     DashboardBrokerOverviewRequest,
     DashboardBrokerOverviewResponse,
@@ -9,10 +9,10 @@ export class DashboardService {
     static async getBrokerOverview(
         request: DashboardBrokerOverviewRequest = { forceRefresh: false }
     ): Promise<DashboardBrokerOverviewResponse> {
-        return invoke<DashboardBrokerOverviewResponse>('get_dashboard_broker_overview', { request });
+        return invokeAuthenticatedCommand<DashboardBrokerOverviewResponse>('get_dashboard_broker_overview', { request });
     }
 
     static async queryTopicCurrent(): Promise<DashboardTopicCurrentResponse> {
-        return invoke<DashboardTopicCurrentResponse>('query_dashboard_topic_current');
+        return invokeAuthenticatedCommand<DashboardTopicCurrentResponse>('query_dashboard_topic_current');
     }
 }

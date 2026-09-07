@@ -222,7 +222,7 @@ impl TopicsView {
                         self.sync_detail_stale(cx);
                         if let Some(detail) = &self.detail {
                             detail.update(cx, |detail, cx| {
-                                detail.apply_mutation_reload(&invalidations, Some(configuration), None, None, cx)
+                                detail.apply_mutation_reload(&invalidations, Some(*configuration), None, None, cx)
                             });
                         }
                         form.update(cx, |form, cx| {

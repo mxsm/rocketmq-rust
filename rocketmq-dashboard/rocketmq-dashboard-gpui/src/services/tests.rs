@@ -23,14 +23,14 @@ use super::*;
 use crate::infrastructure::auth_state::MapEnvironment;
 
 struct FakeConnectionProvider {
-    switch_results: parking_lot::Mutex<VecDeque<Result<(), ProviderError>>>,
+    switch_results: parking_lot::Mutex<VecDeque<Result<(), ProviderFailure>>>,
     switch_gate: parking_lot::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     revision: AtomicU64,
     endpoint: parking_lot::Mutex<String>,
 }
 
 impl FakeConnectionProvider {
-    fn new(results: impl IntoIterator<Item = Result<(), ProviderError>>) -> Arc<Self> {
+    fn new(results: impl IntoIterator<Item = Result<(), ProviderFailure>>) -> Arc<Self> {
         Arc::new(Self {
             switch_results: parking_lot::Mutex::new(results.into_iter().collect()),
             switch_gate: parking_lot::Mutex::new(None),
@@ -44,7 +44,7 @@ impl ConnectionProvider for FakeConnectionProvider {
     fn switch(
         &self,
         snapshot: rocketmq_dashboard_common::ConnectionSnapshot,
-    ) -> ServiceFuture<'_, Result<AdminSessionSummary, ProviderError>> {
+    ) -> ServiceFuture<'_, Result<AdminSessionSummary, ProviderFailure>> {
         let result = self.switch_results.lock().pop_front().unwrap_or(Ok(()));
         let gate = self.switch_gate.lock().take();
         self.revision.store(snapshot.revision, Ordering::Release);
@@ -61,7 +61,7 @@ impl ConnectionProvider for FakeConnectionProvider {
         })
     }
 
-    fn check_health(&self) -> ServiceFuture<'_, Result<EndpointHealth, ProviderError>> {
+    fn check_health(&self) -> ServiceFuture<'_, Result<EndpointHealth, ProviderFailure>> {
         let health = EndpointHealth {
             endpoint: self.endpoint.lock().clone(),
             revision: self.revision.load(Ordering::Acquire),
@@ -75,7 +75,7 @@ impl ConnectionProvider for FakeConnectionProvider {
     fn check_endpoints(
         &self,
         snapshots: Vec<rocketmq_dashboard_common::ConnectionSnapshot>,
-    ) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, ProviderError>> {
+    ) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, ProviderFailure>> {
         Box::pin(std::future::ready(Ok(snapshots
             .into_iter()
             .map(|snapshot| EndpointHealth {
@@ -189,7 +189,7 @@ fn progress_exposes_connecting_before_provider_then_exact_order() {
 fn unreachable_connection_projects_connecting_then_failed_with_real_health_semantics() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let runtime = test_runtime("gpui-progress-failure-projection");
-    let provider = FakeConnectionProvider::new([Err(ProviderError::unavailable_for_test())]);
+    let provider = FakeConnectionProvider::new([Err(ProviderFailure::unavailable_for_test())]);
     let (release, gate) = tokio::sync::oneshot::channel();
     *provider.switch_gate.lock() = Some(gate);
     let (store, services) = real_test_services(&runtime, directory.path().join("config.json"), provider);
@@ -229,7 +229,7 @@ fn unreachable_connection_projects_connecting_then_failed_with_real_health_seman
 fn failed_transport_save_rolls_back_at_a_second_revision_with_ordered_progress() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let runtime = test_runtime("gpui-progress-rollback");
-    let provider = FakeConnectionProvider::new([Err(ProviderError::unavailable_for_test()), Ok(())]);
+    let provider = FakeConnectionProvider::new([Err(ProviderFailure::unavailable_for_test()), Ok(())]);
     let (store, services) = real_test_services(&runtime, directory.path().join("config.json"), provider);
 
     runtime.block_on(async {

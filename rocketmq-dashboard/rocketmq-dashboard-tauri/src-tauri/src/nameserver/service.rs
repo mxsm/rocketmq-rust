@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::DashboardResult as Result;
 use crate::nameserver::db::NameServerDb;
 use crate::nameserver::db::SqliteNameServerStore;
 use crate::nameserver::runtime::NameServerRuntimeState;
 use crate::nameserver::types::NameServerHomePageView;
 use crate::nameserver::types::NameServerStatusItem;
-use anyhow::Result;
 use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::NameServerMutationResult;
@@ -58,8 +58,8 @@ impl NameServerProbe for DefaultNameServerProbe {
                 .await
             {
                 Ok(admin) => admin,
-                Err(error) => {
-                    log::warn!("NameServer probe start failed for `{}`: {}", address, error);
+                Err(_error) => {
+                    log::warn!("NameServer probe could not start");
                     return false;
                 }
             };
@@ -68,8 +68,8 @@ impl NameServerProbe for DefaultNameServerProbe {
                 .probe_name_server(address)
                 .await
                 .map(|_| true)
-                .unwrap_or_else(|error| {
-                    log::warn!("NameServer probe failed for `{}`: {}", address, error);
+                .unwrap_or_else(|_error| {
+                    log::warn!("NameServer probe failed");
                     false
                 });
 

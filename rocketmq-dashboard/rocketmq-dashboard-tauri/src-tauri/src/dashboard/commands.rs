@@ -16,25 +16,34 @@ use crate::cluster::service::ClusterManager;
 use crate::dashboard::service;
 use crate::dashboard::types::DashboardBrokerOverviewResponse;
 use crate::dashboard::types::DashboardTopicCurrentResponse;
+use crate::error::CommandResult;
+use crate::error::authorize_command;
 use crate::topic::service::TopicManager;
 use rocketmq_dashboard_common::DashboardBrokerOverviewRequest;
 use tauri::State;
 
 #[tauri::command]
 pub async fn get_dashboard_broker_overview(
+    session_id: String,
     request: DashboardBrokerOverviewRequest,
     cluster_manager: State<'_, ClusterManager>,
-) -> Result<DashboardBrokerOverviewResponse, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<DashboardBrokerOverviewResponse> {
+    authorize_command(&session_id, &session_state)?;
     service::get_dashboard_broker_overview(&cluster_manager, request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn query_dashboard_topic_current(
+    session_id: String,
     topic_manager: State<'_, TopicManager>,
-) -> Result<DashboardTopicCurrentResponse, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<DashboardTopicCurrentResponse> {
+    authorize_command(&session_id, &session_state)?;
     service::query_dashboard_topic_current(&topic_manager)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
+use crate::auth::SessionState;

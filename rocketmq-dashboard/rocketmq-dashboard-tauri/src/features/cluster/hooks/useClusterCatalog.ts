@@ -1,22 +1,11 @@
 import { useEffect, useState } from 'react';
 import { ClusterService } from '../../../services/cluster.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import type {
     ClusterBrokerConfigView,
     ClusterBrokerStatusView,
     ClusterHomePageResponse,
 } from '../types/cluster.types';
-
-const toErrorMessage = (error: unknown) => {
-    if (error instanceof Error) {
-        return error.message;
-    }
-
-    if (typeof error === 'string') {
-        return error;
-    }
-
-    return 'Failed to load cluster data';
-};
 
 export const useClusterCatalog = () => {
     const [data, setData] = useState<ClusterHomePageResponse | null>(null);
@@ -41,9 +30,9 @@ export const useClusterCatalog = () => {
             setData(homePage);
             return homePage;
         } catch (error) {
-            const errorMessage = toErrorMessage(error);
+            const errorMessage = dashboardErrorMessage(error, 'Failed to load cluster data');
             setLoadError(errorMessage);
-            throw new Error(errorMessage);
+            throw error;
         } finally {
             setIsLoading(false);
             setIsRefreshing(false);
@@ -60,9 +49,8 @@ export const useClusterCatalog = () => {
                 }
             })
             .catch((error) => {
-                console.error('Failed to load Cluster home page', error);
                 if (isMounted) {
-                    setLoadError(toErrorMessage(error));
+                    setLoadError(dashboardErrorMessage(error, 'Failed to load cluster data'));
                 }
             })
             .finally(() => {
@@ -86,7 +74,7 @@ export const useClusterCatalog = () => {
         try {
             return await ClusterService.getClusterBrokerConfig({ brokerAddr: normalizedAddr });
         } catch (error) {
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingConfigAddr(null);
         }
@@ -102,7 +90,7 @@ export const useClusterCatalog = () => {
         try {
             return await ClusterService.getClusterBrokerStatus({ brokerAddr: normalizedAddr });
         } catch (error) {
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingStatusAddr(null);
         }

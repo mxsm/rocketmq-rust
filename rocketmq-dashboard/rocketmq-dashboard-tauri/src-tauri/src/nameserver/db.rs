@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::Result;
+use crate::error::DashboardResult as Result;
 use chrono::Utc;
 use rocketmq_dashboard_common::DashboardCommonError;
 use rocketmq_dashboard_common::DashboardCommonResult;
@@ -26,6 +26,7 @@ use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 use rusqlite::params;
 use std::fs;
+#[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -71,6 +72,7 @@ impl NameServerDb {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn db_path(&self) -> &Path {
         &self.db_path
     }
@@ -247,8 +249,8 @@ fn save_snapshot_to_transaction(
     Ok(())
 }
 
-fn store_error(error: impl std::fmt::Display) -> DashboardCommonError {
-    DashboardCommonError::store(error.to_string())
+fn store_error(_error: impl std::error::Error) -> DashboardCommonError {
+    DashboardCommonError::store("local NameServer storage operation failed")
 }
 
 fn repair_snapshot_tables(transaction: &Transaction<'_>) -> Result<()> {

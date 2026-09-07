@@ -3,7 +3,6 @@ import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { vi } from 'vitest';
 import { messageApi } from '../api/message_api';
-import { ApiClientError } from '../api/client';
 import { topicApi } from '../api/topic_api';
 import { renderAtRoute } from '../test/render';
 import type { MessageView } from '../types/message';
@@ -236,7 +235,8 @@ describe('MessageQueryPage', () => {
       .mockResolvedValueOnce({ items: [{ ...message, brokerName: 'broker-a' }], total: 1 } as never);
 
     renderAtRoute(<MessageQueryPage />, '/messages');
-    expect(await screen.findByText('Topic discovery failed: nameserver unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Topic discovery failed: Unable to load topics.')).toBeInTheDocument();
+    expect(screen.queryByText(/nameserver unavailable/)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry topics' }));
 
     await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
@@ -280,23 +280,4 @@ describe('MessageQueryPage', () => {
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Review resend' })).toBeEnabled());
   });
 
-  it('treats an applied audit failure as terminal, clears the selected message, and refetches once', async () => {
-    const user = userEvent.setup();
-    vi.mocked(messageApi.resend).mockRejectedValueOnce(
-      new ApiClientError('APPLIED_AUDIT_FAILED', 'Resend was applied.', { mutationApplied: true })
-    );
-    renderAtRoute(<MessageQueryPage />, '/messages');
-    await screen.findByRole('heading', { name: 'Message search' });
-    await user.click(screen.getByRole('button', { name: 'Search messages' }));
-    await user.click(await screen.findByRole('row', { name: /MSG-001/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Message detail' });
-    await user.type(within(dialog).getByRole('textbox', { name: 'Consumer group' }), 'order-service');
-    await user.click(within(dialog).getByRole('button', { name: 'Review resend' }));
-    await user.click(within(screen.getByRole('alertdialog', { name: 'Resend message?' })).getByRole('button', { name: 'Confirm resend' }));
-
-    await waitFor(() => expect(messageApi.resend).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Message detail' })).not.toBeInTheDocument());
-    await waitFor(() => expect(messageApi.list).toHaveBeenCalledTimes(2));
-    expect(screen.queryByRole('button', { name: 'Confirm resend' })).not.toBeInTheDocument();
-  });
 });

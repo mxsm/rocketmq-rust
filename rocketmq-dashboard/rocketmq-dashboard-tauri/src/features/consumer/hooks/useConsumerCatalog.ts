@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ConsumerService } from '../../../services/consumer.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import type {
     ConsumerGroupListItem,
     ConsumerGroupListResponse,
@@ -44,7 +45,7 @@ export const useConsumerCatalog = (address?: string) => {
             setResponse(next);
             return next;
         } catch (loadError) {
-            setError(loadError instanceof Error ? loadError.message : 'Failed to load consumer groups');
+            setError(dashboardErrorMessage(loadError, 'Failed to load consumer groups'));
             return null;
         } finally {
             if (refreshIndicatorTimer !== null) {
@@ -87,7 +88,7 @@ export const useConsumerCatalog = (address?: string) => {
             });
             return true;
         } catch (refreshError) {
-            setError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh consumer group');
+            setError(dashboardErrorMessage(refreshError, 'Failed to refresh consumer group'));
             return false;
         } finally {
             setRefreshingGroup('');

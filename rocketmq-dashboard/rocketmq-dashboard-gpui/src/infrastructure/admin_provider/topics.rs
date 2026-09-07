@@ -33,9 +33,7 @@ use rocketmq_dashboard_common::{
     TopicTargetFailure, TopicTargetIdentity, TopicTargetOutcome,
 };
 
-use super::{
-    GpuiAdminProvider, ProviderError, ProviderErrorCode, mutation_for_revision, query_for_revision, select_admin,
-};
+use super::{GpuiAdminProvider, ProviderFailure, mutation_for_revision, query_for_revision, select_admin};
 
 #[path = "topics/mapping.rs"]
 mod mapping;
@@ -180,7 +178,7 @@ impl fmt::Debug for SafeTopicOffsetRequest {
 }
 
 impl GpuiAdminProvider {
-    pub async fn topic_inventory(self: &Arc<Self>, revision: u64) -> Result<TopicInventory, ProviderError> {
+    pub async fn topic_inventory(self: &Arc<Self>, revision: u64) -> Result<TopicInventory, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-inventory", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -195,7 +193,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         topic: TopicIdentity,
-    ) -> Result<TopicRouteView, ProviderError> {
+    ) -> Result<TopicRouteView, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-route", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -210,7 +208,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         topic: TopicIdentity,
-    ) -> Result<TopicStatsView, ProviderError> {
+    ) -> Result<TopicStatsView, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-stats", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -226,7 +224,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         topic: TopicIdentity,
-    ) -> Result<TopicConfigView, ProviderError> {
+    ) -> Result<TopicConfigView, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-config", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -241,7 +239,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         topic: TopicIdentity,
-    ) -> Result<TopicConsumersView, ProviderError> {
+    ) -> Result<TopicConsumersView, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-consumers", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -258,7 +256,7 @@ impl GpuiAdminProvider {
         revision: u64,
         topic: TopicIdentity,
         target: TopicTargetIdentity,
-    ) -> Result<TopicConfigCasState, ProviderError> {
+    ) -> Result<TopicConfigCasState, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-config-preflight", move |cancellation| async move {
             let mut guard = this.mutation_session.lock().await;
@@ -275,7 +273,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         request: SafeTopicCreateRequest,
-    ) -> Result<TopicPartialOutcome, ProviderError> {
+    ) -> Result<TopicPartialOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-create", move |cancellation| async move {
             let preflight = {
@@ -338,7 +336,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         request: SafeTopicQueuePatchRequest,
-    ) -> Result<SafeTopicPatchOutcome, ProviderError> {
+    ) -> Result<SafeTopicPatchOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-edit", move |cancellation| async move {
             let catalog = {
@@ -401,7 +399,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         request: SafeTopicDeleteRequest,
-    ) -> Result<TopicPartialOutcome, ProviderError> {
+    ) -> Result<TopicPartialOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-delete", move |cancellation| async move {
             let preflight = {
@@ -443,7 +441,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         request: SafeTopicDeleteBrokerRequest,
-    ) -> Result<TopicPartialOutcome, ProviderError> {
+    ) -> Result<TopicPartialOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-delete-broker", move |cancellation| async move {
             let preflight = {
@@ -490,7 +488,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         request: SafeTopicSendRequest,
-    ) -> Result<SafeTopicSendReceipt, ProviderError> {
+    ) -> Result<SafeTopicSendReceipt, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-send", move |cancellation| async move {
             let (topic, key, tag, body, trace_enabled) = request.into_parts();
@@ -523,7 +521,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         request: SafeTopicOffsetRequest,
-    ) -> Result<TopicPartialOutcome, ProviderError> {
+    ) -> Result<TopicPartialOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-reset-offset", move |cancellation| async move {
             let timestamp = request.timestamp.ok_or_else(invalid_request)?;
@@ -566,7 +564,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         request: SafeTopicOffsetRequest,
-    ) -> Result<TopicPartialOutcome, ProviderError> {
+    ) -> Result<TopicPartialOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-topic-skip-accumulated", move |cancellation| async move {
             if request.timestamp.is_some() {

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::api::request::ApiJson as Json;
 use crate::error::DashboardError;
 use crate::model::ApiResponse;
 use crate::model::AuthenticatedActor;
@@ -19,7 +20,6 @@ use crate::model::LoginRequest;
 use crate::model::SessionAuthenticationFailure;
 use crate::service;
 use crate::state::AppState;
-use axum::Json;
 use axum::extract::Extension;
 use axum::extract::State;
 use axum::http::HeaderValue;
@@ -50,9 +50,9 @@ pub async fn login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, DashboardError> {
-    let session = service::login(&state, request).await?;
-    let mut response = Json(ApiResponse::success(session.clone())).into_response();
-    if let Some(token) = session.session_id {
+    let outcome = service::login(&state, request).await?;
+    let mut response = Json(ApiResponse::success(outcome.session)).into_response();
+    if let Some(token) = outcome.token {
         response
             .headers_mut()
             .append(SET_COOKIE, session_cookie(&token, state.auth_state.cookie_secure())?);

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ProducerService } from '../../../services/producer.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import type { ProducerConnectionView } from '../types/producer.types';
 const SEARCH_INDICATOR_DELAY_MS = 180;
 
@@ -31,7 +32,7 @@ export const useProducerConnections = () => {
                     return response.topics[0] ?? '';
                 });
             } catch (loadError) {
-                setError(loadError instanceof Error ? loadError.message : 'Failed to load producer topics');
+                setError(dashboardErrorMessage(loadError, 'Failed to load producer topics'));
             } finally {
                 setIsTopicLoading(false);
             }
@@ -71,7 +72,7 @@ export const useProducerConnections = () => {
         } catch (searchError) {
             setResult(null);
             setHasSearched(true);
-            setError(searchError instanceof Error ? searchError.message : 'Failed to query producer connections');
+            setError(dashboardErrorMessage(searchError, 'Failed to query producer connections'));
             return false;
         } finally {
             if (searchIndicatorTimer !== null) {

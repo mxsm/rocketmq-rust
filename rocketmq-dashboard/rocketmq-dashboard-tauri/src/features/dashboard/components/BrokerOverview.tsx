@@ -79,9 +79,7 @@ export const BrokerOverview = () => {
   const handleRefresh = async () => {
     try {
       await refresh();
-    } catch (error) {
-      console.error('Failed to refresh dashboard broker overview', error);
-    }
+    } catch {}
   };
 
   return (

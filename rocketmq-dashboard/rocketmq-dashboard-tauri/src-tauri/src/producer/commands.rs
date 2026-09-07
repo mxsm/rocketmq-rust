@@ -21,22 +21,31 @@ use tauri::State;
 
 #[tauri::command]
 pub async fn get_producer_topic_options(
+    session_id: String,
     request: ProducerTopicOptionsRequest,
     producer_manager: State<'_, ProducerManager>,
-) -> Result<ProducerTopicOptionsView, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ProducerTopicOptionsView> {
+    authorize_command(&session_id, &session_state)?;
     producer_manager
         .get_producer_topic_options(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn query_producer_connections(
+    session_id: String,
     request: ProducerConnectionQueryRequest,
     producer_manager: State<'_, ProducerManager>,
-) -> Result<ProducerConnectionView, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ProducerConnectionView> {
+    authorize_command(&session_id, &session_state)?;
     producer_manager
         .query_producer_connections(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
+use crate::auth::SessionState;
+use crate::error::CommandResult;
+use crate::error::authorize_command;

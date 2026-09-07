@@ -21,6 +21,7 @@ import {
 import { toast } from 'sonner@2.0.3';
 import { ClusterService } from '../../../services/cluster.service';
 import { ConsumerService } from '../../../services/consumer.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import type { ClusterBrokerCardItem } from '../../cluster/types/cluster.types';
 import type {
     ConsumerConfigView,
@@ -113,22 +114,6 @@ const createDefaultFormState = (): ConsumerEditorFormState => ({
 
 const getConsumerLabel = (consumer: ConsumerGroupListItem | null) =>
     consumer?.displayGroupName ?? consumer?.rawGroupName ?? 'New Consumer Group';
-
-const getErrorMessage = (error: unknown, fallback: string) => {
-    if (typeof error === 'string' && error.trim().length > 0) {
-        return error;
-    }
-    if (error instanceof Error && error.message.trim().length > 0) {
-        return error.message;
-    }
-    if (error && typeof error === 'object' && 'message' in error) {
-        const message = (error as { message?: unknown }).message;
-        if (typeof message === 'string' && message.trim().length > 0) {
-            return message;
-        }
-    }
-    return fallback;
-};
 
 const buildClusterOptions = (items: ClusterBrokerCardItem[]): ClusterBrokerOptionGroup[] => {
     const grouped = new Map<string, Set<string>>();
@@ -253,7 +238,7 @@ export const ConsumerEditorModal = ({
                 }
             } catch (loadError) {
                 if (!cancelled) {
-                    setError(getErrorMessage(loadError, 'Failed to load consumer group editor data.'));
+                    setError(dashboardErrorMessage(loadError, 'Failed to load consumer group editor data.'));
                     setForm({
                         ...createDefaultFormState(),
                         consumerGroup: consumer?.rawGroupName ?? '',
@@ -339,7 +324,7 @@ export const ConsumerEditorModal = ({
             );
             onSaved(result);
         } catch (saveError) {
-            setError(getErrorMessage(saveError, 'Failed to save consumer group changes.'));
+            setError(dashboardErrorMessage(saveError, 'Failed to save consumer group changes.'));
         } finally {
             setIsSaving(false);
         }

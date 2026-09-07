@@ -2,7 +2,6 @@ import { StrictMode } from 'react';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { vi } from 'vitest';
-import { ApiClientError } from '../api/client';
 import { deferred } from '../test/deferred';
 import type {
   TopicConfigView,
@@ -51,7 +50,11 @@ const partialResult: TopicOperationResult = {
   message: '1 of 2 targets failed',
   targets: [
     { target: 'broker-a', success: true, message: 'saved on broker-a' },
-    { target: 'broker-b', success: false, message: 'broker-b unavailable' }
+    {
+      target: 'broker-b',
+      success: false,
+      error: { code: 'TOPIC_TARGET_OPERATION_FAILED', message: 'Topic target operation failed' }
+    }
   ]
 };
 
@@ -119,25 +122,6 @@ describe('TopicMutationDialog', () => {
       messageType: 'FIFO'
     }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
-  });
-
-  it('closes and refreshes once instead of retrying after an applied audit failure', async () => {
-    const user = userEvent.setup();
-    const onOpenChange = vi.fn();
-    const onAppliedAuditFailure = vi.fn().mockResolvedValue(undefined);
-    const onSubmit = vi.fn().mockRejectedValue(
-      new ApiClientError('APPLIED_AUDIT_FAILED', 'Topic mutation applied.', { mutationApplied: true })
-    );
-    render(<TopicMutationDialog {...defaultProps} onOpenChange={onOpenChange} onSubmit={onSubmit} onAppliedAuditFailure={onAppliedAuditFailure} />);
-
-    await user.type(screen.getByRole('textbox', { name: 'Topic name' }), 'inventory-events');
-    await user.click(screen.getByRole('checkbox', { name: 'DefaultCluster' }));
-    const confirmation = await openConfirmation(user);
-    await user.click(within(confirmation).getByRole('button', { name: 'Create topic' }));
-
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(onAppliedAuditFailure).toHaveBeenCalledTimes(1);
   });
 
   it('builds permission bits from Read, Write, and Inherit and requires Read or Write', async () => {
@@ -294,7 +278,8 @@ describe('TopicMutationDialog', () => {
     const confirmation = await openConfirmation(user);
     await user.click(within(confirmation).getByRole('button', { name: 'Create topic' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('NameServer unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to save the topic.');
+    expect(screen.queryByText('NameServer unavailable')).not.toBeInTheDocument();
     expect(topic).toHaveValue('kept-topic');
     expect(screen.getByRole('checkbox', { name: 'broker-c' })).toBeChecked();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save topic' })).toHaveFocus());
@@ -319,7 +304,7 @@ describe('TopicMutationDialog', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('1 of 2 targets failed');
     expect(screen.getByText('saved on broker-a')).toBeInTheDocument();
-    expect(screen.getByText('broker-b unavailable')).toBeInTheDocument();
+    expect(screen.getByText('TOPIC_TARGET_OPERATION_FAILED: Topic target operation failed')).toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: 'Edit topic' })).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
@@ -457,7 +442,8 @@ describe('TopicMutationDialog', () => {
     rerender(<TopicMutationDialog {...props} config={{ ...config, inconsistentFields: ['perm'] }} />);
     await act(async () => pending.reject(new Error('same-topic request failed')));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('same-topic request failed');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to save the topic.');
+    expect(screen.queryByText('same-topic request failed')).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Topic name' })).toHaveValue('orders');
   });
 });

@@ -19,7 +19,6 @@ use crate::dashboard::types::DashboardBrokerOverviewResponse;
 use crate::dashboard::types::DashboardBrokerSummary;
 use crate::dashboard::types::DashboardBrokerTopItem;
 use crate::dashboard::types::DashboardBrokerTpsItem;
-use crate::dashboard::types::DashboardError;
 use crate::dashboard::types::DashboardResult;
 use crate::dashboard::types::DashboardTopicCategoryItem;
 use crate::dashboard::types::DashboardTopicCurrentResponse;
@@ -45,8 +44,7 @@ pub(crate) async fn get_dashboard_broker_overview(
         .get_cluster_home_page(ClusterHomePageRequest {
             force_refresh: request.force_refresh,
         })
-        .await
-        .map_err(|error| DashboardError::Cluster(error.to_string()))?;
+        .await?;
 
     Ok(build_broker_overview(cluster_response))
 }
@@ -59,18 +57,13 @@ pub(crate) async fn query_dashboard_topic_current(
             skip_sys_process: false,
             skip_retry_and_dlq: false,
         })
-        .await
-        .map_err(|error| DashboardError::Topic(error.to_string()))?;
-    let stats_response = topic_manager
-        .get_topic_current_stats()
-        .await
-        .map_err(|error| DashboardError::Topic(error.to_string()))?;
+        .await?;
+    let stats_response = topic_manager.get_topic_current_stats().await?;
 
     for failure in &stats_response.failures {
         log::warn!(
-            "Failed to collect dashboard topic current stats for `{}`: {}",
-            failure.topic,
-            failure.error
+            "Failed to collect dashboard topic current stats for `{}`",
+            failure.topic
         );
     }
 

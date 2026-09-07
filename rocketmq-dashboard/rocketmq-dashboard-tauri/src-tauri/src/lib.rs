@@ -18,6 +18,7 @@ mod auth;
 mod cluster;
 mod consumer;
 mod dashboard;
+mod error;
 mod message;
 mod nameserver;
 mod producer;
@@ -36,6 +37,8 @@ use std::time::Duration;
 use tauri::Manager;
 
 const ADMIN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_FAILURE_EXIT_CODE: i32 = 70;
+const CLEANUP_FAILURE_EXIT_CODE: i32 = 71;
 
 #[derive(Clone)]
 struct DashboardAdminLifecycle {
@@ -46,41 +49,66 @@ struct DashboardAdminLifecycle {
     topic_manager: topic::TopicManager,
 }
 
+struct DashboardApplication {
+    app: tauri::App<tauri::Wry>,
+    client_runtime_owner: RuntimeOwner,
+    client_runtime: Arc<ClientRuntime>,
+    admin_lifecycle: Arc<OnceLock<DashboardAdminLifecycle>>,
+}
+
 impl DashboardAdminLifecycle {
     async fn shutdown(&self) {
-        self.cluster_manager.shutdown().await;
-        self.consumer_manager.shutdown().await;
-        self.message_manager.shutdown().await;
-        self.producer_manager.shutdown().await;
-        self.topic_manager.shutdown().await;
+        tokio::join!(
+            self.cluster_manager.shutdown(),
+            self.consumer_manager.shutdown(),
+            self.message_manager.shutdown(),
+            self.producer_manager.shutdown(),
+            self.topic_manager.shutdown(),
+        );
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let client_runtime_owner =
-        match RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-dashboard-tauri-client"))
-            .expect("dashboard client runtime profile is internally valid")
-            .build()
-        {
-            Ok(owner) => owner,
-            Err(error) => {
-                eprintln!("Failed to create dashboard client runtime: {error}");
-                return;
-            }
-        };
+fn final_exit_code(application_exit_code: i32, cleanup_healthy: bool) -> i32 {
+    if application_exit_code != 0 {
+        application_exit_code
+    } else if cleanup_healthy {
+        0
+    } else {
+        CLEANUP_FAILURE_EXIT_CODE
+    }
+}
+
+fn build_application() -> Result<DashboardApplication, i32> {
+    let runtime_plan = match RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-dashboard-tauri-client")) {
+        Ok(plan) => plan,
+        Err(_error) => {
+            eprintln!("Dashboard startup failed while planning the client runtime");
+            return Err(STARTUP_FAILURE_EXIT_CODE);
+        }
+    };
+    let client_runtime_owner = match runtime_plan.build() {
+        Ok(owner) => owner,
+        Err(_error) => {
+            eprintln!("Dashboard startup failed while creating the client runtime");
+            return Err(STARTUP_FAILURE_EXIT_CODE);
+        }
+    };
     let client_runtime = match ClientRuntime::try_new(
         client_runtime_owner.root_context().component("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
     ) {
         Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("Failed to initialize dashboard client runtime: {error}");
-            if let Err(shutdown_error) = client_runtime_owner.shutdown_runtime_blocking() {
-                eprintln!("Failed to shut down dashboard client runtime owner: {shutdown_error}");
+        Err(_error) => {
+            eprintln!("Dashboard startup failed while initializing the admin client");
+            match client_runtime_owner.shutdown_runtime_blocking() {
+                Ok(report) if !report.is_healthy() => {
+                    eprintln!("Dashboard client runtime cleanup was incomplete after startup failure");
+                }
+                Err(_) => eprintln!("Dashboard client runtime cleanup failed after startup failure"),
+                Ok(_) => {}
             }
-            return;
+            return Err(STARTUP_FAILURE_EXIT_CODE);
         }
     };
     let setup_client_runtime = client_runtime.clone();
@@ -98,10 +126,7 @@ pub fn run() {
 
             let auth_db = auth::AuthDb::new(app.handle())?;
             auth_db.init()?;
-            log::info!(
-                "Local auth SQLite database initialized at: {}",
-                auth_db.db_path().display()
-            );
+            log::info!("Local auth SQLite database initialized");
 
             let auth_service = auth::AuthService::new(auth_db);
             let bootstrap_status = auth_service.bootstrap_default_admin()?;
@@ -116,10 +141,7 @@ pub fn run() {
 
             let nameserver_db = nameserver::NameServerDb::new(app.handle())?;
             nameserver_db.init()?;
-            log::info!(
-                "Local NameServer SQLite tables initialized at: {}",
-                nameserver_db.db_path().display()
-            );
+            log::info!("Local NameServer SQLite tables initialized");
 
             let nameserver_store = nameserver::SqliteNameServerStore::new(nameserver_db.clone());
             let nameserver_runtime = Arc::new(nameserver::NameServerRuntimeState::new(
@@ -134,10 +156,7 @@ pub fn run() {
             let topic_manager = topic::TopicManager::new(nameserver_runtime.clone());
             let proxy_db = proxy::ProxyDb::new(app.handle())?;
             proxy_db.init()?;
-            log::info!(
-                "Local Proxy SQLite tables initialized at: {}",
-                proxy_db.db_path().display()
-            );
+            log::info!("Local Proxy SQLite tables initialized");
             let proxy_manager = proxy::ProxyManager::new(proxy_db)?;
 
             setup_lifecycle
@@ -148,7 +167,7 @@ pub fn run() {
                     producer_manager: producer_manager.clone(),
                     topic_manager: topic_manager.clone(),
                 })
-                .map_err(|_| anyhow::anyhow!("dashboard admin lifecycle was initialized more than once"))?;
+                .map_err(|_| crate::error::DashboardError::Internal("admin lifecycle initialized twice"))?;
 
             app.manage(auth_service);
             app.manage(auth::SessionState::default());
@@ -221,37 +240,119 @@ pub fn run() {
             topic::commands::skip_message_accumulate,
             topic::commands::send_topic_message
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application");
+        .build(tauri::generate_context!());
 
-    #[cfg(desktop)]
-    {
-        let exit_code = app.run_return(|_, _| {});
-        if let Some(lifecycle) = admin_lifecycle.get() {
-            // This is the desktop application's top-level runtime boundary.
-            // The event loop has stopped, so owned sessions can be awaited
-            // without spawning detached cleanup work.
-            let shutdown =
-                tauri::async_runtime::block_on(tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, lifecycle.shutdown()));
-            if shutdown.is_err() {
-                log::error!(
-                    "Timed out after {} seconds while shutting down dashboard admin sessions",
-                    ADMIN_SHUTDOWN_TIMEOUT.as_secs()
-                );
+    let app = match app {
+        Ok(app) => app,
+        Err(_error) => {
+            eprintln!("Dashboard startup failed while building the application");
+            match client_runtime_owner.block_on(tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, client_runtime.shutdown()))
+            {
+                Ok(report) if !report.is_healthy() => {
+                    eprintln!("Dashboard admin client cleanup was incomplete after startup failure");
+                }
+                Err(_) => {
+                    eprintln!("Dashboard admin client cleanup timed out after startup failure");
+                }
+                Ok(_) => {}
+            }
+            match client_runtime_owner.shutdown_runtime_blocking() {
+                Ok(report) if !report.is_healthy() => {
+                    eprintln!("Dashboard client runtime cleanup was incomplete after startup failure");
+                }
+                Err(_) => eprintln!("Dashboard client runtime cleanup failed after startup failure"),
+                Ok(_) => {}
+            }
+            return Err(STARTUP_FAILURE_EXIT_CODE);
+        }
+    };
+
+    Ok(DashboardApplication {
+        app,
+        client_runtime_owner,
+        client_runtime,
+        admin_lifecycle,
+    })
+}
+
+#[cfg(desktop)]
+pub fn run() -> i32 {
+    let DashboardApplication {
+        app,
+        client_runtime_owner,
+        client_runtime,
+        admin_lifecycle,
+    } = match build_application() {
+        Ok(application) => application,
+        Err(exit_code) => return exit_code,
+    };
+
+    let exit_code = app.run_return(|_, _| {});
+    let mut cleanup_healthy = true;
+    if let Some(lifecycle) = admin_lifecycle.get() {
+        let shutdown =
+            tauri::async_runtime::block_on(tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, lifecycle.shutdown()));
+        if shutdown.is_err() {
+            cleanup_healthy = false;
+            log::error!(
+                "Timed out after {} seconds while shutting down dashboard admin sessions",
+                ADMIN_SHUTDOWN_TIMEOUT.as_secs()
+            );
+        }
+    }
+    let client_shutdown =
+        client_runtime_owner.block_on(tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, client_runtime.shutdown()));
+    match client_shutdown {
+        Ok(report) => {
+            cleanup_healthy &= report.is_healthy();
+            if !report.is_healthy() {
+                log::error!("Dashboard client runtime cleanup was incomplete");
             }
         }
-        let client_report = client_runtime_owner.block_on(client_runtime.shutdown());
-        client_report.log_if_unhealthy();
-        if let Err(error) = client_runtime_owner.shutdown_runtime_blocking() {
-            log::error!("Failed to shut down dashboard client runtime: {error}");
+        Err(_) => {
+            cleanup_healthy = false;
+            log::error!("Timed out while shutting down the dashboard client runtime");
         }
-        std::process::exit(exit_code);
     }
+    match client_runtime_owner.shutdown_runtime_blocking() {
+        Ok(report) if !report.is_healthy() => {
+            cleanup_healthy = false;
+            log::error!("Dashboard client runtime cleanup was incomplete");
+        }
+        Err(_) => {
+            cleanup_healthy = false;
+            log::error!("Failed to shut down dashboard client runtime");
+        }
+        Ok(_) => {}
+    }
+    final_exit_code(exit_code, cleanup_healthy)
+}
 
-    #[cfg(mobile)]
-    {
-        // Mobile event loops do not support `run_return`; platform process
-        // teardown owns the terminal resource cleanup on those targets.
-        app.run(|_, _| {});
+#[cfg(mobile)]
+#[tauri::mobile_entry_point]
+pub fn run() {
+    let DashboardApplication {
+        app,
+        client_runtime_owner: _client_runtime_owner,
+        client_runtime: _client_runtime,
+        admin_lifecycle: _admin_lifecycle,
+    } = match build_application() {
+        Ok(application) => application,
+        Err(_) => return,
+    };
+
+    app.run(|_, _| {});
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CLEANUP_FAILURE_EXIT_CODE;
+    use super::final_exit_code;
+
+    #[test]
+    fn exit_code_preserves_application_failure_and_reports_cleanup_failure() {
+        assert_eq!(final_exit_code(9, false), 9);
+        assert_eq!(final_exit_code(0, false), CLEANUP_FAILURE_EXIT_CODE);
+        assert_eq!(final_exit_code(0, true), 0);
     }
 }

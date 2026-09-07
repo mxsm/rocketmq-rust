@@ -3,7 +3,6 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { brokerApi } from '../api/broker_api';
 import { consumerApi } from '../api/consumer_api';
-import { ApiClientError } from '../api/client';
 import type { ConsumerGroupListItem, ConsumerOperationResult } from '../types/consumer';
 import { ConsumerQueryScopeProvider } from '../pages/consumers/ConsumerQueryScopeProvider';
 import ConsumerMutationDialog from './ConsumerMutationDialog';
@@ -138,14 +137,28 @@ describe('ConsumerMutationDialog', () => {
     resetConsumerMutationLocksForTests();
   });
 
-  it('closes and refreshes once instead of retrying after an applied audit failure', async () => {
+  it('keeps a partial result open and shows structured target failures', async () => {
     const user = userEvent.setup();
     const onOpenChange = vi.fn();
-    const onAppliedAuditFailure = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(consumerApi.create).mockRejectedValueOnce(
-      new ApiClientError('APPLIED_AUDIT_FAILED', 'Consumer mutation applied.', { mutationApplied: true })
-    );
-    render(<ConsumerQueryScopeProvider><ConsumerMutationDialog open mode="create" onOpenChange={onOpenChange} onSucceeded={vi.fn()} onAppliedAuditFailure={onAppliedAuditFailure} /></ConsumerQueryScopeProvider>);
+    const onSucceeded = vi.fn();
+    vi.mocked(consumerApi.create).mockResolvedValueOnce({
+      ...successResult,
+      success: false,
+      targetCount: 2,
+      targets: [
+        { target: 'broker-a', kind: 'BROKER', success: true, message: 'saved' },
+        {
+          target: 'broker-b',
+          kind: 'BROKER',
+          success: false,
+          error: {
+            code: 'CONSUMER_TARGET_OPERATION_FAILED',
+            message: 'Consumer target operation failed'
+          }
+        }
+      ]
+    });
+    render(<ConsumerQueryScopeProvider><ConsumerMutationDialog open mode="create" onOpenChange={onOpenChange} onSucceeded={onSucceeded} /></ConsumerQueryScopeProvider>);
 
     const dialog = screen.getByRole('dialog', { name: 'Create consumer group' });
     await user.type(within(dialog).getByLabelText('Consumer group'), 'orders-consumer');
@@ -153,18 +166,18 @@ describe('ConsumerMutationDialog', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Create group' }));
 
     await waitFor(() => expect(consumerApi.create).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(onAppliedAuditFailure).toHaveBeenCalledTimes(1);
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'CONSUMER_TARGET_OPERATION_FAILED: Consumer target operation failed'
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(onSucceeded).not.toHaveBeenCalled();
   });
 
-  it('keeps the immutable create target locked across remount and discards its stale applied callback', async () => {
+  it('keeps the immutable create target locked across remount and discards its stale rejection', async () => {
     const user = userEvent.setup();
     const pendingCreate = deferred<ConsumerOperationResult>();
     const onOpenChange = vi.fn();
     const onSucceeded = vi.fn();
-    const onAppliedAuditFailure = vi.fn();
-    const auditWarning = vi.fn();
-    window.addEventListener('rocketmq-audit-warning', auditWarning);
     vi.mocked(consumerApi.create).mockImplementationOnce(() => pendingCreate.promise);
     const renderDialog = (mounted: boolean) => (
       <ConsumerQueryScopeProvider>
@@ -174,7 +187,6 @@ describe('ConsumerMutationDialog', () => {
             mode="create"
             onOpenChange={onOpenChange}
             onSucceeded={onSucceeded}
-            onAppliedAuditFailure={onAppliedAuditFailure}
           />
         ) : null}
       </ConsumerQueryScopeProvider>
@@ -208,16 +220,12 @@ describe('ConsumerMutationDialog', () => {
     expect(within(dialog).getByRole('button', { name: 'Create group' })).toBeDisabled();
 
     await act(async () => {
-      window.dispatchEvent(new CustomEvent('rocketmq-audit-warning', { detail: 'Consumer create was applied.' }));
-      pendingCreate.reject(new ApiClientError('APPLIED_AUDIT_FAILED', 'Consumer create was applied.', { mutationApplied: true }));
+      pendingCreate.reject(new Error('sensitive-rejection-detail'));
     });
     await waitFor(() => expect(within(screen.getByRole('dialog', { name: 'Create consumer group' })).getByRole('button', { name: 'Create group' })).toBeEnabled());
-    expect(onAppliedAuditFailure).not.toHaveBeenCalled();
-    expect(auditWarning).toHaveBeenCalledTimes(1);
     expect(consumerApi.create).toHaveBeenCalledTimes(1);
     expect(onSucceeded).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
-    window.removeEventListener('rocketmq-audit-warning', auditWarning);
   });
 
   it('releases a remounted create target only after the original successful request finally settles', async () => {
@@ -259,11 +267,9 @@ describe('ConsumerMutationDialog', () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
-  it('retains an edit lock across close and reopen while its applied refresh is still authoritative', async () => {
+  it('releases an edit lock after a stale rejected request settles', async () => {
     const user = userEvent.setup();
     const pendingUpdate = deferred<ConsumerOperationResult>();
-    const pendingRefresh = deferred<void>();
-    const onAppliedAuditFailure = vi.fn(() => pendingRefresh.promise);
     vi.mocked(consumerApi.config).mockResolvedValue({
       group: consumer.rawGroupName,
       effective: {
@@ -278,7 +284,7 @@ describe('ConsumerMutationDialog', () => {
     vi.mocked(consumerApi.update).mockImplementationOnce(() => pendingUpdate.promise);
     const renderDialog = (mounted: boolean) => (
       <ConsumerQueryScopeProvider>
-        {mounted ? <ConsumerMutationDialog open mode="edit" consumer={consumer} onOpenChange={vi.fn()} onSucceeded={vi.fn()} onAppliedAuditFailure={onAppliedAuditFailure} /> : null}
+        {mounted ? <ConsumerMutationDialog open mode="edit" consumer={consumer} onOpenChange={vi.fn()} onSucceeded={vi.fn()} /> : null}
       </ConsumerQueryScopeProvider>
     );
     const { rerender } = render(renderDialog(true));
@@ -292,12 +298,9 @@ describe('ConsumerMutationDialog', () => {
     rerender(renderDialog(true));
     dialog = screen.getByRole('dialog', { name: 'Edit orders-consumer' });
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Update group' })).toBeDisabled());
-    await act(async () => pendingUpdate.reject(new ApiClientError('APPLIED_AUDIT_FAILED', 'Consumer edit was applied.', { mutationApplied: true })));
-    await waitFor(() => expect(onAppliedAuditFailure).toHaveBeenCalledTimes(1));
+    await act(async () => pendingUpdate.reject(new Error('sensitive-rejection-detail')));
     expect(consumerApi.update).toHaveBeenCalledTimes(1);
-    expect(within(screen.getByRole('dialog', { name: 'Edit orders-consumer' })).getByRole('button', { name: 'Update group' })).toBeDisabled();
-
-    await act(async () => pendingRefresh.resolve());
     await waitFor(() => expect(within(screen.getByRole('dialog', { name: 'Edit orders-consumer' })).getByRole('button', { name: 'Update group' })).toBeEnabled());
+    expect(screen.queryByText('sensitive-rejection-detail')).not.toBeInTheDocument();
   });
 });

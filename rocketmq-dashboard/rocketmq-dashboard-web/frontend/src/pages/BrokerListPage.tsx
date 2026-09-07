@@ -2,6 +2,7 @@ import { ExternalLink, Gauge, Layers3, RadioTower, ScanSearch, ShieldCheck } fro
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { brokerApi } from '../api/broker_api';
+import { userErrorMessage } from '../api/client';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import EntitySheet from '../components/EntitySheet';
 import ErrorState from '../components/ErrorState';
@@ -28,23 +29,36 @@ export default function BrokerListPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef(0);
+  const mountedRef = useRef(false);
 
   const load = async () => {
+    const requestId = ++requestRef.current;
     if (data) setRefreshing(true);
     else setLoading(true);
     setError(null);
     try {
-      setData(await brokerApi.list());
+      const nextData = await brokerApi.list();
+      if (mountedRef.current && requestId === requestRef.current) setData(nextData);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : String(requestError));
+      if (mountedRef.current && requestId === requestRef.current) {
+        setError(userErrorMessage(requestError, 'Unable to load brokers.'));
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (mountedRef.current && requestId === requestRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
   useEffect(() => {
+    mountedRef.current = true;
     void load();
+    return () => {
+      mountedRef.current = false;
+      requestRef.current += 1;
+    };
   }, []);
 
   const brokers = data?.items ?? [];

@@ -417,7 +417,7 @@ where
                 "Broker `{broker_name}` is not an authoritative target for topic `{topic}`"
             )));
         }
-        let outcome = executor
+        let _outcome = executor
             .delete(&DeleteTopicAdminRequest {
                 topic: topic.clone(),
                 cluster_name: None,
@@ -427,7 +427,10 @@ where
         return Ok(build_operation_result(
             operation,
             topic,
-            vec![TopicTargetResult::success(broker_name, outcome.message)],
+            vec![TopicTargetResult::success(
+                broker_name,
+                "Topic target operation completed",
+            )],
         ));
     }
     let clusters = item
@@ -452,8 +455,15 @@ where
             })
             .await
         {
-            Ok(outcome) => targets.push(TopicTargetResult::success(cluster_name, outcome.message)),
-            Err(_) => targets.push(TopicTargetResult::failure(cluster_name, "Cluster deletion failed")),
+            Ok(_) => targets.push(TopicTargetResult::success(
+                cluster_name,
+                "Topic target operation completed",
+            )),
+            Err(_) => targets.push(TopicTargetResult::failure(
+                cluster_name,
+                "TOPIC_TARGET_OPERATION_FAILED",
+                "Topic target operation failed",
+            )),
         }
     }
     Ok(build_operation_result(operation, topic, targets))
@@ -493,7 +503,7 @@ where
         success: true,
         affected_queue_count: outcome.target_count,
         applied_timestamp,
-        message: outcome.message,
+        message: "Consumer offset reset completed".to_string(),
     })
 }
 
@@ -539,14 +549,22 @@ where
         .into_iter()
         .map(|target| {
             if target.success {
-                TopicTargetResult::success(target.broker_name, target.message)
+                TopicTargetResult::success(target.broker_name, "Topic target operation completed")
             } else {
-                TopicTargetResult::failure(target.broker_name, target.message)
+                TopicTargetResult::failure(
+                    target.broker_name,
+                    "TOPIC_TARGET_OPERATION_FAILED",
+                    "Topic target operation failed",
+                )
             }
         })
         .collect::<Vec<_>>();
-    if let Some(order_config) = batch_outcome.order_config.filter(|outcome| !outcome.success) {
-        targets.push(TopicTargetResult::failure("ORDER_TOPIC_CONFIG", order_config.message));
+    if batch_outcome.order_config.is_some_and(|outcome| !outcome.success) {
+        targets.push(TopicTargetResult::failure(
+            "ORDER_TOPIC_CONFIG",
+            "ORDER_TOPIC_CONFIG_FAILED",
+            "Order-topic configuration update failed",
+        ));
     }
     Ok(build_operation_result(operation, request.topic, targets))
 }
@@ -670,22 +688,19 @@ pub(crate) fn epoch_millis(timestamp: std::time::SystemTime) -> Result<u64, Dash
 pub(crate) fn canonical_send_status(status: &str) -> String {
     let status = status.trim();
     let split = status.find(char::is_whitespace).unwrap_or(status.len());
-    let (prefix, suffix) = status.split_at(split);
-    let canonical = match prefix.rsplit("::").next().unwrap_or(prefix) {
+    let prefix = &status[..split];
+    match prefix.rsplit("::").next().unwrap_or(prefix) {
         "SendOk" | "SEND_OK" => "SEND_OK",
         "FlushDiskTimeout" | "FLUSH_DISK_TIMEOUT" => "FLUSH_DISK_TIMEOUT",
         "FlushSlaveTimeout" | "FLUSH_SLAVE_TIMEOUT" => "FLUSH_SLAVE_TIMEOUT",
         "SlaveNotAvailable" | "SLAVE_NOT_AVAILABLE" => "SLAVE_NOT_AVAILABLE",
-        _ => prefix,
-    };
-    format!("{canonical}{suffix}")
+        _ => "UNKNOWN",
+    }
+    .to_string()
 }
 
 pub(crate) fn is_successful_send_status(status: &str) -> bool {
     status == "SEND_OK"
-        || status
-            .strip_prefix("SEND_OK ")
-            .is_some_and(|suffix| suffix.starts_with('('))
 }
 
 fn map_topic_send_result(result: topic::TopicSendResult) -> TopicSendResultView {
@@ -890,9 +905,10 @@ mod tests {
     #[test]
     fn send_ok_is_the_only_successful_send_status() {
         assert_eq!(canonical_send_status("SendOk"), "SEND_OK");
+        assert_eq!(canonical_send_status("SEND_OK (COMMIT_MESSAGE)"), "SEND_OK");
         assert_eq!(canonical_send_status("FlushDiskTimeout"), "FLUSH_DISK_TIMEOUT");
+        assert_eq!(canonical_send_status("sensitive-rejection-detail"), "UNKNOWN");
         assert!(is_successful_send_status("SEND_OK"));
-        assert!(is_successful_send_status("SEND_OK (COMMIT_MESSAGE)"));
         assert!(!is_successful_send_status("FLUSH_DISK_TIMEOUT"));
     }
 
@@ -1478,11 +1494,14 @@ mod tests {
         .expect("broker mutation remains structured");
 
         assert!(!result.success);
-        assert!(
-            result.targets.iter().any(|target| {
-                target.target == "ORDER_TOPIC_CONFIG" && !target.success && !target.message.is_empty()
-            })
-        );
+        assert!(result.targets.iter().any(|target| {
+            target.target == "ORDER_TOPIC_CONFIG"
+                && !target.success
+                && target.error.as_ref().is_some_and(|error| {
+                    error.code == "ORDER_TOPIC_CONFIG_FAILED"
+                        && error.message == "Order-topic configuration update failed"
+                })
+        }));
     }
 
     fn mutation_request(broker_name_list: Vec<String>) -> TopicMutationRequest {

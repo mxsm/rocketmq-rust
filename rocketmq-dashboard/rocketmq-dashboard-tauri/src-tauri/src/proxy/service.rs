@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::DashboardError;
+use crate::error::DashboardResult as Result;
 use crate::proxy::db::ProxyDb;
-use anyhow::Result;
-use anyhow::bail;
 use rocketmq_dashboard_common::ProxyConfigSnapshot;
 use rocketmq_dashboard_common::ProxyMutationResult;
 use rocketmq_dashboard_common::normalize_proxy_address;
@@ -37,7 +37,7 @@ impl ProxyManager {
         let address = normalize_proxy_address(address)?;
         let snapshot = self.db.update_snapshot(|snapshot| {
             if snapshot.proxy_addr_list.iter().any(|existing| existing == &address) {
-                bail!("Proxy address already exists");
+                return Err(DashboardError::Validation("Proxy address already exists".to_string()));
             }
 
             snapshot.proxy_addr_list.push(address.clone());
@@ -58,7 +58,7 @@ impl ProxyManager {
         let address = normalize_proxy_address(address)?;
         let snapshot = self.db.update_snapshot(|snapshot| {
             if !snapshot.proxy_addr_list.iter().any(|existing| existing == &address) {
-                bail!("Proxy address does not exist");
+                return Err(DashboardError::Validation("Proxy address does not exist".to_string()));
             }
 
             snapshot.current_proxy_addr = Some(address.clone());
@@ -78,7 +78,7 @@ impl ProxyManager {
             snapshot.proxy_addr_list.retain(|existing| existing != &address);
 
             if snapshot.proxy_addr_list.len() == previous_len {
-                bail!("Proxy address does not exist");
+                return Err(DashboardError::Validation("Proxy address does not exist".to_string()));
             }
 
             if snapshot.current_proxy_addr.as_deref() == Some(address.as_str())

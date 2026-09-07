@@ -1,7 +1,7 @@
 import { Filter } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { auditApi } from '../api/audit_api';
-import { ApiClientError } from '../api/client';
+import { ApiClientError, userErrorMessage } from '../api/client';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
@@ -24,8 +24,19 @@ export default function AuditPage() {
   const [cursorHistory, setCursorHistory] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestRef = useRef(0);
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestRef.current += 1;
+    };
+  }, []);
 
   const load = useCallback(async (cursor?: string, resetHistory = false) => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -39,12 +50,15 @@ export default function AuditPage() {
         cursor,
         limit: pageSize
       });
+      if (!mountedRef.current || requestId !== requestRef.current) return;
       setPage(next);
       if (resetHistory) setCursorHistory([]);
     } catch (cause) {
-      setError(errorMessage(cause, 'Unable to load audit events.'));
+      if (mountedRef.current && requestId === requestRef.current) {
+        setError(errorMessage(cause, 'Unable to load audit events.'));
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && requestId === requestRef.current) setLoading(false);
     }
   }, [action, actor, end, environmentId, outcome, start]);
 
@@ -113,5 +127,5 @@ function localDateTimeToMillis(value: string) {
 
 function errorMessage(error: unknown, fallback: string) {
   if (error instanceof ApiClientError && error.code === 'STORAGE_UNAVAILABLE') return `${error.message} Retry when storage is available.`;
-  return error instanceof Error ? error.message : fallback;
+  return userErrorMessage(error, fallback);
 }

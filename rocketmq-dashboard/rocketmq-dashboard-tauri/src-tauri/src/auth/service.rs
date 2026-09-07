@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::auth::db::AuthDb;
-use crate::auth::types::AuthError;
 use crate::auth::types::AuthResult;
 use crate::auth::types::BootstrapStatus;
 use crate::auth::types::UserProfile;
 use crate::auth::types::UserRecord;
+use crate::error::DashboardError;
 use argon2::Argon2;
 use chrono::Utc;
 use password_hash::PasswordHash;
@@ -113,14 +113,14 @@ impl AuthService {
     pub(crate) fn authenticate(&self, username: &str, password: &str) -> AuthResult<UserRecord> {
         let user = self
             .find_user_by_username(username)?
-            .ok_or_else(|| AuthError::Authentication("Invalid username or password".to_string()))?;
+            .ok_or_else(|| DashboardError::Authentication("invalid credentials".to_string()))?;
 
         if !user.is_active {
-            return Err(AuthError::Authentication("Account is disabled".to_string()));
+            return Err(DashboardError::Authentication("account disabled".to_string()));
         }
 
         if !verify_password(password, &user.password_hash)? {
-            return Err(AuthError::Authentication("Invalid username or password".to_string()));
+            return Err(DashboardError::Authentication("invalid credentials".to_string()));
         }
 
         Ok(user)
@@ -129,10 +129,12 @@ impl AuthService {
     pub(crate) fn change_password(&self, user_id: i64, old_password: &str, new_password: &str) -> AuthResult<()> {
         let user = self
             .find_user_by_id(user_id)?
-            .ok_or_else(|| AuthError::Authentication("User not found".to_string()))?;
+            .ok_or_else(|| DashboardError::Authentication("user not found".to_string()))?;
 
         if !verify_password(old_password, &user.password_hash)? {
-            return Err(AuthError::Authentication("Current password is incorrect".to_string()));
+            return Err(DashboardError::Authentication(
+                "current password is incorrect".to_string(),
+            ));
         }
 
         validate_new_password(old_password, new_password)?;
@@ -187,11 +189,10 @@ impl AuthService {
         Ok(())
     }
 
-    pub(crate) fn get_user_profile(&self, session_id: &str, user_id: i64) -> AuthResult<Option<UserProfile>> {
+    pub(crate) fn get_user_profile(&self, user_id: i64) -> AuthResult<Option<UserProfile>> {
         let user = self.find_user_by_id(user_id)?;
 
         Ok(user.map(|user| UserProfile {
-            session_id: session_id.to_string(),
             user_id: user.id,
             username: user.username,
             is_active: user.is_active,
@@ -246,13 +247,13 @@ pub(crate) fn verify_password(password: &str, hash: &str) -> AuthResult<bool> {
 
 fn validate_new_password(old_password: &str, new_password: &str) -> AuthResult<()> {
     if new_password.len() < MIN_PASSWORD_LENGTH {
-        return Err(AuthError::Validation(format!(
+        return Err(DashboardError::Validation(format!(
             "New password must be at least {MIN_PASSWORD_LENGTH} characters long"
         )));
     }
 
     if old_password == new_password {
-        return Err(AuthError::Validation(
+        return Err(DashboardError::Validation(
             "New password must be different from the current password".to_string(),
         ));
     }
@@ -406,11 +407,10 @@ mod tests {
         service.update_last_login(user.id).expect("last login should update");
 
         let profile = service
-            .get_user_profile("session-123", user.id)
+            .get_user_profile(user.id)
             .expect("profile lookup should succeed")
             .expect("profile should exist");
 
-        assert_eq!(profile.session_id, "session-123");
         assert_eq!(profile.user_id, user.id);
         assert_eq!(profile.username, "admin");
         assert!(profile.is_active);
@@ -431,7 +431,7 @@ mod tests {
             .expect("authentication should succeed");
 
         let profile = service
-            .get_user_profile("session-123", user.id)
+            .get_user_profile(user.id)
             .expect("profile lookup should succeed")
             .expect("profile should exist");
 

@@ -1,6 +1,7 @@
 import { Braces, Clock3, Copy, Database, RotateCcw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { messageApi } from '../../api/message_api';
+import { userErrorMessage } from '../../api/client';
 import MetricCard from '../../components/MetricCard';
 import { Button } from '../../components/ui/Button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/Tabs';
@@ -58,7 +59,7 @@ export default function MessageDetailContent({
     } catch (requestError) {
       if (traceRequestRef.current === requestId) {
         setTraceLoaded(false);
-        setTraceError(requestError instanceof Error ? requestError.message : String(requestError));
+        setTraceError(userErrorMessage(requestError, 'Unable to load the message trace.'));
       }
     } finally {
       if (traceRequestRef.current === requestId) setTraceLoading(false);

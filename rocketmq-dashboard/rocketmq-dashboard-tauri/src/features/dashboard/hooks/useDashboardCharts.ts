@@ -1,23 +1,12 @@
 import { useEffect, useState } from 'react';
 import { DashboardService } from '../../../services/dashboard.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import type {
     DashboardBrokerOverviewResponse,
     DashboardTopicCurrentResponse,
 } from '../types/dashboard.types';
 
 const REFRESH_INDICATOR_DELAY_MS = 180;
-
-const toErrorMessage = (error: unknown, fallback: string) => {
-    if (error instanceof Error) {
-        return error.message;
-    }
-
-    if (typeof error === 'string') {
-        return error;
-    }
-
-    return fallback;
-};
 
 export const useDashboardCharts = () => {
     const [brokerOverview, setBrokerOverview] = useState<DashboardBrokerOverviewResponse | null>(null);
@@ -48,13 +37,13 @@ export const useDashboardCharts = () => {
         if (brokerResult.status === 'fulfilled') {
             setBrokerOverview(brokerResult.value);
         } else {
-            setBrokerError(toErrorMessage(brokerResult.reason, 'Failed to load dashboard broker data'));
+            setBrokerError(dashboardErrorMessage(brokerResult.reason, 'Failed to load dashboard broker data'));
         }
 
         if (topicResult.status === 'fulfilled') {
             setTopicCurrent(topicResult.value);
         } else {
-            setTopicError(toErrorMessage(topicResult.reason, 'Failed to load dashboard topic data'));
+            setTopicError(dashboardErrorMessage(topicResult.reason, 'Failed to load dashboard topic data'));
         }
 
         if (refreshIndicatorTimer !== null) {
@@ -70,7 +59,7 @@ export const useDashboardCharts = () => {
         load('initial')
             .catch((error) => {
                 if (isMounted) {
-                    const message = toErrorMessage(error, 'Failed to load dashboard charts');
+                    const message = dashboardErrorMessage(error, 'Failed to load dashboard charts');
                     setBrokerError((current) => current || message);
                     setTopicError((current) => current || message);
                 }

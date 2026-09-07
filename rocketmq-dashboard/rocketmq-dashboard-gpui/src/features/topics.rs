@@ -537,6 +537,13 @@ impl Render for TopicsView {
             Loadable::Failed { previous: None, error } => Some(error.summary().to_owned()),
             _ => None,
         };
+        let refresh_error = match &self.store.inventory.state {
+            Loadable::Failed {
+                previous: Some(_),
+                error,
+            } => Some((error.summary().to_owned(), error.is_retryable())),
+            _ => None,
+        };
         let partial = self
             .store
             .inventory
@@ -611,6 +618,23 @@ impl Render for TopicsView {
                 )
             })
             .child(render_counts(&self.store, cx))
+            .when_some(refresh_error, |this, (summary, retryable)| {
+                this.child(
+                    div()
+                        .p_3()
+                        .rounded_md()
+                        .bg(cx.theme().warning.opacity(0.12))
+                        .child(summary)
+                        .when(retryable, |this| {
+                            this.child(
+                                Button::new("retry-topic-refresh")
+                                    .label("Retry")
+                                    .outline()
+                                    .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
+                            )
+                        }),
+                )
+            })
             .child(
                 div()
                     .flex()

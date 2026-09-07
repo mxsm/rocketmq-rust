@@ -24,6 +24,7 @@ import type { MessageSummary } from '../features/message/types/message.types';
 import type { MessageTraceDetail, MessageTraceNode } from '../features/message-trace/types/message-trace.types';
 import { MessageService } from '../services/message.service';
 import { MessageTraceService } from '../services/message-trace.service';
+import { dashboardErrorMessage } from '../services/invoke';
 
 const DEFAULT_TRACE_TOPIC = 'RMQ_SYS_TRACE_TOPIC';
 
@@ -150,7 +151,7 @@ const TraceDetailModal = ({ isOpen, onClose, traceTopic, message }: TraceDetailM
       })
       .catch((loadError) => {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Failed to load trace detail');
+          setError(dashboardErrorMessage(loadError, 'Failed to load trace detail'));
         }
       })
       .finally(() => {
@@ -457,7 +458,7 @@ export const MessageTraceView = () => {
       setSearchResults(response.items);
     } catch (error) {
       setSearchResults([]);
-      setSearchError(error instanceof Error ? error.message : 'Failed to search message trace');
+      setSearchError(dashboardErrorMessage(error, 'Failed to search message trace'));
     } finally {
       setIsSearching(false);
     }

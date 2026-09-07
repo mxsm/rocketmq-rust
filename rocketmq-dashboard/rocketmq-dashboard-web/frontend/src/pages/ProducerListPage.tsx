@@ -1,6 +1,7 @@
 import { Cable, DatabaseZap, RadioTower, Server, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { producerApi } from '../api/producer_api';
+import { userErrorMessage } from '../api/client';
 import { topicApi } from '../api/topic_api';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import EmptyState from '../components/EmptyState';
@@ -37,25 +38,40 @@ export default function ProducerListPage() {
   const [selectedClient, setSelectedClient] = useState<ProducerConnectionInfo | null>(null);
   const clientTriggerRef = useRef<HTMLElement | null>(null);
   const connectionRequestRef = useRef(0);
+  const loadRequestRef = useRef(0);
+  const mountedRef = useRef(false);
 
   const load = async () => {
+    const requestId = ++loadRequestRef.current;
     if (items.length > 0) setRefreshing(true);
     else setLoading(true);
     setError(null);
     try {
-      const [nextItems, topicView] = await Promise.all([producerApi.list(), topicApi.list()]);
-      setItems(nextItems);
-      setTopics(topicView.items);
+      const [producerResult, topicResult] = await Promise.allSettled([producerApi.list(), topicApi.list()]);
+      if (!mountedRef.current || requestId !== loadRequestRef.current) return;
+      if (producerResult.status === 'rejected') throw producerResult.reason;
+      setItems(producerResult.value);
+      setTopics(topicResult.status === 'fulfilled' ? topicResult.value.items : []);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : String(requestError));
+      if (mountedRef.current && requestId === loadRequestRef.current) {
+        setError(userErrorMessage(requestError, 'Unable to load producers.'));
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (mountedRef.current && requestId === loadRequestRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
   useEffect(() => {
+    mountedRef.current = true;
     void load();
+    return () => {
+      mountedRef.current = false;
+      loadRequestRef.current += 1;
+      connectionRequestRef.current += 1;
+    };
   }, []);
 
   const metrics = useMemo(() => getProducerMetrics(items), [items]);
@@ -107,7 +123,7 @@ export default function ProducerListPage() {
       if (connectionRequestRef.current === requestId) setConnection(nextConnection);
     } catch (requestError) {
       if (connectionRequestRef.current === requestId) {
-        setConnectionError(requestError instanceof Error ? requestError.message : String(requestError));
+        setConnectionError(userErrorMessage(requestError, 'Unable to load producer connections.'));
       }
     } finally {
       if (connectionRequestRef.current === requestId) setConnectionLoading(false);

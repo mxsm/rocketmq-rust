@@ -9,7 +9,6 @@ export { useAuth } from './hooks/useAuth';
 
 // Types
 export type {
-    AuthError,
     AuthSessionResponse,
     BootstrapStatus,
     ChangePasswordPayload,
@@ -17,5 +16,4 @@ export type {
     LoginCredentials,
     SessionUser,
     UserProfile,
-    UserProfileResponse,
 } from './types/auth.types';

@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { consumerApi } from '../api/consumer_api';
-import { ApiClientError } from '../api/client';
 import ConsumerDeleteDialog from '../components/ConsumerDeleteDialog';
 import EntityDetailPage from '../components/EntityDetailPage';
 import ConsumerMutationDialog from '../components/ConsumerMutationDialog';
@@ -36,15 +35,7 @@ export default function ConsumerDetailPage() {
   const [summary, setSummary] = useState<ConsumerSummaryView | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [mutationControlsDisabled, setMutationControlsDisabled] = useState(false);
-  const [authoritativeDetail, setAuthoritativeDetail] = useState<{
-    identityKey: string;
-    revision: number;
-    summary: ConsumerSummaryView;
-    config: Awaited<ReturnType<typeof consumerApi.config>>;
-  } | null>(null);
   const committedIdentityRef = useRef<ConsumerOperationIdentity | null>(null);
-  const authoritativeRevisionRef = useRef(0);
 
   // Render only derives a candidate. A concurrent render may be discarded,
   // therefore the layout effect is the sole publisher of committed identity.
@@ -83,54 +74,10 @@ export default function ConsumerDetailPage() {
   useEffect(() => {
     const identity = activeIdentity;
     setSummary(null);
-    setMutationControlsDisabled(false);
-    setAuthoritativeDetail(null);
     consumerApi.summary(group, scope)
       .then((result) => { if (isCurrentIdentity(identity)) setSummary(result); })
       .catch(() => { if (isCurrentIdentity(identity)) setSummary(null); });
   }, [activeIdentity, scope]);
-
-  const refreshAppliedEdit = async (identity: ConsumerOperationIdentity) => {
-    // Clear the old detail before the request so the destructive controls
-    // cannot reuse a stale configuration while the authoritative read is in
-    // flight. A failed refresh intentionally leaves the controls disabled.
-    const appliedScope = scope;
-    if (isCurrentIdentity(identity)) setMutationControlsDisabled(true);
-    if (isCurrentIdentity(identity)) setSummary(null);
-    if (isCurrentIdentity(identity)) setEditOpen(false);
-    const [nextSummary, nextConfig] = await Promise.all([
-      consumerApi.summary(identity.group, appliedScope),
-      consumerApi.config(identity.group, appliedScope)
-    ]);
-    if (!isCurrentIdentity(identity)) return;
-    setSummary(nextSummary);
-    if (!isCurrentIdentity(identity)) return;
-    setAuthoritativeDetail({
-      identityKey: `${identity.group}|${identity.scopeKey}`,
-      revision: ++authoritativeRevisionRef.current,
-      summary: nextSummary,
-      config: nextConfig
-    });
-    if (isCurrentIdentity(identity)) setMutationControlsDisabled(false);
-  };
-
-  const refreshAppliedDelete = async (identity: ConsumerOperationIdentity) => {
-    const appliedScope = scope;
-    if (isCurrentIdentity(identity)) setMutationControlsDisabled(true);
-    if (isCurrentIdentity(identity)) setSummary(null);
-    if (isCurrentIdentity(identity)) setDeleteOpen(false);
-    try {
-      const nextSummary = await consumerApi.summary(identity.group, appliedScope);
-      if (!isCurrentIdentity(identity)) return;
-      setSummary(nextSummary);
-      if (isCurrentIdentity(identity)) setMutationControlsDisabled(false);
-    } catch (error) {
-      if (isCurrentIdentity(identity) && error instanceof ApiClientError && error.code === 'NOT_FOUND') {
-        navigate('/consumers', { replace: true });
-      }
-      throw error;
-    }
-  };
 
   const summaryScopeKey = summary
     ? consumerScopeKey(summary.queryScope.mode, summary.queryScope.proxyAddress)
@@ -164,11 +111,11 @@ export default function ConsumerDetailPage() {
       backTo="/consumers"
       backLabel="Back to groups"
       actions={<>
-        <Button type="button" variant="outline" size="sm" disabled={!listItem || mutationControlsDisabled || editMutationLocked} onClick={() => setEditOpen(true)}>Edit configuration</Button>
-        <Button type="button" variant="destructive" size="sm" disabled={!listItem || mutationControlsDisabled || deleteMutationLocked} onClick={() => setDeleteOpen(true)}>Delete group</Button>
+        <Button type="button" variant="outline" size="sm" disabled={!listItem || editMutationLocked} onClick={() => setEditOpen(true)}>Edit configuration</Button>
+        <Button type="button" variant="destructive" size="sm" disabled={!listItem || deleteMutationLocked} onClick={() => setDeleteOpen(true)}>Delete group</Button>
       </>}
     >
-      <ConsumerDetailContent group={group} initialTab={initialTab} authoritativeDetail={authoritativeDetail} />
+      <ConsumerDetailContent group={group} initialTab={initialTab} />
 
       {listItem ? (
         <>
@@ -179,7 +126,6 @@ export default function ConsumerDetailPage() {
             operationIdentity={activeIdentity}
             onOpenChange={setEditOpen}
             onSucceeded={() => { setEditOpen(false); setSummary(null); }}
-            onAppliedAuditFailure={refreshAppliedEdit}
           />
           <ConsumerDeleteDialog
             open={deleteOpen}
@@ -187,7 +133,6 @@ export default function ConsumerDetailPage() {
             operationIdentity={activeIdentity}
             onOpenChange={setDeleteOpen}
             onSucceeded={() => navigate('/consumers')}
-            onAppliedAuditFailure={refreshAppliedDelete}
           />
         </>
       ) : null}

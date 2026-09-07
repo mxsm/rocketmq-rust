@@ -150,7 +150,11 @@ describe('TopicDeleteDialog', () => {
       message: '1 of 2 targets failed',
       targets: [
         { target: 'broker-a', success: true, message: 'deleted from broker-a' },
-        { target: 'broker-b', success: false, message: 'broker-b unavailable' }
+        {
+          target: 'broker-b',
+          success: false,
+          error: { code: 'TOPIC_TARGET_OPERATION_FAILED', message: 'Topic target operation failed' }
+        }
       ]
     });
     render(
@@ -168,7 +172,7 @@ describe('TopicDeleteDialog', () => {
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('1 of 2 targets failed');
     expect(within(dialog).getByText('deleted from broker-a')).toBeInTheDocument();
-    expect(within(dialog).getByText('broker-b unavailable')).toBeInTheDocument();
+    expect(within(dialog).getByText('TOPIC_TARGET_OPERATION_FAILED: Topic target operation failed')).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(onSucceeded).not.toHaveBeenCalled();
     expect(onResult).toHaveBeenCalledWith({
@@ -179,7 +183,11 @@ describe('TopicDeleteDialog', () => {
       message: '1 of 2 targets failed',
       targets: [
         { target: 'broker-a', success: true, message: 'deleted from broker-a' },
-        { target: 'broker-b', success: false, message: 'broker-b unavailable' }
+        {
+          target: 'broker-b',
+          success: false,
+          error: { code: 'TOPIC_TARGET_OPERATION_FAILED', message: 'Topic target operation failed' }
+        }
       ]
     });
   });

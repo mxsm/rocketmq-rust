@@ -13,6 +13,7 @@ import {
     X,
 } from 'lucide-react';
 import { ConsumerService } from '../../../services/consumer.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import type {
     ConsumerGroupListItem,
     ConsumerTopicDetailItem,
@@ -32,22 +33,6 @@ const getConsumerLabel = (consumer: ConsumerGroupListItem | null) =>
 const getBrokerScope = (address?: string) => {
     const trimmed = address?.trim();
     return trimmed && trimmed.length > 0 ? trimmed : 'All brokers';
-};
-
-const getErrorMessage = (error: unknown, fallback: string) => {
-    if (typeof error === 'string' && error.trim().length > 0) {
-        return error;
-    }
-    if (error instanceof Error && error.message.trim().length > 0) {
-        return error.message;
-    }
-    if (error && typeof error === 'object' && 'message' in error) {
-        const message = (error as { message?: unknown }).message;
-        if (typeof message === 'string' && message.trim().length > 0) {
-            return message;
-        }
-    }
-    return fallback;
 };
 
 const formatTimestamp = (timestamp: number) => {
@@ -93,7 +78,7 @@ export const ConsumerDetailModal = ({
             })
             .catch((loadError) => {
                 if (!cancelled) {
-                    setError(getErrorMessage(loadError, 'Failed to load consumer details.'));
+                    setError(dashboardErrorMessage(loadError, 'Failed to load consumer details.'));
                 }
             })
             .finally(() => {

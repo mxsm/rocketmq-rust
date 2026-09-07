@@ -2639,13 +2639,11 @@ dependencies = [
 name = "rocketmq-dashboard-web-backend"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "axum",
  "base64 0.22.1",
  "cheetah-string",
  "chrono",
  "fs4",
- "futures-util",
  "getrandom 0.3.4",
  "rocketmq-admin-core",
  "rocketmq-dashboard-common",

@@ -84,7 +84,8 @@ describe('BrokerListPage', () => {
     vi.mocked(brokerApi.list).mockRejectedValueOnce(new Error('inventory unavailable'));
     renderAtRoute(<BrokerListPage />, '/brokers');
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('inventory unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load brokers.');
+    expect(screen.queryByText('inventory unavailable')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('broker-a')).toBeInTheDocument();
     await waitFor(() => expect(brokerApi.list).toHaveBeenCalledTimes(2));

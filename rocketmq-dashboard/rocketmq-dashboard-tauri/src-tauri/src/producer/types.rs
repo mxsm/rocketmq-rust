@@ -12,37 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_admin_core::core::AdminError;
 use serde::Deserialize;
 use serde::Serialize;
-use std::fmt;
 
-pub(crate) type ProducerResult<T> = Result<T, ProducerError>;
-
-#[derive(Debug)]
-pub(crate) enum ProducerError {
-    Configuration(String),
-    Validation(String),
-    Admin(AdminError),
-}
-
-impl fmt::Display for ProducerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Configuration(message) => write!(f, "Configuration error: {message}"),
-            Self::Validation(message) => write!(f, "Validation error: {message}"),
-            Self::Admin(message) => write!(f, "RocketMQ error: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for ProducerError {}
-
-impl From<AdminError> for ProducerError {
-    fn from(error: AdminError) -> Self {
-        Self::Admin(error)
-    }
-}
+pub(crate) type ProducerResult<T> = crate::error::DashboardResult<T>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

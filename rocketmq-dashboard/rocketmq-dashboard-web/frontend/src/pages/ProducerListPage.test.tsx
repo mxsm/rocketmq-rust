@@ -127,7 +127,8 @@ describe('ProducerListPage', () => {
     await user.click(screen.getByRole('row', { name: /order-producer/ }));
     await selectProducerTopic(user, 'orders');
     await user.click(screen.getByRole('button', { name: 'Query producer connections' }));
-    expect(await screen.findByText('connection lookup unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Unable to load producer connections.')).toBeInTheDocument();
+    expect(screen.queryByText('connection lookup unavailable')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry connection query' }));
     expect(await screen.findByText('No producer connections')).toBeInTheDocument();
     expect(producerApi.connections).toHaveBeenCalledTimes(2);

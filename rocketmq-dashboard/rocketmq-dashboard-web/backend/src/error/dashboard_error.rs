@@ -65,6 +65,18 @@ pub enum DashboardError {
     NotImplemented(String),
     #[error("{0}")]
     Internal(String),
+    #[error("{message}")]
+    RequestRejection {
+        status: StatusCode,
+        code: &'static str,
+        message: &'static str,
+        #[source]
+        source: DashboardErrorSource,
+    },
+    #[error("API route was not found")]
+    RouteNotFound,
+    #[error("HTTP method is not allowed for this route")]
+    MethodNotAllowed,
     #[error(transparent)]
     Storage(#[from] PersistenceError),
     #[error("{message}")]
@@ -91,6 +103,18 @@ impl DashboardError {
         E: StdError + Send + Sync + 'static,
     {
         Self::InternalSource {
+            message,
+            source: Box::new(source),
+        }
+    }
+
+    pub(crate) fn request_rejection<E>(status: StatusCode, code: &'static str, message: &'static str, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::RequestRejection {
+            status,
+            code,
             message,
             source: Box::new(source),
         }
@@ -137,6 +161,17 @@ impl DashboardError {
                 "Requested operation is not implemented",
             ),
             Self::Internal(_) | Self::InternalSource { .. } => DashboardHttpProjection::unknown(),
+            Self::RequestRejection {
+                status, code, message, ..
+            } => DashboardHttpProjection::fixed(*status, code, message),
+            Self::RouteNotFound => {
+                DashboardHttpProjection::fixed(StatusCode::NOT_FOUND, "API_ROUTE_NOT_FOUND", "API route was not found")
+            }
+            Self::MethodNotAllowed => DashboardHttpProjection::fixed(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "METHOD_NOT_ALLOWED",
+                "HTTP method is not allowed for this route",
+            ),
             Self::Storage(error) => storage_http_projection(error),
         }
     }

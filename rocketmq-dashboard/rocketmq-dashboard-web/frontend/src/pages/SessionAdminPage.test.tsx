@@ -69,19 +69,4 @@ describe('SessionAdminPage', () => {
     expect(auditApi.revokeAllSessions).not.toHaveBeenCalled();
   });
 
-  it('does not offer a second revoke after the backend applied it without an audit receipt', async () => {
-    const user = userEvent.setup();
-    vi.mocked(auditApi.revokeAllSessions).mockRejectedValueOnce(
-      new ApiClientError('APPLIED_AUDIT_FAILED', 'Sessions were revoked, but audit persistence failed.')
-    );
-    renderAtRoute(<SessionAdminPage />, '/sessions');
-    await screen.findByText('Active');
-    await user.type(screen.getByLabelText('Exact username'), 'operator');
-    await user.click(screen.getByRole('button', { name: 'Revoke all' }));
-    await user.click(within(screen.getByRole('alertdialog', { name: 'Revoke all sessions?' })).getByRole('button', { name: 'Revoke all' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Sessions were revoked, but audit persistence failed.');
-    expect(screen.queryByRole('button', { name: 'Retry revoke' })).not.toBeInTheDocument();
-    expect(auditApi.revokeAllSessions).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(auditApi.listSessions).toHaveBeenCalledTimes(2));
-  });
 });

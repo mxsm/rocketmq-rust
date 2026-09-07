@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeAuthenticatedCommand } from './invoke';
 import type {
     MessageDetail,
     MessageDirectConsumeRequest,
@@ -13,24 +13,24 @@ import type {
 
 export class MessageService {
     static async queryMessageByTopicKey(request: MessageKeyQueryRequest): Promise<MessageSummaryListResponse> {
-        return invoke<MessageSummaryListResponse>('query_message_by_topic_key', { request });
+        return invokeAuthenticatedCommand<MessageSummaryListResponse>('query_message_by_topic_key', { request });
     }
 
     static async queryMessageById(request: MessageIdQueryRequest): Promise<MessageSummaryListResponse> {
-        return invoke<MessageSummaryListResponse>('query_message_by_id', { request });
+        return invokeAuthenticatedCommand<MessageSummaryListResponse>('query_message_by_id', { request });
     }
 
     static async queryMessagePageByTopic(request: MessagePageQueryRequest): Promise<MessagePageResponse> {
-        return invoke<MessagePageResponse>('query_message_page_by_topic', { request });
+        return invokeAuthenticatedCommand<MessagePageResponse>('query_message_page_by_topic', { request });
     }
 
     static async viewMessageDetail(request: ViewMessageRequest): Promise<MessageDetail> {
-        return invoke<MessageDetail>('view_message_detail', { request });
+        return invokeAuthenticatedCommand<MessageDetail>('view_message_detail', { request });
     }
 
     static async consumeMessageDirectly(
         request: MessageDirectConsumeRequest,
     ): Promise<MessageDirectConsumeResult> {
-        return invoke<MessageDirectConsumeResult>('consume_message_directly', { request });
+        return invokeAuthenticatedCommand<MessageDirectConsumeResult>('consume_message_directly', { request });
     }
 }

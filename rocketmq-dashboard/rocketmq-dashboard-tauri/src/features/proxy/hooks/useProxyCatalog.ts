@@ -1,18 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ProxyService } from '../../../services/proxy.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import type { ProxyConfigSnapshot } from '../types/proxy.types';
-
-const toErrorMessage = (error: unknown) => {
-    if (error instanceof Error) {
-        return error.message;
-    }
-
-    if (typeof error === 'string') {
-        return error;
-    }
-
-    return 'Proxy operation failed';
-};
 
 export const useProxyCatalog = () => {
     const [snapshot, setSnapshot] = useState<ProxyConfigSnapshot | null>(null);
@@ -28,9 +17,9 @@ export const useProxyCatalog = () => {
             setLoadError('');
             return nextSnapshot;
         } catch (error) {
-            const errorMessage = toErrorMessage(error);
+            const errorMessage = dashboardErrorMessage(error, 'Proxy operation failed');
             setLoadError(errorMessage);
-            throw new Error(errorMessage);
+            throw error;
         }
     }, []);
 
@@ -41,9 +30,8 @@ export const useProxyCatalog = () => {
             try {
                 await loadHomePage();
             } catch (error) {
-                console.error('Failed to load Proxy home page', error);
                 if (isMounted) {
-                    setLoadError(toErrorMessage(error));
+                    setLoadError(dashboardErrorMessage(error, 'Proxy operation failed'));
                 }
             } finally {
                 if (isMounted) {
@@ -73,7 +61,7 @@ export const useProxyCatalog = () => {
             setNewAddress('');
             return result.message;
         } catch (error) {
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingAction(null);
         }
@@ -87,7 +75,7 @@ export const useProxyCatalog = () => {
             setSnapshot(result.snapshot);
             return result.message;
         } catch (error) {
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingAction(null);
         }
@@ -101,7 +89,7 @@ export const useProxyCatalog = () => {
             setSnapshot(result.snapshot);
             return result.message;
         } catch (error) {
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingAction(null);
         }

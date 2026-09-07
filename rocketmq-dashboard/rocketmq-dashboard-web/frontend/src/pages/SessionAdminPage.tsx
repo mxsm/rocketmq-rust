@@ -1,7 +1,7 @@
 import { LogOut, ShieldCheck } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { auditApi } from '../api/audit_api';
-import { ApiClientError, isAppliedAuditFailure } from '../api/client';
+import { ApiClientError, userErrorMessage } from '../api/client';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
@@ -28,18 +28,34 @@ export default function SessionAdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [revokeError, setRevokeError] = useState<RevokeErrorState | null>(null);
+  const requestRef = useRef(0);
+  const revokeRef = useRef(0);
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestRef.current += 1;
+      revokeRef.current += 1;
+    };
+  }, []);
 
   const load = useCallback(async (exactUsername: string, cursor?: string, resetHistory = false) => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     setError(null);
     try {
       const next = await auditApi.listSessions({ username: exactUsername || undefined, cursor, limit: pageSize });
+      if (!mountedRef.current || requestId !== requestRef.current) return;
       setPage(next);
       if (resetHistory) setCursorHistory([]);
     } catch (cause) {
-      setError(errorMessage(cause, 'Unable to load active sessions.'));
+      if (mountedRef.current && requestId === requestRef.current) {
+        setError(errorMessage(cause, 'Unable to load active sessions.'));
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && requestId === requestRef.current) setLoading(false);
     }
   }, []);
 
@@ -48,25 +64,23 @@ export default function SessionAdminPage() {
   const revokeAll = async () => {
     const exactUsername = username.trim();
     if (!exactUsername) return;
+    const requestId = ++revokeRef.current;
+    const ownerFilter = appliedUsername;
     setRevoking(true);
     setRevokeError(null);
     try {
       await auditApi.revokeAllSessions(exactUsername);
-      await load(appliedUsername, undefined, true);
+      if (!mountedRef.current || requestId !== revokeRef.current || username.trim() !== exactUsername) return;
+      await load(ownerFilter, undefined, true);
     } catch (cause) {
-      if (isAppliedAuditFailure(cause)) {
-        // The business mutation is durable. Reload authoritative state but
-        // retain the terminal warning instead of offering a second revoke.
-        await load(appliedUsername, undefined, true);
+      if (mountedRef.current && requestId === revokeRef.current && username.trim() === exactUsername) {
+        setRevokeError({
+          message: errorMessage(cause, 'Unable to revoke sessions.'),
+          retryable: true
+        });
       }
-      setRevokeError({
-        message: errorMessage(cause, 'Unable to revoke sessions.'),
-        // The backend has already applied the mutation. Retrying would create
-        // another revoke-all audit decision rather than repairing its audit.
-        retryable: !isAppliedAuditFailure(cause)
-      });
     } finally {
-      setRevoking(false);
+      if (mountedRef.current && requestId === revokeRef.current && username.trim() === exactUsername) setRevoking(false);
     }
   };
 
@@ -175,5 +189,5 @@ function sessionStatus(session: SessionListPage['items'][number]) {
 
 function errorMessage(error: unknown, fallback: string) {
   if (error instanceof ApiClientError && error.code === 'STORAGE_UNAVAILABLE') return `${error.message} Retry when storage is available.`;
-  return error instanceof Error ? error.message : fallback;
+  return userErrorMessage(error, fallback);
 }

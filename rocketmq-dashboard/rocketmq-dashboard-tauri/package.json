@@ -56,11 +56,13 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react-swc": "^3.10.2",
     "typescript": "^5.7.0",
-    "vite": "6.4.2"
+    "vite": "6.4.2",
+    "vitest": "^3.2.4"
   },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "vitest run",
     "preview": "vite preview",
     "tauri": "tauri"
   }

@@ -73,7 +73,7 @@ pub enum StartupState {
 
 impl StartupState {
     /// Returns whether retry is permitted without restarting the application.
-    pub const fn can_retry(&self) -> bool {
+    pub fn can_retry(&self) -> bool {
         matches!(self, Self::Failed(error) if error.is_retryable())
     }
 }
@@ -392,7 +392,7 @@ impl RocketmqDashboard {
                     .producers
                     .update(cx, |view, cx| view.set_revision(snapshot.configuration_revision, cx));
                 self.session = if snapshot.has_valid_session {
-                    SessionState::authenticated()
+                    SessionState::restored()
                 } else {
                     SessionState::signed_out()
                 };

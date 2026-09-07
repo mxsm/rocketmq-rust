@@ -1,7 +1,7 @@
 import { RotateCcw } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { topicApi } from '../api/topic_api';
-import { handleAppliedAuditFailure } from '../api/client';
+import { userErrorMessage } from '../api/client';
 import type { TopicOffsetResult, TopicResetOffsetRequest } from '../types/topic';
 import {
   AlertDialog,
@@ -21,7 +21,6 @@ interface TopicResetOffsetDialogProps {
   consumerGroup: string;
   onOpenChange: (open: boolean) => void;
   onSucceeded: (result: TopicOffsetResult) => void;
-  onAppliedAuditFailure?: () => Promise<void> | void;
 }
 
 interface ResetConfirmation {
@@ -46,8 +45,7 @@ export default function TopicResetOffsetDialog({
   topic,
   consumerGroup,
   onOpenChange,
-  onSucceeded,
-  onAppliedAuditFailure
+  onSucceeded
 }: TopicResetOffsetDialogProps) {
   const [resetTime, setResetTime] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -146,17 +144,8 @@ export default function TopicResetOffsetDialog({
     } catch (requestError) {
       if (!isCurrentPresentation(snapshot)) return;
 
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          invalidateAndClose();
-          setError(null);
-          setResult(null);
-        },
-        refresh: onAppliedAuditFailure
-      })) return;
-
       setConfirmation(null);
-      setError(requestError instanceof Error ? requestError.message : 'Unable to reset the consumer offset.');
+      setError(userErrorMessage(requestError, 'Unable to reset the consumer offset.'));
       focusReview();
     } finally {
       if (pendingRef.current === requestId) {

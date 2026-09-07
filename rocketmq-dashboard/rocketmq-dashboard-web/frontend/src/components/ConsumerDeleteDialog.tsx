@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { consumerApi } from '../api/consumer_api';
-import { handleAppliedAuditFailure, isAppliedAuditFailure } from '../api/client';
+import { userErrorMessage } from '../api/client';
 import { useConsumerQueryScope } from '../pages/consumers/ConsumerQueryScopeProvider';
 import type {
   ConsumerGroupListItem,
@@ -13,7 +13,6 @@ import {
   consumerMutationKey,
   finishConsumerMutation,
   isConsumerMutationLocked,
-  markConsumerMutationApplied,
   useConsumerMutationLocked
 } from './consumerMutationLock';
 import { Button } from './ui/Button';
@@ -33,7 +32,6 @@ interface ConsumerDeleteDialogProps {
   operationIdentity?: ConsumerOperationIdentity | null;
   onOpenChange: (open: boolean) => void;
   onSucceeded: (result: ConsumerOperationResult) => void;
-  onAppliedAuditFailure?: (identity: ConsumerOperationIdentity) => Promise<void> | void;
 }
 
 function scopeKey(scope: ConsumerQueryScope) {
@@ -51,8 +49,7 @@ export default function ConsumerDeleteDialog({
   consumer,
   operationIdentity,
   onOpenChange,
-  onSucceeded,
-  onAppliedAuditFailure
+  onSucceeded
 }: ConsumerDeleteDialogProps) {
   const { scope } = useConsumerQueryScope();
   const currentScopeKey = scopeKey(scope);
@@ -159,7 +156,7 @@ export default function ConsumerDeleteDialog({
       })
       .catch((reason: unknown) => {
         if (!cancelled && isCurrentOperation(identity, requestGeneration, operationTarget)) {
-          setError(reason instanceof Error ? reason.message : String(reason));
+          setError(userErrorMessage(reason, 'Unable to load consumer broker targets.'));
         }
       });
     return () => {
@@ -206,26 +203,8 @@ export default function ConsumerDeleteDialog({
         onOpenChange(false);
       }
     } catch (reason) {
-      if (isAppliedAuditFailure(reason)) {
-        if (markConsumerMutationApplied(ticket)) {
-          await handleAppliedAuditFailure(reason, {
-            onApplied: () => {
-              if (!isCurrentOperation(identity, requestGeneration, group)) return;
-              setError(null);
-              if (!isCurrentOperation(identity, requestGeneration, group)) return;
-              setResult(null);
-              if (!isCurrentOperation(identity, requestGeneration, group)) return;
-              onOpenChange(false);
-            },
-            refresh: async () => {
-              await onAppliedAuditFailure?.(identity);
-            }
-          });
-        }
-        return;
-      }
       if (isCurrentOperation(identity, requestGeneration, group)) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(userErrorMessage(reason, 'Unable to delete the consumer group.'));
       }
     } finally {
       finishConsumerMutation(ticket);
@@ -274,7 +253,9 @@ export default function ConsumerDeleteDialog({
           <div className="consumer-operation-result" role="status">
             {result.targets.map((target) => (
               <div key={target.target} className={target.success ? 'notice notice-success' : 'notice notice-danger'}>
-                <strong>{target.target}</strong> {target.kind} · {target.message}
+                <strong>{target.target}</strong> {target.kind} · {target.success
+                  ? target.message ?? 'Consumer target operation completed'
+                  : `${target.error?.code ?? 'CONSUMER_TARGET_OPERATION_FAILED'}: ${target.error?.message ?? 'Consumer target operation failed'}`}
               </div>
             ))}
           </div>

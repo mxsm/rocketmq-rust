@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { TopicService } from '../../../services/topic.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import type { TopicListResponse } from '../types/topic.types';
 
 const defaultListRequest = {
@@ -32,7 +33,7 @@ export const useTopicCatalog = () => {
             const result = await TopicService.getTopicList(defaultListRequest);
             setData(result);
         } catch (loadError) {
-            setError(loadError instanceof Error ? loadError.message : 'Failed to load topics');
+            setError(dashboardErrorMessage(loadError, 'Failed to load topics'));
         } finally {
             if (refreshIndicatorTimer !== null) {
                 window.clearTimeout(refreshIndicatorTimer);

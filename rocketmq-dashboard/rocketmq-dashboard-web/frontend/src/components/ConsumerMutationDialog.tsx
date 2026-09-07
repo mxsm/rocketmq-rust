@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { brokerApi } from '../api/broker_api';
-import { handleAppliedAuditFailure, isAppliedAuditFailure } from '../api/client';
+import { userErrorMessage } from '../api/client';
 import { consumerApi } from '../api/consumer_api';
 import { useConsumerQueryScope } from '../pages/consumers/ConsumerQueryScopeProvider';
 import type {
@@ -16,7 +16,6 @@ import {
   consumerMutationKey,
   finishConsumerMutation,
   isConsumerMutationLocked,
-  markConsumerMutationApplied,
   useConsumerMutationInFlight,
   useConsumerMutationLocked
 } from './consumerMutationLock';
@@ -39,7 +38,6 @@ interface ConsumerMutationDialogProps {
   operationIdentity?: ConsumerOperationIdentity | null;
   onOpenChange: (open: boolean) => void;
   onSucceeded: (result: ConsumerOperationResult) => void;
-  onAppliedAuditFailure?: (identity: ConsumerOperationIdentity) => Promise<void> | void;
 }
 
 const defaultForm = (): Omit<ConsumerUpsertRequest, 'consumerGroup'> => ({
@@ -74,8 +72,7 @@ export default function ConsumerMutationDialog({
   consumer,
   operationIdentity,
   onOpenChange,
-  onSucceeded,
-  onAppliedAuditFailure
+  onSucceeded
 }: ConsumerMutationDialogProps) {
   const { scope } = useConsumerQueryScope();
   const currentScopeKey = scopeKey(scope);
@@ -87,6 +84,7 @@ export default function ConsumerMutationDialog({
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ConsumerOperationResult | null>(null);
   const mutationKind = mode === 'create' ? 'create' : 'update';
   const mutationTarget = mode === 'create' ? group.trim() : consumerGroup;
   const mutationLockKey = consumerMutationKey(mutationKind, mutationTarget, currentScopeKey);
@@ -132,6 +130,7 @@ export default function ConsumerMutationDialog({
     setForm(defaultForm());
     setBrokers([]);
     setError(null);
+    setResult(null);
     setLoading(false);
     setReady(false);
     return () => {
@@ -216,7 +215,7 @@ export default function ConsumerMutationDialog({
         if (!cancelled && isCurrentOperation(identity, requestGeneration, operationTarget)) setReady(true);
       } catch (reason) {
         if (!cancelled && isCurrentOperation(identity, requestGeneration, operationTarget)) {
-          setError(reason instanceof Error ? reason.message : String(reason));
+          setError(userErrorMessage(reason, 'Unable to load consumer targets.'));
         }
       }
     })();
@@ -248,6 +247,7 @@ export default function ConsumerMutationDialog({
     activeTicketRef.current = ticket;
     setLoading(true);
     setError(null);
+    setResult(null);
     try {
       const payload: ConsumerUpsertRequest = {
         ...(mode === 'create' ? { consumerGroup: submittedGroup } : {}),
@@ -258,35 +258,16 @@ export default function ConsumerMutationDialog({
         : await consumerApi.update(submittedGroup, payload);
       if (mutationKind === 'create') completeConsumerMutation(ticket);
       if (!isCurrentOperation(identity, requestGeneration, submittedGroup)) return;
-      onSucceeded(result);
-      if (!isCurrentOperation(identity, requestGeneration, submittedGroup)) return;
-      onOpenChange(false);
-    } catch (reason) {
-      if (isAppliedAuditFailure(reason)) {
-        if (markConsumerMutationApplied(ticket)) {
-          if (mutationKind === 'create') completeConsumerMutation(ticket);
-          await handleAppliedAuditFailure(reason, {
-            onApplied: () => {
-              if (!isCurrentOperation(identity, requestGeneration, submittedGroup)) return;
-              setError(null);
-              if (!isCurrentOperation(identity, requestGeneration, submittedGroup)) return;
-              onOpenChange(false);
-            },
-            refresh: async () => {
-              // The list page owns create invalidation by ticket scope. A
-              // detached dialog must not invoke a stale callback that could
-              // read or write a newer route. Standalone/current consumers of
-              // this component may still provide their local refresh hook.
-              if (mutationKind !== 'create' || isCurrentOperation(identity, requestGeneration, submittedGroup)) {
-                await onAppliedAuditFailure?.(identity);
-              }
-            }
-          });
-        }
-        return;
+      setResult(result);
+      const allSucceeded = result.success && result.targets.every((target) => target.success);
+      if (allSucceeded) {
+        onSucceeded(result);
+        if (!isCurrentOperation(identity, requestGeneration, submittedGroup)) return;
+        onOpenChange(false);
       }
+    } catch (reason) {
       if (isCurrentOperation(identity, requestGeneration, submittedGroup)) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(userErrorMessage(reason, 'Unable to save the consumer group.'));
       }
     } finally {
       finishConsumerMutation(ticket);
@@ -359,6 +340,17 @@ export default function ConsumerMutationDialog({
           </div>
         </div>
 
+        {result ? (
+          <div className="consumer-operation-result" role={result.success ? 'status' : 'alert'}>
+            {result.targets.map((target) => (
+              <div key={`${target.kind}:${target.target}`} className={target.success ? 'notice notice-success' : 'notice notice-danger'}>
+                <strong>{target.target}</strong> {target.kind} · {target.success
+                  ? target.message ?? 'Consumer target operation completed'
+                  : `${target.error?.code ?? 'CONSUMER_TARGET_OPERATION_FAILED'}: ${target.error?.message ?? 'Consumer target operation failed'}`}
+              </div>
+            ))}
+          </div>
+        ) : null}
         {error ? <div className="inline-validation" role="alert">{error}</div> : null}
 
         <DialogFooter>

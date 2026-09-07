@@ -1,7 +1,7 @@
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { configApi } from '../api/config_api';
-import { ApiClientError, handleAppliedAuditFailure } from '../api/client';
+import { ApiClientError, userErrorMessage } from '../api/client';
 import { monitorApi } from '../api/monitor_api';
 import DataTable, { type DataTableColumn } from '../components/DataTable';
 import ErrorState from '../components/ErrorState';
@@ -48,12 +48,14 @@ export default function MonitorPage() {
     setListError(null);
     try {
       const config = await configApi.getConfig();
-      setEnvironmentId(config.environmentId);
       const nextRows = await monitorApi.listConsumerMonitors(config.environmentId);
-      if (mounted.current && request === listRequest.current) setRows(nextRows);
+      if (mounted.current && request === listRequest.current) {
+        setEnvironmentId(config.environmentId);
+        setRows(nextRows);
+      }
     } catch (error) {
       if (mounted.current && request === listRequest.current) {
-        setListError(error instanceof Error ? error.message : 'Unable to load monitor rules.');
+        setListError(userErrorMessage(error, 'Unable to load monitor rules.'));
       }
     } finally {
       if (mounted.current && request === listRequest.current) setLoading(false);
@@ -63,12 +65,13 @@ export default function MonitorPage() {
   useEffect(() => { void load(); }, [load]);
 
   const refreshRule = useCallback(async (ruleEnvironmentId: string, consumerGroup: string) => {
+    const request = ++listRequest.current;
     const config = await configApi.getConfig();
     if (config.environmentId !== ruleEnvironmentId) {
-      throw new Error('The monitor environment changed. Refresh before retrying.');
+      throw new ApiClientError('MONITOR_ENVIRONMENT_CHANGED', 'The monitor environment changed. Refresh before retrying.');
     }
     const authoritativeRows = await monitorApi.listConsumerMonitors(ruleEnvironmentId);
-    if (mounted.current) {
+    if (mounted.current && request === listRequest.current) {
       setEnvironmentId(config.environmentId);
       setRows(authoritativeRows);
     }
@@ -76,8 +79,8 @@ export default function MonitorPage() {
   }, []);
 
   const saveRule = async (request: ConsumerMonitorUpsertRequest) => {
-    if (!environmentId) throw new Error('No environment is available for monitor rules.');
-    if (request.environmentId !== environmentId) throw new Error('The monitor rule environment changed. Refresh before retrying the save.');
+    if (!environmentId) throw new ApiClientError('MONITOR_ENVIRONMENT_UNAVAILABLE', 'No environment is available for monitor rules.');
+    if (request.environmentId !== environmentId) throw new ApiClientError('MONITOR_ENVIRONMENT_CHANGED', 'The monitor rule environment changed. Refresh before retrying the save.');
     await monitorApi.saveConsumerMonitor(request);
     void load();
   };
@@ -91,13 +94,6 @@ export default function MonitorPage() {
       setDeleteTarget(null);
       void load();
     } catch (error) {
-      if (await handleAppliedAuditFailure(error, {
-        onApplied: () => {
-          setDeleteTarget(null);
-          setMutationError(null);
-        },
-        refresh: load
-      })) return;
       if (mounted.current) {
         setDeleteTarget(null);
         let retryRule: ConsumerMonitorView | null = rule;
@@ -193,7 +189,6 @@ export default function MonitorPage() {
           if (authoritative) setSelectedRule(authoritative);
           return authoritative;
         }}
-        onAppliedAuditFailure={load}
       />
 
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => {
@@ -223,5 +218,5 @@ function mutationErrorMessage(error: unknown, fallback: string) {
   if (error instanceof ApiClientError && error.code === 'STORAGE_CONFLICT') {
     return `${error.message} The saved state changed elsewhere; refresh before retrying.`;
   }
-  return error instanceof Error ? error.message : fallback;
+  return userErrorMessage(error, fallback);
 }

@@ -23,6 +23,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { MessageService } from '../services/message.service';
+import { dashboardErrorMessage } from '../services/invoke';
 import type { MessageDetail, MessageSummary, MessageTrack } from '../features/message/types/message.types';
 
 interface MessageDetailModalProps {
@@ -64,7 +65,7 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
       })
       .catch((loadError) => {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : 'Failed to load message detail.');
+          setError(dashboardErrorMessage(loadError, 'Failed to load message detail.'));
         }
       })
       .finally(() => {
@@ -110,8 +111,7 @@ export const MessageDetailModal = ({ isOpen, onClose, message }: MessageDetailMo
         toast.error(result.message);
       }
     } catch (consumeError) {
-      const messageText =
-        consumeError instanceof Error ? consumeError.message : 'Failed to request direct consume.';
+      const messageText = dashboardErrorMessage(consumeError, 'Failed to request direct consume.');
       toast.error(messageText);
     } finally {
       setConsumingGroup(null);

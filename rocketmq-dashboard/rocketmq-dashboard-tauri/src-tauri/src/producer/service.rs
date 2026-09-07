@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::DashboardError as ProducerError;
 use crate::nameserver::NameServerRuntimeState;
 use crate::producer::admin::ManagedProducerAdmin;
 use crate::producer::types::ProducerConnectionItem;
 use crate::producer::types::ProducerConnectionView;
-use crate::producer::types::ProducerError;
 use crate::producer::types::ProducerResult;
 use crate::producer::types::ProducerTopicOptionsView;
 use rocketmq_admin_core::client_adapter::AdminSession;
@@ -78,8 +78,8 @@ impl ProducerManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_producer_connections` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_producer_connections` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -118,8 +118,8 @@ impl ProducerManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_producer_topic_options` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_producer_topic_options` after reconnect");
                 }
                 Err(error) => return Err(error),
             }

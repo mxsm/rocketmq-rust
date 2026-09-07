@@ -37,10 +37,10 @@ use rocketmq_dashboard_common::{
     ProducerInventory,
 };
 
-use super::{GpuiAdminProvider, ProviderError, ProviderErrorCode, query_for_revision, select_admin};
+use super::{GpuiAdminProvider, ProviderFailure, query_for_revision, select_admin};
 
 impl GpuiAdminProvider {
-    pub async fn consumer_inventory(self: &Arc<Self>, revision: u64) -> Result<ConsumerInventory, ProviderError> {
+    pub async fn consumer_inventory(self: &Arc<Self>, revision: u64) -> Result<ConsumerInventory, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-consumer-inventory", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -60,7 +60,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         group: ConsumerIdentity,
-    ) -> Result<ConsumerObservation<ConsumerClients>, ProviderError> {
+    ) -> Result<ConsumerObservation<ConsumerClients>, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-consumer-clients", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -80,7 +80,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         group: ConsumerIdentity,
-    ) -> Result<ConsumerObservation<ConsumerProgress>, ProviderError> {
+    ) -> Result<ConsumerObservation<ConsumerProgress>, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-consumer-progress", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -102,7 +102,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         group: ConsumerIdentity,
-    ) -> Result<ConsumerConfiguration, ProviderError> {
+    ) -> Result<ConsumerConfiguration, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-consumer-configuration", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -119,7 +119,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         request: ConsumerDiagnosticRequest,
-    ) -> Result<ConsumerDiagnosticPayload, ProviderError> {
+    ) -> Result<ConsumerDiagnosticPayload, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-consumer-diagnostic", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -145,7 +145,7 @@ impl GpuiAdminProvider {
         .await
     }
 
-    pub async fn producer_inventory(self: &Arc<Self>, revision: u64) -> Result<ProducerInventory, ProviderError> {
+    pub async fn producer_inventory(self: &Arc<Self>, revision: u64) -> Result<ProducerInventory, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-producer-inventory", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -162,7 +162,7 @@ impl GpuiAdminProvider {
                         client_count: map_observation(item.client_count, std::convert::identity),
                     })
                 })
-                .collect::<Result<Vec<_>, ProviderError>>()?;
+                .collect::<Result<Vec<_>, ProviderFailure>>()?;
             groups.sort_by(|left, right| left.identity.cmp(&right.identity));
             Ok(ProducerInventory {
                 groups,
@@ -178,7 +178,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         query: ProducerConnectionQuery,
-    ) -> Result<ConsumerObservation<ProducerConnections>, ProviderError> {
+    ) -> Result<ConsumerObservation<ProducerConnections>, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-producer-connections", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -195,7 +195,7 @@ impl GpuiAdminProvider {
                     .connections
                     .into_iter()
                     .map(map_producer_client)
-                    .collect::<Result<Vec<_>, ProviderError>>()?;
+                    .collect::<Result<Vec<_>, ProviderFailure>>()?;
                 Ok(ProducerConnections { query, clients })
             })
         })
@@ -206,7 +206,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         command: ConsumerCreateCommand,
-    ) -> Result<ConsumerPartialOutcome, ProviderError> {
+    ) -> Result<ConsumerPartialOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-consumer-create", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -231,7 +231,7 @@ impl GpuiAdminProvider {
                 .targets
                 .iter()
                 .map(admin_exact_upsert_target)
-                .collect::<Result<Vec<_>, ProviderError>>()?;
+                .collect::<Result<Vec<_>, ProviderFailure>>()?;
             let request = rocketmq_admin_core::core::consumer::ConsumerExactBatchUpsertRequest::try_new(
                 rocketmq_admin_core::core::consumer::DashboardConsumerUpsertRequest {
                     cluster_name_list: Vec::new(),
@@ -266,7 +266,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         command: ConsumerConfigPatchCommand,
-    ) -> Result<ConsumerConfigPatchOutcome, ProviderError> {
+    ) -> Result<ConsumerConfigPatchOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-consumer-config-patch", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -311,7 +311,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         command: ConsumerDeleteCommand,
-    ) -> Result<ConsumerPartialOutcome, ProviderError> {
+    ) -> Result<ConsumerPartialOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-consumer-delete", move |cancellation| async move {
             let snapshot = this.snapshot_for_revision(revision)?;
@@ -349,12 +349,12 @@ impl GpuiAdminProvider {
                 .selected_targets
                 .iter()
                 .map(admin_exact_delete_target)
-                .collect::<Result<Vec<_>, ProviderError>>()?;
+                .collect::<Result<Vec<_>, ProviderFailure>>()?;
             let authoritative_targets = command
                 .authoritative_targets
                 .iter()
                 .map(admin_exact_delete_target)
-                .collect::<Result<Vec<_>, ProviderError>>()?;
+                .collect::<Result<Vec<_>, ProviderFailure>>()?;
             let request = rocketmq_admin_core::core::consumer::ConsumerExactBatchDeleteRequest::try_new(
                 command.group.as_str(),
                 selected_targets,
@@ -373,7 +373,7 @@ impl GpuiAdminProvider {
 
 fn admin_exact_delete_target(
     target: &ConsumerTargetIdentity,
-) -> Result<rocketmq_admin_core::core::consumer::ConsumerExactBatchDeleteTarget, ProviderError> {
+) -> Result<rocketmq_admin_core::core::consumer::ConsumerExactBatchDeleteTarget, ProviderFailure> {
     rocketmq_admin_core::core::consumer::ConsumerExactBatchDeleteTarget::try_new(
         target.cluster_name(),
         target.broker_name(),
@@ -384,7 +384,7 @@ fn admin_exact_delete_target(
 
 fn admin_exact_upsert_target(
     target: &ConsumerTargetIdentity,
-) -> Result<rocketmq_admin_core::core::consumer::ConsumerExactBatchUpsertTarget, ProviderError> {
+) -> Result<rocketmq_admin_core::core::consumer::ConsumerExactBatchUpsertTarget, ProviderFailure> {
     rocketmq_admin_core::core::consumer::ConsumerExactBatchUpsertTarget::try_new(
         target.cluster_name(),
         target.broker_name(),
@@ -681,21 +681,19 @@ fn map_batch_outcome(
 
 fn forwarded_address(
     snapshot: &rocketmq_dashboard_common::ConnectionSnapshot,
-) -> Result<Option<String>, ProviderError> {
+) -> Result<Option<String>, ProviderFailure> {
     match snapshot.scope {
         ConnectionScope::NameServer => Ok(None),
         ConnectionScope::Proxy => snapshot.proxy.clone().map(Some).ok_or_else(not_configured),
     }
 }
 
-fn require_direct(scope: ConnectionScope) -> Result<(), ProviderError> {
+fn require_direct(scope: ConnectionScope) -> Result<(), ProviderFailure> {
     if scope == ConnectionScope::NameServer {
         Ok(())
     } else {
-        Err(ProviderError::new(
-            ProviderErrorCode::Unavailable,
+        Err(ProviderFailure::invalid_request(
             "This Consumer capability requires NameServer Direct scope.",
-            false,
         ))
     }
 }
@@ -703,7 +701,7 @@ fn require_direct(scope: ConnectionScope) -> Result<(), ProviderError> {
 fn map_inventory(
     scope: ConnectionScope,
     response: ConsumerInventoryResult,
-) -> Result<ConsumerInventory, ProviderError> {
+) -> Result<ConsumerInventory, ProviderFailure> {
     let mut groups = response
         .items
         .into_iter()
@@ -722,10 +720,10 @@ fn map_inventory(
                     .targets
                     .into_iter()
                     .map(map_target)
-                    .collect::<Result<Vec<_>, ProviderError>>()?,
+                    .collect::<Result<Vec<_>, ProviderFailure>>()?,
             })
         })
-        .collect::<Result<Vec<_>, ProviderError>>()?;
+        .collect::<Result<Vec<_>, ProviderFailure>>()?;
     groups.sort_by(|left, right| left.identity.cmp(&right.identity));
     Ok(ConsumerInventory {
         groups,
@@ -733,7 +731,7 @@ fn map_inventory(
             .targets
             .into_iter()
             .map(map_target)
-            .collect::<Result<Vec<_>, ProviderError>>()?,
+            .collect::<Result<Vec<_>, ProviderFailure>>()?,
         observation: map_state(response.observation),
         failures: response.failures.into_iter().map(map_failure).collect(),
         capabilities: ConsumerCapabilities::for_scope(scope),
@@ -766,14 +764,14 @@ fn map_connection_state(
 fn map_clients(
     group: ConsumerIdentity,
     connection: rocketmq_admin_core::core::consumer::DashboardConsumerConnection,
-) -> Result<ConsumerClients, ProviderError> {
+) -> Result<ConsumerClients, ProviderFailure> {
     Ok(ConsumerClients {
         group,
         clients: connection
             .connections
             .into_iter()
             .map(map_client)
-            .collect::<Result<Vec<_>, ProviderError>>()?,
+            .collect::<Result<Vec<_>, ProviderFailure>>()?,
         consume_type: text_observation(connection.consume_type),
         message_model: text_observation(connection.message_model),
         subscriptions: connection
@@ -790,7 +788,7 @@ fn map_clients(
 
 fn map_client(
     client: rocketmq_admin_core::core::consumer::DashboardConsumerConnectionItem,
-) -> Result<ConsumerClientObservation, ProviderError> {
+) -> Result<ConsumerClientObservation, ProviderFailure> {
     Ok(ConsumerClientObservation {
         identity: ConsumerClientIdentity::parse(client.client_id).map_err(|_| invalid_data())?,
         address: client.client_addr,
@@ -802,7 +800,7 @@ fn map_client(
 
 fn map_producer_client(
     client: rocketmq_admin_core::core::dashboard::DashboardProducerConnection,
-) -> Result<ConsumerClientObservation, ProviderError> {
+) -> Result<ConsumerClientObservation, ProviderFailure> {
     Ok(ConsumerClientObservation {
         identity: ConsumerClientIdentity::parse(client.client_id).map_err(|_| invalid_data())?,
         address: client.client_addr,
@@ -840,7 +838,7 @@ fn map_configuration(
     targets: Vec<ConsumerConfigTarget>,
     observation: WorkspaceObservationState,
     failures: Vec<WorkspaceTargetFailure>,
-) -> Result<ConsumerConfiguration, ProviderError> {
+) -> Result<ConsumerConfiguration, ProviderFailure> {
     let snapshots = targets
         .into_iter()
         .filter_map(|target| match target.observation {
@@ -863,7 +861,7 @@ fn map_configuration(
                 },
             })
         })
-        .collect::<Result<Vec<_>, ProviderError>>()?;
+        .collect::<Result<Vec<_>, ProviderFailure>>()?;
     Ok(ConsumerConfiguration {
         group,
         snapshots,
@@ -892,8 +890,8 @@ fn map_observation<T, U>(observation: WorkspaceObservation<T>, map: impl FnOnce(
 
 fn map_fallible_observation<T, U>(
     observation: WorkspaceObservation<T>,
-    map: impl FnOnce(T) -> Result<U, ProviderError>,
-) -> Result<ConsumerObservation<U>, ProviderError> {
+    map: impl FnOnce(T) -> Result<U, ProviderFailure>,
+) -> Result<ConsumerObservation<U>, ProviderFailure> {
     match observation {
         WorkspaceObservation::Complete { value } => Ok(ConsumerObservation::Complete(map(value)?)),
         WorkspaceObservation::Partial {
@@ -921,7 +919,7 @@ fn text_observation(value: String) -> ConsumerObservation<String> {
     }
 }
 
-fn map_target(target: ConsumerWorkspaceTarget) -> Result<ConsumerTargetIdentity, ProviderError> {
+fn map_target(target: ConsumerWorkspaceTarget) -> Result<ConsumerTargetIdentity, ProviderFailure> {
     ConsumerTargetIdentity::parse(target.cluster_name, target.broker_name, target.broker_address)
         .map_err(|_| invalid_data())
 }
@@ -970,28 +968,16 @@ fn map_category(category: &str) -> ConsumerCategory {
     }
 }
 
-fn invalid_data() -> ProviderError {
-    ProviderError::new(
-        ProviderErrorCode::Unavailable,
-        "The Admin response did not contain a valid Consumer identity.",
-        false,
-    )
+fn invalid_data() -> ProviderFailure {
+    ProviderFailure::invalid_data("The Admin response did not contain a valid Consumer identity.")
 }
 
-fn invalid_request() -> ProviderError {
-    ProviderError::new(
-        ProviderErrorCode::Unavailable,
-        "The Consumer operation did not pass its exact-target preflight.",
-        false,
-    )
+fn invalid_request() -> ProviderFailure {
+    ProviderFailure::invalid_request("The Consumer operation did not pass its exact-target preflight.")
 }
 
-fn not_configured() -> ProviderError {
-    ProviderError::new(
-        ProviderErrorCode::NotConfigured,
-        "A Proxy endpoint is required for Proxy scope.",
-        false,
-    )
+fn not_configured() -> ProviderFailure {
+    ProviderFailure::not_configured("A Proxy endpoint is required for Proxy scope.")
 }
 
 #[cfg(test)]

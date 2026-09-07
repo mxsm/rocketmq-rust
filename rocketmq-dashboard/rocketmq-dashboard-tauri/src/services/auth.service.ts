@@ -1,42 +1,41 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeAuthenticatedCommand, invokePublicCommand, invokeSessionCommand } from './invoke';
 import type {
     AuthSessionResponse,
     BootstrapStatus,
     ChangePasswordPayload,
     CommonResponse,
     LoginCredentials,
-    UserProfileResponse,
+    UserProfile,
 } from '../features/auth/types/auth.types';
 
 export class AuthService {
     static async login(credentials: LoginCredentials): Promise<AuthSessionResponse> {
-        return invoke<AuthSessionResponse>('login', {
+        return invokePublicCommand<AuthSessionResponse>('login', {
             username: credentials.username,
             password: credentials.password,
         });
     }
 
     static async logout(sessionId: string): Promise<CommonResponse> {
-        return invoke<CommonResponse>('logout', { sessionId });
+        return invokeSessionCommand<CommonResponse>('logout', sessionId);
     }
 
     static async restoreSession(sessionId: string): Promise<AuthSessionResponse> {
-        return invoke<AuthSessionResponse>('restore_session', { sessionId });
+        return invokeSessionCommand<AuthSessionResponse>('restore_session', sessionId);
     }
 
     static async changePassword(payload: ChangePasswordPayload): Promise<CommonResponse> {
-        return invoke<CommonResponse>('change_password', {
-            sessionId: payload.sessionId,
+        return invokeAuthenticatedCommand<CommonResponse>('change_password', {
             oldPassword: payload.oldPassword,
             newPassword: payload.newPassword,
         });
     }
 
-    static async getCurrentUserProfile(sessionId: string): Promise<UserProfileResponse> {
-        return invoke<UserProfileResponse>('get_current_user_profile', { sessionId });
+    static async getCurrentUserProfile(): Promise<UserProfile> {
+        return invokeAuthenticatedCommand<UserProfile>('get_current_user_profile');
     }
 
     static async getBootstrapStatus(): Promise<BootstrapStatus> {
-        return invoke<BootstrapStatus>('get_auth_bootstrap_status');
+        return invokePublicCommand<BootstrapStatus>('get_auth_bootstrap_status');
     }
 }

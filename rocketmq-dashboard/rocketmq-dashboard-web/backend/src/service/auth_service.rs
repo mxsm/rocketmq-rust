@@ -46,6 +46,13 @@ pub struct AuthState {
     allowed_origin: Option<HeaderValue>,
 }
 
+/// Internal login result. The token is consumed only to construct `Set-Cookie`
+/// and is deliberately absent from the browser-facing session DTO.
+pub(crate) struct LoginOutcome {
+    pub(crate) session: SessionView,
+    pub(crate) token: Option<String>,
+}
+
 impl AuthState {
     pub fn new(config: AuthConfig) -> Result<Self, DashboardError> {
         let allowed_origin = config.cors_origin()?;
@@ -122,7 +129,6 @@ pub async fn session_view(state: &AppState, actor: Option<&AuthenticatedActor>) 
             login_required: false,
             authenticated: true,
             username: None,
-            session_id: None,
             login_time: None,
             auth_reason: None,
         });
@@ -132,7 +138,6 @@ pub async fn session_view(state: &AppState, actor: Option<&AuthenticatedActor>) 
             login_required: true,
             authenticated: false,
             username: None,
-            session_id: None,
             login_time: None,
             auth_reason: None,
         });
@@ -150,17 +155,17 @@ pub async fn session_view(state: &AppState, actor: Option<&AuthenticatedActor>) 
         login_required: true,
         authenticated: true,
         username: actor.actor.username.clone(),
-        // Only the successful login response returns a token. Session reads
-        // must never replay a credential to a caller or log it through DTOs.
-        session_id: None,
         login_time,
         auth_reason: None,
     })
 }
 
-pub async fn login(state: &AppState, request: LoginRequest) -> Result<SessionView, DashboardError> {
+pub(crate) async fn login(state: &AppState, request: LoginRequest) -> Result<LoginOutcome, DashboardError> {
     if !state.auth_state.login_required() {
-        return session_view(state, Some(&state.auth_state.local_actor())).await;
+        return Ok(LoginOutcome {
+            session: session_view(state, Some(&state.auth_state.local_actor())).await?,
+            token: None,
+        });
     }
     if request.username != state.auth_state.config.username || request.password != state.auth_state.config.password {
         return Err(DashboardError::Auth("Invalid username or password".to_string()));
@@ -208,15 +213,15 @@ pub async fn login(state: &AppState, request: LoginRequest) -> Result<SessionVie
                 error.into()
             }
         })?;
-    Ok(SessionView {
-        login_required: true,
-        authenticated: true,
-        username: Some(request.username),
-        // Compatibility for existing header clients. This is the only DTO
-        // path that contains the newly generated plaintext token.
-        session_id: Some(token),
-        login_time: Some(now),
-        auth_reason: None,
+    Ok(LoginOutcome {
+        session: SessionView {
+            login_required: true,
+            authenticated: true,
+            username: Some(request.username),
+            login_time: Some(now),
+            auth_reason: None,
+        },
+        token: Some(token),
     })
 }
 
@@ -247,7 +252,6 @@ pub async fn logout(state: &AppState, actor: &AuthenticatedActor) -> Result<Sess
         login_required: state.auth_state.login_required(),
         authenticated: !state.auth_state.login_required(),
         username: None,
-        session_id: None,
         login_time: None,
         auth_reason: None,
     })

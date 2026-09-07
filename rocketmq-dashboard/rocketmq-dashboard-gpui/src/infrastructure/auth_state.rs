@@ -77,20 +77,17 @@ impl LocalSession {
     }
 }
 
-/// Credential/source failure that never carries a supplied secret value.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum AuthStateError {
+/// Deterministic credential or local-session rejection that never carries a supplied value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AuthRejection {
     /// Required environment-backed configuration is absent.
-    #[error("required environment credential {name} is not configured")]
     MissingEnvironment {
         /// Variable name only; its value is never retained.
         name: &'static str,
     },
     /// The submitted local login did not match.
-    #[error("the username or password was not accepted")]
     Rejected,
     /// Admin credential construction rejected an incomplete value.
-    #[error("the environment-backed Admin credential is incomplete")]
     InvalidAdminCredential,
 }
 
@@ -115,7 +112,7 @@ impl DesktopAuthState {
     }
 
     /// Checks required environment entries during startup without retaining their values.
-    pub fn validate_startup(&self, config: &AuthConfig) -> Result<(), AuthStateError> {
+    pub fn validate_startup(&self, config: &AuthConfig) -> Result<(), AuthRejection> {
         if config.enabled {
             self.required(LOGIN_USERNAME_ENV)?;
             self.required(LOGIN_PASSWORD_ENV)?;
@@ -128,7 +125,7 @@ impl DesktopAuthState {
     }
 
     /// Authenticates a local operator and stores only the username in memory.
-    pub fn authenticate(&self, username: &str, password: &str) -> Result<LocalSession, AuthStateError> {
+    pub fn authenticate(&self, username: &str, password: &str) -> Result<LocalSession, AuthRejection> {
         let configured_username = self.required(LOGIN_USERNAME_ENV)?;
         let configured_password = self.required(LOGIN_PASSWORD_ENV)?;
         let accepted = constant_time_eq(username.as_bytes(), configured_username.as_bytes())
@@ -136,7 +133,7 @@ impl DesktopAuthState {
         drop(configured_username);
         drop(configured_password);
         if !accepted {
-            return Err(AuthStateError::Rejected);
+            return Err(AuthRejection::Rejected);
         }
         let session = LocalSession {
             username: Some(username.to_owned()),
@@ -159,7 +156,7 @@ impl DesktopAuthState {
     pub fn resolve_admin_credentials(
         &self,
         source: CredentialSourceKind,
-    ) -> Result<Option<AdminCredentials>, AuthStateError> {
+    ) -> Result<Option<AdminCredentials>, AuthRejection> {
         match source {
             CredentialSourceKind::None => Ok(None),
             CredentialSourceKind::Environment => {
@@ -168,16 +165,16 @@ impl DesktopAuthState {
                 let security_token = self.environment.read(ADMIN_SECURITY_TOKEN_ENV);
                 AdminCredentials::try_new(access_key, secret_key, security_token)
                     .map(Some)
-                    .map_err(|_| AuthStateError::InvalidAdminCredential)
+                    .map_err(|_| AuthRejection::InvalidAdminCredential)
             }
         }
     }
 
-    fn required(&self, name: &'static str) -> Result<String, AuthStateError> {
+    fn required(&self, name: &'static str) -> Result<String, AuthRejection> {
         self.environment
             .read(name)
             .filter(|value| !value.trim().is_empty())
-            .ok_or(AuthStateError::MissingEnvironment { name })
+            .ok_or(AuthRejection::MissingEnvironment { name })
     }
 }
 
@@ -231,7 +228,7 @@ mod tests {
 
         assert_eq!(
             error,
-            AuthStateError::MissingEnvironment {
+            AuthRejection::MissingEnvironment {
                 name: LOGIN_USERNAME_ENV
             }
         );
@@ -259,7 +256,7 @@ mod tests {
             (LOGIN_PASSWORD_ENV, "right-password"),
         ])));
 
-        assert_eq!(auth.authenticate("operator", "wrong"), Err(AuthStateError::Rejected));
+        assert_eq!(auth.authenticate("operator", "wrong"), Err(AuthRejection::Rejected));
         assert!(!auth.session().is_authenticated());
     }
 

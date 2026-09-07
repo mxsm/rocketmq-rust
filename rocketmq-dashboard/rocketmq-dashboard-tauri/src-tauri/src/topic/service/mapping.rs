@@ -97,23 +97,16 @@ pub(super) fn normalize_topic_message_body(body: &str) -> TopicResult<String> {
         return Ok(body.to_string());
     }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        return serde_json::to_string(&value)
-            .map_err(|error| TopicError::Validation(format!("Failed to serialize message JSON: {error}")));
+        return serde_json::to_string(&value).map_err(TopicError::Json);
     }
     if let Ok(value) = json5::from_str::<serde_json::Value>(trimmed) {
-        return serde_json::to_string(&value).map_err(|error| {
-            TopicError::Validation(format!("Failed to serialize relaxed JSON message body: {error}"))
-        });
+        return serde_json::to_string(&value).map_err(TopicError::Json);
     }
     let normalized_numeric_keys = quote_numeric_object_keys(trimmed);
     if normalized_numeric_keys != trimmed
         && let Ok(value) = json5::from_str::<serde_json::Value>(&normalized_numeric_keys)
     {
-        return serde_json::to_string(&value).map_err(|error| {
-            TopicError::Validation(format!(
-                "Failed to serialize relaxed JSON message body after normalizing numeric keys: {error}"
-            ))
-        });
+        return serde_json::to_string(&value).map_err(TopicError::Json);
     }
     Err(TopicError::Validation(
         "Message body looks like JSON but could not be parsed. Standard JSON and relaxed JSON syntax such as numeric \

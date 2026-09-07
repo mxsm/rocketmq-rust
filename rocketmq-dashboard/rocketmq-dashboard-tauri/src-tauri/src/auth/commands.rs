@@ -18,45 +18,41 @@ use crate::auth::types::AuthSessionResponse;
 use crate::auth::types::BootstrapStatus;
 use crate::auth::types::CommonResponse;
 use crate::auth::types::SessionUser;
-use crate::auth::types::UserProfileResponse;
+use crate::auth::types::UserProfile;
+use crate::error::CommandResult;
+use crate::error::DashboardError;
+use crate::error::DashboardResult;
 use tauri::State;
 
 fn load_current_user_profile(
     session_id: &str,
     auth_service: &AuthService,
     session_state: &SessionState,
-) -> UserProfileResponse {
-    let Some(session) = session_state.get_session(session_id) else {
-        return UserProfileResponse {
-            success: false,
-            message: "Session not found".to_string(),
-            profile: None,
-        };
-    };
-
-    match auth_service.get_user_profile(&session.session_id, session.user_id) {
-        Ok(Some(profile)) if profile.is_active => UserProfileResponse {
-            success: true,
-            message: "Profile loaded".to_string(),
-            profile: Some(profile),
-        },
-        Ok(_) => {
+) -> DashboardResult<UserProfile> {
+    let session = session_state.require_session(session_id)?;
+    match auth_service.get_user_profile(session.user_id)? {
+        Some(profile) if profile.is_active => Ok(profile),
+        _ => {
             session_state.remove_session(session_id);
-            UserProfileResponse {
-                success: false,
-                message: "User profile is no longer available".to_string(),
-                profile: None,
-            }
-        }
-        Err(error) => {
-            log::error!("Failed to load profile for session {}: {}", session_id, error);
-            UserProfileResponse {
-                success: false,
-                message: "Failed to load user profile".to_string(),
-                profile: None,
-            }
+            Err(DashboardError::Unauthenticated)
         }
     }
+}
+
+fn login_user(
+    username: &str,
+    password: &str,
+    auth_service: &AuthService,
+    session_state: &SessionState,
+) -> DashboardResult<AuthSessionResponse> {
+    let user = auth_service.authenticate(username, password)?;
+    auth_service.update_last_login(user.id)?;
+    let session = session_state.create_session(&user);
+
+    Ok(AuthSessionResponse {
+        session_id: session.session_id.clone(),
+        current_user: session,
+    })
 }
 
 #[tauri::command]
@@ -65,42 +61,46 @@ pub fn login(
     password: String,
     auth_service: State<'_, AuthService>,
     session_state: State<'_, SessionState>,
-) -> AuthSessionResponse {
-    match auth_service.authenticate(&username, &password) {
-        Ok(user) => {
-            if let Err(error) = auth_service.update_last_login(user.id) {
-                log::warn!("Failed to update last login for {}: {}", username, error);
-            }
-
-            let session = session_state.create_session(&user);
-            AuthSessionResponse {
-                success: true,
-                message: "Login successful".to_string(),
-                session_id: Some(session.session_id.clone()),
-                current_user: Some(session.clone()),
-                must_change_password: session.must_change_password,
-            }
-        }
-        Err(error) => {
-            log::warn!("Login failed for {}: {}", username, error);
-            AuthSessionResponse {
-                success: false,
-                message: error.to_string().replace("Authentication error: ", ""),
-                session_id: None,
-                current_user: None,
-                must_change_password: false,
-            }
-        }
-    }
+) -> CommandResult<AuthSessionResponse> {
+    login_user(&username, &password, auth_service.inner(), session_state.inner()).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn logout(session_id: String, session_state: State<'_, SessionState>) -> CommonResponse {
+pub fn logout(session_id: String, session_state: State<'_, SessionState>) -> CommandResult<CommonResponse> {
+    session_state
+        .require_session(&session_id)
+        .map_err(crate::error::CommandError::from)?;
     session_state.remove_session(&session_id);
-
-    CommonResponse {
-        success: true,
+    Ok(CommonResponse {
         message: "Logged out successfully".to_string(),
+    })
+}
+
+fn restore_user_session(
+    session_id: &str,
+    auth_service: &AuthService,
+    session_state: &SessionState,
+) -> DashboardResult<AuthSessionResponse> {
+    let session = session_state.require_session(session_id)?;
+    match auth_service.find_user_by_id(session.user_id)? {
+        Some(user) if user.is_active => {
+            let refreshed_session = SessionUser {
+                session_id: session.session_id,
+                user_id: user.id,
+                username: user.username,
+                must_change_password: user.must_change_password,
+                created_at: session.created_at,
+            };
+            session_state.upsert_session(refreshed_session.clone());
+            Ok(AuthSessionResponse {
+                session_id: refreshed_session.session_id.clone(),
+                current_user: refreshed_session,
+            })
+        }
+        _ => {
+            session_state.remove_session(session_id);
+            Err(DashboardError::Unauthenticated)
+        }
     }
 }
 
@@ -109,57 +109,23 @@ pub fn restore_session(
     session_id: String,
     auth_service: State<'_, AuthService>,
     session_state: State<'_, SessionState>,
-) -> AuthSessionResponse {
-    let Some(session) = session_state.get_session(&session_id) else {
-        return AuthSessionResponse {
-            success: false,
-            message: "Session not found".to_string(),
-            session_id: None,
-            current_user: None,
-            must_change_password: false,
-        };
-    };
+) -> CommandResult<AuthSessionResponse> {
+    restore_user_session(&session_id, auth_service.inner(), session_state.inner()).map_err(Into::into)
+}
 
-    match auth_service.find_user_by_id(session.user_id) {
-        Ok(Some(user)) if user.is_active => {
-            let refreshed_session = SessionUser {
-                session_id: session.session_id.clone(),
-                user_id: user.id,
-                username: user.username,
-                must_change_password: user.must_change_password,
-                created_at: session.created_at,
-            };
-            session_state.upsert_session(refreshed_session.clone());
-
-            AuthSessionResponse {
-                success: true,
-                message: "Session restored".to_string(),
-                session_id: Some(refreshed_session.session_id.clone()),
-                current_user: Some(refreshed_session.clone()),
-                must_change_password: refreshed_session.must_change_password,
-            }
-        }
-        Ok(_) => {
-            session_state.remove_session(&session_id);
-            AuthSessionResponse {
-                success: false,
-                message: "Session is no longer valid".to_string(),
-                session_id: None,
-                current_user: None,
-                must_change_password: false,
-            }
-        }
-        Err(error) => {
-            log::error!("Failed to restore session {}: {}", session_id, error);
-            AuthSessionResponse {
-                success: false,
-                message: "Failed to restore session".to_string(),
-                session_id: None,
-                current_user: None,
-                must_change_password: false,
-            }
-        }
-    }
+fn change_user_password(
+    session_id: &str,
+    old_password: &str,
+    new_password: &str,
+    auth_service: &AuthService,
+    session_state: &SessionState,
+) -> DashboardResult<CommonResponse> {
+    let session = session_state.require_session(session_id)?;
+    auth_service.change_password(session.user_id, old_password, new_password)?;
+    session_state.mark_password_changed(session_id);
+    Ok(CommonResponse {
+        message: "Password updated successfully".to_string(),
+    })
 }
 
 #[tauri::command]
@@ -169,38 +135,15 @@ pub fn change_password(
     new_password: String,
     auth_service: State<'_, AuthService>,
     session_state: State<'_, SessionState>,
-) -> CommonResponse {
-    let Some(session) = session_state.get_session(&session_id) else {
-        return CommonResponse {
-            success: false,
-            message: "Session not found".to_string(),
-        };
-    };
-
-    match auth_service.change_password(session.user_id, &old_password, &new_password) {
-        Ok(()) => {
-            session_state.mark_password_changed(&session_id);
-            CommonResponse {
-                success: true,
-                message: "Password updated successfully".to_string(),
-            }
-        }
-        Err(error) => {
-            log::warn!(
-                "Password change failed for session {} and user {}: {}",
-                session_id,
-                session.username,
-                error
-            );
-            CommonResponse {
-                success: false,
-                message: error
-                    .to_string()
-                    .replace("Authentication error: ", "")
-                    .replace("Validation error: ", ""),
-            }
-        }
-    }
+) -> CommandResult<CommonResponse> {
+    change_user_password(
+        &session_id,
+        &old_password,
+        &new_password,
+        auth_service.inner(),
+        session_state.inner(),
+    )
+    .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -208,31 +151,24 @@ pub fn get_current_user_profile(
     session_id: String,
     auth_service: State<'_, AuthService>,
     session_state: State<'_, SessionState>,
-) -> UserProfileResponse {
-    load_current_user_profile(&session_id, auth_service.inner(), session_state.inner())
+) -> CommandResult<UserProfile> {
+    load_current_user_profile(&session_id, auth_service.inner(), session_state.inner()).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn get_auth_bootstrap_status(auth_service: State<'_, AuthService>) -> BootstrapStatus {
-    match auth_service.get_bootstrap_status() {
-        Ok(status) => status,
-        Err(error) => {
-            log::error!("Failed to load bootstrap status: {}", error);
-            BootstrapStatus {
-                username: "admin".to_string(),
-                created: false,
-                has_default_admin: false,
-                must_change_password: false,
-            }
-        }
-    }
+pub fn get_auth_bootstrap_status(auth_service: State<'_, AuthService>) -> CommandResult<BootstrapStatus> {
+    auth_service.get_bootstrap_status().map_err(Into::into)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::load_current_user_profile;
+    use super::login_user;
+    use super::restore_user_session;
     use crate::auth::db::AuthDb;
     use crate::auth::service::AuthService;
     use crate::auth::session::SessionState;
+    use crate::error::CommandError;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -286,37 +222,37 @@ mod tests {
     }
 
     #[test]
-    fn get_current_user_profile_returns_active_profile() {
+    fn auth_command_matrix_enforces_session_and_password_state() {
         let context = setup_context();
-        let user = context
-            .auth_service
-            .authenticate("admin", "change-me-now")
+        let missing = load_current_user_profile("missing", &context.auth_service, &context.session_state)
+            .expect_err("missing session should fail");
+        assert_eq!(CommandError::from(missing).code, "auth.session.invalid");
+
+        let login = login_user("admin", "change-me-now", &context.auth_service, &context.session_state)
             .expect("authentication should succeed");
-        context
-            .auth_service
-            .update_last_login(user.id)
-            .expect("last login should update");
-        let session = context.session_state.create_session(&user);
+        assert!(context.session_state.authorize_dashboard(&login.session_id).is_err());
 
-        let response =
-            super::load_current_user_profile(&session.session_id, &context.auth_service, &context.session_state);
-
-        assert!(response.success);
-        let profile = response.profile.expect("profile should exist");
-        assert_eq!(profile.session_id, session.session_id);
-        assert_eq!(profile.user_id, user.id);
-        assert!(profile.last_login_at.is_some());
+        context.session_state.mark_password_changed(&login.session_id);
+        assert!(context.session_state.authorize_dashboard(&login.session_id).is_ok());
+        assert!(load_current_user_profile(&login.session_id, &context.auth_service, &context.session_state).is_ok());
     }
 
     #[test]
-    fn get_current_user_profile_rejects_unknown_session() {
+    fn authentication_failure_uses_structured_redacted_error() {
         let context = setup_context();
+        let error = login_user("admin", "wrong-password", &context.auth_service, &context.session_state)
+            .expect_err("invalid credentials should fail");
+        let public = CommandError::from(error);
 
-        let response =
-            super::load_current_user_profile("missing-session", &context.auth_service, &context.session_state);
+        assert_eq!(public.code, "auth.credentials.invalid");
+        assert_eq!(public.message, "Authentication failed.");
+    }
 
-        assert!(!response.success);
-        assert_eq!(response.message, "Session not found");
-        assert!(response.profile.is_none());
+    #[test]
+    fn restoring_unknown_session_is_an_error() {
+        let context = setup_context();
+        let error = restore_user_session("missing", &context.auth_service, &context.session_state)
+            .expect_err("unknown session should fail");
+        assert_eq!(CommandError::from(error).code, "auth.session.invalid");
     }
 }

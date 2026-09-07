@@ -29,7 +29,7 @@ use rocketmq_admin_core::core::{
 };
 use rocketmq_dashboard_common::{EndpointAvailability, RuntimeEntry, redact_sensitive_entries, runtime_entries};
 
-use super::{GpuiAdminProvider, ProviderError, mutation_for_revision, query_for_revision, select_admin};
+use super::{GpuiAdminProvider, ProviderFailure, mutation_for_revision, query_for_revision, select_admin};
 
 /// Topic names required by the current Dashboard product surface.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -204,7 +204,7 @@ pub(crate) enum SafeConfigPatchOutcome {
 
 impl GpuiAdminProvider {
     /// Lists allowlisted Topic names using the revisioned concurrent query session.
-    pub async fn list_topics(self: &Arc<Self>, revision: u64) -> Result<SafeTopicList, ProviderError> {
+    pub async fn list_topics(self: &Arc<Self>, revision: u64) -> Result<SafeTopicList, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-dashboard-topics", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -217,7 +217,11 @@ impl GpuiAdminProvider {
     }
 
     /// Loads the allowlisted offsets for one Topic.
-    pub async fn topic_stats(self: &Arc<Self>, revision: u64, topic: String) -> Result<SafeTopicStats, ProviderError> {
+    pub async fn topic_stats(
+        self: &Arc<Self>,
+        revision: u64,
+        topic: String,
+    ) -> Result<SafeTopicStats, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-dashboard-topic-stats", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -230,7 +234,7 @@ impl GpuiAdminProvider {
     }
 
     /// Counts Consumer groups without retaining raw group metadata.
-    pub async fn list_consumers(self: &Arc<Self>, revision: u64) -> Result<SafeConsumerList, ProviderError> {
+    pub async fn list_consumers(self: &Arc<Self>, revision: u64) -> Result<SafeConsumerList, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-dashboard-consumers", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -243,7 +247,7 @@ impl GpuiAdminProvider {
     }
 
     /// Counts distinct Producer groups without retaining raw producer metadata.
-    pub async fn list_producers(self: &Arc<Self>, revision: u64) -> Result<SafeProducerList, ProviderError> {
+    pub async fn list_producers(self: &Arc<Self>, revision: u64) -> Result<SafeProducerList, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-dashboard-producers", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -256,7 +260,7 @@ impl GpuiAdminProvider {
     }
 
     /// Lists the complete Broker inventory returned by Dashboard Admin.
-    pub async fn list_brokers(self: &Arc<Self>, revision: u64) -> Result<SafeBrokerList, ProviderError> {
+    pub async fn list_brokers(self: &Arc<Self>, revision: u64) -> Result<SafeBrokerList, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-dashboard-brokers", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -273,7 +277,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         target: SafeBrokerTarget,
-    ) -> Result<SafeBrokerRuntime, ProviderError> {
+    ) -> Result<SafeBrokerRuntime, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-broker-runtime", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -294,7 +298,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         target: SafeBrokerTarget,
-    ) -> Result<SafeBrokerConfig, ProviderError> {
+    ) -> Result<SafeBrokerConfig, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-broker-config", move |cancellation| async move {
             let guard = this.query_session.read().await;
@@ -315,7 +319,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         address: String,
-    ) -> Result<SafeConfigGeneration, ProviderError> {
+    ) -> Result<SafeConfigGeneration, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-broker-config-generation", move |cancellation| async move {
             let mut guard = this.mutation_session.lock().await;
@@ -336,7 +340,7 @@ impl GpuiAdminProvider {
         self: &Arc<Self>,
         revision: u64,
         request: SafeConfigPatchRequest,
-    ) -> Result<SafeConfigPatchOutcome, ProviderError> {
+    ) -> Result<SafeConfigPatchOutcome, ProviderFailure> {
         let this = Arc::clone(self);
         self.run_owned("gpui-broker-config-patch", move |cancellation| async move {
             let mut guard = this.mutation_session.lock().await;

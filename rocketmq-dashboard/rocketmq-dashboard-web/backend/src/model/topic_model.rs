@@ -205,7 +205,8 @@ pub struct TopicOffsetResult {
 pub struct TopicTargetResult {
     pub target: String,
     pub success: bool,
-    pub message: String,
+    pub message: Option<String>,
+    pub error: Option<crate::model::OperationErrorView>,
 }
 
 impl TopicTargetResult {
@@ -213,15 +214,17 @@ impl TopicTargetResult {
         Self {
             target: target.into(),
             success: true,
-            message: message.into(),
+            message: Some(message.into()),
+            error: None,
         }
     }
 
-    pub(crate) fn failure(target: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn failure(target: impl Into<String>, code: &'static str, message: &'static str) -> Self {
         Self {
             target: target.into(),
             success: false,
-            message: message.into(),
+            message: None,
+            error: Some(crate::model::OperationErrorView::fixed(code, message)),
         }
     }
 }
@@ -296,7 +299,11 @@ mod tests {
             "orders",
             vec![
                 TopicTargetResult::success("broker-a", "saved"),
-                TopicTargetResult::failure("broker-b", "unavailable"),
+                TopicTargetResult::failure(
+                    "broker-b",
+                    "TOPIC_TARGET_OPERATION_FAILED",
+                    "Topic target operation failed",
+                ),
             ],
         );
 

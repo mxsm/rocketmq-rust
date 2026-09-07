@@ -512,20 +512,20 @@ impl AppServices {
     }
 }
 
-fn query_error(_error: impl std::fmt::Display) -> UiError {
-    UiError::new(
-        "Unable to load Consumer data from the selected connection.",
-        UiErrorCode::Connection,
-        true,
-    )
+fn query_error(source: crate::infrastructure::admin_provider::ProviderFailure) -> UiError {
+    provider_failure(source, "Unable to load Consumer data from the selected connection.")
 }
 
-fn mutation_error(_error: impl std::fmt::Display) -> UiError {
-    UiError::new(
-        "Unable to apply the exact-target Consumer operation.",
-        UiErrorCode::Connection,
-        true,
-    )
+fn mutation_error(source: crate::infrastructure::admin_provider::ProviderFailure) -> UiError {
+    provider_failure(source, "Unable to apply the exact-target Consumer operation.")
+}
+
+fn provider_failure(source: crate::infrastructure::admin_provider::ProviderFailure, summary: &'static str) -> UiError {
+    let retryable = source.is_retryable();
+    match source.into_operational() {
+        Some(source) => UiError::caused_by(summary, UiErrorCode::Connection, retryable, source),
+        None => UiError::new(summary, UiErrorCode::Connection, retryable),
+    }
 }
 
 fn incomplete_reload_error() -> UiError {

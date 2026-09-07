@@ -1,7 +1,7 @@
 import { SkipForward } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { topicApi } from '../api/topic_api';
-import { handleAppliedAuditFailure } from '../api/client';
+import { userErrorMessage } from '../api/client';
 import type { TopicOffsetResult, TopicSkipOffsetRequest } from '../types/topic';
 import { Button } from './ui/Button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/Dialog';
@@ -14,7 +14,6 @@ interface TopicSkipBacklogDialogProps {
   consumerGroup: string;
   onOpenChange: (open: boolean) => void;
   onSucceeded: (result: TopicOffsetResult) => void;
-  onAppliedAuditFailure?: () => Promise<void> | void;
 }
 
 interface SkipSnapshot {
@@ -29,8 +28,7 @@ export default function TopicSkipBacklogDialog({
   topic,
   consumerGroup,
   onOpenChange,
-  onSucceeded,
-  onAppliedAuditFailure
+  onSucceeded
 }: TopicSkipBacklogDialogProps) {
   const [confirmationText, setConfirmationText] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -113,16 +111,7 @@ export default function TopicSkipBacklogDialog({
     } catch (requestError) {
       if (!isCurrentPresentation(snapshot)) return;
 
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          invalidateAndClose();
-          setError(null);
-          setResult(null);
-        },
-        refresh: onAppliedAuditFailure
-      })) return;
-
-      setError(requestError instanceof Error ? requestError.message : 'Unable to skip accumulated messages.');
+      setError(userErrorMessage(requestError, 'Unable to skip accumulated messages.'));
       focusAction();
     } finally {
       if (pendingRef.current === requestId) {

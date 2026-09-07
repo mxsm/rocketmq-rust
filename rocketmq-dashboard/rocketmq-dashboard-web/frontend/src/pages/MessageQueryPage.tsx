@@ -1,7 +1,7 @@
 import { Clock3, DatabaseZap, Hash, Search, Send } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { messageApi } from '../api/message_api';
-import { handleAppliedAuditFailure } from '../api/client';
+import { userErrorMessage } from '../api/client';
 import { topicApi } from '../api/topic_api';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import EntitySheet from '../components/EntitySheet';
@@ -70,7 +70,7 @@ export default function MessageQueryPage() {
     } catch (requestError) {
       if (topicRequestRef.current === requestId) {
         setTopics([]);
-        setTopicsError(`Topic discovery failed: ${requestError instanceof Error ? requestError.message : String(requestError)}`);
+        setTopicsError(`Topic discovery failed: ${userErrorMessage(requestError, 'Unable to load topics.')}`);
       }
     } finally {
       if (topicRequestRef.current === requestId) setTopicsLoading(false);
@@ -166,7 +166,7 @@ export default function MessageQueryPage() {
       if (requestRef.current === requestId) {
         setRows([]);
         setTotal(0);
-        setError(requestError instanceof Error ? requestError.message : String(requestError));
+        setError(userErrorMessage(requestError, 'Unable to query messages.'));
       }
     } finally {
       if (requestRef.current === requestId) setLoading(false);
@@ -205,17 +205,8 @@ export default function MessageQueryPage() {
         message: result.remark ? `${result.consumeResult}: ${result.remark}` : result.message
       });
     } catch (requestError) {
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          setSelected(null);
-          setConsumerGroup('');
-          setClientId('');
-          setResendNotice({ tone: 'warning', message: 'Message resend was applied. Refreshing authoritative results.' });
-        },
-        refresh: searchMessages
-      })) return;
       if (resendRequestRef.current === requestId) {
-        setResendNotice({ tone: 'danger', message: requestError instanceof Error ? requestError.message : String(requestError) });
+        setResendNotice({ tone: 'danger', message: userErrorMessage(requestError, 'Unable to resend the message.') });
       }
     } finally {
       resendPendingRef.current = false;

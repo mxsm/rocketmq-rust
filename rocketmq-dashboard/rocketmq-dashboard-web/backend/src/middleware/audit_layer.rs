@@ -19,8 +19,6 @@ use crate::model::AuditResourceType;
 use crate::model::AuthenticatedActor;
 use crate::service::redact_audit_value;
 use crate::state::AppState;
-use axum::body::Body;
-use axum::body::to_bytes;
 use axum::extract::MatchedPath;
 use axum::extract::Request;
 use axum::extract::State;
@@ -29,7 +27,6 @@ use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::IntoResponse;
 use axum::response::Response;
-use serde_json::Value;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -164,7 +161,7 @@ pub async fn audit_mutation(State(state): State<AppState>, mut request: Request,
                 created_at_ms: now_millis(),
             };
             if state.persistence.append_audit_event(event).await.is_err() && response.status().is_success() {
-                return Ok(applied_audit_failed_response(response).await);
+                return Ok(audit_persistence_failed_response(response));
             }
             Ok(response)
         })
@@ -238,32 +235,11 @@ fn is_safe_resource_segment(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':' | b'@'))
 }
 
-async fn applied_audit_failed_response(response: Response) -> Response {
-    const WARNING: &str = "Mutation was applied, but its audit event could not be persisted";
-    const MAX_AUDIT_WARNING_BODY_BYTES: usize = 1_048_576;
-    let status = response.status();
-    let (mut parts, body) = response.into_parts();
-    parts
-        .headers
+fn audit_persistence_failed_response(mut response: Response) -> Response {
+    response
+        .headers_mut()
         .insert("x-dashboard-audit", HeaderValue::from_static("failed"));
-    let body = to_bytes(body, MAX_AUDIT_WARNING_BODY_BYTES)
-        .await
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|mut value| {
-            let object = value.as_object_mut()?;
-            object.insert("success".to_string(), Value::Bool(true));
-            object.insert("code".to_string(), Value::String("APPLIED_AUDIT_FAILED".to_string()));
-            object.insert("message".to_string(), Value::String(WARNING.to_string()));
-            object.insert("applied".to_string(), Value::Bool(true));
-            object.insert("auditFailed".to_string(), Value::Bool(true));
-            serde_json::to_vec(&value).ok()
-        })
-        .unwrap_or_else(|| {
-            br#"{"success":true,"code":"APPLIED_AUDIT_FAILED","message":"Mutation was applied, but its audit event could not be persisted","applied":true,"auditFailed":true}"#.to_vec()
-        });
-    parts.status = status;
-    Response::from_parts(parts, Body::from(body))
+    response
 }
 
 fn mutation_for(method: &Method, path: &str) -> Option<(AuditAction, AuditResourceType)> {
@@ -343,7 +319,7 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::AuditTerminalFactSink;
-    use super::applied_audit_failed_response;
+    use super::audit_persistence_failed_response;
     use super::mutation_for;
     use crate::model::AuditAction;
     use crate::model::AuditOutcome;
@@ -467,9 +443,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn applied_audit_failure_response_has_a_stable_non_retryable_body() {
-        let response = Response::new(Body::from(r#"{"success":true,"data":{"revoked":33}}"#));
-        let response = applied_audit_failed_response(response).await;
+    async fn audit_persistence_failure_preserves_partial_operation_body() {
+        let original = r#"{"success":true,"data":{"outcome":"partial","targets":[{"target":"broker-a","success":true},{"target":"broker-b","success":false}]}}"#;
+        let response = Response::new(Body::from(original));
+        let response = audit_persistence_failed_response(response);
         assert_eq!(response.status(), 200);
         assert_eq!(
             response
@@ -479,50 +456,7 @@ mod tests {
             Some("failed")
         );
         let body = to_bytes(response.into_body(), 1_024).await.expect("read response body");
-        let value: serde_json::Value = serde_json::from_slice(&body).expect("parse response body");
-        assert_eq!(value["success"], true);
-        assert_eq!(value["code"], "APPLIED_AUDIT_FAILED");
-        assert_eq!(
-            value["message"],
-            "Mutation was applied, but its audit event could not be persisted"
-        );
-        assert_eq!(value["applied"], true);
-        assert_eq!(value["auditFailed"], true);
-        assert_eq!(value["data"]["revoked"], 33);
-    }
-
-    #[tokio::test]
-    async fn applied_audit_failure_uses_the_stable_body_when_original_body_is_too_large() {
-        let response = Response::new(Body::from(vec![b'x'; 1_048_577]));
-        let response = applied_audit_failed_response(response).await;
-        let body = to_bytes(response.into_body(), 1_024)
-            .await
-            .expect("read fallback response body");
-        let value: serde_json::Value = serde_json::from_slice(&body).expect("parse fallback response body");
-
-        assert_eq!(value["success"], true);
-        assert_eq!(value["code"], "APPLIED_AUDIT_FAILED");
-        assert_eq!(value["applied"], true);
-        assert_eq!(value["auditFailed"], true);
-        assert!(value.get("data").is_none());
-    }
-
-    #[tokio::test]
-    async fn applied_audit_failure_uses_the_stable_body_when_body_collection_fails() {
-        let response = Response::new(Body::from_stream(futures_util::stream::once(async {
-            Err::<axum::body::Bytes, std::io::Error>(std::io::Error::other("body read failed"))
-        })));
-        let response = applied_audit_failed_response(response).await;
-        let body = to_bytes(response.into_body(), 1_024)
-            .await
-            .expect("read fallback response body");
-        let value: serde_json::Value = serde_json::from_slice(&body).expect("parse fallback response body");
-
-        assert_eq!(value["success"], true);
-        assert_eq!(value["code"], "APPLIED_AUDIT_FAILED");
-        assert_eq!(value["applied"], true);
-        assert_eq!(value["auditFailed"], true);
-        assert!(value.get("data").is_none());
+        assert_eq!(body.as_ref(), original.as_bytes());
     }
 
     #[tokio::test]

@@ -265,7 +265,7 @@ pub struct ConsumerConfigTarget {
     pub config: Option<ConsumerConfigValue>,
     pub subscription_topics: Vec<String>,
     pub attributes: Vec<ConsumerConfigAttribute>,
-    pub error: Option<String>,
+    pub error: Option<crate::model::OperationErrorView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,7 +318,8 @@ pub struct ConsumerTargetResult {
     pub target: String,
     pub kind: String,
     pub success: bool,
-    pub message: String,
+    pub message: Option<String>,
+    pub error: Option<crate::model::OperationErrorView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
