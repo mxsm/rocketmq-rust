@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::message::types::MessageError;
+use crate::error::DashboardError as MessageError;
 use crate::message::types::MessageResult;
 use crate::nameserver::NameServerRuntimeState;
 use rocketmq_admin_core::client_adapter::AdminBuilder;

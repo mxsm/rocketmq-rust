@@ -20,7 +20,11 @@ use rocketmq_runtime::{ChildServiceContext, TaskGroup, TaskId};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use super::config_store::{ConfigStoreError, write_json_atomically};
+use super::config_store::{ConfigStoreFailure, write_json_atomically};
+
+#[derive(Debug, thiserror::Error)]
+#[error("Monitor id and consumer group must not be empty")]
+struct InvalidMonitorRule;
 
 /// Persisted Monitor rule contract for later Delivery 07 evaluation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,14 +56,14 @@ impl MonitorStore {
     }
 
     /// Lists rules in stable identifier order.
-    pub async fn list(&self) -> Result<Vec<MonitorRule>, ConfigStoreError> {
+    pub async fn list(&self) -> Result<Vec<MonitorRule>, ConfigStoreFailure> {
         let _guard = self.gate.lock().await;
         let path = self.path.clone();
         self.context
             .storage_io()
             .spawn_io("gpui-monitor-list", move || load_rules(&path))
             .await
-            .map_err(|error| ConfigStoreError::Runtime(error.to_string()))?
+            .map_err(ConfigStoreFailure::runtime)?
     }
 
     /// Inserts or replaces a rule by identity.
@@ -70,11 +74,9 @@ impl MonitorStore {
             reason = "Delivery 02 exposes durable CRUD before the Monitor page exists"
         )
     )]
-    pub async fn upsert(&self, rule: MonitorRule) -> Result<(), ConfigStoreError> {
+    pub async fn upsert(&self, rule: MonitorRule) -> Result<(), ConfigStoreFailure> {
         if rule.id.trim().is_empty() || rule.consumer_group.trim().is_empty() {
-            return Err(ConfigStoreError::Validation(
-                "Monitor id and consumer group must not be empty".into(),
-            ));
+            return Err(ConfigStoreFailure::validation(InvalidMonitorRule));
         }
         let _guard = self.gate.lock().await;
         let path = self.path.clone();
@@ -88,7 +90,7 @@ impl MonitorStore {
                 write_json_atomically(&path, &rules)
             })
             .await
-            .map_err(|error| ConfigStoreError::Runtime(error.to_string()))?
+            .map_err(ConfigStoreFailure::runtime)?
     }
 
     /// Deletes a rule and reports whether it existed.
@@ -99,7 +101,7 @@ impl MonitorStore {
             reason = "Delivery 02 exposes durable CRUD before the Monitor page exists"
         )
     )]
-    pub async fn delete(&self, id: String) -> Result<bool, ConfigStoreError> {
+    pub async fn delete(&self, id: String) -> Result<bool, ConfigStoreFailure> {
         let _guard = self.gate.lock().await;
         let path = self.path.clone();
         self.context
@@ -115,7 +117,7 @@ impl MonitorStore {
                 Ok(removed)
             })
             .await
-            .map_err(|error| ConfigStoreError::Runtime(error.to_string()))?
+            .map_err(ConfigStoreFailure::runtime)?
     }
 }
 
@@ -128,7 +130,7 @@ pub struct MonitorLifecycle {
 
 impl MonitorLifecycle {
     /// Starts an owner-cancellable no-op service when enabled.
-    pub fn start(context: &ChildServiceContext, enabled: bool) -> Result<Self, ConfigStoreError> {
+    pub fn start(context: &ChildServiceContext, enabled: bool) -> Result<Self, ConfigStoreFailure> {
         if !enabled {
             return Ok(Self {
                 task_id: None,
@@ -142,7 +144,7 @@ impl MonitorLifecycle {
             .spawn_service("gpui-monitor-lifecycle", async move {
                 task_cancellation.cancelled().await;
             })
-            .map_err(|error| ConfigStoreError::Runtime(error.to_string()))?;
+            .map_err(ConfigStoreFailure::runtime)?;
         Ok(Self {
             task_id: Some(task_id),
             cancellation: Some(cancellation),
@@ -175,27 +177,15 @@ impl Drop for MonitorLifecycle {
     }
 }
 
-fn load_rules(path: &PathBuf) -> Result<Vec<MonitorRule>, ConfigStoreError> {
+fn load_rules(path: &PathBuf) -> Result<Vec<MonitorRule>, ConfigStoreFailure> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(source) => {
-            return Err(ConfigStoreError::Io {
-                operation: "read monitors",
-                path: path.clone(),
-                source,
-            });
+            return Err(ConfigStoreFailure::io("read monitors", path.clone(), source));
         }
     };
-    serde_json::from_slice(&bytes).map_err(|error| ConfigStoreError::InvalidDocument {
-        path: path.clone(),
-        summary: format!(
-            "{:?} at line {}, column {}",
-            error.classify(),
-            error.line(),
-            error.column()
-        ),
-    })
+    serde_json::from_slice(&bytes).map_err(|source| ConfigStoreFailure::invalid_document(path.clone(), source))
 }
 
 #[cfg(test)]

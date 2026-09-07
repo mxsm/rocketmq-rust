@@ -22,6 +22,5 @@ export const authenticatedSession: SessionView = {
   loginRequired: true,
   authenticated: true,
   username: 'operator',
-  sessionId: 'test-session',
   loginTime: 1_700_000_000_000
 };

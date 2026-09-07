@@ -1,7 +1,7 @@
 import { AlertTriangle, CheckCircle2, Pencil, Save, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { brokerApi } from '../../api/broker_api';
-import { handleAppliedAuditFailure } from '../../api/client';
+import { userErrorMessage } from '../../api/client';
 import ErrorState from '../../components/ErrorState';
 import KeyValueTable from '../../components/KeyValueTable';
 import LoadingState from '../../components/LoadingState';
@@ -87,7 +87,7 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
       setRuntime(nextRuntime);
     } catch (requestError) {
       if (requestId !== runtimeRequestRef.current || brokerNameRef.current !== requestBroker) return;
-      setRuntimeError(requestError instanceof Error ? requestError.message : String(requestError));
+      setRuntimeError(userErrorMessage(requestError, 'Unable to load broker runtime data.'));
     } finally {
       if (requestId === runtimeRequestRef.current && brokerNameRef.current === requestBroker) setRuntimeLoading(false);
     }
@@ -105,7 +105,7 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
       setConfigDraft(JSON.stringify(nextConfig.entries, null, 2));
     } catch (requestError) {
       if (requestId !== configRequestRef.current || brokerNameRef.current !== requestBroker) return;
-      setConfigError(requestError instanceof Error ? requestError.message : String(requestError));
+      setConfigError(userErrorMessage(requestError, 'Unable to load broker configuration.'));
     } finally {
       if (requestId === configRequestRef.current && brokerNameRef.current === requestBroker) setConfigLoading(false);
     }
@@ -167,17 +167,7 @@ export default function BrokerDetailContent({ brokerName, broker, initialTab = '
       setSaveMessage('Configuration updated.');
     } catch (requestError) {
       if (requestId !== saveRequestRef.current || brokerNameRef.current !== requestBroker) return;
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          setEditing(false);
-          setConfirmOpen(false);
-          setPendingEntries(null);
-          setSaveError(null);
-          setSaveMessage('Configuration change was applied. Refreshing authoritative values.');
-        },
-        refresh: loadConfig
-      })) return;
-      setSaveError(requestError instanceof Error ? requestError.message : String(requestError));
+      setSaveError(userErrorMessage(requestError, 'Unable to update broker configuration.'));
       setConfirmOpen(false);
     } finally {
       if (requestId === saveRequestRef.current && brokerNameRef.current === requestBroker) setSaving(false);

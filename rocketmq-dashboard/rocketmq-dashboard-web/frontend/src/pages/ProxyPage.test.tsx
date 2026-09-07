@@ -112,7 +112,8 @@ describe('ProxyPage', () => {
     await user.type(input, 'proxy-c:8081');
     await user.click(within(dialog).getByRole('button', { name: 'Add proxy endpoint' }));
 
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Proxy endpoint was rejected.');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Unable to update proxy configuration.');
+    expect(within(dialog).queryByText('Proxy endpoint was rejected.')).not.toBeInTheDocument();
     expect(input).toHaveFocus();
     expect(mockedConfigApi.addProxy).toHaveBeenCalledWith({ address: 'proxy-c:8081', expectedRevision: 9 });
   });

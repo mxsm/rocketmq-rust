@@ -236,9 +236,9 @@ impl ConsumerBackend for FakeConsumerBackend {
     }
 }
 
-fn unexpected_call(operation: &str) -> UiError {
+fn unexpected_call(_operation: &str) -> UiError {
     UiError::new(
-        format!("Unexpected Consumer {operation} test call."),
+        "Unexpected Consumer test call.",
         UiErrorCode::CapabilityUnavailable,
         false,
     )

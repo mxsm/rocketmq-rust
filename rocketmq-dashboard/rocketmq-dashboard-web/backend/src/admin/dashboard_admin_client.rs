@@ -481,10 +481,10 @@ impl DashboardAdminClient {
             force: request.force,
         };
         let mutation_guard = self.acquire_consumer_mutation_lock().await;
-        let result = run_consumer_admin_rpc!(self, Some(mutation_guard), |admin| admin
+        let _result = run_consumer_admin_rpc!(self, Some(mutation_guard), |admin| admin
             .dashboard_reset_consumer(&request))?;
         Ok(MutationResult {
-            message: result.message,
+            message: "Consumer offset reset completed".to_string(),
         })
     }
 
@@ -583,9 +583,9 @@ impl DashboardAdminClient {
             broker_addr: target.broker_addr,
             entries: request.entries,
         };
-        let result = run_admin_rpc!(self, |admin| admin.dashboard_update_broker_config(&request))?;
+        let _result = run_admin_rpc!(self, |admin| admin.dashboard_update_broker_config(&request))?;
         Ok(MutationResult {
-            message: result.message,
+            message: "Broker configuration updated".to_string(),
         })
     }
 
@@ -981,16 +981,17 @@ fn map_direct_consume_result(result: core::AdminMutationResult) -> MessageResend
         .and_then(|details| details.split_whitespace().next())
         .unwrap_or("UNKNOWN")
         .to_string();
-    let remark = result
-        .message
-        .split_once(REMARK_SEPARATOR)
-        .map(|(_, remark)| remark.trim().to_string())
-        .filter(|remark| !remark.is_empty());
+    let has_remark = result.message.split_once(REMARK_SEPARATOR).is_some();
+    let success = consume_result == "CR_SUCCESS";
     MessageResendResult {
-        message: result.message,
-        success: consume_result == "CR_SUCCESS",
+        message: if success {
+            "Message resend completed".to_string()
+        } else {
+            "Message resend was not accepted".to_string()
+        },
+        success,
         consume_result,
-        remark,
+        remark: has_remark.then(|| "The broker returned additional diagnostic information".to_string()),
     }
 }
 
@@ -1139,13 +1140,22 @@ mod tests {
     #[test]
     fn direct_consume_result_classifies_non_success_outcomes() {
         let result = map_direct_consume_result(CoreMutationResult {
-            message: "Direct consume returned CR_LATER for `MSG-001` on `orders` in consumer group `order-service`. Remark: retry later".to_string(),
+            message: "Direct consume returned CR_LATER for `MSG-001` on `orders` in consumer group `order-service`. Remark: sensitive-rejection-detail".to_string(),
             target_count: 1,
         });
 
         assert!(!result.success);
         assert_eq!(result.consume_result, "CR_LATER");
-        assert_eq!(result.remark.as_deref(), Some("retry later"));
+        assert_eq!(result.message, "Message resend was not accepted");
+        assert_eq!(
+            result.remark.as_deref(),
+            Some("The broker returned additional diagnostic information")
+        );
+        assert!(
+            !serde_json::to_string(&result)
+                .expect("serialize result")
+                .contains("sensitive-rejection-detail")
+        );
     }
 
     #[tokio::test]

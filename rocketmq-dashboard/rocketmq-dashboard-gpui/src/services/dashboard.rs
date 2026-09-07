@@ -312,7 +312,11 @@ fn project_overview_load(
     successful_resources: usize,
 ) -> Result<DashboardOverviewLoad, UiError> {
     if successful_resources == 0 {
-        return Err(query_error("overview unavailable"));
+        return Err(UiError::new(
+            "Unable to load Dashboard data from the selected connection.",
+            UiErrorCode::Connection,
+            true,
+        ));
     }
     Ok(DashboardOverviewLoad {
         overview: project_dashboard_overview(evidence),
@@ -320,16 +324,38 @@ fn project_overview_load(
     })
 }
 
-fn query_error(_error: impl std::fmt::Display) -> UiError {
-    UiError::new(
-        "Unable to load Dashboard data from the selected connection.",
-        UiErrorCode::Connection,
-        true,
-    )
+fn query_error(source: crate::infrastructure::admin_provider::ProviderFailure) -> UiError {
+    let retryable = source.is_retryable();
+    match source.into_operational() {
+        Some(source) => UiError::caused_by(
+            "Unable to load Dashboard data from the selected connection.",
+            UiErrorCode::Connection,
+            retryable,
+            source,
+        ),
+        None => UiError::new(
+            "Unable to load Dashboard data from the selected connection.",
+            UiErrorCode::Connection,
+            retryable,
+        ),
+    }
 }
 
-fn history_error(_error: impl std::fmt::Display) -> UiError {
-    UiError::new("Unable to load local metric History.", UiErrorCode::Configuration, true)
+fn history_error(source: crate::infrastructure::config_store::ConfigStoreFailure) -> UiError {
+    let retryable = source.is_retryable();
+    match source.into_operational() {
+        Some(source) => UiError::caused_by(
+            "Unable to load local metric History.",
+            UiErrorCode::Configuration,
+            retryable,
+            source,
+        ),
+        None => UiError::new(
+            "Unable to load local metric History.",
+            UiErrorCode::Configuration,
+            retryable,
+        ),
+    }
 }
 
 #[cfg(test)]

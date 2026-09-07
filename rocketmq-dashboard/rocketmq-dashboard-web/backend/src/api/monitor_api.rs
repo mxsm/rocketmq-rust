@@ -11,6 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::api::request::ApiExtension as Extension;
+use crate::api::request::ApiJson as Json;
+use crate::api::request::ApiPath as Path;
+use crate::api::request::ApiQuery as Query;
 use crate::error::DashboardError;
 use crate::middleware::AuditTerminalFactSink;
 use crate::middleware::successful_mutation_audit_event;
@@ -25,10 +29,6 @@ use crate::model::MonitorDeleteQuery;
 use crate::model::MonitorEnvironmentQuery;
 use crate::service;
 use crate::state::AppState;
-use axum::Json;
-use axum::extract::Extension;
-use axum::extract::Path;
-use axum::extract::Query;
 use axum::extract::State;
 
 pub async fn list_consumer_monitors(

@@ -15,6 +15,21 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OperationErrorView {
+    pub code: String,
+    pub message: String,
+}
+
+impl OperationErrorView {
+    pub(crate) fn fixed(code: &'static str, message: &'static str) -> Self {
+        Self {
+            code: code.to_string(),
+            message: message.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiResponse<T> {
     pub success: bool,
     pub code: String,

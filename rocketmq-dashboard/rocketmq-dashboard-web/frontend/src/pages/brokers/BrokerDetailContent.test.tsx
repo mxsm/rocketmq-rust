@@ -90,7 +90,8 @@ describe('BrokerDetailContent', () => {
     renderAtRoute(<BrokerDetailContent brokerName="broker-a" />, '/brokers');
 
     await user.click(screen.getByRole('tab', { name: 'Runtime' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('runtime unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load broker runtime data.');
+    expect(screen.queryByText('runtime unavailable')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByText('brokerVersion')).toBeInTheDocument();
@@ -138,7 +139,8 @@ describe('BrokerDetailContent', () => {
     await user.click(screen.getByRole('button', { name: 'Review changes' }));
     await user.click(await screen.findByRole('button', { name: 'Apply configuration' }));
 
-    expect(await screen.findByText('write rejected')).toBeInTheDocument();
+    expect(await screen.findByText('Unable to update broker configuration.')).toBeInTheDocument();
+    expect(screen.queryByText('write rejected')).not.toBeInTheDocument();
     expect(editor).toBeInTheDocument();
     expect(editor).toHaveValue('{"sendMessageThreadPoolNums":"24"}');
   });

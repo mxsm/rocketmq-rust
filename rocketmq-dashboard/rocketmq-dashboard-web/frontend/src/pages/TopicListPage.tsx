@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { topicApi } from '../api/topic_api';
+import { userErrorMessage } from '../api/client';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import EntitySheet from '../components/EntitySheet';
 import ErrorState from '../components/ErrorState';
@@ -99,7 +100,7 @@ const emptyConsumers = (topicName = '', kind: TopicConsumerActionKind = 'reset')
   loading: false,
   error: null
 });
-const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+const errorMessage = (error: unknown) => userErrorMessage(error, 'Unable to load topic data.');
 
 export default function TopicListPage() {
   const [data, setData] = useState<TopicListView | null>(null);
@@ -216,11 +217,6 @@ export default function TopicListPage() {
       for (const resource of resources) next[resource] += 1;
       return next;
     });
-  };
-
-  const refreshAppliedTopicResources = async (...resources: Array<keyof typeof detailRevisions>) => {
-    refreshDetailResources(...resources);
-    await load();
   };
 
   const openDetails = (topic: TopicInfo, origin?: HTMLElement) => {
@@ -490,7 +486,6 @@ export default function TopicListPage() {
         targets={data?.targets ?? []}
         onOpenChange={changeCreateOpen}
         onSubmit={saveCreate}
-        onAppliedAuditFailure={load}
       />
       <TopicMutationDialog
         open={Boolean(editAction)}
@@ -502,7 +497,6 @@ export default function TopicListPage() {
         onRetryConfig={retryEditConfig}
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onSubmit={saveEdit}
-        onAppliedAuditFailure={() => refreshAppliedTopicResources('config')}
       />
       <EntitySheet
         open={selectedTopic !== null}
@@ -563,7 +557,6 @@ export default function TopicListPage() {
         topic={sendAction?.topic.topic ?? ''}
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onSucceeded={() => undefined}
-        onAppliedAuditFailure={() => refreshAppliedTopicResources('stats')}
       />
       <TopicResetOffsetDialog
         open={Boolean(consumerAction?.kind === 'reset' && consumerAction.consumerGroup)}
@@ -571,7 +564,6 @@ export default function TopicListPage() {
         consumerGroup={consumerAction?.consumerGroup ?? ''}
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onSucceeded={(result) => refreshOffsetResources(result.topic)}
-        onAppliedAuditFailure={() => refreshAppliedTopicResources('stats', 'consumers')}
       />
       <TopicSkipBacklogDialog
         open={Boolean(consumerAction?.kind === 'skip' && consumerAction.consumerGroup)}
@@ -579,7 +571,6 @@ export default function TopicListPage() {
         consumerGroup={consumerAction?.consumerGroup ?? ''}
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onSucceeded={(result) => refreshOffsetResources(result.topic)}
-        onAppliedAuditFailure={() => refreshAppliedTopicResources('stats', 'consumers')}
       />
       <TopicDeleteDialog
         open={Boolean(deleteAction)}
@@ -589,12 +580,6 @@ export default function TopicListPage() {
         onOpenChange={(open) => { if (!open) closeAction(); }}
         onResult={handleDeleteResult}
         onSucceeded={handleDeleteSucceeded}
-        onAppliedAuditFailure={() => {
-          const resources = deleteAction?.kind === 'delete-broker'
-            ? ['route', 'stats', 'config'] as const
-            : [] as const;
-          return refreshAppliedTopicResources(...resources);
-        }}
       />
     </div>
   );

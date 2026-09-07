@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::Result;
-
-fn main() -> Result<()> {
+fn main() -> Result<(), std::convert::Infallible> {
     // Build script for rocketmq-dashboard
     // This can be used to compile assets, check dependencies, etc.
     Ok(())

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeAuthenticatedCommand } from './invoke';
 import type {
     ProxyConfigSnapshot,
     ProxyMutationResult,
@@ -6,18 +6,18 @@ import type {
 
 export class ProxyService {
     static async getHomePageInfo(): Promise<ProxyConfigSnapshot> {
-        return invoke<ProxyConfigSnapshot>('get_proxy_home_page');
+        return invokeAuthenticatedCommand<ProxyConfigSnapshot>('get_proxy_home_page');
     }
 
     static async addProxyAddr(address: string): Promise<ProxyMutationResult> {
-        return invoke<ProxyMutationResult>('add_proxy_addr', { address });
+        return invokeAuthenticatedCommand<ProxyMutationResult>('add_proxy_addr', { address });
     }
 
     static async switchProxyAddr(address: string): Promise<ProxyMutationResult> {
-        return invoke<ProxyMutationResult>('switch_proxy_addr', { address });
+        return invokeAuthenticatedCommand<ProxyMutationResult>('switch_proxy_addr', { address });
     }
 
     static async deleteProxyAddr(address: string): Promise<ProxyMutationResult> {
-        return invoke<ProxyMutationResult>('delete_proxy_addr', { address });
+        return invokeAuthenticatedCommand<ProxyMutationResult>('delete_proxy_addr', { address });
     }
 }

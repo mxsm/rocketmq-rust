@@ -44,7 +44,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     infrastructure::{
-        admin_provider::{GpuiAdminProvider, ProviderError},
+        admin_provider::{GpuiAdminProvider, ProviderFailure},
         auth_state::DesktopAuthState,
         config_store::{DesktopConfig, DesktopConfigStore},
         history_collector::{HistoryLifecycle, HistorySampler},
@@ -102,8 +102,8 @@ impl RuntimeBridge {
                     let _ = completion.send(name);
                 }
             })
-            .map_err(|_| runtime_unavailable())?;
-        receiver.await.map_err(|_| runtime_unavailable())?
+            .map_err(runtime_unavailable)?;
+        receiver.await.map_err(runtime_unavailable)?
     }
 }
 
@@ -111,11 +111,12 @@ fn runtime_cancelled() -> UiError {
     UiError::new("The dashboard operation was cancelled.", UiErrorCode::Connection, true)
 }
 
-fn runtime_unavailable() -> UiError {
-    UiError::new(
+fn runtime_unavailable(source: impl std::error::Error + Send + Sync + 'static) -> UiError {
+    UiError::caused_by(
         "The dashboard runtime is shutting down.",
         UiErrorCode::Connection,
         false,
+        source,
     )
 }
 
@@ -158,8 +159,8 @@ impl fmt::Debug for SessionState {
 }
 
 impl SessionState {
-    /// Creates a compatibility marker for injected D1 tests.
-    pub fn authenticated() -> Self {
+    /// Creates an authenticated marker when no display username is available.
+    pub fn restored() -> Self {
         Self {
             username: Some("Authenticated".into()),
         }
@@ -408,12 +409,12 @@ trait ConnectionProvider: Send + Sync {
     fn switch(
         &self,
         snapshot: rocketmq_dashboard_common::ConnectionSnapshot,
-    ) -> ServiceFuture<'_, Result<AdminSessionSummary, ProviderError>>;
-    fn check_health(&self) -> ServiceFuture<'_, Result<EndpointHealth, ProviderError>>;
+    ) -> ServiceFuture<'_, Result<AdminSessionSummary, ProviderFailure>>;
+    fn check_health(&self) -> ServiceFuture<'_, Result<EndpointHealth, ProviderFailure>>;
     fn check_endpoints(
         &self,
         snapshots: Vec<rocketmq_dashboard_common::ConnectionSnapshot>,
-    ) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, ProviderError>>;
+    ) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, ProviderFailure>>;
 }
 
 struct RealConnectionProvider(Arc<GpuiAdminProvider>);
@@ -422,18 +423,18 @@ impl ConnectionProvider for RealConnectionProvider {
     fn switch(
         &self,
         snapshot: rocketmq_dashboard_common::ConnectionSnapshot,
-    ) -> ServiceFuture<'_, Result<AdminSessionSummary, ProviderError>> {
+    ) -> ServiceFuture<'_, Result<AdminSessionSummary, ProviderFailure>> {
         Box::pin(self.0.switch(snapshot))
     }
 
-    fn check_health(&self) -> ServiceFuture<'_, Result<EndpointHealth, ProviderError>> {
+    fn check_health(&self) -> ServiceFuture<'_, Result<EndpointHealth, ProviderFailure>> {
         Box::pin(self.0.check_health())
     }
 
     fn check_endpoints(
         &self,
         snapshots: Vec<rocketmq_dashboard_common::ConnectionSnapshot>,
-    ) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, ProviderError>> {
+    ) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, ProviderFailure>> {
         Box::pin(self.0.check_endpoints(snapshots))
     }
 }
@@ -446,7 +447,7 @@ impl ConnectionProvider for ProductFakeConnectionProvider {
     fn switch(
         &self,
         snapshot: rocketmq_dashboard_common::ConnectionSnapshot,
-    ) -> ServiceFuture<'_, Result<AdminSessionSummary, ProviderError>> {
+    ) -> ServiceFuture<'_, Result<AdminSessionSummary, ProviderFailure>> {
         let configured = snapshot.nameserver.is_some() || snapshot.proxy.is_some();
         Box::pin(std::future::ready(Ok(AdminSessionSummary {
             revision: snapshot.revision,
@@ -459,7 +460,7 @@ impl ConnectionProvider for ProductFakeConnectionProvider {
         })))
     }
 
-    fn check_health(&self) -> ServiceFuture<'_, Result<EndpointHealth, ProviderError>> {
+    fn check_health(&self) -> ServiceFuture<'_, Result<EndpointHealth, ProviderFailure>> {
         Box::pin(std::future::ready(Ok(EndpointHealth {
             endpoint: String::new(),
             revision: 0,
@@ -472,7 +473,7 @@ impl ConnectionProvider for ProductFakeConnectionProvider {
     fn check_endpoints(
         &self,
         snapshots: Vec<rocketmq_dashboard_common::ConnectionSnapshot>,
-    ) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, ProviderError>> {
+    ) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, ProviderFailure>> {
         Box::pin(std::future::ready(Ok(snapshots
             .into_iter()
             .map(|snapshot| EndpointHealth {
@@ -516,10 +517,15 @@ pub struct AppServices {
 }
 
 impl AppServices {
-    /// Preserves the narrow D1 injection surface for focused shell tests.
-    pub fn new(startup: Arc<dyn StartupService>, config: Arc<dyn ConfigService>, auth: Arc<dyn AuthService>) -> Self {
+    /// Creates a narrow synchronous backend for focused shell tests.
+    #[cfg(test)]
+    pub(crate) fn injected_for_test(
+        startup: Arc<dyn TestStartup>,
+        config: Arc<dyn TestConfig>,
+        auth: Arc<dyn TestAuth>,
+    ) -> Self {
         Self {
-            backend: Arc::new(LegacyBackend { startup, config, auth }),
+            backend: Arc::new(InjectedBackend { startup, config, auth }),
             runtime_bridge: None,
             delivery03: delivery03::RealDelivery03Backend::new(
                 dashboard::DashboardService::unavailable(),
@@ -530,7 +536,7 @@ impl AppServices {
         }
     }
 
-    /// Creates the full Delivery 02 service pipeline.
+    /// Creates the complete desktop service pipeline.
     pub fn desktop(
         store: Arc<DesktopConfigStore>,
         provider: Arc<GpuiAdminProvider>,
@@ -711,7 +717,7 @@ impl AppServices {
         self.backend.config_path()
     }
 
-    /// Compatibility intent used by the startup error page.
+    /// Opens the configuration location used by the startup error page.
     pub async fn open_config_location(&self) -> Result<(), UiError> {
         let Some(runtime) = self.runtime_bridge.as_ref() else {
             return self.backend.open_config_location().await;
@@ -725,12 +731,13 @@ impl AppServices {
     }
 }
 
+#[cfg(test)]
 impl Default for AppServices {
     fn default() -> Self {
-        Self::new(
-            Arc::new(DefaultStartupService),
-            Arc::new(CapabilityUnavailableConfigService),
-            Arc::new(CapabilityUnavailableAuthService),
+        Self::injected_for_test(
+            Arc::new(DefaultTestStartup),
+            Arc::new(UnavailableTestConfig),
+            Arc::new(UnavailableTestAuth),
         )
     }
 }
@@ -773,12 +780,11 @@ impl DesktopBackend {
                 }
             };
             if let Some(mut lifecycle) = existing
-                && !lifecycle.stop().await
+                && let Err(source) = lifecycle.stop().await
             {
-                return Err(UiError::new(
+                return Err(config_ui_error_with_summary(
+                    source,
                     "The History lifecycle did not stop cleanly.",
-                    UiErrorCode::Configuration,
-                    true,
                 ));
             }
             if self.history_lifecycle.lock().is_none() {
@@ -803,12 +809,11 @@ impl DesktopBackend {
         } else {
             let lifecycle = self.history_lifecycle.lock().take();
             if let Some(mut lifecycle) = lifecycle
-                && !lifecycle.stop().await
+                && let Err(source) = lifecycle.stop().await
             {
-                return Err(UiError::new(
+                return Err(config_ui_error_with_summary(
+                    source,
                     "The History lifecycle did not stop cleanly.",
-                    UiErrorCode::Configuration,
-                    true,
                 ));
             }
         }
@@ -928,9 +933,7 @@ impl ApplicationBackend for DesktopBackend {
     fn bootstrap(&self) -> ServiceFuture<'_, Result<StartupSnapshot, UiError>> {
         Box::pin(async move {
             let config = self.store.load().await.map_err(config_ui_error)?;
-            self.auth
-                .validate_startup(&config.auth)
-                .map_err(|error| UiError::new(error.to_string(), UiErrorCode::Authentication, true))?;
+            self.auth.validate_startup(&config.auth).map_err(auth_ui_error)?;
             if self
                 .install_persisted(config.clone(), None, ConfigRouteTransition::None)
                 .await
@@ -958,13 +961,7 @@ impl ApplicationBackend for DesktopBackend {
     ) -> ServiceFuture<'a, Result<SessionState, UiError>> {
         Box::pin(async move {
             self.auth.authenticate(username, password).map_or_else(
-                |error| {
-                    let retryable = matches!(
-                        error,
-                        crate::infrastructure::auth_state::AuthStateError::MissingEnvironment { .. }
-                    );
-                    Err(UiError::new(error.to_string(), UiErrorCode::Authentication, retryable))
-                },
+                |error| Err(auth_ui_error(error)),
                 |session| {
                     Ok(SessionState::for_username(
                         session.username().unwrap_or_default().to_owned(),
@@ -1015,9 +1012,7 @@ impl ApplicationBackend for DesktopBackend {
                 mutation,
                 ConfigMutation::SetAuthEnabled(true) | ConfigMutation::SetCredentialSource(_)
             ) {
-                self.auth
-                    .validate_startup(&next.auth)
-                    .map_err(|error| UiError::new(error.to_string(), UiErrorCode::Authentication, true))?;
+                self.auth.validate_startup(&next.auth).map_err(auth_ui_error)?;
             }
             let saved = self.store.save_next(next).await.map_err(config_ui_error)?;
             let warning = self
@@ -1081,12 +1076,20 @@ impl ApplicationBackend for DesktopBackend {
                 .storage_io()
                 .spawn_io("gpui-open-config-location", move || open_platform_location(&path))
                 .await
-                .map_err(|error| UiError::new(error.to_string(), UiErrorCode::Configuration, true))?
-                .map_err(|error| {
-                    UiError::new(
-                        format!("Unable to open the configuration location: {error}"),
+                .map_err(|source| {
+                    UiError::caused_by(
+                        "Unable to open the configuration location.",
                         UiErrorCode::Configuration,
                         true,
+                        source,
+                    )
+                })?
+                .map_err(|source| {
+                    UiError::caused_by(
+                        "Unable to open the configuration location.",
+                        UiErrorCode::Configuration,
+                        true,
+                        source,
                     )
                 })
         })
@@ -1226,53 +1229,102 @@ fn apply_mutation(config: &mut DesktopConfig, mutation: &ConfigMutation) -> Resu
         }
         ConfigMutation::Reload => Ok(()),
     };
-    result.map_err(|error| UiError::new(error.to_string(), UiErrorCode::Validation, false))
+    result.map_err(|source| {
+        UiError::caused_by(
+            "The requested configuration change is invalid.",
+            UiErrorCode::Validation,
+            false,
+            source,
+        )
+    })
 }
 
-fn config_ui_error(error: impl std::fmt::Display) -> UiError {
-    UiError::new(error.to_string(), UiErrorCode::Configuration, true)
+fn auth_ui_error(rejection: crate::infrastructure::auth_state::AuthRejection) -> UiError {
+    use crate::infrastructure::auth_state::AuthRejection;
+
+    match rejection {
+        AuthRejection::MissingEnvironment { .. } => UiError::new(
+            "Required environment-backed credentials are not configured.",
+            UiErrorCode::Authentication,
+            true,
+        ),
+        AuthRejection::Rejected => UiError::new(
+            "The username or password was not accepted.",
+            UiErrorCode::Authentication,
+            false,
+        ),
+        AuthRejection::InvalidAdminCredential => UiError::new(
+            "The environment-backed Admin credential is incomplete.",
+            UiErrorCode::Authentication,
+            true,
+        ),
+    }
 }
 
-fn provider_ui_error(error: ProviderError) -> UiError {
+fn config_ui_error(error: crate::infrastructure::config_store::ConfigStoreFailure) -> UiError {
+    config_ui_error_with_summary(error, "Unable to access local dashboard data.")
+}
+
+fn config_ui_error_with_summary(
+    error: crate::infrastructure::config_store::ConfigStoreFailure,
+    summary: &'static str,
+) -> UiError {
     let retryable = error.is_retryable();
-    let code = match error.code() {
-        crate::infrastructure::admin_provider::ProviderErrorCode::Authentication => UiErrorCode::Authentication,
-        crate::infrastructure::admin_provider::ProviderErrorCode::NotConfigured => UiErrorCode::Configuration,
-        crate::infrastructure::admin_provider::ProviderErrorCode::Unavailable
-        | crate::infrastructure::admin_provider::ProviderErrorCode::Cancelled
-        | crate::infrastructure::admin_provider::ProviderErrorCode::StaleRevision
-        | crate::infrastructure::admin_provider::ProviderErrorCode::Runtime => UiErrorCode::Connection,
-    };
-    UiError::new(error.to_string(), code, retryable)
+    match error.into_operational() {
+        Some(source) => UiError::caused_by(summary, UiErrorCode::Configuration, retryable, source),
+        None => UiError::new(summary, UiErrorCode::Configuration, retryable),
+    }
 }
 
-/// D1 startup injection seam retained for focused shell tests.
-pub trait StartupService: Send + Sync {
+fn provider_ui_error(error: ProviderFailure) -> UiError {
+    let retryable = error.is_retryable();
+    let summary = error.summary();
+    let code = match error.code() {
+        crate::infrastructure::admin_provider::ProviderFailureCode::Authentication => UiErrorCode::Authentication,
+        crate::infrastructure::admin_provider::ProviderFailureCode::NotConfigured => UiErrorCode::Configuration,
+        crate::infrastructure::admin_provider::ProviderFailureCode::Unavailable
+        | crate::infrastructure::admin_provider::ProviderFailureCode::Cancelled
+        | crate::infrastructure::admin_provider::ProviderFailureCode::StaleRevision
+        | crate::infrastructure::admin_provider::ProviderFailureCode::Runtime => UiErrorCode::Connection,
+    };
+    match error.into_operational() {
+        Some(source) => UiError::caused_by(summary, code, retryable, source),
+        None => UiError::new(summary, code, retryable),
+    }
+}
+
+/// Synchronous startup seam for focused tests.
+#[cfg(test)]
+pub(crate) trait TestStartup: Send + Sync {
     /// Returns the safe startup decision.
     fn bootstrap(&self) -> Result<StartupSnapshot, UiError>;
 }
 
-/// D1 configuration intent seam retained for compatibility.
-pub trait ConfigService: Send + Sync {
+/// Synchronous configuration seam for focused tests.
+#[cfg(test)]
+pub(crate) trait TestConfig: Send + Sync {
     /// Opens the configuration location if supported.
     fn open_config_location(&self) -> Result<(), UiError>;
 }
 
-/// D1 authentication seam retained for compatibility.
-pub trait AuthService: Send + Sync {
+/// Synchronous authentication seam for focused tests.
+#[cfg(test)]
+pub(crate) trait TestAuth: Send + Sync {
     /// Authenticates without retaining supplied values.
     fn authenticate(&self, username: &str, password: &str) -> Result<SessionState, UiError>;
     /// Clears the local session.
     fn sign_out(&self) -> Result<(), UiError>;
 }
 
-struct LegacyBackend {
-    startup: Arc<dyn StartupService>,
-    config: Arc<dyn ConfigService>,
-    auth: Arc<dyn AuthService>,
+#[cfg(test)]
+struct InjectedBackend {
+    startup: Arc<dyn TestStartup>,
+    config: Arc<dyn TestConfig>,
+    auth: Arc<dyn TestAuth>,
 }
 
-impl ApplicationBackend for LegacyBackend {
+#[cfg(test)]
+impl ApplicationBackend for InjectedBackend {
     fn bootstrap(&self) -> ServiceFuture<'_, Result<StartupSnapshot, UiError>> {
         Box::pin(std::future::ready(self.startup.bootstrap()))
     }
@@ -1294,9 +1346,7 @@ impl ApplicationBackend for LegacyBackend {
         _mutation: ConfigMutation,
         _progress: ConfigProgressSender,
     ) -> ServiceFuture<'_, Result<ConfigUpdate, UiError>> {
-        Box::pin(std::future::ready(Err(capability_unavailable(
-            "Configuration mutation",
-        ))))
+        Box::pin(std::future::ready(Err(test_capability_unavailable())))
     }
 
     fn check_all_nameservers(&self) -> ServiceFuture<'_, Result<Vec<EndpointHealth>, UiError>> {
@@ -1316,9 +1366,11 @@ impl ApplicationBackend for LegacyBackend {
     }
 }
 
-struct DefaultStartupService;
+#[cfg(test)]
+struct DefaultTestStartup;
 
-impl StartupService for DefaultStartupService {
+#[cfg(test)]
+impl TestStartup for DefaultTestStartup {
     fn bootstrap(&self) -> Result<StartupSnapshot, UiError> {
         Ok(StartupSnapshot {
             configuration_revision: 0,
@@ -1331,7 +1383,7 @@ impl StartupService for DefaultStartupService {
 /// Deterministic startup fake.
 #[cfg(test)]
 #[derive(Clone)]
-pub struct FakeStartupService {
+pub(crate) struct FakeStartupService {
     result: Result<StartupSnapshot, UiError>,
 }
 
@@ -1344,7 +1396,7 @@ impl FakeStartupService {
 }
 
 #[cfg(test)]
-impl StartupService for FakeStartupService {
+impl TestStartup for FakeStartupService {
     fn bootstrap(&self) -> Result<StartupSnapshot, UiError> {
         self.result.clone()
     }
@@ -1353,7 +1405,7 @@ impl StartupService for FakeStartupService {
 /// Deterministic authentication fake.
 #[cfg(test)]
 #[derive(Clone)]
-pub struct FakeAuthService {
+pub(crate) struct FakeAuthService {
     result: Result<SessionState, UiError>,
 }
 
@@ -1362,7 +1414,7 @@ impl FakeAuthService {
     /// Creates a successful fake.
     pub fn authenticated() -> Self {
         Self {
-            result: Ok(SessionState::authenticated()),
+            result: Ok(SessionState::restored()),
         }
     }
 
@@ -1373,7 +1425,7 @@ impl FakeAuthService {
 }
 
 #[cfg(test)]
-impl AuthService for FakeAuthService {
+impl TestAuth for FakeAuthService {
     fn authenticate(&self, _username: &str, _password: &str) -> Result<SessionState, UiError> {
         self.result.clone()
     }
@@ -1383,32 +1435,36 @@ impl AuthService for FakeAuthService {
     }
 }
 
-/// Compatibility service with no host integration.
-pub struct CapabilityUnavailableConfigService;
+/// Test configuration seam with no host integration.
+#[cfg(test)]
+pub(crate) struct UnavailableTestConfig;
 
-impl ConfigService for CapabilityUnavailableConfigService {
+#[cfg(test)]
+impl TestConfig for UnavailableTestConfig {
     fn open_config_location(&self) -> Result<(), UiError> {
-        Err(capability_unavailable("Opening the configuration location"))
+        Err(test_capability_unavailable())
     }
 }
 
-/// Compatibility auth service with no backing source.
-pub struct CapabilityUnavailableAuthService;
+/// Test authentication seam with no backing source.
+#[cfg(test)]
+struct UnavailableTestAuth;
 
-impl AuthService for CapabilityUnavailableAuthService {
+#[cfg(test)]
+impl TestAuth for UnavailableTestAuth {
     fn authenticate(&self, _username: &str, _password: &str) -> Result<SessionState, UiError> {
-        Err(capability_unavailable("Authentication"))
+        Err(test_capability_unavailable())
     }
 
     fn sign_out(&self) -> Result<(), UiError> {
-        Err(capability_unavailable("Sign out"))
+        Err(test_capability_unavailable())
     }
 }
 
-/// Creates a safe explicit signal for a missing capability.
-pub fn capability_unavailable(capability: &str) -> UiError {
+#[cfg(test)]
+fn test_capability_unavailable() -> UiError {
     UiError::new(
-        format!("{capability} is not available in this delivery."),
+        "The requested capability is not available in this delivery.",
         UiErrorCode::CapabilityUnavailable,
         false,
     )

@@ -281,7 +281,8 @@ describe('TopicDetailContent', () => {
     await user.click(screen.getByRole('tab', { name: 'Consumers' }));
     expect(screen.getByRole('status', { name: 'Loading topic consumers' })).toBeInTheDocument();
     await act(async () => consumersRequest.reject(new Error('consumers unavailable')));
-    expect(await screen.findByRole('alert')).toHaveTextContent('consumers unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load topic details.');
+    expect(screen.queryByText('consumers unavailable')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Retry consumers' }));
     expect(await screen.findByText('No consumers')).toBeInTheDocument();
@@ -300,7 +301,8 @@ describe('TopicDetailContent', () => {
     await user.click(screen.getByRole('tab', { name: 'Routes and status' }));
     expect(await screen.findByRole('region', { name: 'Topic routes' })).toBeInTheDocument();
     await user.click(screen.getByRole('tab', { name: 'Configuration' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('config unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load topic details.');
+    expect(screen.queryByText('config unavailable')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry configuration' }));
     expect(await screen.findByRole('combobox', { name: 'Configuration broker' })).toHaveTextContent('broker-a');
     await user.click(screen.getByRole('tab', { name: 'Routes and status' }));

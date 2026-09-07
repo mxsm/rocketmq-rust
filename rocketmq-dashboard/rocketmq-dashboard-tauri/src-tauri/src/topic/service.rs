@@ -22,6 +22,7 @@ use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
 use rocketmq_admin_core::core::topic::ResetTopicConsumerOffsetRequest;
 use rocketmq_admin_core::core::topic::TopicAdmin;
 use rocketmq_admin_core::core::topic::TopicCatalogRequest;
+use rocketmq_admin_core::core::topic::TopicMutationOutcome;
 use rocketmq_admin_core::core::topic::TopicRoute;
 use rocketmq_admin_core::core::topic::TopicSendRequest as AdminTopicSendRequest;
 use rocketmq_admin_core::core::topic::TopicSendResult as AdminTopicSendResult;
@@ -38,6 +39,7 @@ use rocketmq_dashboard_common::TopicListRequest;
 use rocketmq_dashboard_common::TopicQueryRequest;
 use tokio::sync::Mutex;
 
+use crate::error::DashboardError as TopicError;
 use crate::nameserver::NameServerRuntimeState;
 use crate::topic::admin::ManagedTopicAdmin;
 use crate::topic::types::TopicBrokerAddressView;
@@ -48,7 +50,6 @@ use crate::topic::types::TopicConsumerInfoView;
 use crate::topic::types::TopicCurrentStatsFailure;
 use crate::topic::types::TopicCurrentStatsItem;
 use crate::topic::types::TopicCurrentStatsResponse;
-use crate::topic::types::TopicError;
 use crate::topic::types::TopicListItem;
 use crate::topic::types::TopicListResponse;
 use crate::topic::types::TopicMutationResult;
@@ -108,8 +109,8 @@ impl TopicManager {
             drop(session_guard);
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_topic_list` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_list` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -142,8 +143,8 @@ impl TopicManager {
             drop(session_guard);
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_topic_current_stats` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_current_stats` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -171,8 +172,8 @@ impl TopicManager {
             drop(session_guard);
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_topic_route` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_route` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -200,8 +201,8 @@ impl TopicManager {
             drop(session_guard);
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_topic_stats` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_stats` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -229,8 +230,8 @@ impl TopicManager {
             drop(session_guard);
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_topic_config` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_config` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -317,8 +318,8 @@ impl TopicManager {
             drop(session_guard);
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_topic_consumer_groups` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_consumer_groups` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -349,8 +350,8 @@ impl TopicManager {
             drop(session_guard);
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_topic_consumers` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_consumers` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -582,12 +583,7 @@ impl TopicManager {
             })
             .await
             .map_err(map_admin_error)?;
-        Ok(TopicMutationResult {
-            success: true,
-            message: outcome.message,
-            topic_name: Some(topic_name),
-            affected_queues: None,
-        })
+        Ok(project_topic_mutation_outcome(outcome, topic_name, "Topic saved."))
     }
 
     async fn delete_topic_with_admin(
@@ -607,12 +603,7 @@ impl TopicManager {
             })
             .await
             .map_err(map_admin_error)?;
-        Ok(TopicMutationResult {
-            success: true,
-            message: outcome.message,
-            topic_name: Some(topic),
-            affected_queues: None,
-        })
+        Ok(project_topic_mutation_outcome(outcome, topic, "Topic deleted."))
     }
 
     async fn delete_topic_by_broker_with_admin(
@@ -636,12 +627,7 @@ impl TopicManager {
             })
             .await
             .map_err(map_admin_error)?;
-        Ok(TopicMutationResult {
-            success: true,
-            message: outcome.message,
-            topic_name: Some(topic),
-            affected_queues: None,
-        })
+        Ok(project_topic_mutation_outcome(outcome, topic, "Topic deleted."))
     }
 
     async fn get_topic_consumer_groups_with_admin(
@@ -758,6 +744,41 @@ impl TopicManager {
             .await
             .map_err(map_admin_error)?;
         Ok(map_send_result(result))
+    }
+}
+
+fn project_topic_mutation_outcome(
+    _outcome: TopicMutationOutcome,
+    topic_name: String,
+    message: &'static str,
+) -> TopicMutationResult {
+    TopicMutationResult {
+        success: true,
+        message: message.to_string(),
+        topic_name: Some(topic_name),
+        affected_queues: None,
+    }
+}
+
+#[cfg(test)]
+mod boundary_projection_tests {
+    use super::project_topic_mutation_outcome;
+    use rocketmq_admin_core::core::topic::TopicMutationOutcome;
+
+    #[test]
+    fn topic_mutation_projection_discards_upstream_message() {
+        let result = project_topic_mutation_outcome(
+            TopicMutationOutcome {
+                message: "password=secret C:\\private\\broker".to_string(),
+                target_count: 1,
+            },
+            "orders".to_string(),
+            "Topic saved.",
+        );
+
+        assert_eq!(result.message, "Topic saved.");
+        assert!(!result.message.contains("secret"));
+        assert!(!result.message.contains("private"));
     }
 }
 

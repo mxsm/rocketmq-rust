@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardApi } from '../api/dashboard_api';
+import { userErrorMessage } from '../api/client';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
@@ -42,7 +43,7 @@ function historyPoints(series: DashboardHistorySeries | null) {
 }
 
 function rejectionMessage(result: PromiseRejectedResult) {
-  return result.reason instanceof Error ? result.reason.message : String(result.reason);
+  return userErrorMessage(result.reason, 'Dashboard data is unavailable.');
 }
 
 export default function DashboardPage() {

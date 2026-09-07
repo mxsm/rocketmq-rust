@@ -14,26 +14,8 @@
 
 use serde::Deserialize;
 use serde::Serialize;
-use std::fmt;
 
-pub(crate) type DashboardResult<T> = Result<T, DashboardError>;
-
-#[derive(Debug)]
-pub(crate) enum DashboardError {
-    Cluster(String),
-    Topic(String),
-}
-
-impl fmt::Display for DashboardError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Cluster(message) => write!(f, "Cluster error: {message}"),
-            Self::Topic(message) => write!(f, "Topic error: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for DashboardError {}
+pub(crate) type DashboardResult<T> = crate::error::DashboardResult<T>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

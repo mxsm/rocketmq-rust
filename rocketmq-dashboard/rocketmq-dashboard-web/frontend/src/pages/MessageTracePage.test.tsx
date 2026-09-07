@@ -79,7 +79,8 @@ describe('MessageTracePage', () => {
     await user.click(await screen.findByRole('row', { name: /MSG-001/ }));
     expect(await screen.findByText('No trace nodes')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Reload trace' }));
-    expect(await screen.findByText('trace backend unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Unable to load the message trace.')).toBeInTheDocument();
+    expect(screen.queryByText('trace backend unavailable')).not.toBeInTheDocument();
   });
 
   it('traces the selected physical message when client identifiers collide', async () => {
@@ -148,7 +149,8 @@ describe('MessageTracePage', () => {
       .mockResolvedValueOnce(topicList);
 
     renderAtRoute(<MessageTracePage />, '/message-trace');
-    expect(await screen.findByText('Topic discovery failed: nameserver unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Topic discovery failed: Unable to load topics.')).toBeInTheDocument();
+    expect(screen.queryByText(/nameserver unavailable/)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry topics' }));
 
     await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));

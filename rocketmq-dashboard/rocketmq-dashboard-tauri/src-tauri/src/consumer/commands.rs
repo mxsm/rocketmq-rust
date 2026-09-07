@@ -19,6 +19,8 @@ use crate::consumer::types::ConsumerGroupListItem;
 use crate::consumer::types::ConsumerGroupListResponse;
 use crate::consumer::types::ConsumerMutationResult;
 use crate::consumer::types::ConsumerTopicDetailView;
+use crate::error::CommandResult;
+use crate::error::authorize_command;
 use rocketmq_dashboard_common::ConsumerConfigQueryRequest;
 use rocketmq_dashboard_common::ConsumerConnectionQueryRequest;
 use rocketmq_dashboard_common::ConsumerCreateOrUpdateRequest;
@@ -30,88 +32,113 @@ use tauri::State;
 
 #[tauri::command]
 pub async fn query_consumer_groups(
+    session_id: String,
     request: ConsumerGroupListRequest,
     consumer_manager: State<'_, ConsumerManager>,
-) -> Result<ConsumerGroupListResponse, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ConsumerGroupListResponse> {
+    authorize_command(&session_id, &session_state)?;
     consumer_manager
         .query_consumer_groups(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn refresh_consumer_group(
+    session_id: String,
     request: ConsumerGroupRefreshRequest,
     consumer_manager: State<'_, ConsumerManager>,
-) -> Result<ConsumerGroupListItem, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ConsumerGroupListItem> {
+    authorize_command(&session_id, &session_state)?;
     consumer_manager
         .refresh_consumer_group(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn refresh_all_consumer_groups(
+    session_id: String,
     request: ConsumerGroupListRequest,
     consumer_manager: State<'_, ConsumerManager>,
-) -> Result<ConsumerGroupListResponse, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ConsumerGroupListResponse> {
+    authorize_command(&session_id, &session_state)?;
     consumer_manager
         .refresh_all_consumer_groups(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn query_consumer_connection(
+    session_id: String,
     request: ConsumerConnectionQueryRequest,
     consumer_manager: State<'_, ConsumerManager>,
-) -> Result<ConsumerConnectionView, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ConsumerConnectionView> {
+    authorize_command(&session_id, &session_state)?;
     consumer_manager
         .query_consumer_connection(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn query_consumer_topic_detail(
+    session_id: String,
     request: ConsumerTopicDetailQueryRequest,
     consumer_manager: State<'_, ConsumerManager>,
-) -> Result<ConsumerTopicDetailView, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ConsumerTopicDetailView> {
+    authorize_command(&session_id, &session_state)?;
     consumer_manager
         .query_consumer_topic_detail(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn query_consumer_config(
+    session_id: String,
     request: ConsumerConfigQueryRequest,
     consumer_manager: State<'_, ConsumerManager>,
-) -> Result<ConsumerConfigView, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ConsumerConfigView> {
+    authorize_command(&session_id, &session_state)?;
     consumer_manager
         .query_consumer_config(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn create_or_update_consumer_group(
+    session_id: String,
     request: ConsumerCreateOrUpdateRequest,
     consumer_manager: State<'_, ConsumerManager>,
-) -> Result<ConsumerMutationResult, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ConsumerMutationResult> {
+    authorize_command(&session_id, &session_state)?;
     consumer_manager
         .create_or_update_consumer_group(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 pub async fn delete_consumer_group(
+    session_id: String,
     request: ConsumerDeleteRequest,
     consumer_manager: State<'_, ConsumerManager>,
-) -> Result<ConsumerMutationResult, String> {
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ConsumerMutationResult> {
+    authorize_command(&session_id, &session_state)?;
     consumer_manager
         .delete_consumer_group(request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
 }
+use crate::auth::SessionState;

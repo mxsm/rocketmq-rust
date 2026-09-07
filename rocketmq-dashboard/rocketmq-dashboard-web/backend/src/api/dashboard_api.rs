@@ -11,6 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::api::request::ApiJson as Json;
+use crate::api::request::ApiQuery as Query;
 use crate::error::DashboardError;
 use crate::model::ApiResponse;
 use crate::model::DashboardHistoryQuery;
@@ -22,8 +24,6 @@ use crate::service::overview as overview_service;
 use crate::service::topic_current as topic_current_service;
 use crate::service::topic_history as topic_history_service;
 use crate::state::AppState;
-use axum::Json;
-use axum::extract::Query;
 use axum::extract::State;
 
 pub async fn overview(State(state): State<AppState>) -> Result<Json<ApiResponse<DashboardOverview>>, DashboardError> {

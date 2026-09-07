@@ -1,112 +1,132 @@
 import type { ApiResponse } from '../types/api';
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? '';
-const sessionStorageKey = 'rocketmq-dashboard-web-session';
-export const appliedAuditFailedCode = 'APPLIED_AUDIT_FAILED';
-
-export const authSessionStore = {
-  get: () => window.localStorage.getItem(sessionStorageKey),
-  set: (sessionId: string) => window.localStorage.setItem(sessionStorageKey, sessionId),
-  clear: () => window.localStorage.removeItem(sessionStorageKey)
-};
+const auditWarningMessage = 'The operation completed, but its audit record could not be stored.';
 
 export class ApiClientError extends Error {
   readonly code: string;
-  readonly mutationApplied: boolean;
+  readonly status: number | null;
+  readonly details: Readonly<Record<string, unknown>>;
 
-  constructor(code: string, message: string, options: { mutationApplied?: boolean } = {}) {
+  constructor(
+    code: string,
+    message: string,
+    options: { status?: number; details?: Record<string, unknown> } = {}
+  ) {
     super(message);
+    this.name = 'ApiClientError';
     this.code = code;
-    this.mutationApplied = options.mutationApplied ?? false;
+    this.status = options.status ?? null;
+    this.details = options.details ?? {};
   }
 }
 
-export function isAppliedAuditFailure(error: unknown): error is ApiClientError {
-  // The error code is the protocol contract. `mutationApplied` is an
-  // additional local signal for callers that need it, but a UI must never
-  // expose a retry merely because an adapter reconstructed this typed error.
-  return error instanceof ApiClientError && error.code === appliedAuditFailedCode;
-}
-
-/**
- * Settles a mutation that committed remotely but whose audit event could not
- * be recorded. The mutation must remain terminal: close or disable its UI
- * synchronously, then fetch authoritative state exactly once without
- * resubmitting the original request.
- */
-export async function handleAppliedAuditFailure(
-  error: unknown,
-  options: {
-    onApplied: () => void;
-    refresh?: () => Promise<unknown> | void;
-  }
-): Promise<boolean> {
-  if (!isAppliedAuditFailure(error)) return false;
-  options.onApplied();
-  try {
-    await options.refresh?.();
-  } catch {
-    // The global audit warning is already retained by the API client. A
-    // refresh failure must not turn this terminal mutation into a retry.
-  }
-  return true;
+export function userErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiClientError ? error.message : fallback;
 }
 
 function notifyAuthenticationExpired() {
-  authSessionStore.clear();
   window.dispatchEvent(new Event('rocketmq-auth-expired'));
 }
 
-function emptyResponseMessage(path: string, response: Response) {
-  if (response.ok) {
-    return `The dashboard backend returned an empty response for ${path}.`;
-  }
-
-  return `The dashboard backend is unavailable or returned an empty response for ${path} (${response.status} ${response.statusText || 'HTTP error'}).`;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function invalidJsonMessage(path: string, response: Response) {
-  if (response.ok) {
-    return `The dashboard backend returned an invalid JSON response for ${path}.`;
+function decodeResponse<T>(value: unknown): ApiResponse<T> | null {
+  if (!isRecord(value)
+    || typeof value.success !== 'boolean'
+    || typeof value.code !== 'string'
+    || typeof value.message !== 'string') {
+    return null;
   }
+  if (value.details !== undefined && !isRecord(value.details)) return null;
+  return value as unknown as ApiResponse<T>;
+}
 
-  return `The dashboard backend returned a non-JSON error response for ${path} (${response.status} ${response.statusText || 'HTTP error'}).`;
+function safeServerErrorMessage(code: string, status: number): string {
+  switch (code) {
+    case 'AUTH_ERROR':
+    case 'AUTH_TOKEN_AMBIGUOUS':
+      return 'Authentication failed.';
+    case 'FORBIDDEN':
+      return 'Permission was denied.';
+    case 'VALIDATION_ERROR':
+    case 'ADMIN_INVALID_ARGUMENT':
+    case 'INVALID_JSON':
+    case 'INVALID_JSON_DATA':
+    case 'INVALID_QUERY':
+    case 'INVALID_PATH':
+      return 'The request is invalid.';
+    case 'UNSUPPORTED_MEDIA_TYPE':
+      return 'The request must use JSON.';
+    case 'PAYLOAD_TOO_LARGE':
+      return 'The request is too large.';
+    case 'NOT_FOUND':
+    case 'ADMIN_NOT_FOUND':
+    case 'API_ROUTE_NOT_FOUND':
+      return 'The requested resource was not found.';
+    case 'METHOD_NOT_ALLOWED':
+      return 'The requested operation is not allowed.';
+    case 'ADMIN_SESSION_CLOSED':
+      return 'The admin service is unavailable.';
+    case 'CONFIG_ERROR':
+      return 'Dashboard configuration is invalid.';
+    case 'NOT_IMPLEMENTED':
+      return 'The requested operation is not implemented.';
+    case 'INTERNAL_ERROR':
+    case 'MISSING_REQUEST_CONTEXT':
+    case 'REQUEST_BODY_ERROR':
+      return 'The dashboard request could not be completed.';
+    default:
+      if (status === 401) return 'Authentication failed.';
+      if (status === 403) return 'Permission was denied.';
+      if (status === 404) return 'The requested resource was not found.';
+      return 'The dashboard request failed.';
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const sessionId = authSessionStore.get();
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    ...init,
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(sessionId ? { 'x-dashboard-session': sessionId } : {}),
-      ...init?.headers
-    }
-  });
-  const responseText = await response.text();
-  // An HTTP 401 is authoritative even when an intermediary has stripped or
-  // replaced the JSON body. Do not retain a legacy header credential that
-  // would conflict with a fresh HttpOnly session on the next request.
-  if (response.status === 401) notifyAuthenticationExpired();
-  if (responseText.trim() === '') {
-    throw new ApiClientError(response.ok ? 'EMPTY_RESPONSE' : String(response.status), emptyResponseMessage(path, response));
-  }
-
-  let payload: ApiResponse<T>;
+  let response: Response;
   try {
-    payload = JSON.parse(responseText) as ApiResponse<T>;
+    response = await fetch(`${apiBaseUrl}${path}`, {
+      ...init,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...init?.headers
+      }
+    });
   } catch {
-    throw new ApiClientError(response.ok ? 'INVALID_JSON' : String(response.status), invalidJsonMessage(path, response));
+    throw new ApiClientError('NETWORK_ERROR', 'Unable to reach the dashboard backend.');
   }
 
-  // This terminal result is intentionally handled before generic success and
-  // data checks. The backend has applied the mutation, so exposing response
-  // data (or an empty-response retry) could cause a second mutation.
-  if (payload.code === appliedAuditFailedCode) {
-    window.dispatchEvent(new CustomEvent('rocketmq-audit-warning', { detail: payload.message }));
-    throw new ApiClientError(appliedAuditFailedCode, payload.message || 'The mutation was applied, but audit persistence failed.', {
-      mutationApplied: true
+  if (response.status === 401) notifyAuthenticationExpired();
+  if (response.headers.get('x-dashboard-audit') === 'failed') {
+    window.dispatchEvent(new CustomEvent('rocketmq-audit-warning', { detail: auditWarningMessage }));
+  }
+
+  const responseText = await response.text();
+  if (responseText.trim() === '') {
+    throw new ApiClientError(
+      'EMPTY_RESPONSE',
+      response.ok ? 'The dashboard backend returned no data.' : 'The dashboard request failed.',
+      { status: response.status }
+    );
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(responseText);
+  } catch {
+    throw new ApiClientError('INVALID_RESPONSE', 'The dashboard backend returned an invalid response.', {
+      status: response.status
+    });
+  }
+  const payload = decodeResponse<T>(decoded);
+  if (!payload) {
+    throw new ApiClientError('INVALID_RESPONSE', 'The dashboard backend returned an invalid response.', {
+      status: response.status
     });
   }
 
@@ -114,10 +134,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (response.status === 401 || payload.code === 'AUTH_ERROR' || payload.code === 'AUTH_TOKEN_AMBIGUOUS') {
       notifyAuthenticationExpired();
     }
-    throw new ApiClientError(payload.code || String(response.status), payload.message || response.statusText);
+    throw new ApiClientError(payload.code, safeServerErrorMessage(payload.code, response.status), {
+      status: response.status,
+      details: payload.details
+    });
   }
   if (payload.data === undefined || payload.data === null) {
-    throw new ApiClientError('EMPTY_RESPONSE', 'The server returned no data.');
+    throw new ApiClientError('EMPTY_RESPONSE', 'The server returned no data.', { status: response.status });
   }
   return payload.data;
 }

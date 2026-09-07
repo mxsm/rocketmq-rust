@@ -25,6 +25,7 @@ import { Button } from '../components/ui/LegacyButton';
 import { SideSheet } from './ui/SideSheet';
 import { useClusterCatalog } from '../features/cluster/hooks/useClusterCatalog';
 import type { ClusterBrokerCardItem } from '../features/cluster/types/cluster.types';
+import { dashboardErrorMessage } from '../services/invoke';
 
 const formatNumber = (value: number) => value.toLocaleString();
 const formatTps = (value: number) => value.toFixed(2);
@@ -226,7 +227,7 @@ export const ClusterView = () => {
         },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load broker status';
+      const message = dashboardErrorMessage(error, 'Failed to load broker status');
       setDetailSheet({
         isOpen: true,
         type: 'Status',
@@ -263,7 +264,7 @@ export const ClusterView = () => {
         },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load broker config';
+      const message = dashboardErrorMessage(error, 'Failed to load broker config');
       setDetailSheet({
         isOpen: true,
         type: 'Config',
@@ -282,7 +283,7 @@ export const ClusterView = () => {
       await refresh();
       toast.success('Cluster status refreshed');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to refresh cluster status';
+      const message = dashboardErrorMessage(error, 'Failed to refresh cluster status');
       toast.error(message);
     }
   };

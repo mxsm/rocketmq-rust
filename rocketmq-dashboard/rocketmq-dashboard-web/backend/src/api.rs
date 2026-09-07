@@ -23,6 +23,7 @@ pub mod message_api;
 pub mod monitor_api;
 pub mod ops_api;
 pub mod producer_api;
+mod request;
 pub mod router;
 pub mod topic_api;
 

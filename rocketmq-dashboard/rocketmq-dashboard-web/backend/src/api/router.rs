@@ -24,6 +24,7 @@ use crate::api::monitor_api;
 use crate::api::ops_api;
 use crate::api::producer_api;
 use crate::api::topic_api;
+use crate::error::DashboardError;
 use crate::middleware::audit_mutation;
 use crate::middleware::http_trace_layer;
 use crate::middleware::optional_auth;
@@ -31,7 +32,6 @@ use crate::middleware::require_auth;
 use crate::state::AppState;
 use axum::Router;
 use axum::http::HeaderValue;
-use axum::http::header::AUTHORIZATION;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::header::HeaderName;
 use axum::middleware;
@@ -186,6 +186,8 @@ pub fn build_router(state: AppState) -> Router {
         .merge(auth_routes)
         .merge(admin_session_audit_routes)
         .merge(protected_routes)
+        .fallback(route_not_found)
+        .method_not_allowed_fallback(method_not_allowed)
         .layer(http_trace_layer())
         .with_state(state.clone());
 
@@ -193,6 +195,14 @@ pub fn build_router(state: AppState) -> Router {
         return router;
     };
     router.layer(cors_layer(origin))
+}
+
+async fn route_not_found() -> DashboardError {
+    DashboardError::RouteNotFound
+}
+
+async fn method_not_allowed() -> DashboardError {
+    DashboardError::MethodNotAllowed
 }
 
 fn cors_layer(origin: HeaderValue) -> CorsLayer {
@@ -205,26 +215,23 @@ fn cors_layer(origin: HeaderValue) -> CorsLayer {
             axum::http::Method::PUT,
             axum::http::Method::DELETE,
         ])
-        .allow_headers([
-            AUTHORIZATION,
-            CONTENT_TYPE,
-            HeaderName::from_static("x-dashboard-session"),
-        ])
+        .allow_headers([CONTENT_TYPE])
+        .expose_headers([HeaderName::from_static("x-dashboard-audit")])
 }
 
 #[cfg(test)]
 mod tests {
     use super::build_router;
     use super::cors_layer;
+    use super::method_not_allowed;
+    use super::route_not_found;
     use crate::config::AppConfig;
     use crate::config::AuthConfig;
     use crate::config::ServerConfig;
     use crate::config::SqlPoolConfig;
     use crate::config::StorageConfig;
     use crate::model::DashboardConfigView;
-    use crate::model::LoginRequest;
     use crate::model::StorageBackend;
-    use crate::service;
     use crate::state::AppState;
     use axum::Router;
     use axum::body::Body;
@@ -232,7 +239,9 @@ mod tests {
     use axum::http::HeaderValue;
     use axum::http::Request;
     use axum::http::StatusCode;
-    use axum::http::header::AUTHORIZATION;
+    use axum::http::header::ALLOW;
+    use axum::http::header::CONTENT_TYPE;
+    use axum::http::header::SET_COOKIE;
     use axum::routing::get;
     use rocketmq_admin_core::client_adapter::ClientRuntime;
     use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
@@ -240,6 +249,42 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn route_and_method_fallbacks_use_json_and_preserve_allow() {
+        let app = Router::new()
+            .route("/known", get(|| async { "ok" }))
+            .fallback(route_not_found)
+            .method_not_allowed_fallback(method_not_allowed);
+
+        let not_found = app
+            .clone()
+            .oneshot(Request::get("/missing").body(Body::empty()).expect("request"))
+            .await
+            .expect("response");
+        assert_eq!(not_found.status(), StatusCode::NOT_FOUND);
+        let not_found_body = to_bytes(not_found.into_body(), 4_096).await.expect("body");
+        let not_found_json: serde_json::Value = serde_json::from_slice(&not_found_body).expect("JSON");
+        assert_eq!(not_found_json["code"], "API_ROUTE_NOT_FOUND");
+
+        let method_not_allowed_response = app
+            .oneshot(Request::post("/known").body(Body::empty()).expect("request"))
+            .await
+            .expect("response");
+        assert_eq!(method_not_allowed_response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(
+            method_not_allowed_response
+                .headers()
+                .get(ALLOW)
+                .and_then(|value| value.to_str().ok()),
+            Some("GET,HEAD")
+        );
+        let method_body = to_bytes(method_not_allowed_response.into_body(), 4_096)
+            .await
+            .expect("body");
+        let method_json: serde_json::Value = serde_json::from_slice(&method_body).expect("JSON");
+        assert_eq!(method_json["code"], "METHOD_NOT_ALLOWED");
+    }
 
     fn test_config(data_path: PathBuf) -> AppConfig {
         AppConfig {
@@ -282,6 +327,40 @@ mod tests {
         (state, client_runtime)
     }
 
+    async fn login_cookie(app: &Router) -> String {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/auth/login")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"username":"admin","password":"test-password"}"#))
+                    .expect("login request"),
+            )
+            .await
+            .expect("login response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let set_cookie = response
+            .headers()
+            .get(SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .expect("session cookie")
+            .to_string();
+        assert!(set_cookie.contains("; HttpOnly;"));
+        assert!(set_cookie.contains("; SameSite=Strict"));
+        let cookie = set_cookie.split(';').next().expect("cookie pair").to_string();
+        let token = cookie.strip_prefix("dashboard_session=").expect("session cookie name");
+        let body = to_bytes(response.into_body(), 4_096).await.expect("login body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("login json");
+        assert_eq!(json["data"]["authenticated"], true);
+        assert!(json["data"].get("sessionId").is_none());
+        assert!(
+            !String::from_utf8(body.to_vec())
+                .expect("utf-8 login body")
+                .contains(token)
+        );
+        cookie
+    }
+
     #[tokio::test]
     async fn exact_origin_uses_credentialed_preflight_without_panicking() {
         let app = Router::new()
@@ -315,57 +394,47 @@ mod tests {
     }
 
     #[test]
-    fn session_status_propagates_ambiguous_credentials_and_accepts_identical_duplicates() {
+    fn login_session_and_logout_use_only_the_http_only_cookie() {
         let directory = tempfile::tempdir().expect("temp dir");
         let owner = RuntimeOwner::new().expect("runtime owner");
         owner.block_on(async {
             let (state, client_runtime) = test_state(&owner, directory.path().join("dashboard")).await;
-            let session = service::login(
-                &state,
-                LoginRequest {
-                    username: "admin".to_string(),
-                    password: "test-password".to_string(),
-                },
-            )
-            .await
-            .expect("login");
-            let token = session.session_id.expect("session token");
             let app = build_router(state.clone());
+            let cookie = login_cookie(&app).await;
 
-            let identical_request = Request::builder()
+            let session_request = Request::builder()
                 .uri("/api/auth/session")
-                .header("x-dashboard-session", &token)
-                .header(AUTHORIZATION, format!("Bearer {token}"))
-                .header("cookie", format!("dashboard_session={token}"))
+                .header("cookie", &cookie)
                 .body(Body::empty())
-                .expect("identical credential request");
-            let identical_response = app.clone().oneshot(identical_request).await.expect("session response");
-            assert_eq!(identical_response.status(), StatusCode::OK);
-            let identical_body = to_bytes(identical_response.into_body(), 4_096)
+                .expect("session request");
+            let session_response = app.clone().oneshot(session_request).await.expect("session response");
+            assert_eq!(session_response.status(), StatusCode::OK);
+            let session_body = to_bytes(session_response.into_body(), 4_096)
                 .await
                 .expect("session body");
-            let identical_json: serde_json::Value = serde_json::from_slice(&identical_body).expect("session json");
-            assert_eq!(identical_json["data"]["authenticated"], true);
+            let session_json: serde_json::Value = serde_json::from_slice(&session_body).expect("session json");
+            assert_eq!(session_json["data"]["authenticated"], true);
+            assert!(session_json["data"].get("sessionId").is_none());
 
-            for uri in ["/api/auth/session", "/api/dashboard/overview"] {
-                let request = Request::builder()
-                    .uri(uri)
-                    .header("x-dashboard-session", "header-secret")
-                    .header(AUTHORIZATION, "Bearer bearer-secret")
-                    .header("cookie", "dashboard_session=cookie-secret")
-                    .body(Body::empty())
-                    .expect("conflicting credential request");
-                let response = app.clone().oneshot(request).await.expect("error response");
-                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-                let body = to_bytes(response.into_body(), 4_096).await.expect("error body");
-                let json: serde_json::Value = serde_json::from_slice(&body).expect("error json");
-                assert_eq!(json["code"], "AUTH_TOKEN_AMBIGUOUS");
-                assert_eq!(json["message"], "Ambiguous session credentials");
-                let text = String::from_utf8(body.to_vec()).expect("utf-8 error body");
-                assert!(!text.contains("header-secret"));
-                assert!(!text.contains("bearer-secret"));
-                assert!(!text.contains("cookie-secret"));
-            }
+            let logout_response = app
+                .clone()
+                .oneshot(
+                    Request::post("/api/auth/logout")
+                        .header("cookie", cookie)
+                        .body(Body::empty())
+                        .expect("logout request"),
+                )
+                .await
+                .expect("logout response");
+            assert_eq!(logout_response.status(), StatusCode::OK);
+            let clear_cookie = logout_response
+                .headers()
+                .get(SET_COOKIE)
+                .and_then(|value| value.to_str().ok())
+                .expect("cleared session cookie");
+            assert!(clear_cookie.starts_with("dashboard_session=;"));
+            assert!(clear_cookie.contains("; HttpOnly;"));
+            assert!(clear_cookie.contains("; Max-Age=0"));
 
             drop(app);
             drop(state);
@@ -409,22 +478,13 @@ mod tests {
                 .expect("denied status response");
             assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
-            let session = service::login(
-                &state,
-                LoginRequest {
-                    username: "admin".to_string(),
-                    password: "test-password".to_string(),
-                },
-            )
-            .await
-            .expect("login");
-            let token = session.session_id.expect("session token");
+            let cookie = login_cookie(&app).await;
             let response = app
                 .clone()
                 .oneshot(
                     Request::builder()
                         .uri("/api/ops/storage/status")
-                        .header("x-dashboard-session", token)
+                        .header("cookie", cookie)
                         .body(Body::empty())
                         .expect("authenticated status request"),
                 )

@@ -19,65 +19,68 @@ use tauri::State;
 
 #[tauri::command]
 pub async fn get_name_server_home_page(
+    session_id: String,
     nameserver_manager: State<'_, NameServerManager>,
-) -> Result<NameServerHomePageView, String> {
-    nameserver_manager.home_page_info().await.map_err(|error| {
-        log::error!("Failed to load NameServer home page: {}", error);
-        error.to_string()
-    })
+    session_state: State<'_, SessionState>,
+) -> CommandResult<NameServerHomePageView> {
+    authorize_command(&session_id, &session_state)?;
+    nameserver_manager.home_page_info().await.map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn add_name_server(
+    session_id: String,
     address: String,
     nameserver_manager: State<'_, NameServerManager>,
-) -> Result<NameServerMutationResult, String> {
-    nameserver_manager.add_name_server(&address).map_err(|error| {
-        log::warn!("Failed to add NameServer `{}`: {}", address, error);
-        error.to_string()
-    })
+    session_state: State<'_, SessionState>,
+) -> CommandResult<NameServerMutationResult> {
+    authorize_command(&session_id, &session_state)?;
+    nameserver_manager.add_name_server(&address).map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn switch_name_server(
+    session_id: String,
     address: String,
     nameserver_manager: State<'_, NameServerManager>,
-) -> Result<NameServerMutationResult, String> {
-    nameserver_manager.switch_name_server(&address).map_err(|error| {
-        log::warn!("Failed to switch NameServer to `{}`: {}", address, error);
-        error.to_string()
-    })
+    session_state: State<'_, SessionState>,
+) -> CommandResult<NameServerMutationResult> {
+    authorize_command(&session_id, &session_state)?;
+    nameserver_manager.switch_name_server(&address).map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn delete_name_server(
+    session_id: String,
     address: String,
     nameserver_manager: State<'_, NameServerManager>,
-) -> Result<NameServerMutationResult, String> {
-    nameserver_manager.delete_name_server(&address).map_err(|error| {
-        log::warn!("Failed to delete NameServer `{}`: {}", address, error);
-        error.to_string()
-    })
+    session_state: State<'_, SessionState>,
+) -> CommandResult<NameServerMutationResult> {
+    authorize_command(&session_id, &session_state)?;
+    nameserver_manager.delete_name_server(&address).map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn update_vip_channel(
+    session_id: String,
     enabled: bool,
     nameserver_manager: State<'_, NameServerManager>,
-) -> Result<NameServerMutationResult, String> {
-    nameserver_manager.update_vip_channel(enabled).map_err(|error| {
-        log::warn!("Failed to update VIP channel: {}", error);
-        error.to_string()
-    })
+    session_state: State<'_, SessionState>,
+) -> CommandResult<NameServerMutationResult> {
+    authorize_command(&session_id, &session_state)?;
+    nameserver_manager.update_vip_channel(enabled).map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn update_use_tls(
+    session_id: String,
     enabled: bool,
     nameserver_manager: State<'_, NameServerManager>,
-) -> Result<NameServerMutationResult, String> {
-    nameserver_manager.update_use_tls(enabled).map_err(|error| {
-        log::warn!("Failed to update TLS setting: {}", error);
-        error.to_string()
-    })
+    session_state: State<'_, SessionState>,
+) -> CommandResult<NameServerMutationResult> {
+    authorize_command(&session_id, &session_state)?;
+    nameserver_manager.update_use_tls(enabled).map_err(Into::into)
 }
+use crate::auth::SessionState;
+use crate::error::CommandResult;
+use crate::error::authorize_command;

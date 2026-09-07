@@ -1,6 +1,7 @@
 import { useParams } from 'react-router-dom';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { brokerApi } from '../api/broker_api';
+import { userErrorMessage } from '../api/client';
 import EntityDetailPage from '../components/EntityDetailPage';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
@@ -25,7 +26,7 @@ export default function BrokerDetailPage() {
       setBroker(list.items.find((item) => item.brokerName === brokerName) ?? null);
     } catch (requestError) {
       if (requestId !== requestRef.current) return;
-      setError(requestError instanceof Error ? requestError.message : String(requestError));
+      setError(userErrorMessage(requestError, 'Unable to load broker details.'));
     } finally {
       if (requestId === requestRef.current) setLoading(false);
     }

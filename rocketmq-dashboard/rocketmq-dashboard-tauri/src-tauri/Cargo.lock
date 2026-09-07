@@ -3824,7 +3824,6 @@ dependencies = [
 name = "rocketmq-dashboard-tauri"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "argon2",
  "base64 0.22.1",
  "chrono",
@@ -3841,6 +3840,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
+ "thiserror 2.0.20",
  "tokio",
  "uuid",
 ]

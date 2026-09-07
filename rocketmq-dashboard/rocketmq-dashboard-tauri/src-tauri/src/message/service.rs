@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::DashboardError as MessageError;
 use crate::message::admin::ManagedMessageAdmin;
 use crate::message::page_cache::MessagePageCache;
 use crate::message::page_cache::MessagePageCacheEntry;
@@ -24,7 +25,6 @@ use crate::message::types::DlqBatchMessageExportView;
 use crate::message::types::DlqMessageExportView;
 use crate::message::types::MessageBatchResendResponse;
 use crate::message::types::MessageDetailView;
-use crate::message::types::MessageError;
 use crate::message::types::MessagePageResponse;
 use crate::message::types::MessagePageView;
 use crate::message::types::MessageResendResult;
@@ -124,8 +124,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_message_by_topic_key` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_message_by_topic_key` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -159,8 +159,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_message_by_id` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_message_by_id` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -225,8 +225,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `view_message_detail` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `view_message_detail` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -322,8 +322,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `export_dlq_message` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `export_dlq_message` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -357,8 +357,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `batch_export_dlq_message` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `batch_export_dlq_message` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -417,8 +417,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_message_trace_by_id` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_message_trace_by_id` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -452,8 +452,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `view_message_trace_detail` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `view_message_trace_detail` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -528,8 +528,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_first_message_page` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_first_message_page` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -564,8 +564,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_first_dlq_message_page` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_first_dlq_message_page` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -600,8 +600,8 @@ impl MessageManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `query_message_page_from_cache` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_message_page_from_cache` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -1303,15 +1303,16 @@ fn build_message_resend_result(
         consume_result: consume_result_text,
         remark,
     } = consume_result;
-    let mut message = if success {
-        format!("Direct consume succeeded for `{msg_id}` on `{topic}` in consumer group `{consumer_group}`.")
+    let public_consume_result = closed_consume_result(consume_result_text.as_deref());
+    let message = if success {
+        "Direct consume completed.".to_string()
     } else {
-        let status = consume_result_text.clone().unwrap_or_else(|| "UNKNOWN".to_string());
-        format!("Direct consume returned {status} for `{msg_id}` on `{topic}` in consumer group `{consumer_group}`.")
+        "Direct consume was not accepted.".to_string()
     };
-    if let Some(remark_text) = remark.as_deref().and_then(non_empty) {
-        message.push_str(&format!(" Remark: {remark_text}."));
-    }
+    let public_remark = remark
+        .as_deref()
+        .and_then(non_empty)
+        .map(|_| "The broker returned additional diagnostic information.".to_string());
 
     MessageResendResult {
         success,
@@ -1319,8 +1320,20 @@ fn build_message_resend_result(
         consumer_group,
         topic,
         msg_id,
-        consume_result: consume_result_text,
-        remark,
+        consume_result: Some(public_consume_result.to_string()),
+        remark: public_remark,
+    }
+}
+
+fn closed_consume_result(value: Option<&str>) -> &'static str {
+    match value {
+        Some("CR_SUCCESS") => "CR_SUCCESS",
+        Some("CR_LATER") => "CR_LATER",
+        Some("CR_ROLLBACK") => "CR_ROLLBACK",
+        Some("CR_COMMIT") => "CR_COMMIT",
+        Some("CR_THROW_EXCEPTION") => "CR_THROW_EXCEPTION",
+        Some("CR_RETURN_NULL") => "CR_RETURN_NULL",
+        _ => "UNKNOWN",
     }
 }
 
@@ -1336,7 +1349,7 @@ fn build_failed_message_resend_result(
         topic: String::new(),
         msg_id,
         consume_result: None,
-        remark: Some(error.to_string()),
+        remark: Some(crate::error::CommandError::from(error).message.to_string()),
     }
 }
 
@@ -1421,7 +1434,7 @@ fn build_failed_dlq_export_row(topic: String, message_id: String, error: Message
         String::new(),
         String::new(),
         String::new(),
-        error.to_string(),
+        crate::error::CommandError::from(error).message.to_string(),
     ]
 }
 
@@ -1481,6 +1494,16 @@ fn sanitize_export_file_fragment(value: &str) -> String {
 
 fn csv_escape(value: impl AsRef<str>) -> String {
     let value = value.as_ref();
+    let begins_with_formula = value
+        .trim_start_matches([' ', '\t', '\r', '\n'])
+        .chars()
+        .next()
+        .is_some_and(|character| matches!(character, '=' | '+' | '-' | '@'));
+    let value = if begins_with_formula {
+        format!("'{value}")
+    } else {
+        value.to_string()
+    };
     let escaped = value.replace('"', "\"\"");
     format!("\"{escaped}\"")
 }
@@ -1873,8 +1896,32 @@ mod tests {
 
         assert!(!result.success);
         assert_eq!(result.consume_result.as_deref(), Some("CR_LATER"));
-        assert_eq!(result.remark.as_deref(), Some("retry later"));
-        assert!(result.message.contains("CR_LATER"));
+        assert_eq!(
+            result.remark.as_deref(),
+            Some("The broker returned additional diagnostic information.")
+        );
+        assert_eq!(result.message, "Direct consume was not accepted.");
+    }
+
+    #[test]
+    fn build_message_resend_result_discards_untrusted_broker_text() {
+        let result = build_message_resend_result(
+            "group-a".to_string(),
+            "%RETRY%group-a".to_string(),
+            "origin-msg-1".to_string(),
+            DirectConsumeResult {
+                success: false,
+                consume_result: Some("password=secret C:\\private\\broker".to_string()),
+                remark: Some("token=secret".to_string()),
+            },
+        );
+        let serialized = serde_json::to_string(&result).expect("message resend result serializes");
+
+        assert_eq!(result.consume_result.as_deref(), Some("UNKNOWN"));
+        assert_eq!(result.message, "Direct consume was not accepted.");
+        assert!(!serialized.contains("password"));
+        assert!(!serialized.contains("token"));
+        assert!(!serialized.contains("private"));
     }
 
     #[test]
@@ -1906,7 +1953,7 @@ mod tests {
     }
 
     #[test]
-    fn build_failed_message_resend_result_preserves_error_context() {
+    fn build_failed_message_resend_result_redacts_error_context() {
         let result = build_failed_message_resend_result(
             "group-a".to_string(),
             "msg-1".to_string(),
@@ -1916,7 +1963,7 @@ mod tests {
         assert!(!result.success);
         assert_eq!(result.consumer_group, "group-a");
         assert_eq!(result.msg_id, "msg-1");
-        assert_eq!(result.remark.as_deref(), Some("Validation error: missing origin id"));
+        assert_eq!(result.remark.as_deref(), Some("The request is invalid."));
     }
 
     #[test]
@@ -2004,12 +2051,21 @@ mod tests {
         assert_eq!(export.failure_count, 2);
         assert!(export.file_name.starts_with("dlqs-"));
         assert!(export.content.contains("\"exception\""));
-        assert!(
-            export
-                .content
-                .contains("\"Validation error: Failed to query message by Id: msg-1\"")
-        );
+        assert!(export.content.contains("\"The request is invalid.\""));
+        assert!(!export.content.contains("Failed to query message by Id"));
+        assert!(!export.content.contains("boom"));
         assert!(export.content.contains("\"msg-2\""));
+    }
+
+    #[test]
+    fn csv_escape_neutralizes_spreadsheet_formulas() {
+        assert_eq!(
+            csv_escape("=HYPERLINK(\"https://example.invalid\")"),
+            "\"'=HYPERLINK(\"\"https://example.invalid\"\")\""
+        );
+        assert_eq!(csv_escape("  +1+1"), "\"'  +1+1\"");
+        assert_eq!(csv_escape("@SUM(1,2)"), "\"'@SUM(1,2)\"");
+        assert_eq!(csv_escape("ordinary"), "\"ordinary\"");
     }
 
     #[test]

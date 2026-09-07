@@ -1,6 +1,6 @@
 import { Save } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
-import { handleAppliedAuditFailure } from '../api/client';
+import { userErrorMessage } from '../api/client';
 import type {
   TopicConfigView,
   TopicMutationRequest,
@@ -31,7 +31,6 @@ interface TopicMutationDialogProps {
   onRetryConfig?: () => void;
   onOpenChange: (open: boolean) => void;
   onSubmit: (request: TopicMutationRequest) => Promise<TopicOperationResult>;
-  onAppliedAuditFailure?: () => Promise<void> | void;
 }
 
 interface TopicFormState {
@@ -61,8 +60,7 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps) {
   const {
     open,
     onOpenChange,
-    onSubmit,
-    onAppliedAuditFailure
+    onSubmit
   } = props;
   const mode = props.mode;
   const targets = props.targets;
@@ -202,17 +200,8 @@ export default function TopicMutationDialog(props: TopicMutationDialogProps) {
     } catch (requestError) {
       if (!isCurrentPresentation(requestId, submittedMode, submittedTopic)) return;
 
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          closeDialog();
-          setError(null);
-          setResult(null);
-        },
-        refresh: onAppliedAuditFailure
-      })) return;
-
       setConfirmation(null);
-      setError(requestError instanceof Error ? requestError.message : 'Unable to save the topic.');
+      setError(userErrorMessage(requestError, 'Unable to save the topic.'));
       focusSave();
     } finally {
       if (pendingRef.current === requestId) pendingRef.current = null;
@@ -486,7 +475,9 @@ function OperationResult({ result }: { result: TopicOperationResult }) {
       <ul>
         {result.targets.map((target) => (
           <li key={target.target}>
-            <strong>{target.target}</strong>: <span>{target.message}</span>
+            <strong>{target.target}</strong>: <span>{target.success
+              ? target.message ?? 'Topic target operation completed'
+              : `${target.error?.code ?? 'TOPIC_TARGET_OPERATION_FAILED'}: ${target.error?.message ?? 'Topic target operation failed'}`}</span>
           </li>
         ))}
       </ul>

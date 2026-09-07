@@ -2,7 +2,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { configApi } from '../api/config_api';
 import { opsApi } from '../api/ops_api';
-import { ApiClientError, handleAppliedAuditFailure } from '../api/client';
+import { ApiClientError, userErrorMessage } from '../api/client';
 import ErrorState from '../components/ErrorState';
 import LoadingState from '../components/LoadingState';
 import PageHeader from '../components/PageHeader';
@@ -52,7 +52,7 @@ export default function ConfigPage() {
         applyConfig(nextConfig, undefined, draftToPreserve);
         void checkNameserverAvailability();
       })
-      .catch((requestError: Error) => setError(requestError.message))
+      .catch((requestError: unknown) => setError(userErrorMessage(requestError, 'Unable to load OPS settings.')))
       .finally(() => setLoading(false));
   };
 
@@ -80,7 +80,7 @@ export default function ConfigPage() {
       if (requestId === availabilityRequest.current) setNameserverAvailability(result);
     } catch (requestError) {
       if (requestId === availabilityRequest.current) {
-        setAvailabilityError(requestError instanceof Error ? requestError.message : 'Unable to check NameServer availability.');
+        setAvailabilityError(userErrorMessage(requestError, 'Unable to check NameServer availability.'));
       }
     } finally {
       if (requestId === availabilityRequest.current) setAvailabilityLoading(false);
@@ -100,17 +100,6 @@ export default function ConfigPage() {
       window.dispatchEvent(new CustomEvent('rocketmq-config-updated'));
       void checkNameserverAvailability();
     } catch (requestError) {
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          setNameserverToRemove(null);
-          setNotice({ tone: 'warning', message: 'Configuration change was applied. Refreshing authoritative settings.' });
-        },
-        refresh: async () => {
-          const authoritative = await configApi.getConfig();
-          applyConfig(authoritative);
-          await checkNameserverAvailability();
-        }
-      })) return;
       setNotice({ tone: 'danger', message: mutationErrorMessage(requestError, 'Configuration update failed.') });
       if (requestError instanceof ApiClientError && requestError.code === 'STORAGE_CONFLICT') {
         load(true);
@@ -214,7 +203,7 @@ function mutationErrorMessage(error: unknown, fallback: string) {
   if (error instanceof ApiClientError && error.code === 'STORAGE_CONFLICT') {
     return `${error.message} Your draft is still preserved; refresh before retrying.`;
   }
-  return error instanceof Error ? error.message : fallback;
+  return userErrorMessage(error, fallback);
 }
 
 interface SecuritySectionProps { useVIPChannel: boolean; useTLS: boolean; pending: boolean; onToggleVip: () => void; onToggleTls: () => void; }
@@ -247,7 +236,7 @@ function StorageSection({ storageBackend, storageMode }: { storageBackend: strin
       }
     } catch (error) {
       if (requestId === requestSequence.current) {
-        setRefreshError(error instanceof Error ? error.message : 'Unable to refresh storage status.');
+        setRefreshError(userErrorMessage(error, 'Unable to refresh storage status.'));
       }
     } finally {
       if (requestId === requestSequence.current) setRefreshing(false);

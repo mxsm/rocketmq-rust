@@ -20,6 +20,7 @@ import { Pagination } from './Pagination';
 import { useTopicCatalog } from '../features/topic/hooks/useTopicCatalog';
 import type { MessageSummary } from '../features/message/types/message.types';
 import { MessageService } from '../services/message.service';
+import { dashboardErrorMessage } from '../services/invoke';
 
 type MessageTab = 'Topic' | 'Message Key' | 'Message ID';
 
@@ -143,7 +144,7 @@ export const MessageView = () => {
       });
     } catch (error) {
       setMessages([]);
-      setSearchError(error instanceof Error ? error.message : 'Failed to query messages by topic.');
+      setSearchError(dashboardErrorMessage(error, 'Failed to query messages by topic.'));
     } finally {
       setIsSearching(false);
     }
@@ -203,7 +204,7 @@ export const MessageView = () => {
       setMessages(response.items);
     } catch (error) {
       setMessages([]);
-      setSearchError(error instanceof Error ? error.message : 'Failed to query messages.');
+      setSearchError(dashboardErrorMessage(error, 'Failed to query messages.'));
     } finally {
       setIsSearching(false);
     }

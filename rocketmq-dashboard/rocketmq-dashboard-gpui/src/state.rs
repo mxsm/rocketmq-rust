@@ -14,7 +14,7 @@
 
 //! Pure, reusable UI state primitives.
 
-use std::fmt;
+use std::{error::Error as StdError, fmt, sync::Arc};
 
 /// The read state for a screen resource.
 ///
@@ -209,8 +209,7 @@ impl RequestEpoch {
 }
 
 /// The process has issued every representable request epoch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("request epoch exhausted")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestEpochExhausted;
 
 /// A stable category for user-facing errors.
@@ -243,64 +242,91 @@ pub enum UiErrorCode {
 }
 
 /// A user-facing error that deliberately avoids retaining sensitive diagnostic data in `Debug`.
-#[derive(Clone, PartialEq, Eq)]
-pub struct UiError {
-    summary: String,
+#[derive(Clone)]
+pub(crate) struct UiError {
+    inner: Arc<UiErrorInner>,
+}
+
+struct UiErrorInner {
+    summary: &'static str,
     code: UiErrorCode,
     retryable: bool,
-    diagnostic: Option<String>,
+    source: Option<Arc<dyn StdError + Send + Sync>>,
 }
 
 impl UiError {
     /// Creates an error with a user-readable summary and a stable category.
-    pub fn new(summary: impl Into<String>, code: UiErrorCode, retryable: bool) -> Self {
+    pub(crate) fn new(summary: &'static str, code: UiErrorCode, retryable: bool) -> Self {
         Self {
-            summary: summary.into(),
-            code,
-            retryable,
-            diagnostic: None,
+            inner: Arc::new(UiErrorInner {
+                summary,
+                code,
+                retryable,
+                source: None,
+            }),
         }
     }
 
-    /// Adds a diagnostic context string that has been reviewed as non-sensitive.
-    ///
-    /// Never pass credentials, message content, ACL material, session values, or full Broker
-    /// configuration to this method.
-    #[cfg(test)]
-    pub fn with_safe_diagnostic(mut self, diagnostic: impl Into<String>) -> Self {
-        self.diagnostic = Some(diagnostic.into());
-        self
+    /// Creates a fixed user-facing projection while retaining the typed operational cause.
+    pub(crate) fn caused_by(
+        summary: &'static str,
+        code: UiErrorCode,
+        retryable: bool,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            inner: Arc::new(UiErrorInner {
+                summary,
+                code,
+                retryable,
+                source: Some(Arc::new(source)),
+            }),
+        }
     }
 
     /// Returns the summary intended for the current screen.
     pub fn summary(&self) -> &str {
-        &self.summary
+        self.inner.summary
     }
 
     /// Returns whether retry is appropriate without changing user input.
-    pub const fn is_retryable(&self) -> bool {
-        self.retryable
+    pub fn is_retryable(&self) -> bool {
+        self.inner.retryable
     }
 }
+
+impl PartialEq for UiError {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.summary == other.inner.summary
+            && self.inner.code == other.inner.code
+            && self.inner.retryable == other.inner.retryable
+    }
+}
+
+impl Eq for UiError {}
 
 impl fmt::Debug for UiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("UiError")
-            .field("code", &self.code)
-            .field("retryable", &self.retryable)
-            .field("diagnostic_available", &self.diagnostic.is_some())
+            .field("code", &self.inner.code)
+            .field("retryable", &self.inner.retryable)
+            .field("source_available", &self.inner.source.is_some())
             .finish()
     }
 }
 
 impl fmt::Display for UiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.summary)
+        formatter.write_str(self.inner.summary)
     }
 }
 
-impl std::error::Error for UiError {}
+impl StdError for UiError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.inner.source.as_deref().map(|source| source as _)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -343,13 +369,23 @@ mod tests {
     }
 
     #[test]
-    fn error_debug_output_does_not_include_diagnostics() {
-        let error = UiError::new("Unable to save configuration.", UiErrorCode::Configuration, true)
-            .with_safe_diagnostic("configuration revision 42");
+    fn error_debug_output_does_not_include_sources() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("configuration revision 42 contains secret-value")]
+        struct SensitiveSource;
+
+        let error = UiError::caused_by(
+            "Unable to save configuration.",
+            UiErrorCode::Configuration,
+            true,
+            SensitiveSource,
+        );
 
         let debug = format!("{error:?}");
         assert!(!debug.contains("configuration revision 42"));
-        assert!(debug.contains("diagnostic_available: true"));
+        assert!(!debug.contains("secret-value"));
+        assert!(debug.contains("source_available: true"));
+        assert!(std::error::Error::source(&error).is_some());
     }
 
     #[test]

@@ -14,6 +14,7 @@
 
 //! Real Broker inventory Table and typed Sheet navigation.
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, Focusable as _, InteractiveElement as _, IntoElement,
     KeyBinding, ParentElement as _, Render, Styled as _, Subscription, Task, WeakEntity, Window, div, px,
@@ -473,6 +474,13 @@ impl Render for BrokersView {
             Loadable::Failed { previous: None, error } => Some(error.summary().to_owned()),
             _ => None,
         };
+        let refresh_failure = match &self.store.inventory.state {
+            Loadable::Failed {
+                previous: Some(_),
+                error,
+            } => Some((error.summary().to_owned(), error.is_retryable())),
+            _ => None,
+        };
         let inventory_body = if let Some(error) = initial_failure {
             crate::components::states::error_state(
                 "Broker inventory unavailable",
@@ -532,6 +540,23 @@ impl Render for BrokersView {
                             .on_click(cx.listener(|view, _, window, cx| view.refresh_in(window, cx))),
                     ),
             )
+            .when_some(refresh_failure, |this, (summary, retryable)| {
+                this.child(
+                    div()
+                        .p_3()
+                        .rounded_md()
+                        .bg(cx.theme().warning.opacity(0.12))
+                        .child(summary)
+                        .when(retryable, |this| {
+                            this.child(
+                                Button::new("retry-broker-refresh")
+                                    .label("Retry")
+                                    .outline()
+                                    .on_click(cx.listener(|view, _, window, cx| view.refresh_in(window, cx))),
+                            )
+                        }),
+                )
+            })
             .child(inventory_body)
             .child(
                 div()

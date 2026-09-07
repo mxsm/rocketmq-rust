@@ -11,14 +11,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+use crate::api::request::ApiJson as Json;
+use crate::api::request::ApiQuery as Query;
 use crate::error::DashboardError;
 use crate::model::ApiResponse;
 use crate::model::ProducerConnectionView;
 use crate::model::ProducerInfo;
 use crate::service;
 use crate::state::AppState;
-use axum::Json;
-use axum::extract::Query;
 use axum::extract::State;
 use serde::Deserialize;
 

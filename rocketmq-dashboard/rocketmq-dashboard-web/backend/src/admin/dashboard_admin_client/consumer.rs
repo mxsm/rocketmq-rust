@@ -388,13 +388,16 @@ fn map_consumer_config(
                     .collect(),
                 error: None,
             }),
-            Err(error) => targets.push(ConsumerConfigTarget {
+            Err(_) => targets.push(ConsumerConfigTarget {
                 broker_name: fetch.broker_address.clone(),
                 broker_address: fetch.broker_address,
                 config: None,
                 subscription_topics: Vec::new(),
                 attributes: Vec::new(),
-                error: Some(error.to_string()),
+                error: Some(OperationErrorView::fixed(
+                    "CONSUMER_CONFIG_TARGET_UNAVAILABLE",
+                    "Consumer configuration is unavailable for this target",
+                )),
             }),
         }
     }
@@ -597,6 +600,33 @@ mod tests {
                 &ConsumerQuery::proxy(None)
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn consumer_config_target_errors_do_not_publish_admin_reasons() {
+        let view = map_consumer_config(
+            "orders-consumer",
+            vec![ConsumerConfigTargetFetch {
+                broker_address: "broker-a:10911".to_string(),
+                result: Err(AdminError::backend(
+                    "consumer_config_failed",
+                    "sensitive-rejection-detail",
+                )),
+            }],
+            ConsumerQueryScope {
+                mode: ConsumerQueryMode::NameServer,
+                address: None,
+            },
+        );
+
+        let error = view.targets[0].error.as_ref().expect("structured target error");
+        assert_eq!(error.code, "CONSUMER_CONFIG_TARGET_UNAVAILABLE");
+        assert_eq!(error.message, "Consumer configuration is unavailable for this target");
+        assert!(
+            !serde_json::to_string(&view)
+                .expect("serialize view")
+                .contains("sensitive-rejection-detail")
         );
     }
 

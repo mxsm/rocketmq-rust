@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NameServerService } from '../../../services/nameserver.service';
+import { dashboardErrorMessage } from '../../../services/invoke';
 import type {
     NameServerConfigSnapshot,
     NameServerHomePageInfo,
@@ -7,18 +8,6 @@ import type {
 } from '../types/nameserver.types';
 
 const NAMESERVER_REFRESH_INTERVAL_MS = 5_000;
-
-const toErrorMessage = (error: unknown) => {
-    if (error instanceof Error) {
-        return error.message;
-    }
-
-    if (typeof error === 'string') {
-        return error;
-    }
-
-    return 'NameServer operation failed';
-};
 
 const buildServerStatuses = (
     snapshot: NameServerConfigSnapshot,
@@ -47,9 +36,9 @@ export const useNameServer = () => {
             setLoadError('');
             return homePage;
         } catch (error) {
-            const errorMessage = toErrorMessage(error);
+            const errorMessage = dashboardErrorMessage(error, 'NameServer operation failed');
             setLoadError(errorMessage);
-            throw new Error(errorMessage);
+            throw error;
         }
     };
 
@@ -60,9 +49,8 @@ export const useNameServer = () => {
             try {
                 await loadHomePage();
             } catch (error) {
-                console.error('Failed to load NameServer home page', error);
                 if (isMounted) {
-                    setLoadError(toErrorMessage(error));
+                    setLoadError(dashboardErrorMessage(error, 'NameServer operation failed'));
                 }
             } finally {
                 if (isMounted) {
@@ -74,9 +62,7 @@ export const useNameServer = () => {
         void loadInitialState();
 
         const intervalId = window.setInterval(() => {
-            void loadHomePage().catch((error) => {
-                console.error('Failed to refresh NameServer home page', error);
-            });
+            void loadHomePage().catch(() => {});
         }, NAMESERVER_REFRESH_INTERVAL_MS);
 
         return () => {
@@ -99,7 +85,7 @@ export const useNameServer = () => {
             setNewAddress('');
             return result.message;
         } catch (error) {
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingAction(null);
         }
@@ -113,7 +99,7 @@ export const useNameServer = () => {
             await loadHomePage();
             return result.message;
         } catch (error) {
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingAction(null);
         }
@@ -127,7 +113,7 @@ export const useNameServer = () => {
             await loadHomePage();
             return result.message;
         } catch (error) {
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingAction(null);
         }
@@ -162,7 +148,7 @@ export const useNameServer = () => {
             return result.message;
         } catch (error) {
             setData(previous);
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingAction(null);
         }
@@ -183,7 +169,7 @@ export const useNameServer = () => {
             return result.message;
         } catch (error) {
             setData(previous);
-            throw new Error(toErrorMessage(error));
+            throw error;
         } finally {
             setPendingAction(null);
         }

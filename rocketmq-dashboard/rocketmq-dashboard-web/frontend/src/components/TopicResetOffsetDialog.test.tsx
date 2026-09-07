@@ -110,7 +110,8 @@ describe('TopicResetOffsetDialog', () => {
 
     await submitReset(user);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('reset failed');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to reset the consumer offset.');
+    expect(screen.queryByText('reset failed')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Reset time')).toHaveValue('2026-08-15T10:30');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Review reset' })).toHaveFocus());
     expect(topicApi.resetOffset).toHaveBeenCalledTimes(1);

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeAuthenticatedCommand } from './invoke';
 import type {
     ConsumerConfigQueryRequest,
     ConsumerConfigView,
@@ -17,38 +17,38 @@ import type {
 
 export class ConsumerService {
     static async queryConsumerGroups(request: ConsumerGroupListRequest = {}): Promise<ConsumerGroupListResponse> {
-        return invoke<ConsumerGroupListResponse>('query_consumer_groups', { request });
+        return invokeAuthenticatedCommand<ConsumerGroupListResponse>('query_consumer_groups', { request });
     }
 
     static async refreshConsumerGroup(request: ConsumerGroupRefreshRequest): Promise<ConsumerGroupListItem> {
-        return invoke<ConsumerGroupListItem>('refresh_consumer_group', { request });
+        return invokeAuthenticatedCommand<ConsumerGroupListItem>('refresh_consumer_group', { request });
     }
 
     static async refreshAllConsumerGroups(
         request: ConsumerGroupListRequest = {},
     ): Promise<ConsumerGroupListResponse> {
-        return invoke<ConsumerGroupListResponse>('refresh_all_consumer_groups', { request });
+        return invokeAuthenticatedCommand<ConsumerGroupListResponse>('refresh_all_consumer_groups', { request });
     }
 
     static async queryConsumerConnection(request: ConsumerConnectionQueryRequest): Promise<ConsumerConnectionView> {
-        return invoke<ConsumerConnectionView>('query_consumer_connection', { request });
+        return invokeAuthenticatedCommand<ConsumerConnectionView>('query_consumer_connection', { request });
     }
 
     static async queryConsumerTopicDetail(request: ConsumerTopicDetailQueryRequest): Promise<ConsumerTopicDetailView> {
-        return invoke<ConsumerTopicDetailView>('query_consumer_topic_detail', { request });
+        return invokeAuthenticatedCommand<ConsumerTopicDetailView>('query_consumer_topic_detail', { request });
     }
 
     static async queryConsumerConfig(request: ConsumerConfigQueryRequest): Promise<ConsumerConfigView> {
-        return invoke<ConsumerConfigView>('query_consumer_config', { request });
+        return invokeAuthenticatedCommand<ConsumerConfigView>('query_consumer_config', { request });
     }
 
     static async createOrUpdateConsumerGroup(
         request: ConsumerCreateOrUpdateRequest,
     ): Promise<ConsumerMutationResult> {
-        return invoke<ConsumerMutationResult>('create_or_update_consumer_group', { request });
+        return invokeAuthenticatedCommand<ConsumerMutationResult>('create_or_update_consumer_group', { request });
     }
 
     static async deleteConsumerGroup(request: ConsumerDeleteRequest): Promise<ConsumerMutationResult> {
-        return invoke<ConsumerMutationResult>('delete_consumer_group', { request });
+        return invokeAuthenticatedCommand<ConsumerMutationResult>('delete_consumer_group', { request });
     }
 }

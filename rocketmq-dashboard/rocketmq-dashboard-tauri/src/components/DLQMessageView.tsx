@@ -21,6 +21,7 @@ import { Input } from './ui/input';
 import { useConsumerCatalog } from '../features/consumer/hooks/useConsumerCatalog';
 import type { DlqMessageSummary } from '../features/dlq/types/dlq.types';
 import { DlqService } from '../services/dlq.service';
+import { dashboardErrorMessage } from '../services/invoke';
 
 type DlqTab = 'Consumer' | 'Message ID';
 
@@ -181,7 +182,7 @@ export const DLQMessageView = () => {
       });
     } catch (error) {
       setMessages([]);
-      setSearchError(error instanceof Error ? error.message : 'Failed to query DLQ messages.');
+      setSearchError(dashboardErrorMessage(error, 'Failed to query DLQ messages.'));
     } finally {
       setIsSearching(false);
     }
@@ -212,7 +213,7 @@ export const DLQMessageView = () => {
       setMessages([toSummary(detail)]);
     } catch (error) {
       setMessages([]);
-      setSearchError(error instanceof Error ? error.message : 'Failed to query DLQ message detail.');
+      setSearchError(dashboardErrorMessage(error, 'Failed to query DLQ message detail.'));
     } finally {
       setIsSearching(false);
     }
@@ -256,7 +257,7 @@ export const DLQMessageView = () => {
         toast.error(result.message);
       }
     } catch (error) {
-      const messageText = error instanceof Error ? error.message : 'Failed to resend DLQ message.';
+      const messageText = dashboardErrorMessage(error, 'Failed to resend DLQ message.');
       toast.error(messageText);
       setSearchError(messageText);
     } finally {
@@ -348,7 +349,7 @@ export const DLQMessageView = () => {
 
       await queryDlqPage(pagination.currentPage || 1);
     } catch (error) {
-      const messageText = error instanceof Error ? error.message : 'Failed to batch resend DLQ messages.';
+      const messageText = dashboardErrorMessage(error, 'Failed to batch resend DLQ messages.');
       toast.error(messageText);
       setSearchError(messageText);
     } finally {
@@ -374,7 +375,7 @@ export const DLQMessageView = () => {
       downloadExportPayload(payload.fileName, payload.mimeType, payload.content);
       toast.success(`Exported DLQ message ${message.msgId}.`);
     } catch (error) {
-      const messageText = error instanceof Error ? error.message : 'Failed to export DLQ message.';
+      const messageText = dashboardErrorMessage(error, 'Failed to export DLQ message.');
       toast.error(messageText);
       setSearchError(messageText);
     } finally {
@@ -422,7 +423,7 @@ export const DLQMessageView = () => {
 
       setSelectedMessageIds(EMPTY_SELECTED_IDS);
     } catch (error) {
-      const messageText = error instanceof Error ? error.message : 'Failed to batch export DLQ messages.';
+      const messageText = dashboardErrorMessage(error, 'Failed to batch export DLQ messages.');
       toast.error(messageText);
       setSearchError(messageText);
     } finally {

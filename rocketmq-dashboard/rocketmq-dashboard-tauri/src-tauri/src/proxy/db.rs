@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::Result;
+use crate::error::DashboardResult as Result;
 use chrono::Utc;
 use rocketmq_dashboard_common::ProxyConfigSnapshot;
 use rocketmq_dashboard_common::canonicalize_proxy_snapshot;
@@ -22,6 +22,7 @@ use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 use rusqlite::params;
 use std::fs;
+#[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -57,6 +58,7 @@ impl ProxyDb {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn db_path(&self) -> &Path {
         &self.db_path
     }

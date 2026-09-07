@@ -16,7 +16,7 @@
 
 use super::*;
 
-pub(super) fn sanitize_inventory(response: DetailedTopicCatalog) -> Result<TopicInventory, ProviderError> {
+pub(super) fn sanitize_inventory(response: DetailedTopicCatalog) -> Result<TopicInventory, ProviderFailure> {
     let items = response
         .items
         .into_iter()
@@ -33,7 +33,7 @@ pub(super) fn sanitize_inventory(response: DetailedTopicCatalog) -> Result<Topic
                 ordered: item.order,
             })
         })
-        .collect::<Result<Vec<_>, ProviderError>>()?;
+        .collect::<Result<Vec<_>, ProviderFailure>>()?;
     let targets = response
         .broker_targets
         .into_iter()
@@ -101,7 +101,7 @@ pub(super) fn sanitize_stats(topic: TopicIdentity, response: DetailedTopicStats)
 pub(super) fn sanitize_config(
     topic: TopicIdentity,
     response: rocketmq_admin_core::core::topic::DetailedTopicConfig,
-) -> Result<TopicConfigView, ProviderError> {
+) -> Result<TopicConfigView, ProviderFailure> {
     let targets = response
         .targets
         .into_iter()
@@ -119,7 +119,7 @@ pub(super) fn sanitize_config(
                 message_type: TopicMessageType::parse(Some(&target.message_type)),
             })
         })
-        .collect::<Result<Vec<_>, ProviderError>>()?;
+        .collect::<Result<Vec<_>, ProviderFailure>>()?;
     Ok(TopicConfigView {
         topic,
         targets,
@@ -201,7 +201,7 @@ pub(super) fn targets_still_match(catalog: &DetailedTopicCatalog, targets: &[Top
         })
 }
 
-pub(super) fn mutation_message_type(value: TopicMessageType) -> Result<Option<String>, ProviderError> {
+pub(super) fn mutation_message_type(value: TopicMessageType) -> Result<Option<String>, ProviderFailure> {
     match value {
         TopicMessageType::Normal => Ok(Some("NORMAL".into())),
         TopicMessageType::Delay => Ok(Some("DELAY".into())),
@@ -398,24 +398,16 @@ pub(super) fn sanitize_offset_outcome(
     }
 }
 
-pub(super) fn invalid_request() -> ProviderError {
-    ProviderError::new(
-        ProviderErrorCode::Unavailable,
-        "The Topic operation request is invalid.",
-        false,
-    )
+pub(super) fn invalid_request() -> ProviderFailure {
+    ProviderFailure::invalid_request("The Topic operation request is invalid.")
 }
 
-pub(super) fn invalid_data() -> ProviderError {
-    ProviderError::new(
-        ProviderErrorCode::Unavailable,
-        "The Topic response contains invalid identity data.",
-        false,
-    )
+pub(super) fn invalid_data() -> ProviderFailure {
+    ProviderFailure::invalid_data("The Topic response contains invalid identity data.")
 }
 
-pub(super) fn not_found() -> ProviderError {
-    ProviderError::new(ProviderErrorCode::Unavailable, "The Topic was not found.", false)
+pub(super) fn not_found() -> ProviderFailure {
+    ProviderFailure::not_found("The Topic was not found.")
 }
 
 #[cfg(test)]

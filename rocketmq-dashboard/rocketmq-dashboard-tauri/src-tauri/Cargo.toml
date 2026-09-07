@@ -53,6 +53,6 @@ uuid             = { version = "1", features = ["v4", "serde"] }
 chrono           = { version = "0.4", features = ["serde"] }
 tokio            = { version = "1", features = ["sync", "time"] }
 rocketmq-dashboard-common = { version = "1.0.0", path = "../../rocketmq-dashboard-common" }
-anyhow           = "1.0.103"
+thiserror        = "2"
 rocketmq-admin-core = { version = "1.0.0", path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", default-features = false, features = ["client-adapter"] }
 rocketmq-runtime    = { version = "1.0.0", path = "../../../rocketmq-runtime" }

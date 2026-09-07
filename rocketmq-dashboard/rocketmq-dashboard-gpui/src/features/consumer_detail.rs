@@ -247,19 +247,54 @@ impl ConsumerDetail {
             ConsumerTab::OffsetActions => failed_summary(&self.store.offset_actions.state),
         };
         if let Some(summary) = failed {
-            return div().flex().flex_col().gap_3().child(summary).child(
-                Button::new("retry-consumer-tab")
-                    .label("Retry")
-                    .on_click(cx.listener(|detail, _, _, cx| detail.retry_active(cx))),
-            );
+            let retryable = match self.store.active_tab {
+                ConsumerTab::Overview => failed_retryable(&self.store.overview.state),
+                ConsumerTab::Clients => failed_retryable(&self.store.clients.state),
+                ConsumerTab::Progress | ConsumerTab::OffsetActions => failed_retryable(&self.store.progress.state),
+                ConsumerTab::Configuration => failed_retryable(&self.store.configuration.state),
+            };
+            return div().flex().flex_col().gap_3().child(summary).when(retryable, |this| {
+                this.child(
+                    Button::new("retry-consumer-tab")
+                        .label("Retry")
+                        .on_click(cx.listener(|detail, _, _, cx| detail.retry_active(cx))),
+                )
+            });
         }
-        match self.store.active_tab {
+        let body = match self.store.active_tab {
             ConsumerTab::Overview => self.render_overview(window, cx),
             ConsumerTab::Clients => self.render_clients(cx),
             ConsumerTab::Progress => self.render_progress(false, cx),
             ConsumerTab::Configuration => self.render_configuration(cx),
             ConsumerTab::OffsetActions => self.render_progress(true, cx),
-        }
+        };
+        let refresh_failure = match self.store.active_tab {
+            ConsumerTab::Overview => retained_failure(&self.store.overview.state),
+            ConsumerTab::Clients => retained_failure(&self.store.clients.state),
+            ConsumerTab::Progress | ConsumerTab::OffsetActions => retained_failure(&self.store.progress.state),
+            ConsumerTab::Configuration => retained_failure(&self.store.configuration.state),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .when_some(refresh_failure, |this, (summary, retryable)| {
+                this.child(
+                    div()
+                        .p_3()
+                        .rounded_md()
+                        .bg(cx.theme().warning.opacity(0.12))
+                        .child(summary)
+                        .when(retryable, |this| {
+                            this.child(
+                                Button::new("retry-consumer-tab-refresh")
+                                    .label("Retry")
+                                    .on_click(cx.listener(|detail, _, _, cx| detail.retry_active(cx))),
+                            )
+                        }),
+                )
+            })
+            .child(body)
     }
 
     fn render_overview(&self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
@@ -704,14 +739,54 @@ fn observation_state_label<T>(observation: &ConsumerObservation<T>) -> &'static 
 
 fn failed_summary<T>(state: &Loadable<T>) -> Option<String> {
     match state {
-        Loadable::Failed { error, .. } => Some(error.summary().to_owned()),
+        Loadable::Failed { previous: None, error } => Some(error.summary().to_owned()),
         _ => None,
     }
+}
+
+fn retained_failure<T>(state: &Loadable<T>) -> Option<(String, bool)> {
+    match state {
+        Loadable::Failed {
+            previous: Some(_),
+            error,
+        } => Some((error.summary().to_owned(), error.is_retryable())),
+        _ => None,
+    }
+}
+
+fn failed_retryable<T>(state: &Loadable<T>) -> bool {
+    matches!(state, Loadable::Failed { error, .. } if error.is_retryable())
 }
 
 fn loading_or_empty<T>(state: &Loadable<T>) -> gpui::Div {
     match state {
         Loadable::Empty => div().child("No authoritative data was returned."),
         _ => div().child("Loading…"),
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use crate::state::{UiError, UiErrorCode};
+
+    use super::*;
+
+    #[test]
+    fn refresh_failure_keeps_data_visible_and_exposes_recovery_separately() {
+        let state = Loadable::ready("retained").fail(UiError::new("Refresh failed.", UiErrorCode::Connection, true));
+
+        assert_eq!(state.value(), Some(&"retained"));
+        assert_eq!(failed_summary(&state), None);
+        assert_eq!(retained_failure(&state), Some(("Refresh failed.".to_owned(), true)));
+    }
+
+    #[test]
+    fn initial_failure_has_no_recovery_button_when_retry_is_not_allowed() {
+        let state: Loadable<()> =
+            Loadable::InitialLoading.fail(UiError::new("Invalid request.", UiErrorCode::Validation, false));
+
+        assert_eq!(failed_summary(&state), Some("Invalid request.".to_owned()));
+        assert!(!failed_retryable(&state));
+        assert_eq!(retained_failure(&state), None);
     }
 }

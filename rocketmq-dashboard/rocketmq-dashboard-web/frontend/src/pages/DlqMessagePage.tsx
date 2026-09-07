@@ -2,7 +2,7 @@ import { Download, RotateCcw, Search, ShieldAlert } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { consumerApi } from '../api/consumer_api';
 import { dlqApi } from '../api/dlq_api';
-import { handleAppliedAuditFailure } from '../api/client';
+import { userErrorMessage } from '../api/client';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import EntitySheet from '../components/EntitySheet';
 import MetricCard from '../components/MetricCard';
@@ -74,7 +74,7 @@ export default function DlqMessagePage() {
     } catch (requestError) {
       if (groupRequestRef.current === requestId) {
         setGroups([]);
-        setGroupsError(`Consumer-group discovery failed: ${requestError instanceof Error ? requestError.message : String(requestError)}`);
+        setGroupsError(`Consumer-group discovery failed: ${userErrorMessage(requestError, 'Unable to load consumer groups.')}`);
       }
     } finally {
       if (groupRequestRef.current === requestId) setGroupsLoading(false);
@@ -150,7 +150,7 @@ export default function DlqMessagePage() {
         setRows([]);
         setTotal(0);
         setSelectedIds(new Set());
-        setQueryError(requestError instanceof Error ? requestError.message : String(requestError));
+        setQueryError(userErrorMessage(requestError, 'Unable to query DLQ messages.'));
       }
     } finally {
       if (requestRef.current === requestId) setLoading(false);
@@ -205,18 +205,8 @@ export default function DlqMessagePage() {
       });
       if (resendRequestRef.current === requestId) setResendResults(results);
     } catch (requestError) {
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          setSelectedIds(new Set());
-          setSelected(null);
-          setResendResults([]);
-          setResendTerminal(true);
-          setResendError('Selected DLQ resends were applied. Refreshing authoritative results.');
-        },
-        refresh: () => query(page)
-      })) return;
       if (resendRequestRef.current === requestId) {
-        setResendError(requestError instanceof Error ? requestError.message : String(requestError));
+        setResendError(userErrorMessage(requestError, 'Unable to resend the selected DLQ messages.'));
       }
     } finally {
       resendPendingRef.current = false;
@@ -245,14 +235,8 @@ export default function DlqMessagePage() {
       URL.revokeObjectURL(url);
     } catch (requestError) {
       if (exportRequestRef.current !== requestId) return;
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          setExportTerminal(true);
-          setExportError('The export was applied, but its audit record could not be stored. Re-query before requesting another export.');
-        }
-      })) return;
       if (exportRequestRef.current === requestId) {
-        setExportError(requestError instanceof Error ? requestError.message : String(requestError));
+        setExportError(userErrorMessage(requestError, 'Unable to export the current DLQ query.'));
       }
     } finally {
       if (exportRequestRef.current === requestId) setExporting(false);

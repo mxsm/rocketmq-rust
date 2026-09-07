@@ -16,7 +16,6 @@
 //!
 //! SQLite bootstrap and schema initialization for local dashboard auth.
 
-use crate::auth::types::AuthError;
 use crate::auth::types::AuthResult;
 use rusqlite::Connection;
 use std::fs;
@@ -53,10 +52,7 @@ pub(crate) struct AuthDb {
 #[allow(dead_code)]
 impl AuthDb {
     pub(crate) fn new(app: &AppHandle) -> AuthResult<Self> {
-        let app_config_dir = app
-            .path()
-            .app_config_dir()
-            .map_err(|error| AuthError::AppPath(error.to_string()))?;
+        let app_config_dir = app.path().app_config_dir()?;
 
         Ok(Self::from_path(app_config_dir.join(DB_FILE_NAME)))
     }

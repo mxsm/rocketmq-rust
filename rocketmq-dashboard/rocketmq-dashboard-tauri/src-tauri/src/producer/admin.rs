@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::DashboardError as ProducerError;
 use crate::nameserver::NameServerRuntimeState;
-use crate::producer::types::ProducerError;
 use crate::producer::types::ProducerResult;
 use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_admin_core::client_adapter::AdminSession;

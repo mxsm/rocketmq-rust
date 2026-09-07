@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::DashboardError as TopicError;
 use crate::nameserver::NameServerRuntimeState;
-use crate::topic::types::TopicError;
 use crate::topic::types::TopicResult;
 use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_admin_core::client_adapter::AdminSession;

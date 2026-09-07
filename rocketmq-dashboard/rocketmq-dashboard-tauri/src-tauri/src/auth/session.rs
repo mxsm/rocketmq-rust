@@ -14,6 +14,8 @@
 
 use crate::auth::types::SessionUser;
 use crate::auth::types::UserRecord;
+use crate::error::DashboardError;
+use crate::error::DashboardResult;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -42,6 +44,18 @@ impl SessionState {
     pub(crate) fn get_session(&self, session_id: &str) -> Option<SessionUser> {
         let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         sessions.get(session_id).cloned()
+    }
+
+    pub(crate) fn require_session(&self, session_id: &str) -> DashboardResult<SessionUser> {
+        self.get_session(session_id).ok_or(DashboardError::Unauthenticated)
+    }
+
+    pub(crate) fn authorize_dashboard(&self, session_id: &str) -> DashboardResult<SessionUser> {
+        let session = self.require_session(session_id)?;
+        if session.must_change_password {
+            return Err(DashboardError::PasswordChangeRequired);
+        }
+        Ok(session)
     }
 
     pub(crate) fn remove_session(&self, session_id: &str) -> bool {
@@ -106,5 +120,26 @@ mod tests {
             .expect("session should exist");
 
         assert!(!updated.must_change_password);
+    }
+
+    #[test]
+    fn dashboard_authorization_rejects_missing_and_password_change_sessions() {
+        let state = SessionState::default();
+        let missing = state
+            .authorize_dashboard("missing")
+            .expect_err("missing session should be rejected");
+        assert!(matches!(missing, crate::error::DashboardError::Unauthenticated));
+
+        let session = state.create_session(&test_user_record());
+        let forced_change = state
+            .authorize_dashboard(&session.session_id)
+            .expect_err("password change session should be rejected");
+        assert!(matches!(
+            forced_change,
+            crate::error::DashboardError::PasswordChangeRequired
+        ));
+
+        state.mark_password_changed(&session.session_id);
+        assert!(state.authorize_dashboard(&session.session_id).is_ok());
     }
 }

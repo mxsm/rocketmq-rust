@@ -16,10 +16,10 @@ use crate::cluster::admin::ManagedClusterAdmin;
 use crate::cluster::types::ClusterBrokerCardItem;
 use crate::cluster::types::ClusterBrokerConfigView;
 use crate::cluster::types::ClusterBrokerStatusView;
-use crate::cluster::types::ClusterError;
 use crate::cluster::types::ClusterHomePageResponse;
 use crate::cluster::types::ClusterOverviewSummary;
 use crate::cluster::types::ClusterResult;
+use crate::error::DashboardError as ClusterError;
 use crate::nameserver::NameServerRuntimeState;
 use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
@@ -90,8 +90,8 @@ impl ClusterManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_cluster_home_page` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_cluster_home_page` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -125,8 +125,8 @@ impl ClusterManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_cluster_broker_config` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_cluster_broker_config` after reconnect");
                 }
                 Err(error) => return Err(error),
             }
@@ -160,8 +160,8 @@ impl ClusterManager {
 
             match result {
                 Ok(response) => return Ok(response),
-                Err(error) if should_reset && attempt < 2 => {
-                    log::warn!("Retrying `get_cluster_broker_status` after reconnect: {}", error);
+                Err(_error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_cluster_broker_status` after reconnect");
                 }
                 Err(error) => return Err(error),
             }

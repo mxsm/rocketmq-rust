@@ -170,7 +170,7 @@ pub(super) fn map_acl_policy_request(
 
 pub(super) fn map_acl_mutation(result: core::AdminMutationResult) -> AclMutationResult {
     AclMutationResult {
-        message: result.message,
+        message: "ACL mutation completed".to_string(),
         target_count: result.target_count,
     }
 }

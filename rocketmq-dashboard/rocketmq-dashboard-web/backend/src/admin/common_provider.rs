@@ -89,7 +89,7 @@ impl DashboardAdminProvider for DashboardAdminClient {
         Box::pin(async move {
             DashboardAdminClient::create_or_update_topic(self, request)
                 .await
-                .and_then(legacy_topic_mutation_result)
+                .and_then(provider_topic_mutation_result)
         })
     }
 
@@ -97,7 +97,7 @@ impl DashboardAdminProvider for DashboardAdminClient {
         Box::pin(async move {
             DashboardAdminClient::delete_topic(self, topic)
                 .await
-                .and_then(legacy_topic_mutation_result)
+                .and_then(provider_topic_mutation_result)
         })
     }
 
@@ -188,7 +188,12 @@ impl DashboardAdminProvider for DashboardAdminClient {
     }
 }
 
-fn legacy_topic_mutation_result(result: crate::model::TopicOperationResult) -> Result<MutationResult, DashboardError> {
+/// Projects the structured Web result into the single result type required by
+/// the current `DashboardAdminProvider` trait. HTTP handlers use the structured
+/// result directly; this is the sole provider-trait projection.
+fn provider_topic_mutation_result(
+    result: crate::model::TopicOperationResult,
+) -> Result<MutationResult, DashboardError> {
     if result.success {
         return Ok(MutationResult {
             message: result.message,
@@ -196,40 +201,42 @@ fn legacy_topic_mutation_result(result: crate::model::TopicOperationResult) -> R
     }
     Err(DashboardError::Admin(rocketmq_admin_core::core::AdminError::backend(
         "topic_mutation_partial",
-        result.message,
+        "Topic mutation was not completed for every target",
     )))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::legacy_topic_mutation_result;
+    use super::provider_topic_mutation_result;
     use crate::error::DashboardError;
     use crate::model::TopicOperationResult;
     use crate::model::TopicTargetResult;
     use crate::model::build_operation_result;
 
     #[test]
-    fn legacy_facade_rejects_a_partial_topic_mutation() {
+    fn provider_projection_rejects_a_partial_topic_mutation_with_a_fixed_error() {
         let result = build_operation_result(
             "UPDATE",
             "orders",
             vec![
                 TopicTargetResult::success("broker-a", "saved"),
-                TopicTargetResult::failure("broker-b", "unavailable"),
+                TopicTargetResult::failure("broker-b", "TOPIC_TARGET_OPERATION_FAILED", "sensitive-broker-detail"),
             ],
         );
 
-        let error = legacy_topic_mutation_result(result).expect_err("partial mutation must not look successful");
+        let error = provider_topic_mutation_result(result).expect_err("partial mutation must not look successful");
+        let rendered = error.to_string();
 
         assert!(matches!(
             error,
             DashboardError::Admin(rocketmq_admin_core::core::AdminError::Backend { reason, .. })
-                if reason == "2 targets: 1 succeeded, 1 failed"
+                if reason == "Topic mutation was not completed for every target"
         ));
+        assert!(!rendered.contains("sensitive-broker-detail"));
     }
 
     #[test]
-    fn legacy_facade_keeps_full_success_message_compatible() {
+    fn provider_projection_returns_full_success() {
         let result = TopicOperationResult {
             operation: "UPDATE".into(),
             topic: "orders".into(),
@@ -239,8 +246,8 @@ mod tests {
             targets: vec![TopicTargetResult::success("broker-a", "saved")],
         };
 
-        let legacy = legacy_topic_mutation_result(result).expect("full mutation remains compatible");
+        let projection = provider_topic_mutation_result(result).expect("full mutation succeeds");
 
-        assert_eq!(legacy.message, "1 targets: 1 succeeded, 0 failed");
+        assert_eq!(projection.message, "1 targets: 1 succeeded, 0 failed");
     }
 }

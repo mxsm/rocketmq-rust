@@ -18,39 +18,47 @@ use rocketmq_dashboard_common::ProxyMutationResult;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_proxy_home_page(proxy_manager: State<'_, ProxyManager>) -> Result<ProxyConfigSnapshot, String> {
-    proxy_manager.home_page_info().map_err(|error| {
-        log::error!("Failed to load Proxy home page: {}", error);
-        error.to_string()
-    })
+pub fn get_proxy_home_page(
+    session_id: String,
+    proxy_manager: State<'_, ProxyManager>,
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ProxyConfigSnapshot> {
+    authorize_command(&session_id, &session_state)?;
+    proxy_manager.home_page_info().map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn add_proxy_addr(address: String, proxy_manager: State<'_, ProxyManager>) -> Result<ProxyMutationResult, String> {
-    proxy_manager.add_proxy_addr(&address).map_err(|error| {
-        log::warn!("Failed to add Proxy `{}`: {}", address, error);
-        error.to_string()
-    })
+pub fn add_proxy_addr(
+    session_id: String,
+    address: String,
+    proxy_manager: State<'_, ProxyManager>,
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ProxyMutationResult> {
+    authorize_command(&session_id, &session_state)?;
+    proxy_manager.add_proxy_addr(&address).map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn switch_proxy_addr(
+    session_id: String,
     address: String,
     proxy_manager: State<'_, ProxyManager>,
-) -> Result<ProxyMutationResult, String> {
-    proxy_manager.switch_proxy_addr(&address).map_err(|error| {
-        log::warn!("Failed to switch Proxy to `{}`: {}", address, error);
-        error.to_string()
-    })
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ProxyMutationResult> {
+    authorize_command(&session_id, &session_state)?;
+    proxy_manager.switch_proxy_addr(&address).map_err(Into::into)
 }
 
 #[tauri::command]
 pub fn delete_proxy_addr(
+    session_id: String,
     address: String,
     proxy_manager: State<'_, ProxyManager>,
-) -> Result<ProxyMutationResult, String> {
-    proxy_manager.delete_proxy_addr(&address).map_err(|error| {
-        log::warn!("Failed to delete Proxy `{}`: {}", address, error);
-        error.to_string()
-    })
+    session_state: State<'_, SessionState>,
+) -> CommandResult<ProxyMutationResult> {
+    authorize_command(&session_id, &session_state)?;
+    proxy_manager.delete_proxy_addr(&address).map_err(Into::into)
 }
+use crate::auth::SessionState;
+use crate::error::CommandResult;
+use crate::error::authorize_command;

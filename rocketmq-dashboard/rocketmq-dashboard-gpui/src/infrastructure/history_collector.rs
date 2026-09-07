@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::state::UiError;
 
-use super::{config_store::ConfigStoreError, history_store::HistoryStore};
+use super::{config_store::ConfigStoreFailure, history_store::HistoryStore};
 
 /// Boxed sampling operation implemented by the Dashboard service boundary.
 pub type HistorySampleFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<HistoryPoint>, UiError>> + Send + 'a>>;
@@ -52,7 +52,7 @@ impl HistoryLifecycle {
         retention: HistoryRetention,
         store: Arc<HistoryStore>,
         sampler: Arc<dyn HistorySampler>,
-    ) -> Result<Self, ConfigStoreError> {
+    ) -> Result<Self, ConfigStoreFailure> {
         if interval_seconds == 0 {
             return Ok(Self {
                 task: None,
@@ -80,7 +80,7 @@ impl HistoryLifecycle {
                     collect_once(&store, sampler.as_ref(), retention).await;
                 }
             })
-            .map_err(|error| ConfigStoreError::Runtime(error.to_string()))?;
+            .map_err(ConfigStoreFailure::runtime)?;
         Ok(Self {
             task: Some(task),
             cancellation: Some(cancellation),
@@ -100,14 +100,14 @@ impl HistoryLifecycle {
     }
 
     /// Cancels the next collection iteration and awaits all owned work.
-    pub async fn stop(&mut self) -> bool {
+    pub async fn stop(&mut self) -> Result<(), ConfigStoreFailure> {
         if let Some(cancellation) = self.cancellation.take() {
             cancellation.cancel();
         }
         let Some(task) = self.task.take() else {
-            return true;
+            return Ok(());
         };
-        task.await.is_ok()
+        task.await.map_err(ConfigStoreFailure::runtime)
     }
 }
 
@@ -306,7 +306,7 @@ mod tests {
                 release.notify_one();
             };
             let (stopped, ()) = tokio::join!(stop, release_sample);
-            assert!(stopped);
+            stopped.expect("collector stopped");
             assert_eq!(store.points().await.expect("retained point").len(), 1);
         });
         runtime.shutdown_runtime_blocking().expect("shutdown");

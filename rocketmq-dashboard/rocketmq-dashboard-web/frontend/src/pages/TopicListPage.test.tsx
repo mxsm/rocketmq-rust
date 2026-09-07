@@ -289,7 +289,8 @@ describe('TopicListPage', () => {
     expect(within(dialog).queryByRole('button', { name: 'Save topic' })).not.toBeInTheDocument();
 
     await act(async () => pending.reject(new Error('orders config unavailable')));
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('orders config unavailable');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Unable to load topic data.');
+    expect(within(dialog).queryByText('orders config unavailable')).not.toBeInTheDocument();
     vi.mocked(topicApi.config).mockResolvedValueOnce(config('orders'));
     await user.click(within(dialog).getByRole('button', { name: 'Retry configuration' }));
     expect(await within(dialog).findByRole('textbox', { name: 'Topic name' })).toHaveValue('orders');
@@ -350,7 +351,8 @@ describe('TopicListPage', () => {
 
     await chooseRowAction(user, 'orders', 'Reset consumer offset');
     const chooser = await screen.findByRole('dialog', { name: 'Choose consumer group for reset consumer offset' });
-    expect(await within(chooser).findByRole('alert')).toHaveTextContent('orders consumers unavailable');
+    expect(await within(chooser).findByRole('alert')).toHaveTextContent('Unable to load topic data.');
+    expect(within(chooser).queryByText('orders consumers unavailable')).not.toBeInTheDocument();
     expect(screen.getByRole('row', { name: /^orders Full page/, hidden: true })).toBeInTheDocument();
     await user.click(within(chooser).getByRole('button', { name: 'Retry consumers' }));
     expect(await within(chooser).findByText('No consumers subscribe to this topic.')).toBeInTheDocument();
@@ -496,7 +498,11 @@ describe('TopicListPage', () => {
       message: '1 of 2 targets failed',
       targets: [
         { target: 'broker-a', success: true, message: 'deleted from broker-a' },
-        { target: 'broker-b', success: false, message: 'broker-b unavailable' }
+        {
+          target: 'broker-b',
+          success: false,
+          error: { code: 'TOPIC_TARGET_OPERATION_FAILED', message: 'Topic target operation failed' }
+        }
       ]
     });
     renderAtRoute(<TopicListPage />, '/topics');
@@ -512,7 +518,7 @@ describe('TopicListPage', () => {
 
     expect(await within(deleteDialog).findByRole('alert')).toHaveTextContent('1 of 2 targets failed');
     expect(within(deleteDialog).getByText('deleted from broker-a')).toBeInTheDocument();
-    expect(within(deleteDialog).getByText('broker-b unavailable')).toBeInTheDocument();
+    expect(within(deleteDialog).getByText(/TOPIC_TARGET_OPERATION_FAILED/)).toBeInTheDocument();
     expect(screen.getByRole('alertdialog', { name: 'Delete topic' })).toBeInTheDocument();
     expect(screen.getAllByText('1 of 2 targets failed')).toHaveLength(1);
     await waitFor(() => expect(topicApi.list).toHaveBeenCalledTimes(2));
@@ -557,7 +563,11 @@ describe('TopicListPage', () => {
       message: '1 of 2 targets failed',
       targets: [
         { target: 'broker-a', success: true, message: 'created on broker-a' },
-        { target: 'broker-b', success: false, message: 'broker-b unavailable' }
+        {
+          target: 'broker-b',
+          success: false,
+          error: { code: 'TOPIC_TARGET_OPERATION_FAILED', message: 'Topic target operation failed' }
+        }
       ]
     });
     renderAtRoute(<TopicListPage />, '/topics');
@@ -575,7 +585,7 @@ describe('TopicListPage', () => {
     renderAtRoute(<TopicListPage />, '/topics');
     await screen.findByRole('heading', { name: 'Topics' });
     const dialog = await submitCreate(user, 'orders');
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('already exists');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Unable to save the topic.');
     expect(topicApi.create).not.toHaveBeenCalled();
   });
 });

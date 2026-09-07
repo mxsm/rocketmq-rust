@@ -2,7 +2,6 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { consumerApi } from '../api/consumer_api';
-import { ApiClientError } from '../api/client';
 import type { ConsumerGroupListItem, ConsumerOperationResult } from '../types/consumer';
 import { ConsumerQueryScopeProvider } from '../pages/consumers/ConsumerQueryScopeProvider';
 import ConsumerDeleteDialog from './ConsumerDeleteDialog';
@@ -107,7 +106,12 @@ describe('ConsumerDeleteDialog', () => {
       success: false,
       targets: [
         { target: 'broker-a', kind: 'BROKER', success: true, message: 'deleted' },
-        { target: 'broker-b', kind: 'BROKER', success: false, message: 'unavailable' }
+        {
+          target: 'broker-b',
+          kind: 'BROKER',
+          success: false,
+          error: { code: 'CONSUMER_TARGET_OPERATION_FAILED', message: 'Consumer target operation failed' }
+        }
       ]
     });
     render(
@@ -126,23 +130,19 @@ describe('ConsumerDeleteDialog', () => {
     await user.type(within(dialog).getByLabelText('Confirm consumer group'), 'orders-consumer');
     await user.click(within(dialog).getByRole('button', { name: 'Delete consumer group' }));
 
-    expect(await within(dialog).findByText((content) => content.includes('unavailable'))).toBeInTheDocument();
+    expect(await within(dialog).findByText((content) => content.includes('CONSUMER_TARGET_OPERATION_FAILED'))).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(onSucceeded).not.toHaveBeenCalled();
   });
 
-  it('retains a delete lock across close and reopen until the original applied request settles', async () => {
+  it('retains a delete lock across close and reopen until the original request settles', async () => {
     const user = userEvent.setup();
     const pendingDelete = deferred<ConsumerOperationResult>();
-    const pendingRefresh = deferred<void>();
     const onOpenChange = vi.fn();
-    const onAppliedAuditFailure = vi.fn(() => pendingRefresh.promise);
-    const auditWarning = vi.fn();
-    window.addEventListener('rocketmq-audit-warning', auditWarning);
     vi.mocked(consumerApi.delete).mockImplementationOnce(() => pendingDelete.promise);
     const renderDialog = (mounted: boolean) => (
       <ConsumerQueryScopeProvider>
-        {mounted ? <ConsumerDeleteDialog open consumer={consumer} onOpenChange={onOpenChange} onSucceeded={vi.fn()} onAppliedAuditFailure={onAppliedAuditFailure} /> : null}
+        {mounted ? <ConsumerDeleteDialog open consumer={consumer} onOpenChange={onOpenChange} onSucceeded={vi.fn()} /> : null}
       </ConsumerQueryScopeProvider>
     );
     const { rerender } = render(renderDialog(true));
@@ -167,17 +167,11 @@ describe('ConsumerDeleteDialog', () => {
     expect(within(dialog).getByRole('button', { name: 'Delete consumer group' })).toBeDisabled();
 
     await act(async () => {
-      window.dispatchEvent(new CustomEvent('rocketmq-audit-warning', { detail: 'Consumer deletion was applied.' }));
-      pendingDelete.reject(new ApiClientError('APPLIED_AUDIT_FAILED', 'Consumer deletion was applied.', { mutationApplied: true }));
+      pendingDelete.reject(new Error('sensitive-rejection-detail'));
     });
-    await waitFor(() => expect(onAppliedAuditFailure).toHaveBeenCalledTimes(1));
-    expect(auditWarning).toHaveBeenCalledTimes(1);
     expect(consumerApi.delete).toHaveBeenCalledTimes(1);
-    expect(within(screen.getByRole('dialog', { name: 'Delete consumer group' })).getByRole('button', { name: 'Delete consumer group' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
-
-    await act(async () => pendingRefresh.resolve());
     await waitFor(() => expect(within(screen.getByRole('dialog', { name: 'Delete consumer group' })).getByRole('button', { name: 'Delete consumer group' })).toBeEnabled());
-    window.removeEventListener('rocketmq-audit-warning', auditWarning);
+    expect(screen.queryByText('sensitive-rejection-detail')).not.toBeInTheDocument();
   });
 });

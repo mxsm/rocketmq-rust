@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Activity, CheckCircle2, Network, Plus, RefreshCw, Server, Trash2 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { useProxyCatalog } from '../features/proxy/hooks/useProxyCatalog';
+import { dashboardErrorMessage } from '../services/invoke';
 import { Card } from '../components/ui/LegacyCard';
 import { Button } from '../components/ui/LegacyButton';
 import { Input } from '../components/ui/LegacyInput';
@@ -32,7 +33,7 @@ export const ProxyView = () => {
                 toast.success(message);
             }
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : 'Proxy operation failed');
+            toast.error(dashboardErrorMessage(error, 'Proxy operation failed'));
         }
     };
 

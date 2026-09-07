@@ -4,7 +4,6 @@ export interface LoginCredentials {
 }
 
 export interface SessionUser {
-    sessionId: string;
     userId: number;
     username: string;
     mustChangePassword: boolean;
@@ -12,15 +11,11 @@ export interface SessionUser {
 }
 
 export interface AuthSessionResponse {
-    success: boolean;
-    message: string;
-    sessionId: string | null;
-    currentUser: SessionUser | null;
-    mustChangePassword: boolean;
+    sessionId: string;
+    currentUser: SessionUser;
 }
 
 export interface UserProfile {
-    sessionId: string;
     userId: number;
     username: string;
     isActive: boolean;
@@ -30,19 +25,11 @@ export interface UserProfile {
     lastLoginAt: string | null;
 }
 
-export interface UserProfileResponse {
-    success: boolean;
-    message: string;
-    profile: UserProfile | null;
-}
-
 export interface CommonResponse {
-    success: boolean;
     message: string;
 }
 
 export interface ChangePasswordPayload {
-    sessionId: string;
     oldPassword: string;
     newPassword: string;
 }
@@ -52,9 +39,4 @@ export interface BootstrapStatus {
     created: boolean;
     hasDefaultAdmin: boolean;
     mustChangePassword: boolean;
-}
-
-export interface AuthError {
-    message: string;
-    code?: string;
 }

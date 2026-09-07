@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cluster::types::ClusterError;
 use crate::cluster::types::ClusterResult;
+use crate::error::DashboardError as ClusterError;
 use crate::nameserver::NameServerRuntimeState;
 use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_admin_core::client_adapter::AdminSession;

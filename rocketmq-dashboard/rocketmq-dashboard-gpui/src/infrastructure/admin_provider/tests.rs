@@ -381,10 +381,30 @@ fn backend_error_body_is_redacted_and_cancellation_wins() {
             .check_health_with_cancellation(cancellation)
             .await
             .expect_err("cancelled");
-        assert_eq!(error.code(), ProviderErrorCode::Cancelled);
+        assert_eq!(error.code(), ProviderFailureCode::Cancelled);
         provider.shutdown().await;
     });
     runtime.shutdown_runtime_blocking().expect("shutdown");
+}
+
+#[test]
+fn operational_provider_error_retains_admin_source_without_rendering_backend_text() {
+    let failure = map_admin_error(AdminError::backend(
+        "list_topics",
+        "password=private-password token=private-token",
+    ));
+    let error = failure.into_operational().expect("backend failures are operational");
+
+    assert!(std::error::Error::source(&error).is_some());
+    assert!(
+        std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<AdminError>())
+            .is_some()
+    );
+    for projection in [format!("{error}"), format!("{error:?}")] {
+        assert!(!projection.contains("private-password"));
+        assert!(!projection.contains("private-token"));
+    }
 }
 
 #[test]
@@ -520,7 +540,7 @@ fn switch_shuts_both_sessions_and_rejects_stale_revision() {
             .switch(snapshot(2, ConnectionScope::NameServer))
             .await
             .expect_err("stale");
-        assert_eq!(stale.code(), ProviderErrorCode::StaleRevision);
+        assert_eq!(stale.code(), ProviderFailureCode::StaleRevision);
         provider.shutdown().await;
     });
     assert_eq!(controls.query_shutdowns.load(Ordering::SeqCst), 2);

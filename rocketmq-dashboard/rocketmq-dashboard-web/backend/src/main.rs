@@ -13,61 +13,8 @@
 // limitations under the License.
 #![recursion_limit = "256"]
 
-use rocketmq_admin_core::client_adapter::ClientRuntime;
-use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
-use rocketmq_dashboard_web_backend::config::AppConfig;
-use rocketmq_dashboard_web_backend::run_with_telemetry;
-use rocketmq_runtime::RuntimeConfig;
-use rocketmq_runtime::RuntimeOwner;
+use std::process::ExitCode;
 
-fn main() -> anyhow::Result<()> {
-    let owner = RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-dashboard-web-backend"))
-        .expect("dashboard runtime profile is internally valid")
-        .build()?;
-    let config = AppConfig::load()?;
-    let environment_filter = rocketmq_observability::read_rust_log()?;
-    let resolved_filter =
-        rocketmq_observability::LogFilterResolver::resolve(rocketmq_observability::LogFilterInputs {
-            environment: environment_filter.as_deref(),
-            ..rocketmq_observability::LogFilterInputs::default()
-        })?;
-    let mut bootstrap = rocketmq_observability::TelemetryBootstrapConfig::default();
-    bootstrap.observability.service_name = "rocketmq-dashboard-web-backend".to_string();
-    bootstrap.observability.service_namespace = "rocketmq".to_string();
-    bootstrap.observability.node_type = "dashboard".to_string();
-    bootstrap.observability.node_id = "web-backend".to_string();
-    bootstrap.observability.subscriber_install_policy = rocketmq_observability::SubscriberInstallPolicy::Required;
-    let telemetry_guard = rocketmq_observability::install_global_with_filter(&bootstrap, resolved_filter.clone())?;
-    let client_runtime = ClientRuntime::try_new(
-        owner.root_context().component("rocketmq-admin-client"),
-        ClientRuntimeConfig::default(),
-        telemetry_guard.handle(),
-    )?;
-    tracing::info!(
-        service = "rocketmq-dashboard-web-backend",
-        effective_filter = resolved_filter.filter(),
-        filter_source = %resolved_filter.source(),
-        subscriber_installed = telemetry_guard.subscriber_install_status().installed,
-        reload_enabled = bootstrap.logging.reload.enabled,
-        "Dashboard Web telemetry bootstrap initialized"
-    );
-
-    let run_result = owner.block_on(async {
-        let run_result = Box::pin(run_with_telemetry(
-            config,
-            client_runtime.clone(),
-            telemetry_guard.handle(),
-        ))
-        .await;
-        let report = client_runtime.shutdown().await;
-        report.log_if_unhealthy();
-        run_result
-    });
-    let telemetry_shutdown_result = telemetry_guard.shutdown().into_result();
-    let runtime_shutdown_result = owner.shutdown_runtime_blocking();
-
-    run_result?;
-    telemetry_shutdown_result?;
-    runtime_shutdown_result?;
-    Ok(())
+fn main() -> ExitCode {
+    rocketmq_dashboard_web_backend::process_main()
 }

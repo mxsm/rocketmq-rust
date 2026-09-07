@@ -232,7 +232,7 @@ pub(crate) enum TopicQueuePatchResult {
     Applied {
         previous_version: u64,
         version: u64,
-        configuration: TopicConfigView,
+        configuration: Box<TopicConfigView>,
         inventory: TopicInventory,
         invalidations: Vec<TopicCacheInvalidation>,
     },
@@ -561,7 +561,11 @@ impl TopicBackend for RealTopicBackend {
             if receipt.delivered {
                 Ok(())
             } else {
-                Err(mutation_error("message delivery was not acknowledged"))
+                Err(UiError::new(
+                    "The RocketMQ broker did not acknowledge message delivery.",
+                    UiErrorCode::Connection,
+                    true,
+                ))
             }
         })
     }
@@ -710,7 +714,7 @@ impl AppServices {
                         (Ok(configuration), Ok(inventory)) => Ok(TopicQueuePatchResult::Applied {
                             previous_version,
                             version,
-                            configuration,
+                            configuration: Box::new(configuration),
                             inventory,
                             invalidations,
                         }),
@@ -883,16 +887,20 @@ fn offset_request(command: TopicOffsetCommand) -> SafeTopicOffsetRequest {
     }
 }
 
-fn query_error(_error: impl fmt::Display) -> UiError {
-    UiError::new(
-        "Unable to load Topic data from the selected connection.",
-        UiErrorCode::Connection,
-        true,
-    )
+fn query_error(source: crate::infrastructure::admin_provider::ProviderFailure) -> UiError {
+    provider_failure(source, "Unable to load Topic data from the selected connection.")
 }
 
-fn mutation_error(_error: impl fmt::Display) -> UiError {
-    UiError::new("Unable to apply the Topic operation.", UiErrorCode::Connection, true)
+fn mutation_error(source: crate::infrastructure::admin_provider::ProviderFailure) -> UiError {
+    provider_failure(source, "Unable to apply the Topic operation.")
+}
+
+fn provider_failure(source: crate::infrastructure::admin_provider::ProviderFailure, summary: &'static str) -> UiError {
+    let retryable = source.is_retryable();
+    match source.into_operational() {
+        Some(source) => UiError::caused_by(summary, UiErrorCode::Connection, retryable, source),
+        None => UiError::new(summary, UiErrorCode::Connection, retryable),
+    }
 }
 
 #[cfg(test)]

@@ -22,7 +22,7 @@ use rocketmq_dashboard_common::{
 
 use crate::{
     infrastructure::admin_provider::{
-        GpuiAdminProvider, SafeBrokerTarget, SafeConfigPatchOutcome, SafeConfigPatchRequest,
+        GpuiAdminProvider, ProviderFailure, SafeBrokerTarget, SafeConfigPatchOutcome, SafeConfigPatchRequest,
     },
     state::{UiError, UiErrorCode},
 };
@@ -233,16 +233,20 @@ fn ensure_target(identity: &BrokerIdentity, broker_name: &str, address: &str) ->
     }
 }
 
-fn query_error(_error: impl std::fmt::Display) -> UiError {
-    UiError::new(
-        "Unable to load Broker data from the selected connection.",
-        UiErrorCode::Connection,
-        true,
-    )
+fn query_error(source: ProviderFailure) -> UiError {
+    provider_failure(source, "Unable to load Broker data from the selected connection.")
 }
 
-fn mutation_error(_error: impl std::fmt::Display) -> UiError {
-    UiError::new("Unable to update Broker configuration.", UiErrorCode::Connection, true)
+fn mutation_error(source: ProviderFailure) -> UiError {
+    provider_failure(source, "Unable to update Broker configuration.")
+}
+
+fn provider_failure(source: ProviderFailure, summary: &'static str) -> UiError {
+    let retryable = source.is_retryable();
+    match source.into_operational() {
+        Some(source) => UiError::caused_by(summary, UiErrorCode::Connection, retryable, source),
+        None => UiError::new(summary, UiErrorCode::Connection, retryable),
+    }
 }
 
 #[cfg(test)]

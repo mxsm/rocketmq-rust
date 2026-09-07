@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invokeAuthenticatedCommand } from './invoke';
 import type {
     ClusterBrokerConfigRequest,
     ClusterBrokerConfigView,
@@ -12,18 +12,18 @@ export class ClusterService {
     static async getClusterHomePage(
         request: ClusterHomePageRequest = { forceRefresh: false }
     ): Promise<ClusterHomePageResponse> {
-        return invoke<ClusterHomePageResponse>('get_cluster_home_page', { request });
+        return invokeAuthenticatedCommand<ClusterHomePageResponse>('get_cluster_home_page', { request });
     }
 
     static async getClusterBrokerConfig(
         request: ClusterBrokerConfigRequest
     ): Promise<ClusterBrokerConfigView> {
-        return invoke<ClusterBrokerConfigView>('get_cluster_broker_config', { request });
+        return invokeAuthenticatedCommand<ClusterBrokerConfigView>('get_cluster_broker_config', { request });
     }
 
     static async getClusterBrokerStatus(
         request: ClusterBrokerStatusRequest
     ): Promise<ClusterBrokerStatusView> {
-        return invoke<ClusterBrokerStatusView>('get_cluster_broker_status', { request });
+        return invokeAuthenticatedCommand<ClusterBrokerStatusView>('get_cluster_broker_status', { request });
     }
 }

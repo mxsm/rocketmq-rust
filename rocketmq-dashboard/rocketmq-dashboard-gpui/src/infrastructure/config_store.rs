@@ -15,6 +15,7 @@
 //! Versioned, non-sensitive desktop configuration persisted on the storage-I/O lane.
 
 use std::{
+    error::Error as StdError,
     fmt,
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -159,22 +160,20 @@ impl Default for DesktopConfig {
 
 impl DesktopConfig {
     /// Validates and normalizes the complete persisted compatibility surface.
-    pub fn normalize(mut self) -> Result<Self, ConfigStoreError> {
+    pub fn normalize(mut self) -> Result<Self, ConfigStoreFailure> {
         if self.schema_version != CONFIG_SCHEMA_VERSION {
-            return Err(ConfigStoreError::UnsupportedSchema {
-                found: self.schema_version,
-                supported: CONFIG_SCHEMA_VERSION,
-            });
+            return Err(ConfigStoreFailure::unsupported_schema(
+                self.schema_version,
+                CONFIG_SCHEMA_VERSION,
+            ));
         }
         (self.nameservers, self.current_nameserver) =
             normalize_nameserver_selection(&self.nameservers, self.current_nameserver.as_deref())
-                .map_err(|error| ConfigStoreError::Validation(error.to_string()))?;
+                .map_err(ConfigStoreFailure::validation)?;
         (self.proxies, self.current_proxy) = normalize_proxy_selection(&self.proxies, self.current_proxy.as_deref())
-            .map_err(|error| ConfigStoreError::Validation(error.to_string()))?;
+            .map_err(ConfigStoreFailure::validation)?;
         if self.scope == ConnectionScope::Proxy && self.current_proxy.is_none() {
-            return Err(ConfigStoreError::Validation(
-                "Proxy scope requires a selected Proxy endpoint".to_owned(),
-            ));
+            return Err(ConfigStoreFailure::validation(ConfigValidation::ProxyRequiresSelection));
         }
         self.foundations.history_max_points_per_series = self
             .foundations
@@ -201,51 +200,222 @@ impl DesktopConfig {
     }
 }
 
-/// Recoverable configuration failure. Its display text never includes file contents.
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigStoreError {
-    /// A filesystem operation failed.
-    #[error("configuration {operation} failed at {path}: {source}")]
-    Io {
-        /// Stable operation category.
-        operation: &'static str,
-        /// Exact affected path for recovery actions.
-        path: PathBuf,
-        /// Platform I/O failure.
-        #[source]
-        source: io::Error,
-    },
-    /// JSON parsing failed. The malformed content is deliberately omitted.
-    #[error("configuration at {path} is not valid JSON: {summary}")]
-    InvalidDocument {
-        /// Exact affected path.
-        path: PathBuf,
-        /// Parser category/position without source bytes.
-        summary: String,
-    },
-    /// A newer or incompatible schema was found.
-    #[error("unsupported configuration schema {found}; this build supports {supported}")]
-    UnsupportedSchema {
-        /// Schema found on disk.
-        found: u32,
-        /// Schema supported by this build.
-        supported: u32,
-    },
-    /// Domain validation rejected a requested change.
-    #[error("configuration validation failed: {0}")]
-    Validation(String),
-    /// A caller attempted to persist from a stale revision.
-    #[error("configuration revision changed; reload before saving")]
+/// Opaque recoverable storage failure with a fixed safe projection.
+#[derive(Clone)]
+pub(crate) struct ConfigStoreFailure {
+    kind: ConfigStoreFailureKind,
+}
+
+#[derive(Clone)]
+enum ConfigStoreFailureKind {
+    Rejected(ConfigStoreRejection),
+    Operational(ConfigStoreError),
+}
+
+#[derive(Clone, Debug)]
+enum ConfigStoreRejection {
+    UnsupportedSchema { found: u32, supported: u32 },
     StaleRevision,
-    /// The revision cannot advance further.
-    #[error("configuration revision is exhausted")]
     RevisionExhausted,
-    /// A damaged or unknown-schema original remains protected from overwrite.
-    #[error("the existing configuration is protected; recover it before saving")]
     ProtectedOriginal,
-    /// Runtime infrastructure rejected storage-lane work.
-    #[error("configuration storage runtime is unavailable: {0}")]
-    Runtime(String),
+}
+
+#[derive(Clone)]
+pub(crate) struct ConfigStoreError {
+    inner: Arc<ConfigStoreErrorInner>,
+}
+
+struct ConfigStoreErrorInner {
+    condition: ConfigStoreCondition,
+    source: Arc<dyn StdError + Send + Sync>,
+    // Retained for recovery and diagnostics, but never exposed by Display or Debug.
+    path: Option<PathBuf>,
+    operation: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfigStoreCondition {
+    Io,
+    InvalidDocument,
+    Validation,
+    Runtime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfigStoreFailureCode {
+    Io,
+    InvalidDocument,
+    UnsupportedSchema,
+    Validation,
+    StaleRevision,
+    RevisionExhausted,
+    ProtectedOriginal,
+    Runtime,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ConfigValidation {
+    #[error("the user configuration directory is unavailable")]
+    UserDirectoryUnavailable,
+    #[error("Proxy scope requires a selected Proxy endpoint")]
+    ProxyRequiresSelection,
+    #[error("the storage path has no parent")]
+    PathHasNoParent,
+}
+
+impl ConfigStoreFailure {
+    fn rejected(rejection: ConfigStoreRejection) -> Self {
+        Self {
+            kind: ConfigStoreFailureKind::Rejected(rejection),
+        }
+    }
+
+    fn operational(inner: ConfigStoreErrorInner) -> Self {
+        Self {
+            kind: ConfigStoreFailureKind::Operational(ConfigStoreError { inner: Arc::new(inner) }),
+        }
+    }
+
+    fn caused_by(
+        condition: ConfigStoreCondition,
+        path: Option<PathBuf>,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::operational(ConfigStoreErrorInner {
+            condition,
+            source: Arc::new(source),
+            path,
+            operation: None,
+        })
+    }
+
+    pub(super) fn io(operation: &'static str, path: PathBuf, source: io::Error) -> Self {
+        Self::operational(ConfigStoreErrorInner {
+            condition: ConfigStoreCondition::Io,
+            source: Arc::new(source),
+            path: Some(path),
+            operation: Some(operation),
+        })
+    }
+
+    pub(super) fn invalid_document(path: PathBuf, source: serde_json::Error) -> Self {
+        Self::caused_by(ConfigStoreCondition::InvalidDocument, Some(path), source)
+    }
+
+    pub(super) fn validation(source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::caused_by(ConfigStoreCondition::Validation, None, source)
+    }
+
+    pub(super) fn runtime(source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::caused_by(ConfigStoreCondition::Runtime, None, source)
+    }
+
+    fn code(&self) -> ConfigStoreFailureCode {
+        match &self.kind {
+            ConfigStoreFailureKind::Operational(error) => match error.inner.condition {
+                ConfigStoreCondition::Io => ConfigStoreFailureCode::Io,
+                ConfigStoreCondition::InvalidDocument => ConfigStoreFailureCode::InvalidDocument,
+                ConfigStoreCondition::Validation => ConfigStoreFailureCode::Validation,
+                ConfigStoreCondition::Runtime => ConfigStoreFailureCode::Runtime,
+            },
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. }) => {
+                ConfigStoreFailureCode::UnsupportedSchema
+            }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::StaleRevision) => {
+                ConfigStoreFailureCode::StaleRevision
+            }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::RevisionExhausted) => {
+                ConfigStoreFailureCode::RevisionExhausted
+            }
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::ProtectedOriginal) => {
+                ConfigStoreFailureCode::ProtectedOriginal
+            }
+        }
+    }
+
+    pub(super) fn unsupported_schema(found: u32, supported: u32) -> Self {
+        Self::rejected(ConfigStoreRejection::UnsupportedSchema { found, supported })
+    }
+
+    fn protects_original(&self) -> bool {
+        matches!(
+            &self.kind,
+            ConfigStoreFailureKind::Operational(error)
+                if error.inner.condition == ConfigStoreCondition::InvalidDocument
+        ) || matches!(
+            &self.kind,
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. })
+        )
+    }
+
+    pub(crate) fn into_operational(self) -> Option<ConfigStoreError> {
+        match self.kind {
+            ConfigStoreFailureKind::Operational(error) => Some(error),
+            ConfigStoreFailureKind::Rejected(_) => None,
+        }
+    }
+
+    pub(crate) fn is_retryable(&self) -> bool {
+        match &self.kind {
+            ConfigStoreFailureKind::Rejected(
+                ConfigStoreRejection::StaleRevision | ConfigStoreRejection::ProtectedOriginal,
+            ) => true,
+            ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema { .. })
+            | ConfigStoreFailureKind::Rejected(ConfigStoreRejection::RevisionExhausted) => false,
+            ConfigStoreFailureKind::Operational(_) => true,
+        }
+    }
+}
+
+impl fmt::Debug for ConfigStoreFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConfigStoreFailure")
+            .field("code", &self.code())
+            .field(
+                "operational",
+                &matches!(&self.kind, ConfigStoreFailureKind::Operational(_)),
+            )
+            .field(
+                "schema_available",
+                &matches!(
+                    &self.kind,
+                    ConfigStoreFailureKind::Rejected(ConfigStoreRejection::UnsupportedSchema {
+                        found,
+                        supported,
+                    }) if *found > 0 || *supported > 0
+                ),
+            )
+            .finish()
+    }
+}
+
+impl fmt::Debug for ConfigStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConfigStoreError")
+            .field("condition", &self.inner.condition)
+            .field("path_available", &self.inner.path.is_some())
+            .field("operation_available", &self.inner.operation.is_some())
+            .finish()
+    }
+}
+
+impl fmt::Display for ConfigStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self.inner.condition {
+            ConfigStoreCondition::Io => "The local dashboard data could not be read or written.",
+            ConfigStoreCondition::InvalidDocument => "The local dashboard data is not valid JSON.",
+            ConfigStoreCondition::Validation => "The local dashboard data failed validation.",
+            ConfigStoreCondition::Runtime => "The local dashboard storage runtime is unavailable.",
+        })
+    }
+}
+
+impl StdError for ConfigStoreError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.inner.source.as_ref())
+    }
 }
 
 /// File-backed store with serialized updates and explicit corrupt-original protection.
@@ -259,11 +429,11 @@ pub struct DesktopConfigStore {
 
 impl DesktopConfigStore {
     /// Resolves the configured path, preferring [`CONFIG_PATH_ENV`].
-    pub fn from_environment(context: ChildServiceContext) -> Result<Arc<Self>, ConfigStoreError> {
+    pub fn from_environment(context: ChildServiceContext) -> Result<Arc<Self>, ConfigStoreFailure> {
         let path = match std::env::var_os(CONFIG_PATH_ENV) {
             Some(path) if !path.is_empty() => PathBuf::from(path),
             _ => dirs::config_dir()
-                .ok_or_else(|| ConfigStoreError::Validation("the user configuration directory is unavailable".into()))?
+                .ok_or_else(|| ConfigStoreFailure::validation(ConfigValidation::UserDirectoryUnavailable))?
                 .join("rocketmq-dashboard")
                 .join("gpui")
                 .join("config.json"),
@@ -288,7 +458,7 @@ impl DesktopConfigStore {
     }
 
     /// Loads, parses, validates, and records the on-disk revision.
-    pub async fn load(&self) -> Result<DesktopConfig, ConfigStoreError> {
+    pub async fn load(&self) -> Result<DesktopConfig, ConfigStoreFailure> {
         let _guard = self.io_gate.lock().await;
         let path = self.path.clone();
         let result = self
@@ -296,14 +466,14 @@ impl DesktopConfigStore {
             .storage_io()
             .spawn_io("gpui-config-load", move || load_file(&path))
             .await
-            .map_err(|error| ConfigStoreError::Runtime(error.to_string()))?;
+            .map_err(ConfigStoreFailure::runtime)?;
         match result {
             Ok(config) => {
                 self.known_revision.store(config.revision, Ordering::Release);
                 self.protected_original.store(false, Ordering::Release);
                 Ok(config)
             }
-            Err(error @ (ConfigStoreError::InvalidDocument { .. } | ConfigStoreError::UnsupportedSchema { .. })) => {
+            Err(error) if error.protects_original() => {
                 self.protected_original.store(true, Ordering::Release);
                 Err(error)
             }
@@ -312,70 +482,55 @@ impl DesktopConfigStore {
     }
 
     /// Atomically persists a validated next revision.
-    pub async fn save_next(&self, config: DesktopConfig) -> Result<DesktopConfig, ConfigStoreError> {
+    pub async fn save_next(&self, config: DesktopConfig) -> Result<DesktopConfig, ConfigStoreFailure> {
         let _guard = self.io_gate.lock().await;
         if self.protected_original.load(Ordering::Acquire) {
-            return Err(ConfigStoreError::ProtectedOriginal);
+            return Err(ConfigStoreFailure::rejected(ConfigStoreRejection::ProtectedOriginal));
         }
         let known_revision = self.known_revision.load(Ordering::Acquire);
         if config.revision != known_revision {
-            return Err(ConfigStoreError::StaleRevision);
+            return Err(ConfigStoreFailure::rejected(ConfigStoreRejection::StaleRevision));
         }
         let mut config = config.normalize()?;
         config.revision = config
             .revision
             .checked_add(1)
-            .ok_or(ConfigStoreError::RevisionExhausted)?;
+            .ok_or_else(|| ConfigStoreFailure::rejected(ConfigStoreRejection::RevisionExhausted))?;
         let path = self.path.clone();
         let persisted = config.clone();
         self.context
             .storage_io()
             .spawn_io("gpui-config-save", move || save_file(&path, &persisted))
             .await
-            .map_err(|error| ConfigStoreError::Runtime(error.to_string()))??;
+            .map_err(ConfigStoreFailure::runtime)??;
         self.known_revision.store(config.revision, Ordering::Release);
         Ok(config)
     }
 }
 
-fn load_file(path: &Path) -> Result<DesktopConfig, ConfigStoreError> {
+fn load_file(path: &Path) -> Result<DesktopConfig, ConfigStoreFailure> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DesktopConfig::default()),
         Err(source) => {
-            return Err(ConfigStoreError::Io {
-                operation: "read",
-                path: path.to_path_buf(),
-                source,
-            });
+            return Err(ConfigStoreFailure::io("read", path.to_path_buf(), source));
         }
     };
-    let config =
-        serde_json::from_slice::<DesktopConfig>(&bytes).map_err(|error| ConfigStoreError::InvalidDocument {
-            path: path.to_path_buf(),
-            summary: format!(
-                "{:?} at line {}, column {}",
-                error.classify(),
-                error.line(),
-                error.column()
-            ),
-        })?;
+    let config = serde_json::from_slice::<DesktopConfig>(&bytes)
+        .map_err(|source| ConfigStoreFailure::invalid_document(path.to_path_buf(), source))?;
     config.normalize()
 }
 
-fn save_file(path: &Path, config: &DesktopConfig) -> Result<(), ConfigStoreError> {
+fn save_file(path: &Path, config: &DesktopConfig) -> Result<(), ConfigStoreFailure> {
     write_json_atomically(path, config)
 }
 
-pub(super) fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigStoreError> {
+pub(super) fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigStoreFailure> {
     let parent = path
         .parent()
-        .ok_or_else(|| ConfigStoreError::Validation("configuration path has no parent".into()))?;
-    fs::create_dir_all(parent).map_err(|source| ConfigStoreError::Io {
-        operation: "create directory",
-        path: parent.to_path_buf(),
-        source,
-    })?;
+        .ok_or_else(|| ConfigStoreFailure::validation(ConfigValidation::PathHasNoParent))?;
+    fs::create_dir_all(parent)
+        .map_err(|source| ConfigStoreFailure::io("create directory", parent.to_path_buf(), source))?;
     let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("config.json");
     let temporary = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), sequence));
@@ -384,46 +539,83 @@ pub(super) fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Res
     write_and_replace(&temporary, path, value)
 }
 
-fn write_and_replace<T: Serialize>(temporary: &Path, target: &Path, value: &T) -> Result<(), ConfigStoreError> {
+fn write_and_replace<T: Serialize>(temporary: &Path, target: &Path, value: &T) -> Result<(), ConfigStoreFailure> {
     let mut bytes = serde_json::to_vec_pretty(value)
-        .map_err(|error| ConfigStoreError::Validation(format!("configuration serialization failed: {error}")))?;
+        .map_err(|source| ConfigStoreFailure::caused_by(ConfigStoreCondition::Validation, None, source))?;
     bytes.push(b'\n');
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(temporary)
-        .map_err(|source| ConfigStoreError::Io {
-            operation: "create temporary file",
-            path: temporary.to_path_buf(),
-            source,
-        })?;
-    file.write_all(&bytes).map_err(|source| ConfigStoreError::Io {
-        operation: "write temporary file",
-        path: temporary.to_path_buf(),
-        source,
-    })?;
-    file.sync_all().map_err(|source| ConfigStoreError::Io {
-        operation: "sync temporary file",
-        path: temporary.to_path_buf(),
-        source,
-    })?;
+        .map_err(|source| ConfigStoreFailure::io("create temporary file", temporary.to_path_buf(), source))?;
+    file.write_all(&bytes)
+        .map_err(|source| ConfigStoreFailure::io("write temporary file", temporary.to_path_buf(), source))?;
+    file.sync_all()
+        .map_err(|source| ConfigStoreFailure::io("sync temporary file", temporary.to_path_buf(), source))?;
     drop(file);
-    atomic_replace(temporary, target).map_err(|source| ConfigStoreError::Io {
-        operation: "replace",
-        path: target.to_path_buf(),
-        source,
+    atomic_replace(temporary, target).map_err(|source| {
+        ConfigStoreFailure::caused_by(ConfigStoreCondition::Io, Some(target.to_path_buf()), source)
     })?;
     sync_parent(target)?;
     Ok(())
 }
 
+enum AtomicReplaceFailure {
+    Io(io::Error),
+    Recovery { replacement: io::Error, restore: io::Error },
+}
+
+impl AtomicReplaceFailure {
+    #[cfg(test)]
+    fn raw_os_error(&self) -> Option<i32> {
+        match self {
+            Self::Io(source) => source.raw_os_error(),
+            Self::Recovery { replacement, .. } => replacement.raw_os_error(),
+        }
+    }
+}
+
+impl fmt::Debug for AtomicReplaceFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let restore_kind = match self {
+            Self::Recovery { restore, .. } => Some(restore.kind()),
+            Self::Io(_) => None,
+        };
+        formatter
+            .debug_struct("AtomicReplaceFailure")
+            .field("recovery_failed", &matches!(self, Self::Recovery { .. }))
+            .field("restore_kind", &restore_kind)
+            .finish()
+    }
+}
+
+impl fmt::Display for AtomicReplaceFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Io(_) => "Atomic replacement failed.",
+            Self::Recovery { .. } => "Atomic replacement and recovery both failed.",
+        })
+    }
+}
+
+impl StdError for AtomicReplaceFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(source)
+            | Self::Recovery {
+                replacement: source, ..
+            } => Some(source),
+        }
+    }
+}
+
 #[cfg(not(windows))]
-fn atomic_replace(temporary: &Path, target: &Path) -> io::Result<()> {
-    fs::rename(temporary, target)
+fn atomic_replace(temporary: &Path, target: &Path) -> Result<(), AtomicReplaceFailure> {
+    fs::rename(temporary, target).map_err(AtomicReplaceFailure::Io)
 }
 
 #[cfg(windows)]
-fn atomic_replace(temporary: &Path, target: &Path) -> io::Result<()> {
+fn atomic_replace(temporary: &Path, target: &Path) -> Result<(), AtomicReplaceFailure> {
     atomic_replace_with(temporary, target, &SystemWindowsReplace)
 }
 
@@ -476,9 +668,9 @@ impl WindowsReplace for SystemWindowsReplace {
 }
 
 #[cfg(windows)]
-fn atomic_replace_with(temporary: &Path, target: &Path, api: &dyn WindowsReplace) -> io::Result<()> {
+fn atomic_replace_with(temporary: &Path, target: &Path, api: &dyn WindowsReplace) -> Result<(), AtomicReplaceFailure> {
     if !target.exists() {
-        return fs::rename(temporary, target);
+        return fs::rename(temporary, target).map_err(AtomicReplaceFailure::Io);
     }
     let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let file_name = target
@@ -495,7 +687,7 @@ fn atomic_replace_with(temporary: &Path, target: &Path, api: &dyn WindowsReplace
         std::process::id(),
         sequence
     ));
-    fs::hard_link(target, &recovery)?;
+    fs::hard_link(target, &recovery).map_err(AtomicReplaceFailure::Io)?;
 
     match api.replace(target, temporary, &backup) {
         Ok(()) => {
@@ -513,35 +705,31 @@ fn atomic_replace_with(temporary: &Path, target: &Path, api: &dyn WindowsReplace
                     fs::copy(&recovery, target).map(|_| ())
                 };
                 if let Err(restore_error) = restore_result {
-                    return Err(io::Error::new(
-                        restore_error.kind(),
-                        format!("replacement failed ({replace_error}); backup restore failed ({restore_error})"),
-                    ));
+                    return Err(AtomicReplaceFailure::Recovery {
+                        replacement: replace_error,
+                        restore: restore_error,
+                    });
                 }
             }
-            Err(replace_error)
+            Err(AtomicReplaceFailure::Io(replace_error))
         }
     }
 }
 
 #[cfg(not(windows))]
-fn sync_parent(target: &Path) -> Result<(), ConfigStoreError> {
+fn sync_parent(target: &Path) -> Result<(), ConfigStoreFailure> {
     use std::fs::File;
 
     let parent = target
         .parent()
-        .ok_or_else(|| ConfigStoreError::Validation("configuration path has no parent".into()))?;
+        .ok_or_else(|| ConfigStoreFailure::validation(ConfigValidation::PathHasNoParent))?;
     File::open(parent)
         .and_then(|directory| directory.sync_all())
-        .map_err(|source| ConfigStoreError::Io {
-            operation: "sync directory",
-            path: parent.to_path_buf(),
-            source,
-        })
+        .map_err(|source| ConfigStoreFailure::io("sync directory", parent.to_path_buf(), source))
 }
 
 #[cfg(windows)]
-fn sync_parent(_target: &Path) -> Result<(), ConfigStoreError> {
+fn sync_parent(_target: &Path) -> Result<(), ConfigStoreFailure> {
     // ReplaceFileW completes the same-volume atomic replacement. Windows does not expose
     // directory handles through std::fs::File, while the temporary file itself is synced above.
     Ok(())
@@ -596,10 +784,11 @@ mod tests {
             let store = DesktopConfigStore::new(path.clone(), runtime.root_context().component("config"));
             runtime.block_on(async {
                 assert!(store.load().await.is_err());
-                assert!(matches!(
-                    store.save_next(DesktopConfig::default()).await,
-                    Err(ConfigStoreError::ProtectedOriginal)
-                ));
+                let error = store
+                    .save_next(DesktopConfig::default())
+                    .await
+                    .expect_err("protected original");
+                assert_eq!(error.code(), ConfigStoreFailureCode::ProtectedOriginal);
             });
             assert_eq!(fs::read_to_string(path).expect("protected original"), contents);
             runtime.shutdown_runtime_blocking().expect("shutdown");
@@ -618,12 +807,47 @@ mod tests {
             let original = store.load().await.expect("load");
             let saved = store.save_next(original.clone()).await.expect("first save");
             assert_eq!(saved.revision, 1);
-            assert!(matches!(
-                store.save_next(original).await,
-                Err(ConfigStoreError::StaleRevision)
-            ));
+            let error = store.save_next(original).await.expect_err("stale revision");
+            assert_eq!(error.code(), ConfigStoreFailureCode::StaleRevision);
         });
         runtime.shutdown_runtime_blocking().expect("shutdown");
+    }
+
+    #[test]
+    fn storage_error_retains_typed_source_and_redacts_path_and_source_text() {
+        let path = PathBuf::from("C:/private/token/config.json");
+        let failure = ConfigStoreFailure::io(
+            "read",
+            path,
+            io::Error::new(io::ErrorKind::PermissionDenied, "password=private-password"),
+        );
+        let error = failure.into_operational().expect("I/O is operational");
+
+        assert!(
+            std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .is_some()
+        );
+        for projection in [format!("{error}"), format!("{error:?}")] {
+            assert!(!projection.contains("private/token"));
+            assert!(!projection.contains("private-password"));
+        }
+    }
+
+    #[test]
+    fn malformed_document_retains_serde_source_while_schema_rejection_is_non_operational() {
+        let serde_source =
+            serde_json::from_slice::<DesktopConfig>(br#"{"password":"secret""#).expect_err("invalid JSON");
+        let failure = ConfigStoreFailure::invalid_document(PathBuf::from("secret.json"), serde_source);
+        let error = failure.into_operational().expect("parse failure is operational");
+        assert!(
+            std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<serde_json::Error>())
+                .is_some()
+        );
+
+        let schema = ConfigStoreFailure::unsupported_schema(99, CONFIG_SCHEMA_VERSION);
+        assert!(schema.into_operational().is_none());
     }
 
     #[cfg(windows)]

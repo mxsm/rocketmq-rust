@@ -27,8 +27,8 @@ use crate::{
     },
     route::{AppRoute, BrokerTab, RouteKey, TopicTab},
     services::{
-        AppServices, CapabilityUnavailableConfigService, ConfigRouteTransition, ConfigUpdatePhase, ConfigUpdated,
-        FakeAuthService, FakeStartupService, StartupSnapshot, delivery03::test_support::FakeDelivery03Backend,
+        AppServices, ConfigRouteTransition, ConfigUpdatePhase, ConfigUpdated, FakeAuthService, FakeStartupService,
+        StartupSnapshot, UnavailableTestConfig, delivery03::test_support::FakeDelivery03Backend,
     },
     state::{RequestEpoch, UiError, UiErrorCode},
 };
@@ -66,9 +66,9 @@ fn topic_item(name: &str) -> rocketmq_dashboard_common::TopicInventoryItem {
 }
 
 fn services(snapshot: StartupSnapshot, auth: FakeAuthService) -> AppServices {
-    AppServices::new(
+    AppServices::injected_for_test(
         Arc::new(FakeStartupService::ready(snapshot)),
-        Arc::new(CapabilityUnavailableConfigService),
+        Arc::new(UnavailableTestConfig),
         Arc::new(auth),
     )
 }
@@ -313,7 +313,9 @@ fn real_desktop_services_bootstrap_on_the_gpui_executor_without_a_tokio_reactor(
         cx.read(|app| dashboard.read(app).startup_state.clone()),
         StartupState::Ready(ReadyScreen::MainShell)
     );
-    let report = runtime.shutdown(provider).expect("clean desktop runtime shutdown");
+    let report = runtime
+        .shutdown(Some(provider))
+        .expect("clean desktop runtime shutdown");
     assert_eq!(report.leaked, 0);
     assert_eq!(report.timed_out, 0);
 }

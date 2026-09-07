@@ -185,7 +185,8 @@ describe('ConfigPage', () => {
     await user.type(input, '10.0.0.12:9876');
     await user.click(screen.getByRole('button', { name: 'Add NameServer' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('NameServer unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Configuration update failed.');
+    expect(screen.queryByText('NameServer unavailable')).not.toBeInTheDocument();
     expect(input).toHaveValue('10.0.0.12:9876');
     expect(onConfigUpdated).not.toHaveBeenCalled();
     window.removeEventListener('rocketmq-config-updated', onConfigUpdated);

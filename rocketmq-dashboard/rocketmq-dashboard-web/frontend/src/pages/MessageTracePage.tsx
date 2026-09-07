@@ -1,6 +1,7 @@
 import { GitBranch, Hash, Network, Search } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { messageApi } from '../api/message_api';
+import { userErrorMessage } from '../api/client';
 import { topicApi } from '../api/topic_api';
 import AppDataTable, { type AppDataTableColumn } from '../components/AppDataTable';
 import MetricCard from '../components/MetricCard';
@@ -56,7 +57,7 @@ export default function MessageTracePage() {
     } catch (requestError) {
       if (topicRequestRef.current === requestId) {
         setTopics([]);
-        setTopicsError(`Topic discovery failed: ${requestError instanceof Error ? requestError.message : String(requestError)}`);
+        setTopicsError(`Topic discovery failed: ${userErrorMessage(requestError, 'Unable to load topics.')}`);
       }
     } finally {
       if (topicRequestRef.current === requestId) setTopicsLoading(false);
@@ -122,7 +123,7 @@ export default function MessageTracePage() {
     } catch (requestError) {
       if (candidateRequestRef.current === requestId) {
         setRows([]);
-        setCandidateError(requestError instanceof Error ? requestError.message : String(requestError));
+        setCandidateError(userErrorMessage(requestError, 'Unable to load trace candidates.'));
       }
     } finally {
       if (candidateRequestRef.current === requestId) setCandidateLoading(false);
@@ -140,7 +141,7 @@ export default function MessageTracePage() {
       const data = await messageApi.trace(messageTraceId(message), message.topic, traceTopic.trim());
       if (traceRequestRef.current === requestId) setTrace(data);
     } catch (requestError) {
-      if (traceRequestRef.current === requestId) setTraceError(requestError instanceof Error ? requestError.message : String(requestError));
+      if (traceRequestRef.current === requestId) setTraceError(userErrorMessage(requestError, 'Unable to load the message trace.'));
     } finally {
       if (traceRequestRef.current === requestId) setTraceLoading(false);
     }

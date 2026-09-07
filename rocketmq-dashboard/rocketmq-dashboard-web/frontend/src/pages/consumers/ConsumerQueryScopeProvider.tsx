@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { configApi } from '../../api/config_api';
+import { userErrorMessage } from '../../api/client';
 import type { ConsumerQueryMode, ConsumerQueryScope } from '../../types/consumer';
 
 const STORAGE_KEY = 'rocketmq.consumer.queryMode';
@@ -58,7 +59,7 @@ export function ConsumerQueryScopeProvider({ children }: { children: ReactNode }
       );
     } catch (error) {
       if (token === requestToken.current) {
-        setConfigError(error instanceof Error ? error.message : String(error));
+        setConfigError(userErrorMessage(error, 'Unable to load consumer query configuration.'));
       }
     } finally {
       if (token === requestToken.current) setConfigLoading(false);

@@ -61,14 +61,22 @@ where
         .into_iter()
         .map(|target| {
             if target.success {
-                TopicTargetResult::success(target.broker_name, target.message)
+                TopicTargetResult::success(target.broker_name, "Topic target operation completed")
             } else {
-                TopicTargetResult::failure(target.broker_name, target.message)
+                TopicTargetResult::failure(
+                    target.broker_name,
+                    "TOPIC_TARGET_OPERATION_FAILED",
+                    "Topic target operation failed",
+                )
             }
         })
         .collect::<Vec<_>>();
-    if let Some(order_config) = outcome.order_config.filter(|result| !result.success) {
-        targets.push(TopicTargetResult::failure("ORDER_TOPIC_CONFIG", order_config.message));
+    if outcome.order_config.is_some_and(|result| !result.success) {
+        targets.push(TopicTargetResult::failure(
+            "ORDER_TOPIC_CONFIG",
+            "ORDER_TOPIC_CONFIG_FAILED",
+            "Order-topic configuration update failed",
+        ));
     }
     Ok(build_operation_result("DELETE_TOPIC", topic, targets))
 }

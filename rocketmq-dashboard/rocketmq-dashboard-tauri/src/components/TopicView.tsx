@@ -38,6 +38,7 @@ import {Button} from '../components/ui/LegacyButton';
 import {Pagination} from './Pagination';
 import {useTopicCatalog} from '../features/topic/hooks/useTopicCatalog';
 import {TopicService} from '../services/topic.service';
+import {dashboardErrorMessage} from '../services/invoke';
 import type {
     TopicCategory,
     TopicConfigView,
@@ -139,22 +140,6 @@ const buildTopicEditorSeedFromConfig = (config: TopicConfigView): TopicEditorSee
     messageType: config.messageType || 'UNSPECIFIED',
 });
 
-const getErrorMessage = (error: unknown, fallback: string): string => {
-    if (error instanceof Error) {
-        return error.message;
-    }
-
-    if (typeof error === 'string') {
-        return error;
-    }
-
-    if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-        return error.message;
-    }
-
-    return fallback;
-};
-
 interface TopicRouterModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -187,7 +172,7 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
             } catch (loadError) {
                 if (!cancelled) {
                     setRouteData(null);
-                    setError(loadError instanceof Error ? loadError.message : 'Failed to load topic route.');
+                    setError(dashboardErrorMessage(loadError, 'Failed to load topic route.'));
                 }
             } finally {
                 if (!cancelled) {
@@ -554,7 +539,7 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
             } catch (loadError) {
                 if (!cancelled) {
                     setConfigData(null);
-                    setError(loadError instanceof Error ? loadError.message : 'Failed to load topic configuration.');
+                    setError(dashboardErrorMessage(loadError, 'Failed to load topic configuration.'));
                 }
             } finally {
                 if (!cancelled) {
@@ -652,7 +637,7 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
             await onRefresh();
             onClose();
         } catch (deleteError) {
-            setActionError(getErrorMessage(deleteError, 'Failed to delete topic from the selected broker.'));
+            setActionError(dashboardErrorMessage(deleteError, 'Failed to delete topic from the selected broker.'));
         } finally {
             setIsDeletingBroker(false);
         }
@@ -984,7 +969,7 @@ const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
             } catch (loadError) {
                 if (!cancelled) {
                     setStatusData(null);
-                    setError(loadError instanceof Error ? loadError.message : 'Failed to load topic status.');
+                    setError(dashboardErrorMessage(loadError, 'Failed to load topic status.'));
                 }
             } finally {
                 if (!cancelled) {
@@ -1314,7 +1299,7 @@ const TopicConsumerManageModal = ({isOpen, onClose, topic}: TopicRouterModalProp
                 }
             } catch (loadError) {
                 if (!cancelled) {
-                    setError(loadError instanceof Error ? loadError.message : 'Failed to load consumer details.');
+                    setError(dashboardErrorMessage(loadError, 'Failed to load consumer details.'));
                 }
             } finally {
                 if (!cancelled) {
@@ -1603,7 +1588,7 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                 }
             } catch (loadError) {
                 if (!cancelled) {
-                    setError(getErrorMessage(loadError, 'Failed to load topic configuration before sending.'));
+                    setError(dashboardErrorMessage(loadError, 'Failed to load topic configuration before sending.'));
                 }
             } finally {
                 if (!cancelled) {
@@ -1644,7 +1629,7 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
             setSendResult(result);
             toast.success(`Message sent to ${topic.name}`);
         } catch (submitError) {
-            setError(submitError instanceof Error ? submitError.message : 'Failed to send topic message.');
+            setError(dashboardErrorMessage(submitError, 'Failed to send topic message.'));
         } finally {
             setIsSubmitting(false);
         }
@@ -1928,7 +1913,7 @@ const TopicResetOffsetModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                 setSelectedConsumerGroup(groups[0] ?? '');
             } catch (loadError) {
                 if (!cancelled) {
-                    setError(loadError instanceof Error ? loadError.message : 'Failed to load consumer groups.');
+                    setError(dashboardErrorMessage(loadError, 'Failed to load consumer groups.'));
                 }
             } finally {
                 if (!cancelled) {
@@ -1978,7 +1963,7 @@ const TopicResetOffsetModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
             toast.success(result.message || `Offset reset requested for ${topic.name}`);
             onClose();
         } catch (resetError) {
-            setError(resetError instanceof Error ? resetError.message : 'Failed to reset consumer offset.');
+            setError(dashboardErrorMessage(resetError, 'Failed to reset consumer offset.'));
         } finally {
             setIsSubmitting(false);
         }
@@ -2141,7 +2126,7 @@ const TopicSkipMessageAccumulateModal = ({isOpen, onClose, topic}: TopicRouterMo
                 setSelectedConsumerGroup(groups[0] ?? '');
             } catch (loadError) {
                 if (!cancelled) {
-                    setError(loadError instanceof Error ? loadError.message : 'Failed to load consumer groups.');
+                    setError(dashboardErrorMessage(loadError, 'Failed to load consumer groups.'));
                 }
             } finally {
                 if (!cancelled) {
@@ -2180,7 +2165,7 @@ const TopicSkipMessageAccumulateModal = ({isOpen, onClose, topic}: TopicRouterMo
             toast.success(result.message || `Skipped accumulated messages for ${topic.name}`);
             onClose();
         } catch (skipError) {
-            setError(skipError instanceof Error ? skipError.message : 'Failed to skip accumulated messages.');
+            setError(dashboardErrorMessage(skipError, 'Failed to skip accumulated messages.'));
         } finally {
             setIsSubmitting(false);
         }
@@ -2401,7 +2386,7 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
             await onSaved();
             onClose();
         } catch (submitError) {
-            setError(getErrorMessage(submitError, 'Failed to save topic changes.'));
+            setError(dashboardErrorMessage(submitError, 'Failed to save topic changes.'));
         } finally {
             setIsSubmitting(false);
         }
@@ -2777,7 +2762,7 @@ const TopicDeleteModal = ({isOpen, onClose, topic, onDeleted}: TopicDeleteModalP
             await onDeleted();
             onClose();
         } catch (deleteError) {
-            setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete topic.');
+            setError(dashboardErrorMessage(deleteError, 'Failed to delete topic.'));
         } finally {
             setIsSubmitting(false);
         }

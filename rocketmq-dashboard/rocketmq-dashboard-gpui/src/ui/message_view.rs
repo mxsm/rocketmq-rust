@@ -458,16 +458,16 @@ impl MessageView {
 
     /// Render the message cards grid (one per row for message details)
     fn render_message_grid(&self, cx: &mut Context<Self>) -> Div {
-        div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .w_full()
-            .children(self.messages.iter().map(|msg| self.render_message_card(msg, cx)))
+        div().flex().flex_col().gap_4().w_full().children(
+            self.messages
+                .iter()
+                .enumerate()
+                .map(|(index, msg)| self.render_message_card(index, msg, cx)),
+        )
     }
 
     /// Render a single message card
-    fn render_message_card(&self, msg: &MessageData, cx: &mut Context<Self>) -> Div {
+    fn render_message_card(&self, message_index: usize, msg: &MessageData, cx: &mut Context<Self>) -> Div {
         div()
             .w_full()
             .rounded(px(12.0))
@@ -481,7 +481,7 @@ impl MessageView {
             .child(self.render_card_header(msg))
             .child(self.render_card_details(msg))
             .child(div().h(px(1.0)).bg(rgb(0xE5E5E7)))
-            .child(self.render_card_actions(msg, cx))
+            .child(self.render_card_actions(message_index, cx))
     }
 
     /// Render the card header
@@ -594,9 +594,7 @@ impl MessageView {
     }
 
     /// Render the card action buttons
-    fn render_card_actions(&self, msg: &MessageData, cx: &mut Context<Self>) -> Div {
-        let message_index = self.messages.iter().position(|m| m.msg_id == msg.msg_id).unwrap();
-
+    fn render_card_actions(&self, message_index: usize, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
             .items_center()
@@ -628,10 +626,8 @@ impl MessageView {
             .cursor_pointer()
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 if this.modal_message_index == Some(message_index) {
-                    println!("Closing modal for message {}", message_index);
                     this.modal_message_index = None;
                 } else {
-                    println!("Opening modal for message {}", message_index);
                     this.modal_message_index = Some(message_index);
                 }
                 cx.notify();

@@ -1,7 +1,7 @@
 import { ListChecks, Network, RadioTower, RotateCcw, Settings2, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { consumerApi } from '../../api/consumer_api';
-import { handleAppliedAuditFailure } from '../../api/client';
+import { userErrorMessage } from '../../api/client';
 import AppDataTable, { type AppDataTableColumn } from '../../components/AppDataTable';
 import ErrorState from '../../components/ErrorState';
 import LoadingState from '../../components/LoadingState';
@@ -38,12 +38,6 @@ import { normalizeConsumerValue } from './consumer-model';
 interface ConsumerDetailContentProps {
   group: string;
   initialTab?: 'overview' | 'clients' | 'progress' | 'config' | 'reset';
-  authoritativeDetail?: {
-    identityKey: string;
-    revision: number;
-    summary: ConsumerSummaryView;
-    config: ConsumerConfigView;
-  } | null;
 }
 
 const connectionColumns: AppDataTableColumn<ConsumerConnectionItem>[] = [
@@ -78,8 +72,7 @@ const queueColumns: AppDataTableColumn<ConsumerProgressQueue>[] = [
 
 export default function ConsumerDetailContent({
   group,
-  initialTab = 'overview',
-  authoritativeDetail = null
+  initialTab = 'overview'
 }: ConsumerDetailContentProps) {
   const { scope, revision } = useConsumerQueryScope();
   const scopeKey = `${scope.mode}:${scope.proxyAddress ?? ''}`;
@@ -103,10 +96,10 @@ export default function ConsumerDetailContent({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
   const requestToken = useRef(0);
+  const clientsRequestToken = useRef(0);
   const configRequestToken = useRef(0);
   const resetOperationToken = useRef(0);
   const currentGroupRef = useRef(group);
-  const appliedCursorRef = useRef<{ identityKey: string; revision: number } | null>(null);
 
   const load = async () => {
     const token = ++requestToken.current;
@@ -123,7 +116,7 @@ export default function ConsumerDetailContent({
       setResetTopic((current) => current || nextProgress.topics[0]?.topic || '');
     } catch (requestError) {
       if (token === requestToken.current) {
-        setError(requestError instanceof Error ? requestError.message : String(requestError));
+        setError(userErrorMessage(requestError, 'Unable to load the consumer workspace.'));
       }
     } finally {
       if (token === requestToken.current) setLoading(false);
@@ -131,14 +124,23 @@ export default function ConsumerDetailContent({
   };
 
   const loadClients = async () => {
+    const token = ++clientsRequestToken.current;
+    const ownerIdentity = identityKey;
     setClientsLoading(true);
     setClientsError(null);
     try {
-      setConnections(await consumerApi.connections(group, scope));
+      const nextConnections = await consumerApi.connections(group, scope);
+      if (token === clientsRequestToken.current && ownerIdentity === `${currentGroupRef.current}|${scopeKey}`) {
+        setConnections(nextConnections);
+      }
     } catch (requestError) {
-      setClientsError(requestError instanceof Error ? requestError.message : String(requestError));
+      if (token === clientsRequestToken.current && ownerIdentity === `${currentGroupRef.current}|${scopeKey}`) {
+        setClientsError(userErrorMessage(requestError, 'Unable to load consumer clients.'));
+      }
     } finally {
-      setClientsLoading(false);
+      if (token === clientsRequestToken.current && ownerIdentity === `${currentGroupRef.current}|${scopeKey}`) {
+        setClientsLoading(false);
+      }
     }
   };
 
@@ -152,7 +154,7 @@ export default function ConsumerDetailContent({
       setConfig(nextConfig);
     } catch (requestError) {
       if (token === configRequestToken.current) {
-        setConfigError(requestError instanceof Error ? requestError.message : String(requestError));
+        setConfigError(userErrorMessage(requestError, 'Unable to load consumer configuration.'));
       }
     } finally {
       if (token === configRequestToken.current) setConfigLoading(false);
@@ -175,29 +177,14 @@ export default function ConsumerDetailContent({
     setNotice(null);
     setConfirmOpen(false);
     setResetting(false);
-    appliedCursorRef.current = null;
     void load();
     return () => {
       requestToken.current += 1;
+      clientsRequestToken.current += 1;
       configRequestToken.current += 1;
       resetOperationToken.current += 1;
     };
   }, [group, initialTab, scope.mode, scope.proxyAddress, revision]);
-
-  useEffect(() => {
-    if (!authoritativeDetail || authoritativeDetail.identityKey !== identityKey) return;
-    const cursor = appliedCursorRef.current;
-    if (cursor?.identityKey === identityKey && cursor.revision === authoritativeDetail.revision) return;
-    appliedCursorRef.current = { identityKey, revision: authoritativeDetail.revision };
-    requestToken.current += 1;
-    configRequestToken.current += 1;
-    setSummary(authoritativeDetail.summary);
-    setConfig(authoritativeDetail.config);
-    setLoading(false);
-    setError(null);
-    setConfigLoading(false);
-    setConfigError(null);
-  }, [authoritativeDetail, identityKey]);
 
   useEffect(() => {
     if (activeTab === 'clients' && !connections) void loadClients();
@@ -257,16 +244,8 @@ export default function ConsumerDetailContent({
       await load();
     } catch (requestError) {
       if (operationToken !== resetOperationToken.current || currentGroupRef.current !== operationGroup) return;
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          setConfirmOpen(false);
-          setValidationError(null);
-          setNotice(`Offset reset was applied for ${operationGroup}. Refreshing authoritative progress.`);
-        },
-        refresh: load
-      })) return;
       setConfirmOpen(false);
-      setValidationError(requestError instanceof Error ? requestError.message : 'Unable to reset offsets.');
+      setValidationError(userErrorMessage(requestError, 'Unable to reset offsets.'));
     } finally {
       if (operationToken === resetOperationToken.current && currentGroupRef.current === operationGroup) {
         setResetting(false);
@@ -525,7 +504,7 @@ function ConsumerConfigurationTargetCard({ target }: ConsumerConfigurationTarget
           tone={target.error ? 'danger' : target.config ? 'success' : 'neutral'}
         />
       </header>
-      {target.error ? <div className="notice notice-danger" role="alert">{target.error}</div> : null}
+      {target.error ? <div className="notice notice-danger" role="alert">{target.error.code}: {target.error.message}</div> : null}
       {target.config ? (
         <>
           <div className="consumer-configuration-groups">

@@ -24,7 +24,8 @@ describe('MonitorDialog', () => {
     await user.type(minCount, '4');
     await user.click(screen.getByRole('button', { name: 'Save rule' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('monitor service unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to save the monitor rule.');
+    expect(screen.queryByText('monitor service unavailable')).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Group' })).toHaveValue('order-service');
     expect(screen.getByRole('spinbutton', { name: 'Min Count' })).toHaveValue(4);
     expect(screen.getByRole('button', { name: 'Retry save' })).toBeInTheDocument();

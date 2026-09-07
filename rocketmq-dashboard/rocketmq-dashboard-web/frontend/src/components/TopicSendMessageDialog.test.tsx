@@ -109,7 +109,8 @@ describe('TopicSendMessageDialog', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Enable trace' }));
     await submitSend(user);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('broker unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to send the test message.');
+    expect(screen.queryByText('broker unavailable')).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Key' })).toHaveValue(' key with spaces ');
     expect(screen.getByRole('textbox', { name: 'Tag' })).toHaveValue('created');
     expect(screen.getByRole('textbox', { name: 'Message body' })).toHaveValue('payload');

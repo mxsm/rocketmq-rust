@@ -22,7 +22,7 @@ use rocketmq_dashboard_common::{
 use rocketmq_runtime::ChildServiceContext;
 use serde::{Deserialize, Serialize};
 
-use super::config_store::{ConfigStoreError, write_json_atomically};
+use super::config_store::{ConfigStoreFailure, write_json_atomically};
 
 const HISTORY_SCHEMA_VERSION: u32 = 1;
 const MAX_SERIES_IDENTITY_BYTES: usize = 1_024;
@@ -61,7 +61,7 @@ impl HistoryStore {
     }
 
     /// Returns all retained observations in deterministic series/time order.
-    pub async fn points(&self) -> Result<Vec<HistoryPoint>, ConfigStoreError> {
+    pub async fn points(&self) -> Result<Vec<HistoryPoint>, ConfigStoreFailure> {
         let _guard = self.gate.lock().await;
         let path = self.path.clone();
         self.context
@@ -70,7 +70,7 @@ impl HistoryStore {
                 load_document(&path).map(|document| document.points)
             })
             .await
-            .map_err(|error| ConfigStoreError::Runtime(error.to_string()))?
+            .map_err(ConfigStoreFailure::runtime)?
     }
 
     /// Returns actual observations for one metric/series and time range without filling gaps.
@@ -80,7 +80,7 @@ impl HistoryStore {
         series_identity: String,
         start_epoch_ms: u64,
         end_epoch_ms: u64,
-    ) -> Result<Vec<HistoryPoint>, ConfigStoreError> {
+    ) -> Result<Vec<HistoryPoint>, ConfigStoreFailure> {
         let points = self.points().await?;
         let selected = points
             .into_iter()
@@ -96,7 +96,7 @@ impl HistoryStore {
         &self,
         sample: Vec<HistoryPoint>,
         retention: HistoryRetention,
-    ) -> Result<(), ConfigStoreError> {
+    ) -> Result<(), ConfigStoreFailure> {
         let sample = sample
             .into_iter()
             .filter(|point| {
@@ -120,44 +120,32 @@ impl HistoryStore {
                 write_json_atomically(&path, &document)
             })
             .await
-            .map_err(|error| ConfigStoreError::Runtime(error.to_string()))?
+            .map_err(ConfigStoreFailure::runtime)?
     }
 }
 
-fn load_document(path: &PathBuf) -> Result<HistoryDocument, ConfigStoreError> {
+fn load_document(path: &PathBuf) -> Result<HistoryDocument, ConfigStoreFailure> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HistoryDocument::default()),
         Err(source) => {
-            return Err(ConfigStoreError::Io {
-                operation: "read history",
-                path: path.clone(),
-                source,
-            });
+            return Err(ConfigStoreFailure::io("read history", path.clone(), source));
         }
     };
 
     match serde_json::from_slice::<HistoryDocument>(&bytes) {
         Ok(document) if document.schema_version == HISTORY_SCHEMA_VERSION => Ok(document),
-        Ok(document) => Err(ConfigStoreError::UnsupportedSchema {
-            found: document.schema_version,
-            supported: HISTORY_SCHEMA_VERSION,
-        }),
+        Ok(document) => Err(ConfigStoreFailure::unsupported_schema(
+            document.schema_version,
+            HISTORY_SCHEMA_VERSION,
+        )),
         Err(document_error) => {
             // Delivery 02 persisted an array of lifecycle notes, never metrics. Accept that shape as
             // an empty metric history so existing installations upgrade without invented points.
             if serde_json::from_slice::<Vec<LegacyHistoryRecord>>(&bytes).is_ok() {
                 return Ok(HistoryDocument::default());
             }
-            Err(ConfigStoreError::InvalidDocument {
-                path: path.clone(),
-                summary: format!(
-                    "{:?} at line {}, column {}",
-                    document_error.classify(),
-                    document_error.line(),
-                    document_error.column()
-                ),
-            })
+            Err(ConfigStoreFailure::invalid_document(path.clone(), document_error))
         }
     }
 }

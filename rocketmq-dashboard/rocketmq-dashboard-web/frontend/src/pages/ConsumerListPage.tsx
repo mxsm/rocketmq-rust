@@ -2,6 +2,7 @@ import { Activity, ListRestart, MoreHorizontal, Pencil, Plus, RotateCcw, Trash2,
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { consumerApi } from '../api/consumer_api';
+import { userErrorMessage } from '../api/client';
 import ConsumerDeleteDialog from '../components/ConsumerDeleteDialog';
 import ConsumerMutationDialog from '../components/ConsumerMutationDialog';
 import { useConsumerMutationScopeRevision } from '../components/consumerMutationLock';
@@ -111,7 +112,7 @@ export default function ConsumerListPage() {
       setData(next);
     } catch (error) {
       if (token !== requestToken.current || !isCurrentScope(requestScope)) return;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = userErrorMessage(error, 'Unable to load consumer groups.');
       if (isRefresh) setRefreshError(message);
       else setInitialError(message);
     } finally {
@@ -408,7 +409,6 @@ export default function ConsumerListPage() {
         consumer={deleteTarget}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}
         onSucceeded={() => void load(false)}
-        onAppliedAuditFailure={() => load(false)}
       />
     </div>
   );

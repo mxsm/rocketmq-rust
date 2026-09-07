@@ -76,7 +76,8 @@ describe('TopicSkipBacklogDialog', () => {
 
     await user.click(screen.getByRole('button', { name: 'Skip accumulated messages' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('skip failed');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to skip accumulated messages.');
+    expect(screen.queryByText('skip failed')).not.toBeInTheDocument();
     expect(confirmation).toHaveValue('order-service');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Skip accumulated messages' })).toHaveFocus());
     expect(topicApi.skipBacklog).toHaveBeenCalledTimes(1);

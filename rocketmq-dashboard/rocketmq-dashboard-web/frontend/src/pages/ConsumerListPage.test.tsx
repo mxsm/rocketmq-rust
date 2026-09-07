@@ -5,7 +5,6 @@ import { afterEach, vi } from 'vitest';
 import { configApi } from '../api/config_api';
 import { consumerApi } from '../api/consumer_api';
 import { brokerApi } from '../api/broker_api';
-import { ApiClientError } from '../api/client';
 import { renderAtRoute } from '../test/render';
 import type { ConsumerGroupListItem } from '../types/consumer';
 import { ConsumerQueryScopeProvider, useConsumerQueryScope } from './consumers/ConsumerQueryScopeProvider';
@@ -152,7 +151,8 @@ describe('ConsumerListPage', () => {
       });
     renderPage();
 
-    expect(await screen.findByText('consumer service unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Unable to load consumer groups.')).toBeInTheDocument();
+    expect(screen.queryByText('consumer service unavailable')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('heading', { name: 'Consumer groups' })).toBeInTheDocument();
   });
@@ -197,11 +197,9 @@ describe('ConsumerListPage', () => {
     expect(consumerApi.create).toHaveBeenCalledTimes(1);
   });
 
-  it('does not let an applied NameServer create refresh the visible proxy scope', async () => {
+  it('does not let a stale rejected NameServer create refresh the visible proxy scope', async () => {
     const user = userEvent.setup();
     const pendingCreate = deferred<never>();
-    const auditWarning = vi.fn();
-    window.addEventListener('rocketmq-audit-warning', auditWarning);
     vi.mocked(consumerApi.list).mockImplementation((scope) => Promise.resolve(
       scope?.mode === 'proxy' ? listView('proxy-only', 'proxy') : listView('name-server-only', 'nameServer')
     ));
@@ -220,11 +218,10 @@ describe('ConsumerListPage', () => {
     expect(await screen.findByText('proxy-only')).toBeInTheDocument();
     const readsBeforeTerminal = vi.mocked(consumerApi.list).mock.calls.length;
     await act(async () => {
-      window.dispatchEvent(new CustomEvent('rocketmq-audit-warning', { detail: 'Mutation applied.' }));
-      pendingCreate.reject(new ApiClientError('APPLIED_AUDIT_FAILED', 'Mutation applied.', { mutationApplied: true }));
+      pendingCreate.reject(new Error('sensitive-rejection-detail'));
     });
-    await waitFor(() => expect(auditWarning).toHaveBeenCalledTimes(1));
     expect(vi.mocked(consumerApi.list).mock.calls).toHaveLength(readsBeforeTerminal);
+    expect(screen.queryByText('sensitive-rejection-detail')).not.toBeInTheDocument();
     expect(screen.getByText('proxy-only')).toBeInTheDocument();
     await act(async () => setScopeMode('nameServer'));
     await waitFor(() => expect(
@@ -232,6 +229,5 @@ describe('ConsumerListPage', () => {
     ).toHaveLength(2));
     expect(await screen.findByText('name-server-only')).toBeInTheDocument();
     expect(consumerApi.create).toHaveBeenCalledTimes(1);
-    window.removeEventListener('rocketmq-audit-warning', auditWarning);
   });
 });

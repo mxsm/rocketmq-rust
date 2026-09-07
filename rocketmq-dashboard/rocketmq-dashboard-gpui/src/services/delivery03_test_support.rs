@@ -283,9 +283,9 @@ impl Delivery03Backend for FakeDelivery03Backend {
     }
 }
 
-fn unexpected_call(operation: &str) -> UiError {
+fn unexpected_call(_operation: &str) -> UiError {
     UiError::new(
-        format!("Unexpected {operation} test call."),
+        "Unexpected Delivery test call.",
         UiErrorCode::CapabilityUnavailable,
         false,
     )

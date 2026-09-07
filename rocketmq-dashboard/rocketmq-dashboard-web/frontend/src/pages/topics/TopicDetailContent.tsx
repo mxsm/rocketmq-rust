@@ -1,6 +1,7 @@
 import { Database, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { topicApi } from '../../api/topic_api';
+import { userErrorMessage } from '../../api/client';
 import AppDataTable, { type AppDataTableColumn } from '../../components/AppDataTable';
 import ErrorState from '../../components/ErrorState';
 import LoadingState from '../../components/LoadingState';
@@ -62,7 +63,7 @@ const emptyResource = <T,>(topicName: string, data: T | null = null): ResourceSt
   error: null
 });
 
-const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+const errorMessage = (error: unknown) => userErrorMessage(error, 'Unable to load topic details.');
 const EMPTY_REVISIONS: TopicDetailResourceRevisions = {};
 const TAB_LABELS: Record<TopicDetailTab, string> = {
   overview: 'Overview',

@@ -4,8 +4,7 @@ export class SessionStorageService {
     static getSessionId(): string | null {
         try {
             return window.localStorage.getItem(SESSION_KEY);
-        } catch (error) {
-            console.warn('Failed to read auth session from localStorage', error);
+        } catch {
             return null;
         }
     }
@@ -13,16 +12,12 @@ export class SessionStorageService {
     static setSessionId(sessionId: string): void {
         try {
             window.localStorage.setItem(SESSION_KEY, sessionId);
-        } catch (error) {
-            console.warn('Failed to persist auth session to localStorage', error);
-        }
+        } catch {}
     }
 
     static clearSessionId(): void {
         try {
             window.localStorage.removeItem(SESSION_KEY);
-        } catch (error) {
-            console.warn('Failed to clear auth session from localStorage', error);
-        }
+        } catch {}
     }
 }

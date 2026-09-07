@@ -75,7 +75,8 @@ describe('MonitorPage', () => {
       .mockResolvedValueOnce([]);
     renderAtRoute(<MonitorPage />, '/monitor');
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('monitor list unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load monitor rules.');
+    expect(screen.queryByText('monitor list unavailable')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry monitor rules' }));
 
     expect(await screen.findByText('No monitor rules')).toBeInTheDocument();
@@ -127,7 +128,8 @@ describe('MonitorPage', () => {
     await user.type(within(dialog).getByRole('textbox', { name: 'Group' }), 'inventory-worker');
     await user.click(within(dialog).getByRole('button', { name: 'Save rule' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('refresh unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load monitor rules.');
+    expect(screen.queryByText('refresh unavailable')).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Create rule' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry monitor rules' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry save' })).not.toBeInTheDocument();
@@ -187,7 +189,8 @@ describe('MonitorPage', () => {
     await user.click(screen.getByRole('button', { name: 'Delete rule for order-service' }));
     await user.click(within(screen.getByRole('alertdialog', { name: 'Delete rule?' })).getByRole('button', { name: 'Delete rule' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('refresh unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load monitor rules.');
+    expect(screen.queryByText('refresh unavailable')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry monitor rules' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry delete' })).not.toBeInTheDocument();
     expect(monitorApi.deleteConsumerMonitor).toHaveBeenCalledTimes(1);

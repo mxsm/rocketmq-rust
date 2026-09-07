@@ -22,7 +22,7 @@ pub struct RouteKey(String);
 
 impl RouteKey {
     /// Validates a route key without accepting a value that could change URL structure.
-    pub fn parse(value: impl Into<String>) -> Result<Self, RouteParseError> {
+    pub fn parse(value: impl Into<String>) -> Result<Self, RouteRejection> {
         let value = value.into();
         if value.is_empty()
             || value.len() > 256
@@ -30,7 +30,7 @@ impl RouteKey {
                 .chars()
                 .any(|character| matches!(character, '/' | '?' | '#' | '\\') || character.is_control())
         {
-            return Err(RouteParseError::InvalidParameter);
+            return Err(RouteRejection::InvalidParameter);
         }
 
         Ok(Self(value))
@@ -122,7 +122,7 @@ pub enum AppRoute {
 
 impl AppRoute {
     /// Parses a path. Compatibility aliases are accepted only at this boundary.
-    pub fn parse(path: &str) -> Result<Self, RouteParseError> {
+    pub fn parse(path: &str) -> Result<Self, RouteRejection> {
         let path = path.split_once('?').map_or(path, |(path, _)| path);
         let segments: Vec<_> = path.split('/').filter(|segment| !segment.is_empty()).collect();
 
@@ -158,7 +158,7 @@ impl AppRoute {
             ["ops"] => Ok(Self::OpsSettings),
             ["cluster"] => Ok(Self::Brokers),
             ["dlq"] => Ok(Self::DlqMessages),
-            _ => Err(RouteParseError::UnknownPath),
+            _ => Err(RouteRejection::UnknownPath),
         }
     }
 
@@ -213,7 +213,7 @@ impl fmt::Display for AppRoute {
 }
 
 impl FromStr for AppRoute {
-    type Err = RouteParseError;
+    type Err = RouteRejection;
 
     fn from_str(path: &str) -> Result<Self, Self::Err> {
         Self::parse(path)
@@ -255,13 +255,11 @@ impl fmt::Display for ConsumerTab {
 }
 
 /// A parse failure that contains no source value, preserving safe diagnostics for malformed links.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum RouteParseError {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteRejection {
     /// The path is not a supported dashboard route.
-    #[error("unknown dashboard route")]
     UnknownPath,
     /// A detail path does not have a valid parameter or tab.
-    #[error("invalid dashboard route parameter")]
     InvalidParameter,
 }
 
@@ -337,34 +335,34 @@ impl NavigationHistory {
     }
 }
 
-fn parse_broker_tab(value: &str) -> Result<BrokerTab, RouteParseError> {
+fn parse_broker_tab(value: &str) -> Result<BrokerTab, RouteRejection> {
     match value {
         "overview" => Ok(BrokerTab::Overview),
         "runtime" => Ok(BrokerTab::Runtime),
         "configuration" => Ok(BrokerTab::Configuration),
-        _ => Err(RouteParseError::InvalidParameter),
+        _ => Err(RouteRejection::InvalidParameter),
     }
 }
 
-fn parse_topic_tab(value: &str) -> Result<TopicTab, RouteParseError> {
+fn parse_topic_tab(value: &str) -> Result<TopicTab, RouteRejection> {
     match value {
         "overview" => Ok(TopicTab::Overview),
         "stats" | "queues" => Ok(TopicTab::Stats),
         "route" => Ok(TopicTab::Route),
         "configuration" | "permissions" => Ok(TopicTab::Configuration),
         "consumers" => Ok(TopicTab::Consumers),
-        _ => Err(RouteParseError::InvalidParameter),
+        _ => Err(RouteRejection::InvalidParameter),
     }
 }
 
-fn parse_consumer_tab(value: &str) -> Result<ConsumerTab, RouteParseError> {
+fn parse_consumer_tab(value: &str) -> Result<ConsumerTab, RouteRejection> {
     match value {
         "overview" => Ok(ConsumerTab::Overview),
         "clients" | "connections" | "subscriptions" => Ok(ConsumerTab::Clients),
         "progress" | "monitoring" => Ok(ConsumerTab::Progress),
         "configuration" => Ok(ConsumerTab::Configuration),
         "offset-actions" | "offsets" => Ok(ConsumerTab::OffsetActions),
-        _ => Err(RouteParseError::InvalidParameter),
+        _ => Err(RouteRejection::InvalidParameter),
     }
 }
 

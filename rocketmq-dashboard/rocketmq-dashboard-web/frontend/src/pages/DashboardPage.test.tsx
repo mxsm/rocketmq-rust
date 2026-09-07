@@ -101,7 +101,8 @@ describe('DashboardPage', () => {
     vi.mocked(dashboardApi.overview).mockRejectedValueOnce(new Error('overview offline')).mockResolvedValue(overview);
     renderAtRoute(<DashboardPage />);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('overview offline');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Dashboard data is unavailable.');
+    expect(screen.queryByText('overview offline')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByRole('heading', { name: 'Operations overview' })).toBeInTheDocument();

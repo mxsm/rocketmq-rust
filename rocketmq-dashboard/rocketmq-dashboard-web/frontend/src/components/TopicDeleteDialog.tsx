@@ -1,7 +1,7 @@
 import { Trash2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { topicApi } from '../api/topic_api';
-import { handleAppliedAuditFailure } from '../api/client';
+import { userErrorMessage } from '../api/client';
 import type { TopicInfo, TopicOperationResult } from '../types/topic';
 import {
   AlertDialog,
@@ -23,7 +23,6 @@ export interface TopicDeleteDialogProps {
   onOpenChange: (open: boolean) => void;
   onResult?: (result: TopicOperationResult) => void;
   onSucceeded: (result: TopicOperationResult) => void;
-  onAppliedAuditFailure?: () => Promise<void> | void;
 }
 
 interface DeleteSnapshot {
@@ -40,8 +39,7 @@ export default function TopicDeleteDialog({
   brokerName,
   onOpenChange,
   onResult,
-  onSucceeded,
-  onAppliedAuditFailure
+  onSucceeded
 }: TopicDeleteDialogProps) {
   const topicName = topic?.topic ?? '';
   const [selectedBroker, setSelectedBroker] = useState(() => initialBroker(topic, brokerName));
@@ -138,15 +136,7 @@ export default function TopicDeleteDialog({
       }
     } catch (requestError) {
       if (!isCurrentPresentation(snapshot)) return;
-      if (await handleAppliedAuditFailure(requestError, {
-        onApplied: () => {
-          invalidateAndClose();
-          setError(null);
-          setResult(null);
-        },
-        refresh: onAppliedAuditFailure
-      })) return;
-      setError(requestError instanceof Error ? requestError.message : 'Unable to delete the topic.');
+      setError(userErrorMessage(requestError, 'Unable to delete the topic.'));
     } finally {
       if (pendingRef.current === requestId) {
         pendingRef.current = null;
@@ -254,7 +244,9 @@ function OperationResult({ result }: { result: TopicOperationResult }) {
           <li key={target.target}>
             <strong>{target.target}</strong>
             <span>{target.success ? 'Succeeded' : 'Failed'}</span>
-            <span>{target.message}</span>
+            <span>{target.success
+              ? target.message ?? 'Topic target operation completed'
+              : `${target.error?.code ?? 'TOPIC_TARGET_OPERATION_FAILED'}: ${target.error?.message ?? 'Topic target operation failed'}`}</span>
           </li>
         ))}
       </ul>

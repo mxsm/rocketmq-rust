@@ -32,14 +32,8 @@ export const useSessionBootstrap = () => {
                     return;
                 }
 
-                if (result.success && result.sessionId && result.currentUser) {
-                    setAuthSession(result.sessionId, result.currentUser);
-                } else {
-                    SessionStorageService.clearSessionId();
-                    clearAuthSession();
-                }
-            } catch (error) {
-                console.error('Failed to restore auth session', error);
+                setAuthSession(result.sessionId, result.currentUser);
+            } catch (_error) {
                 SessionStorageService.clearSessionId();
                 if (isMounted) {
                     clearAuthSession();

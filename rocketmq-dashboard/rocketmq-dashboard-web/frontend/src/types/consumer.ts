@@ -151,13 +151,18 @@ export interface ConsumerConfigAttribute {
   value: string;
 }
 
+export interface OperationError {
+  code: string;
+  message: string;
+}
+
 export interface ConsumerConfigTarget {
   brokerName: string;
   brokerAddress: string;
   config: ConsumerConfigValue | null;
   subscriptionTopics: string[];
   attributes: ConsumerConfigAttribute[];
-  error?: string | null;
+  error?: OperationError | null;
 }
 
 export interface ConsumerConfigView {
@@ -209,7 +214,8 @@ export interface ConsumerTargetResult {
   target: string;
   kind: string;
   success: boolean;
-  message: string;
+  message?: string | null;
+  error?: OperationError | null;
 }
 
 export interface ConsumerOperationResult {

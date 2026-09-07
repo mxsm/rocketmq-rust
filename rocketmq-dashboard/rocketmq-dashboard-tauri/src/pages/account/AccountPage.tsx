@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
     CalendarDays,
-    Copy,
     KeyRound,
     LogOut,
     RefreshCw,
@@ -11,6 +10,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { AuthService } from '../../services/auth.service';
+import { DashboardClientError, dashboardErrorMessage } from '../../services/invoke';
 import { SessionStorageService } from '../../services/session.storage';
 import { useAppStore } from '../../stores/app.store';
 import { SignOutConfirmDialog, useAuth } from '../../features/auth';
@@ -47,18 +47,6 @@ const formatTimestamp = (value: string | null | undefined) => {
         dateStyle: 'medium',
         timeStyle: 'short',
     }).format(parsed);
-};
-
-const maskSessionId = (value: string | null) => {
-    if (!value) {
-        return 'Unavailable';
-    }
-
-    if (value.length <= 18) {
-        return value;
-    }
-
-    return `${value.slice(0, 8)}...${value.slice(-8)}`;
 };
 
 const DetailRow = ({
@@ -105,35 +93,24 @@ export const AccountPage = () => {
             setError('');
 
             try {
-                const result = await AuthService.getCurrentUserProfile(sessionId);
+                const result = await AuthService.getCurrentUserProfile();
                 if (!isMounted) {
                     return;
                 }
 
-                if (result.success && result.profile) {
-                    setProfile(result.profile);
-                    return;
-                }
-
-                setProfile(null);
-
-                if (
-                    result.message === 'Session not found' ||
-                    result.message === 'User profile is no longer available'
-                ) {
-                    SessionStorageService.clearSessionId();
-                    clearAuthSession();
-                    return;
-                }
-
-                setError(result.message || 'Failed to load user profile');
+                setProfile(result);
             } catch (loadError) {
                 if (!isMounted) {
                     return;
                 }
 
                 setProfile(null);
-                setError(loadError instanceof Error ? loadError.message : 'Failed to load user profile');
+                if (loadError instanceof DashboardClientError && loadError.code === 'auth.session.invalid') {
+                    SessionStorageService.clearSessionId();
+                    clearAuthSession();
+                    return;
+                }
+                setError(dashboardErrorMessage(loadError, 'Failed to load user profile'));
             } finally {
                 if (isMounted) {
                     setIsLoading(false);
@@ -148,23 +125,9 @@ export const AccountPage = () => {
         };
     }, [currentUser?.mustChangePassword, reloadKey, sessionId]);
 
-    const sessionValue = profile?.sessionId ?? sessionId;
     const username = profile?.username ?? currentUser?.username ?? 'Admin';
     const initials = username.slice(0, 2).toUpperCase();
     const unresolvedValue = isLoading && !profile ? 'Loading...' : 'Unavailable';
-
-    const handleCopySession = async () => {
-        if (!sessionValue) {
-            return;
-        }
-
-        try {
-            await navigator.clipboard.writeText(sessionValue);
-            toast.success('Session ID copied');
-        } catch (copyError) {
-            toast.error(copyError instanceof Error ? copyError.message : 'Failed to copy session ID');
-        }
-    };
 
     const handleLogout = async () => {
         setIsLogoutDialogOpen(false);
@@ -305,27 +268,14 @@ export const AccountPage = () => {
                             <CalendarDays className="h-4 w-4 text-sky-500" />
                             Session & actions
                         </CardTitle>
-                        <CardDescription>Inspect the active session and run account-level actions.</CardDescription>
+                        <CardDescription>Manage the authenticated local account lifecycle.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4 !pb-14">
-                        <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center">
-                            <div className="rounded-2xl border border-black/5 bg-black/[0.02] px-4 py-4 dark:border-white/6 dark:bg-white/[0.025]">
-                                <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400 dark:text-gray-500">
-                                    Active session
-                                </div>
-                                <div className="font-mono text-sm text-gray-900 dark:text-white">{maskSessionId(sessionValue)}</div>
+                        <div className="rounded-2xl border border-black/5 bg-black/[0.02] px-4 py-4 dark:border-white/6 dark:bg-white/[0.025]">
+                            <div className="text-sm font-medium text-gray-900 dark:text-white">Authenticated locally</div>
+                            <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                                Session credentials remain private and are never displayed or copied.
                             </div>
-
-                            <Button
-                                type="button"
-                                variant="outline"
-                                onClick={handleCopySession}
-                                disabled={!sessionValue}
-                                className={secondaryActionButtonClass}
-                            >
-                                <Copy className="h-4 w-4" />
-                                Copy Session ID
-                            </Button>
                         </div>
 
                         <div className="flex flex-wrap gap-6 pt-6 pb-4">

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { useNameServer } from '../features/nameserver/hooks/useNameServer';
+import { dashboardErrorMessage } from '../services/invoke';
 import { Button } from '../components/ui/LegacyButton';
 import { Input } from '../components/ui/LegacyInput';
 import { Toggle } from '../components/ui/LegacyToggle';
@@ -146,7 +147,7 @@ export const NameServerView = () => {
                 toast.success(message);
             }
         } catch (error) {
-            toast.error(error instanceof Error ? error.message : 'NameServer operation failed');
+            toast.error(dashboardErrorMessage(error, 'NameServer operation failed'));
         }
     };
 
