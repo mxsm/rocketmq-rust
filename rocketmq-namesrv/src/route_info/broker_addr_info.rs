@@ -20,16 +20,18 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+/// Identifies a broker in NameServer route tables by its cluster and address.
 pub struct BrokerAddrInfo {
-    // mq cluster name
+    /// The broker's cluster name, serialized as `clusterName`.
     #[serde(rename = "clusterName")]
     pub cluster_name: CheetahString,
-    // broker ip address
+    /// The broker address, serialized as `brokerAddr`.
     #[serde(rename = "brokerAddr")]
     pub broker_addr: CheetahString,
 }
 
 impl BrokerAddrInfo {
+    /// Creates an identity from a cluster name and broker address.
     pub fn new(cluster_name: impl Into<CheetahString>, broker_addr: impl Into<CheetahString>) -> Self {
         Self {
             cluster_name: cluster_name.into(),
@@ -39,12 +41,14 @@ impl BrokerAddrInfo {
 }
 
 impl AsRef<Self> for BrokerAddrInfo {
+    /// Returns this broker identity by reference.
     fn as_ref(&self) -> &Self {
         self
     }
 }
 
 impl Display for BrokerAddrInfo {
+    /// Formats the cluster name and broker address for display.
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
