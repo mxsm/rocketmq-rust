@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Request processors and workload admission for the NameServer remoting protocol.
+//!
+//! [`NameServerRequestProcessorWrapper`] dispatches requests to the exported client,
+//! cluster-test, and default processors.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
