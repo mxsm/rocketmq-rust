@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Trace records, transfer types, constants, and wire codecs.
+//!
+//! Use [`encode_records`] and [`decode_records`] with [`TraceRecord`],
+//! [`TraceTransferBean`], and [`TraceType`] to exchange trace data.
+
 pub mod trace_codec;
 pub mod trace_constants;
 pub mod trace_record;

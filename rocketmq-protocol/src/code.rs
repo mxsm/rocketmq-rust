@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Request and response codes used by the RocketMQ remoting protocol.
+//!
+//! The module exports [`RequestCode`], [`RemotingSysResponseCode`], and
+//! [`BrokerRequestCode`].
+
 pub mod broker_request_code;
 pub mod request_code;
 pub mod response_code;

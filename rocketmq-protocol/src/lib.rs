@@ -13,6 +13,13 @@
 // limitations under the License.
 
 //! Runtime-neutral RocketMQ wire protocol contracts.
+//!
+//! This crate defines request and response codes, [`RemotingCommand`] frames,
+//! custom-header codecs, protocol bodies, compression, and trace encoding.
+//! Its main entry points include [`RequestCode`], [`RemotingCommand`],
+//! [`CommandCustomHeader`], [`HeaderCodec`], and [`RpcRequestHeader`].
+//!
+//! Enable the `simd` feature to use accelerated protocol decoding paths.
 
 mod contract;
 
