@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Compression codecs, message wire types, and shared wire constants.
+//!
+//! [`compression`] provides payload compression, [`message`] contains message
+//! encodings, and [`wire_constants`] exposes values shared across the protocol.
+
 pub mod compression;
 pub mod message;
 pub mod wire_constants {
