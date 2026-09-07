@@ -35,7 +35,7 @@ use super::model::FinOpsLedgerPage;
 use super::model::FinOpsLedgerQuery;
 use super::model::FinOpsReportQuery;
 use super::model::RecordFinOpsCostRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 
 const FINOPS_WRITE_BODY_LIMIT: usize = 128 * 1024;
@@ -69,7 +69,7 @@ async fn record_cost(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<RecordFinOpsCostRequest>,
-) -> Result<Json<FinOpsCostEntry>, ControlPlaneError> {
+) -> Result<Json<FinOpsCostEntry>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.finops.record_cost(&auth, &request).await.map(Json)
 }
@@ -78,7 +78,7 @@ async fn ledger(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<FinOpsLedgerQuery>,
-) -> Result<Json<FinOpsLedgerPage>, ControlPlaneError> {
+) -> Result<Json<FinOpsLedgerPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.finops.ledger(&auth, &query).await.map(Json)
 }
@@ -87,7 +87,7 @@ async fn create_budget(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateFinOpsBudgetRequest>,
-) -> Result<Json<FinOpsBudget>, ControlPlaneError> {
+) -> Result<Json<FinOpsBudget>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.finops.create_budget(&auth, &request).await.map(Json)
 }
@@ -96,7 +96,7 @@ async fn budgets(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<FinOpsBudgetQuery>,
-) -> Result<Json<FinOpsBudgetPage>, ControlPlaneError> {
+) -> Result<Json<FinOpsBudgetPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.finops.budgets(&auth, &query).await.map(Json)
 }
@@ -105,7 +105,7 @@ async fn evaluate_budget(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<EvaluateFinOpsBudgetRequest>,
-) -> Result<Json<FinOpsBudgetDecisionView>, ControlPlaneError> {
+) -> Result<Json<FinOpsBudgetDecisionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.finops.evaluate_budget(&auth, &request).await.map(Json)
 }
@@ -114,7 +114,7 @@ async fn create_allocation_policy(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateFinOpsAllocationPolicyRequest>,
-) -> Result<Json<FinOpsAllocationPolicyView>, ControlPlaneError> {
+) -> Result<Json<FinOpsAllocationPolicyView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.finops.create_allocation_policy(&auth, &request).await.map(Json)
 }
@@ -122,7 +122,7 @@ async fn create_allocation_policy(
 async fn allocation_policy(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<FinOpsAllocationPolicyView>, ControlPlaneError> {
+) -> Result<Json<FinOpsAllocationPolicyView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.finops.allocation_policy(&auth).await.map(Json)
 }
@@ -131,7 +131,7 @@ async fn report(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<FinOpsReportQuery>,
-) -> Result<Json<FinOpsReport>, ControlPlaneError> {
+) -> Result<Json<FinOpsReport>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.finops.report(&auth, &query).await.map(Json)
 }

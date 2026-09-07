@@ -29,6 +29,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -45,11 +46,10 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         report: &ClusterHealthReport,
-    ) -> Result<ClusterHealthReport, ControlPlaneError> {
+    ) -> Result<ClusterHealthReport, ControlPlaneRequestFailure> {
         enforce_health_scope(auth, report.tenant_id, report.cluster_id)?;
-        let report_json = serde_json::to_value(report).map_err(|_| {
-            ControlPlaneError::validation("invalid_health_snapshot", "health report cannot be serialized")
-        })?;
+        let report_json = serde_json::to_value(report)
+            .map_err(|source| ControlPlaneRequestFailure::validation_source("invalid_health_snapshot", source))?;
         sqlx::query(
             "INSERT INTO cluster_health_snapshots (
                 id, tenant_id, cluster_id, score, status, data_quality,
@@ -80,7 +80,7 @@ impl PostgresRepository {
         self.latest_health_snapshot(auth, report.cluster_id)
             .await?
             .ok_or_else(|| {
-                ControlPlaneError::forbidden(
+                ControlPlaneRequestFailure::forbidden(
                     "cluster_not_allowed",
                     "health snapshot cluster is offboarded or outside the authenticated scope",
                 )
@@ -91,9 +91,9 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<Option<ClusterHealthReport>, ControlPlaneError> {
+    ) -> Result<Option<ClusterHealthReport>, ControlPlaneRequestFailure> {
         if !auth.clusters.contains(&cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "health snapshot cluster is outside the authenticated scope",
             ));
@@ -116,7 +116,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         region: Option<&str>,
-    ) -> Result<Vec<FleetHealthRecord>, ControlPlaneError> {
+    ) -> Result<Vec<FleetHealthRecord>, ControlPlaneRequestFailure> {
         let clusters = auth
             .clusters
             .iter()
@@ -166,9 +166,9 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         incident_id: IncidentId,
         correlation_id: CorrelationId,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         if !auth.clusters.contains(&cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "incident cluster is outside the authenticated scope",
             ));
@@ -225,9 +225,9 @@ fn enforce_health_scope(
     auth: &AuthContext,
     tenant_id: rocketmq_sre_contracts::TenantId,
     cluster_id: ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if tenant_id != auth.tenant_id || !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "health snapshot scope differs from the authenticated scope",
         ));
@@ -235,9 +235,8 @@ fn enforce_health_scope(
     Ok(())
 }
 
-fn parse_health_report(value: Value) -> Result<ClusterHealthReport, ControlPlaneError> {
-    serde_json::from_value(value)
-        .map_err(|_| ControlPlaneError::configuration("database contains an invalid cluster health report"))
+fn parse_health_report(value: Value) -> Result<ClusterHealthReport, ControlPlaneRequestFailure> {
+    Ok(serde_json::from_value(value).map_err(ControlPlaneError::configuration_source)?)
 }
 
 const fn health_status_name(status: HealthStatus) -> &'static str {

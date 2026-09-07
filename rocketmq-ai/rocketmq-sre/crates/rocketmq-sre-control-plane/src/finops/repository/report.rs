@@ -22,7 +22,7 @@ use rocketmq_sre_contracts::TenantId;
 use sqlx::Row;
 
 use super::FinOpsRepository;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::finops::model::FinOpsReportQuery;
 use crate::finops::model::bounded_report_limit;
 
@@ -40,7 +40,7 @@ impl FinOpsRepository {
         &self,
         tenant_id: TenantId,
         query: &FinOpsReportQuery,
-    ) -> Result<FinOpsReportData, ControlPlaneError> {
+    ) -> Result<FinOpsReportData, ControlPlaneRequestFailure> {
         let limit = bounded_report_limit(query.limit);
         let rows = sqlx::query(
             "WITH entries AS (
@@ -175,7 +175,7 @@ impl FinOpsRepository {
         cluster_id: Option<ClusterId>,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
-    ) -> Result<u64, ControlPlaneError> {
+    ) -> Result<u64, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "WITH costs AS (
                 SELECT cost_micros
@@ -203,7 +203,7 @@ impl FinOpsRepository {
         &self,
         tenant_id: TenantId,
         query: &FinOpsReportQuery,
-    ) -> Result<(u64, u64), ControlPlaneError> {
+    ) -> Result<(u64, u64), ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT
                 (
@@ -243,7 +243,7 @@ impl FinOpsRepository {
     }
 }
 
-fn dimensions(row: &sqlx::postgres::PgRow) -> Result<BTreeMap<String, String>, ControlPlaneError> {
+fn dimensions(row: &sqlx::postgres::PgRow) -> Result<BTreeMap<String, String>, ControlPlaneRequestFailure> {
     let mut dimensions = BTreeMap::from([
         ("source".to_owned(), row.try_get("source_kind")?),
         ("workload".to_owned(), row.try_get("workload_kind")?),
@@ -264,11 +264,7 @@ fn dimensions(row: &sqlx::postgres::PgRow) -> Result<BTreeMap<String, String>, C
     Ok(dimensions)
 }
 
-fn unsigned(value: i64, field: &str) -> Result<u64, ControlPlaneError> {
-    u64::try_from(value).map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_persisted_finops_state",
-            format!("persisted FinOps {field} is invalid"),
-        )
-    })
+fn unsigned(value: i64, _field: &str) -> Result<u64, ControlPlaneRequestFailure> {
+    u64::try_from(value)
+        .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_persisted_finops_state", source))
 }

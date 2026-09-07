@@ -20,7 +20,7 @@ use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::AgentStoreError;
+use crate::error::AgentStoreFailure;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct CredentialBeforeState {
@@ -79,7 +79,7 @@ impl CredentialRotationJournal {
         plan_step_id: PlanStepId,
         before: &CredentialBeforeState,
         created_at: DateTime<Utc>,
-    ) -> Result<CredentialBeforeState, AgentStoreError> {
+    ) -> Result<CredentialBeforeState, AgentStoreFailure> {
         sqlx::query(
             "INSERT INTO execution_agent_credential_rotation_before_states (
                  id, execution_id, plan_step_id, credential_set,
@@ -117,7 +117,7 @@ impl CredentialRotationJournal {
         if persisted == *before {
             Ok(persisted)
         } else {
-            Err(AgentStoreError::IdempotencyConflict)
+            Err(AgentStoreFailure::idempotency_conflict())
         }
     }
 
@@ -125,7 +125,7 @@ impl CredentialRotationJournal {
         &self,
         execution_id: ExecutionId,
         plan_step_id: PlanStepId,
-    ) -> Result<CredentialBeforeState, AgentStoreError> {
+    ) -> Result<CredentialBeforeState, AgentStoreFailure> {
         let row = sqlx::query(
             "SELECT credential_set, selector_namespace, selector_name,
                     selector_uid, selector_resource_version, operation_id,
@@ -139,7 +139,7 @@ impl CredentialRotationJournal {
         .bind(plan_step_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(AgentStoreError::NotFound)?;
+        .ok_or(AgentStoreFailure::not_found())?;
         Ok(CredentialBeforeState {
             credential_set: row.try_get("credential_set")?,
             selector_namespace: row.try_get("selector_namespace")?,
@@ -161,7 +161,7 @@ impl CredentialRotationJournal {
         plan_step_id: PlanStepId,
         result: &CredentialResult<'_>,
         recorded_at: DateTime<Utc>,
-    ) -> Result<(), AgentStoreError> {
+    ) -> Result<(), AgentStoreFailure> {
         let insert = sqlx::query(
             "INSERT INTO execution_agent_credential_rotation_results (
                  execution_id, plan_step_id, credential_set, operation_id,
@@ -219,7 +219,7 @@ impl CredentialRotationJournal {
         if identical {
             Ok(())
         } else {
-            Err(AgentStoreError::IdempotencyConflict)
+            Err(AgentStoreFailure::idempotency_conflict())
         }
     }
 }

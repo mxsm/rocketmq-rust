@@ -24,7 +24,6 @@ use serde_json::Value;
 use crate::ActionPlanId;
 use crate::ClusterId;
 use crate::CompensationSpec;
-use crate::ContractError;
 use crate::DiagnosisRevisionId;
 use crate::EvidenceId;
 use crate::ExecutionAction;
@@ -32,6 +31,7 @@ use crate::ImpactScope;
 use crate::IncidentId;
 use crate::ModelInvocationId;
 use crate::PlanStepId;
+use crate::SreContractError;
 use crate::TenantId;
 use crate::VerificationSpec;
 use crate::canonical_precondition_hash;
@@ -146,7 +146,7 @@ impl ActionPlan {
     ///
     /// Rejects rules-only diagnoses, missing plan content, invalid windows, or
     /// values that cannot be canonicalized.
-    pub fn seal(draft: ActionPlanDraft) -> Result<Self, ContractError> {
+    pub fn seal(draft: ActionPlanDraft) -> Result<Self, SreContractError> {
         validate_draft(&draft)?;
         let mut plan = Self {
             schema_version: Self::SCHEMA_VERSION.to_owned(),
@@ -176,7 +176,7 @@ impl ActionPlan {
     /// # Errors
     ///
     /// Returns a contract error if canonical JSON encoding fails.
-    pub fn compute_plan_hash(&self) -> Result<String, ContractError> {
+    pub fn compute_plan_hash(&self) -> Result<String, SreContractError> {
         canonical_sha256(&PlanHashMaterial {
             schema_version: &self.schema_version,
             id: self.id,
@@ -200,12 +200,12 @@ impl ActionPlan {
     /// # Errors
     ///
     /// Rejects an empty or mismatched plan hash.
-    pub fn verify_plan_hash(&self) -> Result<(), ContractError> {
+    pub fn verify_plan_hash(&self) -> Result<(), SreContractError> {
         if self.schema_version != Self::SCHEMA_VERSION
             || !is_sha256_digest(&self.plan_hash)
             || self.plan_hash != self.compute_plan_hash()?
         {
-            return Err(ContractError::InvalidContentHash);
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidContentHash));
         }
         Ok(())
     }
@@ -216,7 +216,7 @@ impl ActionPlan {
     ///
     /// Returns a contract error when the ordered precondition set cannot be
     /// canonicalized.
-    pub fn compute_precondition_hash(&self) -> Result<String, ContractError> {
+    pub fn compute_precondition_hash(&self) -> Result<String, SreContractError> {
         let material = self
             .steps
             .iter()
@@ -237,21 +237,20 @@ impl ActionPlan {
     /// # Errors
     ///
     /// Rejects modified, expired, already submitted, or invalid timestamps.
-    pub fn submit_for_review(mut self, submitted_at: DateTime<Utc>, needs_critic: bool) -> Result<Self, ContractError> {
+    pub fn submit_for_review(
+        mut self,
+        submitted_at: DateTime<Utc>,
+        needs_critic: bool,
+    ) -> Result<Self, SreContractError> {
         self.verify_plan_hash()?;
         if self.status != PlanStatus::Draft
             || self.submitted_at.is_some()
             || submitted_at < self.created_at
             || submitted_at >= self.expires_at
         {
-            return Err(ContractError::InvalidStateTransition {
-                from: format!("{:?}", self.status),
-                to: if needs_critic {
-                    "NeedsCritic".to_owned()
-                } else {
-                    "ReadyForApproval".to_owned()
-                },
-            });
+            return Err(crate::SreContractError::new(
+                crate::PublicErrorCode::InvalidStateTransition,
+            ));
         }
         self.status = if needs_critic {
             PlanStatus::NeedsCritic
@@ -263,29 +262,21 @@ impl ActionPlan {
     }
 }
 
-fn validate_draft(draft: &ActionPlanDraft) -> Result<(), ContractError> {
+fn validate_draft(draft: &ActionPlanDraft) -> Result<(), SreContractError> {
     if !draft.diagnosis_execution_eligible {
-        return Err(ContractError::InvalidDescriptor {
-            reason: "rules-only diagnosis cannot create an executable action plan".to_owned(),
-        });
+        return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
     }
     if draft.version == 0 || draft.steps.is_empty() {
-        return Err(ContractError::InvalidDescriptor {
-            reason: "action plan version and steps must be non-empty".to_owned(),
-        });
+        return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
     }
     if draft.primary_model_invocation_id.as_uuid().is_nil() {
-        return Err(ContractError::InvalidDescriptor {
-            reason: "primary model invocation id must be non-empty".to_owned(),
-        });
+        return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
     }
     if draft.created_by.trim().is_empty()
         || !is_sha256_digest(&draft.evidence_hash)
         || draft.expires_at <= draft.created_at
     {
-        return Err(ContractError::InvalidDescriptor {
-            reason: "action plan actor, SHA-256 evidence hash, and validity window are required".to_owned(),
-        });
+        return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
     }
     let mut step_ids = BTreeSet::new();
     let mut sequences = BTreeSet::new();
@@ -297,18 +288,12 @@ fn validate_draft(draft: &ActionPlanDraft) -> Result<(), ContractError> {
             || !step_ids.insert(step.id)
             || !sequences.insert(step.sequence)
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "every plan step requires a unique id and sequence, resource, descriptor version, and SHA-256 \
-                         precondition hash"
-                    .to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
     }
     for (index, sequence) in sequences.iter().enumerate() {
         if usize::from(*sequence) != index + 1 {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "plan step sequences must be contiguous and start at one".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
     }
     Ok(())

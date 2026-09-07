@@ -42,9 +42,9 @@ use sqlx::Row;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use crate::ControlPlaneError;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
-pub(super) fn plan_from_row(row: &PgRow) -> Result<DrPlan, ControlPlaneError> {
+pub(super) fn plan_from_row(row: &PgRow) -> Result<DrPlan, ControlPlaneRequestFailure> {
     let modes = row
         .try_get::<Vec<String>, _>("allowed_modes")?
         .into_iter()
@@ -66,8 +66,11 @@ pub(super) fn plan_from_row(row: &PgRow) -> Result<DrPlan, ControlPlaneError> {
         },
         allowed_modes: modes,
         required_sources: row.try_get("required_sources")?,
-        checkpoints: serde_json::from_value(row.try_get("checkpoint_definitions")?).map_err(|_| {
-            ControlPlaneError::validation("invalid_persisted_dr_plan", "checkpoint definitions are invalid")
+        checkpoints: serde_json::from_value(row.try_get("checkpoint_definitions")?).map_err(|source| {
+            ControlPlaneRequestFailure::from(ControlPlaneError::validation_source(
+                "invalid_persisted_dr_plan",
+                source,
+            ))
         })?,
         active: row.try_get("active")?,
         created_at: row.try_get("created_at")?,
@@ -75,7 +78,7 @@ pub(super) fn plan_from_row(row: &PgRow) -> Result<DrPlan, ControlPlaneError> {
     })
 }
 
-pub(super) fn backup_asset_from_row(row: &PgRow) -> Result<DrBackupAsset, ControlPlaneError> {
+pub(super) fn backup_asset_from_row(row: &PgRow) -> Result<DrBackupAsset, ControlPlaneRequestFailure> {
     Ok(DrBackupAsset {
         id: DrBackupAssetId::from_uuid(row.try_get("id")?),
         plan_id: DrPlanId::from_uuid(row.try_get("plan_id")?),
@@ -91,7 +94,7 @@ pub(super) fn backup_asset_from_row(row: &PgRow) -> Result<DrBackupAsset, Contro
     })
 }
 
-pub(super) fn exercise_from_row(row: &PgRow) -> Result<DrExercise, ControlPlaneError> {
+pub(super) fn exercise_from_row(row: &PgRow) -> Result<DrExercise, ControlPlaneRequestFailure> {
     Ok(DrExercise {
         id: DrExerciseId::from_uuid(row.try_get("id")?),
         plan_id: DrPlanId::from_uuid(row.try_get("plan_id")?),
@@ -118,7 +121,7 @@ pub(super) fn exercise_from_row(row: &PgRow) -> Result<DrExercise, ControlPlaneE
     })
 }
 
-pub(super) fn checkpoint_from_row(row: &PgRow) -> Result<RecoveryCheckpoint, ControlPlaneError> {
+pub(super) fn checkpoint_from_row(row: &PgRow) -> Result<RecoveryCheckpoint, ControlPlaneRequestFailure> {
     Ok(RecoveryCheckpoint {
         id: RecoveryCheckpointId::from_uuid(row.try_get("id")?),
         exercise_id: DrExerciseId::from_uuid(row.try_get("exercise_id")?),
@@ -145,7 +148,7 @@ pub(super) fn checkpoint_from_row(row: &PgRow) -> Result<RecoveryCheckpoint, Con
     })
 }
 
-pub(super) fn finding_from_row(row: &PgRow) -> Result<DrFinding, ControlPlaneError> {
+pub(super) fn finding_from_row(row: &PgRow) -> Result<DrFinding, ControlPlaneRequestFailure> {
     Ok(DrFinding {
         id: DrFindingId::from_uuid(row.try_get("id")?),
         exercise_id: DrExerciseId::from_uuid(row.try_get("exercise_id")?),
@@ -163,7 +166,7 @@ pub(super) fn finding_from_row(row: &PgRow) -> Result<DrFinding, ControlPlaneErr
     })
 }
 
-pub(super) fn action_item_from_row(row: &PgRow) -> Result<DrActionItem, ControlPlaneError> {
+pub(super) fn action_item_from_row(row: &PgRow) -> Result<DrActionItem, ControlPlaneRequestFailure> {
     Ok(DrActionItem {
         id: DrActionItemId::from_uuid(row.try_get("id")?),
         finding_id: DrFindingId::from_uuid(row.try_get("finding_id")?),
@@ -181,7 +184,7 @@ pub(super) fn action_item_from_row(row: &PgRow) -> Result<DrActionItem, ControlP
     })
 }
 
-fn evidence_ids(row: &PgRow) -> Result<Vec<EvidenceId>, ControlPlaneError> {
+fn evidence_ids(row: &PgRow) -> Result<Vec<EvidenceId>, ControlPlaneRequestFailure> {
     Ok(row
         .try_get::<Vec<Uuid>, _>("evidence_ids")?
         .into_iter()
@@ -279,7 +282,7 @@ pub(super) const fn backup_kind_name(value: DrBackupAssetKind) -> &'static str {
     }
 }
 
-fn subject(value: &str) -> Result<DrSubject, ControlPlaneError> {
+fn subject(value: &str) -> Result<DrSubject, ControlPlaneRequestFailure> {
     match value {
         "sre_control_plane" => Ok(DrSubject::SreControlPlane),
         "rocket_mq_cluster" => Ok(DrSubject::RocketMqCluster),
@@ -287,7 +290,7 @@ fn subject(value: &str) -> Result<DrSubject, ControlPlaneError> {
     }
 }
 
-fn exercise_mode(value: &str) -> Result<DrExerciseMode, ControlPlaneError> {
+fn exercise_mode(value: &str) -> Result<DrExerciseMode, ControlPlaneRequestFailure> {
     match value {
         "readiness" => Ok(DrExerciseMode::Readiness),
         "tabletop" => Ok(DrExerciseMode::Tabletop),
@@ -296,7 +299,7 @@ fn exercise_mode(value: &str) -> Result<DrExerciseMode, ControlPlaneError> {
     }
 }
 
-fn execution_boundary(value: &str) -> Result<DrExecutionBoundary, ControlPlaneError> {
+fn execution_boundary(value: &str) -> Result<DrExecutionBoundary, ControlPlaneRequestFailure> {
     match value {
         "read_only" => Ok(DrExecutionBoundary::ReadOnly),
         "test_cluster_supervised" => Ok(DrExecutionBoundary::TestClusterSupervised),
@@ -304,7 +307,7 @@ fn execution_boundary(value: &str) -> Result<DrExecutionBoundary, ControlPlaneEr
     }
 }
 
-fn exercise_state(value: &str) -> Result<DrExerciseState, ControlPlaneError> {
+fn exercise_state(value: &str) -> Result<DrExerciseState, ControlPlaneRequestFailure> {
     match value {
         "planned" => Ok(DrExerciseState::Planned),
         "running" => Ok(DrExerciseState::Running),
@@ -316,7 +319,9 @@ fn exercise_state(value: &str) -> Result<DrExerciseState, ControlPlaneError> {
     }
 }
 
-fn checkpoint_status(value: &str) -> Result<rocketmq_sre_contracts::RecoveryCheckpointStatus, ControlPlaneError> {
+fn checkpoint_status(
+    value: &str,
+) -> Result<rocketmq_sre_contracts::RecoveryCheckpointStatus, ControlPlaneRequestFailure> {
     match value {
         "pending" => Ok(rocketmq_sre_contracts::RecoveryCheckpointStatus::Pending),
         "running" => Ok(rocketmq_sre_contracts::RecoveryCheckpointStatus::Running),
@@ -330,7 +335,7 @@ fn checkpoint_status(value: &str) -> Result<rocketmq_sre_contracts::RecoveryChec
     }
 }
 
-fn finding_severity(value: &str) -> Result<DrFindingSeverity, ControlPlaneError> {
+fn finding_severity(value: &str) -> Result<DrFindingSeverity, ControlPlaneRequestFailure> {
     match value {
         "info" => Ok(DrFindingSeverity::Info),
         "warning" => Ok(DrFindingSeverity::Warning),
@@ -339,7 +344,7 @@ fn finding_severity(value: &str) -> Result<DrFindingSeverity, ControlPlaneError>
     }
 }
 
-fn finding_status(value: &str) -> Result<DrFindingStatus, ControlPlaneError> {
+fn finding_status(value: &str) -> Result<DrFindingStatus, ControlPlaneRequestFailure> {
     match value {
         "open" => Ok(DrFindingStatus::Open),
         "accepted" => Ok(DrFindingStatus::Accepted),
@@ -348,7 +353,7 @@ fn finding_status(value: &str) -> Result<DrFindingStatus, ControlPlaneError> {
     }
 }
 
-fn action_item_status(value: &str) -> Result<ActionItemStatus, ControlPlaneError> {
+fn action_item_status(value: &str) -> Result<ActionItemStatus, ControlPlaneRequestFailure> {
     match value {
         "open" => Ok(ActionItemStatus::Open),
         "assigned" => Ok(ActionItemStatus::Assigned),
@@ -361,7 +366,7 @@ fn action_item_status(value: &str) -> Result<ActionItemStatus, ControlPlaneError
     }
 }
 
-fn backup_kind(value: &str) -> Result<DrBackupAssetKind, ControlPlaneError> {
+fn backup_kind(value: &str) -> Result<DrBackupAssetKind, ControlPlaneRequestFailure> {
     match value {
         "postgre_sql" => Ok(DrBackupAssetKind::PostgreSql),
         "object_storage" => Ok(DrBackupAssetKind::ObjectStorage),
@@ -388,23 +393,31 @@ fn backup_kind(value: &str) -> Result<DrBackupAssetKind, ControlPlaneError> {
     }
 }
 
-fn invalid<T>(name: &str) -> Result<T, ControlPlaneError> {
-    Err(ControlPlaneError::validation(
+fn invalid<T>(name: &str) -> Result<T, ControlPlaneRequestFailure> {
+    Err(ControlPlaneRequestFailure::validation(
         "invalid_persisted_dr_state",
         format!("{name} is not recognized"),
     ))
 }
 
-fn u64_value(value: i64, name: &str) -> Result<u64, ControlPlaneError> {
-    u64::try_from(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_persisted_dr_state", format!("{name} is negative")))
+fn u64_value(value: i64, _name: &str) -> Result<u64, ControlPlaneRequestFailure> {
+    u64::try_from(value).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source(
+            "invalid_persisted_dr_state",
+            source,
+        ))
+    })
 }
 
-fn optional_u64(value: Option<i64>, name: &str) -> Result<Option<u64>, ControlPlaneError> {
+fn optional_u64(value: Option<i64>, name: &str) -> Result<Option<u64>, ControlPlaneRequestFailure> {
     value.map(|number| u64_value(number, name)).transpose()
 }
 
-fn u32_value(value: i32, name: &str) -> Result<u32, ControlPlaneError> {
-    u32::try_from(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_persisted_dr_state", format!("{name} is negative")))
+fn u32_value(value: i32, _name: &str) -> Result<u32, ControlPlaneRequestFailure> {
+    u32::try_from(value).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source(
+            "invalid_persisted_dr_state",
+            source,
+        ))
+    })
 }

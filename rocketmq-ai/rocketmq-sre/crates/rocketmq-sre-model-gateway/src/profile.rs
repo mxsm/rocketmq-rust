@@ -21,7 +21,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderOperationalFailure;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::ir::CanonicalModelRequest;
 use crate::ir::ModelContentPart;
 use crate::ir::ResponseFormat;
@@ -187,27 +189,22 @@ impl ProviderCapabilities {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderErrorCode::CapabilityUnsupported`] without prompt
+    /// Returns [`ProviderRejection::CapabilityUnsupported`] without prompt
     /// simulation when any required capability is absent.
-    pub fn ensure_request_supported(&self, request: &CanonicalModelRequest) -> Result<(), ProviderError> {
+    pub fn ensure_request_supported(&self, request: &CanonicalModelRequest) -> Result<(), ProviderStatusOutcome> {
         if request.tools.iter().any(|tool| tool.mutates_cluster) {
-            return Err(ProviderError::policy_denied(
-                "model gateway accepts read-only tools only",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied));
         }
         if let ToolChoice::Specific { name } = &request.tool_choice
             && !request.tools.iter().any(|tool| &tool.name == name)
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "specific tool choice does not match a declared tool",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::InvalidRequest));
         }
         if let (Some(requested), Some(maximum)) = (request.max_output_tokens, self.max_output_tokens)
             && requested > maximum
         {
-            return Err(ProviderError::capability_unsupported(
-                "requested output token limit exceeds provider capability",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::CapabilityUnsupported,
             ));
         }
         let required = Self::required_for_request(request);
@@ -215,9 +212,9 @@ impl ProviderCapabilities {
         if missing.is_empty() {
             Ok(())
         } else {
-            Err(ProviderError::capability_unsupported(format!(
-                "provider profile lacks required capabilities: {missing:?}"
-            )))
+            Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::CapabilityUnsupported,
+            ))
         }
     }
 }
@@ -306,35 +303,26 @@ impl ProviderProfile {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderErrorCode::ProfileInvalid`] for invalid endpoints,
+    /// Returns [`ProviderRejection::ProfileInvalid`] for invalid endpoints,
     /// missing identities, or a profile without chat capability.
-    pub fn validate(&self) -> Result<(), ProviderError> {
+    pub fn validate(&self) -> Result<(), ProviderStatusOutcome> {
         if self.id.trim().is_empty()
             || self.model_family.trim().is_empty()
             || self.model.trim().is_empty()
             || self.model_revision.trim().is_empty()
             || self.endpoint_instance.trim().is_empty()
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider profile identity fields must be non-empty",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         if !(self.endpoint.starts_with("https://")
             || self.endpoint.starts_with("http://")
             || self.endpoint.starts_with("grpc://")
             || self.endpoint.starts_with("grpcs://"))
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider endpoint must use an approved transport scheme",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         if !self.capabilities.supported.contains(&ProviderCapability::Chat) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "chat provider profile must declare chat capability",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         Ok(())
     }
@@ -639,19 +627,14 @@ impl ProviderProfileManifest {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderErrorCode::ProfileInvalid`] for malformed data or an
+    /// Returns [`ProviderRejection::ProfileInvalid`] for malformed data or an
     /// unsupported manifest version.
-    pub fn parse(input: &str) -> Result<Self, ProviderError> {
-        let parsed: Self = serde_json::from_str(input).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider profile manifest is invalid",
-            )
-        })?;
+    pub fn parse(input: &str) -> Result<Self, ProviderStatusOutcome> {
+        let parsed: Self = serde_json::from_str(input)
+            .map_err(|source| ProviderError::from_source(ProviderOperationalFailure::ProtocolError, source))?;
         if parsed.schema_version != "rocketmq-sre.provider-profile-manifest.v1" {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider profile manifest version is unsupported",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::UnsupportedWireVersion,
             ));
         }
         let mut ids = BTreeSet::new();
@@ -662,10 +645,7 @@ impl ProviderProfileManifest {
                 || entry.fixture.contains("..")
                 || !ids.insert(entry.id.clone())
         }) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider profile manifest contains an invalid or duplicate entry",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         Ok(parsed)
     }

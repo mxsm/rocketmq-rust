@@ -61,7 +61,7 @@ use super::model::TransitionDrExerciseRequest;
 use super::model::UpdateDrActionItemRequest;
 use super::model::UpsertDrBackupAssetRequest;
 use super::repository::DrRepository;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -81,7 +81,7 @@ impl DrService {
         &self,
         auth: &AuthContext,
         request: &CreateDrPlanRequest,
-    ) -> Result<DrPlan, ControlPlaneError> {
+    ) -> Result<DrPlan, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_plan_request(request)?;
         require_cluster(auth, request.cluster_id)?;
@@ -90,7 +90,7 @@ impl DrService {
             .scope_exists(auth.tenant_id, request.fleet_id, request.region_id, request.cluster_id)
             .await?
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "tenant_mismatch",
                 "DR plan scope does not belong to the authenticated tenant",
             ));
@@ -118,7 +118,11 @@ impl DrService {
             .await
     }
 
-    pub(crate) async fn plans(&self, auth: &AuthContext, query: &DrPlanQuery) -> Result<DrPlanPage, ControlPlaneError> {
+    pub(crate) async fn plans(
+        &self,
+        auth: &AuthContext,
+        query: &DrPlanQuery,
+    ) -> Result<DrPlanPage, ControlPlaneRequestFailure> {
         require_read(auth)?;
         require_cluster(auth, query.cluster_id)?;
         let (items, truncated) = self.repository.list_plans(auth.tenant_id, query).await?;
@@ -134,12 +138,12 @@ impl DrService {
         auth: &AuthContext,
         plan_id: DrPlanId,
         request: &UpsertDrBackupAssetRequest,
-    ) -> Result<DrBackupAsset, ControlPlaneError> {
+    ) -> Result<DrBackupAsset, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_text("backup owner", &request.owner, 256)?;
         validate_text("backup access owner", &request.access_owner, 256)?;
         if !is_sha256_digest(&request.backup_locator_digest) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_backup_locator_digest",
                 "backup locator must be represented by a SHA-256 digest",
             ));
@@ -157,7 +161,7 @@ impl DrService {
                 | rocketmq_sre_contracts::DrBackupAssetKind::AuditLedger
         ) && !request.encrypted
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "unencrypted_recovery_asset",
                 "sensitive recovery assets must be encrypted",
             ));
@@ -186,7 +190,7 @@ impl DrService {
         &self,
         auth: &AuthContext,
         plan_id: DrPlanId,
-    ) -> Result<DrBackupAssetPage, ControlPlaneError> {
+    ) -> Result<DrBackupAssetPage, ControlPlaneRequestFailure> {
         require_read(auth)?;
         let plan = self.repository.get_plan(auth.tenant_id, plan_id).await?;
         require_cluster(auth, plan.cluster_id)?;
@@ -200,12 +204,12 @@ impl DrService {
         &self,
         auth: &AuthContext,
         request: &StartDrExerciseRequest,
-    ) -> Result<DrExercise, ControlPlaneError> {
+    ) -> Result<DrExercise, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let plan = self.repository.get_plan(auth.tenant_id, request.plan_id).await?;
         require_cluster(auth, plan.cluster_id)?;
         if !plan.active || !plan.allowed_modes.contains(&request.mode) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "dr_mode_not_allowed",
                 "the active DR plan does not allow this exercise mode",
             ));
@@ -216,14 +220,14 @@ impl DrService {
             }
             DrExerciseMode::SupervisedTest => {
                 let cluster_id = plan.cluster_id.ok_or_else(|| {
-                    ControlPlaneError::validation(
+                    ControlPlaneRequestFailure::validation(
                         "test_cluster_required",
                         "supervised DR exercises require an explicitly scoped test cluster",
                     )
                 })?;
                 let environment = self.repository.cluster_environment(auth.tenant_id, cluster_id).await?;
                 if environment != "test" {
-                    return Err(ControlPlaneError::forbidden(
+                    return Err(ControlPlaneRequestFailure::forbidden(
                         "production_dr_cutover_forbidden",
                         "supervised DR exercises are restricted to registered test clusters",
                     ));
@@ -261,7 +265,7 @@ impl DrService {
         &self,
         auth: &AuthContext,
         query: &DrExerciseQuery,
-    ) -> Result<DrExercisePage, ControlPlaneError> {
+    ) -> Result<DrExercisePage, ControlPlaneRequestFailure> {
         require_read(auth)?;
         require_cluster(auth, query.cluster_id)?;
         let (items, truncated) = self.repository.list_exercises(auth.tenant_id, query).await?;
@@ -277,13 +281,13 @@ impl DrService {
         auth: &AuthContext,
         exercise_id: DrExerciseId,
         request: &TransitionDrExerciseRequest,
-    ) -> Result<DrExercise, ControlPlaneError> {
+    ) -> Result<DrExercise, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         bound_evidence(&request.evidence_ids)?;
         let current = self.repository.get_exercise(auth.tenant_id, exercise_id).await?;
         require_cluster(auth, current.cluster_id)?;
         if !current.state.can_transition_to(request.state) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "invalid_dr_exercise_transition",
                 "the requested DR exercise state transition is not allowed",
             ));
@@ -307,15 +311,15 @@ impl DrService {
         &self,
         exercise: &DrExercise,
         request: &TransitionDrExerciseRequest,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         if request.actual_rto_seconds.is_none() || request.actual_rpo_seconds.is_none() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "dr_measurement_required",
                 "completed exercises require actual RTO and RPO measurements",
             ));
         }
         if request.evidence_ids.is_empty() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "dr_evidence_required",
                 "completed exercises require recovery evidence",
             ));
@@ -331,22 +335,25 @@ impl DrService {
         }
         for (sequence, definition) in plan.checkpoints.iter().enumerate() {
             let sequence = u32::try_from(sequence).map_err(|_| {
-                ControlPlaneError::validation("invalid_dr_plan", "checkpoint sequence exceeds the supported range")
+                ControlPlaneRequestFailure::validation(
+                    "invalid_dr_plan",
+                    "checkpoint sequence exceeds the supported range",
+                )
             })?;
             let checkpoint = latest.get(&sequence).ok_or_else(|| {
-                ControlPlaneError::conflict_code(
+                ControlPlaneRequestFailure::conflict_code(
                     "dr_checkpoint_incomplete",
                     format!("checkpoint {} has not been recorded", definition.key),
                 )
             })?;
             if !checkpoint.status.is_terminal() {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "dr_checkpoint_incomplete",
                     format!("checkpoint {} has not reached a terminal state", definition.key),
                 ));
             }
             if checkpoint.cleanup_required && !checkpoint.cleanup_complete {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "dr_cleanup_incomplete",
                     format!("checkpoint {} still requires cleanup", definition.key),
                 ));
@@ -360,7 +367,7 @@ impl DrService {
         auth: &AuthContext,
         exercise_id: DrExerciseId,
         request: &RecordRecoveryCheckpointRequest,
-    ) -> Result<RecoveryCheckpoint, ControlPlaneError> {
+    ) -> Result<RecoveryCheckpoint, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let exercise = self.repository.get_exercise(auth.tenant_id, exercise_id).await?;
         require_cluster(auth, exercise.cluster_id)?;
@@ -368,7 +375,7 @@ impl DrService {
             exercise.state,
             DrExerciseState::Running | DrExerciseState::AwaitingManualConfirmation
         ) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "dr_exercise_not_running",
                 "recovery checkpoints can only be recorded for a running exercise",
             ));
@@ -377,13 +384,13 @@ impl DrService {
         let definition = plan
             .checkpoints
             .get(usize::try_from(request.sequence).map_err(|_| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "invalid_recovery_checkpoint",
                     "checkpoint sequence exceeds the supported range",
                 )
             })?)
             .ok_or_else(|| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "unknown_recovery_checkpoint",
                     "checkpoint sequence is not declared by the active plan",
                 )
@@ -427,7 +434,7 @@ impl DrService {
         &self,
         auth: &AuthContext,
         exercise_id: DrExerciseId,
-    ) -> Result<RecoveryCheckpointPage, ControlPlaneError> {
+    ) -> Result<RecoveryCheckpointPage, ControlPlaneRequestFailure> {
         require_read(auth)?;
         let exercise = self.repository.get_exercise(auth.tenant_id, exercise_id).await?;
         require_cluster(auth, exercise.cluster_id)?;
@@ -442,7 +449,7 @@ impl DrService {
         auth: &AuthContext,
         exercise_id: DrExerciseId,
         request: &RecordDrFindingRequest,
-    ) -> Result<DrFinding, ControlPlaneError> {
+    ) -> Result<DrFinding, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_text("finding code", &request.code, 128)?;
         validate_text("finding summary", &request.summary, 1_024)?;
@@ -462,7 +469,7 @@ impl DrService {
             {
                 return Ok(existing);
             }
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "dr_finding_idempotency_conflict",
                 "finding code was already used with different content",
             ));
@@ -512,7 +519,7 @@ impl DrService {
         &self,
         auth: &AuthContext,
         exercise_id: DrExerciseId,
-    ) -> Result<DrFindingPage, ControlPlaneError> {
+    ) -> Result<DrFindingPage, ControlPlaneRequestFailure> {
         require_read(auth)?;
         let exercise = self.repository.get_exercise(auth.tenant_id, exercise_id).await?;
         require_cluster(auth, exercise.cluster_id)?;
@@ -526,7 +533,7 @@ impl DrService {
         &self,
         auth: &AuthContext,
         query: &DrActionItemQuery,
-    ) -> Result<DrActionItemPage, ControlPlaneError> {
+    ) -> Result<DrActionItemPage, ControlPlaneRequestFailure> {
         require_read(auth)?;
         require_cluster(auth, query.cluster_id)?;
         let (items, truncated) = self.repository.list_action_items(auth.tenant_id, query).await?;
@@ -542,14 +549,14 @@ impl DrService {
         auth: &AuthContext,
         id: DrActionItemId,
         request: &UpdateDrActionItemRequest,
-    ) -> Result<DrActionItem, ControlPlaneError> {
+    ) -> Result<DrActionItem, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         bound_evidence(&request.evidence_ids)?;
         if request.status == ActionItemStatus::Completed
             && request.verification.as_deref().is_none_or(str::is_empty)
             && request.evidence_ids.is_empty()
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "dr_action_verification_required",
                 "completed DR action items require verification or Evidence",
             ));
@@ -557,7 +564,7 @@ impl DrService {
         let current = self.repository.get_action_item(auth.tenant_id, id).await?;
         require_cluster(auth, current.cluster_id)?;
         if !action_item_transition_allowed(current.status, request.status) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "invalid_dr_action_item_transition",
                 "the requested DR action item transition is not allowed",
             ));

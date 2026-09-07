@@ -28,14 +28,13 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::ProductionBrokerConfigPatchClient;
-use crate::AgentStoreError;
 use crate::ConfigWriteClient;
 use crate::DriverFuture;
-use crate::ExecutionAgentError;
 use crate::LoggerLevelControlClient;
 use crate::LoggerLevelState;
 use crate::LoggerLevelTtlRestore;
 use crate::LoggerLevelTtlWrite;
+use crate::error::AgentStoreFailure;
 
 const COMPONENT: &str = "broker";
 const MIN_TTL_SECONDS: u32 = 60;
@@ -95,7 +94,7 @@ impl LoggerLevelJournal {
         &self,
         execution_id: ExecutionId,
         plan_step_id: PlanStepId,
-    ) -> Result<Option<LoggerBeforeState>, AgentStoreError> {
+    ) -> Result<Option<LoggerBeforeState>, AgentStoreFailure> {
         let row = sqlx::query(
             "SELECT component, broker_addr, logger, before_level,
                     requested_level, forward_operation_id, expires_at
@@ -122,7 +121,7 @@ impl LoggerLevelJournal {
         .transpose()
     }
 
-    async fn persist_before(&self, state: &LoggerBeforeState) -> Result<LoggerBeforeState, AgentStoreError> {
+    async fn persist_before(&self, state: &LoggerBeforeState) -> Result<LoggerBeforeState, AgentStoreFailure> {
         sqlx::query(
             "INSERT INTO execution_agent_logger_level_before_states (
                 id, execution_id, plan_step_id, component, broker_addr,
@@ -154,7 +153,7 @@ impl LoggerLevelJournal {
                     && persisted.requested_level == state.requested_level
                     && persisted.forward_operation_id == state.forward_operation_id
             })
-            .ok_or(AgentStoreError::IdempotencyConflict)
+            .ok_or(AgentStoreFailure::idempotency_conflict())
     }
 
     async fn append_result(
@@ -163,7 +162,7 @@ impl LoggerLevelJournal {
         operation_id: &str,
         direction: Direction,
         observed: &LoggerLevelState,
-    ) -> Result<(), AgentStoreError> {
+    ) -> Result<(), AgentStoreFailure> {
         let insert = sqlx::query(
             "INSERT INTO execution_agent_logger_level_results (
                 execution_id, plan_step_id, component, broker_addr, logger,
@@ -219,7 +218,7 @@ impl LoggerLevelJournal {
         if identical {
             Ok(())
         } else {
-            Err(AgentStoreError::IdempotencyConflict)
+            Err(AgentStoreFailure::idempotency_conflict())
         }
     }
 }
@@ -234,16 +233,16 @@ impl ProductionBrokerConfigPatchClient {
         component: &str,
         broker_addr: &str,
         logger: &str,
-    ) -> Result<LoggerLevelState, ExecutionAgentError> {
+    ) -> Result<LoggerLevelState, crate::ExecutionAgentRequestFailure> {
         require_scope(component, broker_addr, logger)?;
         let request = QueryBrokerLogFilterStateRequest::try_new(broker_addr, logger)
-            .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
         let state = {
             let mut admin = self.read_admin.lock().await;
             admin
                 .query_log_filter_state(&request)
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?
         };
         logger_state(state)
     }
@@ -260,7 +259,7 @@ impl ConfigWriteClient for ProductionBrokerConfigPatchClient {
                 .await?;
             if let Some(persisted) = journal.load_before(request.execution_id, request.plan_step_id).await? {
                 if !persisted.matches_request(request) {
-                    return Err(ExecutionAgentError::InvalidRequest);
+                    return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
                 }
                 if live.active_operation_id.as_deref() == Some(request.operation_id.as_str())
                     && live.level == request.level
@@ -273,10 +272,10 @@ impl ConfigWriteClient for ProductionBrokerConfigPatchClient {
                 {
                     return Ok(());
                 }
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if live.active_operation_id.is_some() {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let before = journal
                 .persist_before(&LoggerBeforeState {
@@ -298,13 +297,13 @@ impl ConfigWriteClient for ProductionBrokerConfigPatchClient {
                 ttl_seconds,
                 &request.operation_id,
             )
-            .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             {
                 let mut admin = self.mutation_admin.lock().await;
                 admin
                     .set_log_filter_ttl(&mutation)
                     .await
-                    .map_err(|_| ExecutionAgentError::DriverFailed)?;
+                    .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
             }
             let observed = self
                 .live_logger_state(&request.component, &request.broker_addr, &request.logger)
@@ -312,12 +311,12 @@ impl ConfigWriteClient for ProductionBrokerConfigPatchClient {
             if observed.level != request.level
                 || observed.active_operation_id.as_deref() != Some(request.operation_id.as_str())
             {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
             journal
                 .append_result(&before, &request.operation_id, Direction::Forward, &observed)
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)
+                .await?;
+            Ok(())
         })
     }
 }
@@ -339,12 +338,12 @@ impl LoggerLevelControlClient for ProductionBrokerConfigPatchClient {
             let before = journal
                 .load_before(request.execution_id, request.plan_step_id)
                 .await?
-                .ok_or(AgentStoreError::NotFound)?;
+                .ok_or(AgentStoreFailure::not_found())?;
             if before.component != request.component
                 || before.broker_addr != request.broker_addr
                 || before.logger != request.logger
             {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let live = self
                 .live_logger_state(&request.component, &request.broker_addr, &request.logger)
@@ -359,16 +358,16 @@ impl LoggerLevelControlClient for ProductionBrokerConfigPatchClient {
                 return Ok(());
             }
             if live.active_operation_id.as_deref() != Some(before.forward_operation_id.as_str()) {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let mutation = RestoreBrokerLogFilterRequest::try_new(&request.broker_addr, &request.operation_id)
-                .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+                .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             {
                 let mut admin = self.mutation_admin.lock().await;
                 admin
                     .restore_log_filter(&mutation)
                     .await
-                    .map_err(|_| ExecutionAgentError::DriverFailed)?;
+                    .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
             }
             let observed = self
                 .live_logger_state(&request.component, &request.broker_addr, &request.logger)
@@ -377,33 +376,33 @@ impl LoggerLevelControlClient for ProductionBrokerConfigPatchClient {
                 || observed.last_completed_operation_id.as_deref() != Some(before.forward_operation_id.as_str())
                 || observed.level != before.before_level
             {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
             journal
                 .append_result(&before, &request.operation_id, Direction::Compensation, &observed)
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)
+                .await?;
+            Ok(())
         })
     }
 }
 
-fn require_scope(component: &str, broker_addr: &str, logger: &str) -> Result<(), ExecutionAgentError> {
+fn require_scope(component: &str, broker_addr: &str, logger: &str) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if component != COMPONENT || broker_addr.trim() != broker_addr || broker_addr.is_empty() {
-        return Err(ExecutionAgentError::InvalidRequest);
+        return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
     }
     QueryBrokerLogFilterStateRequest::try_new(broker_addr, logger)
         .map(|_| ())
-        .map_err(|_| ExecutionAgentError::InvalidRequest)
+        .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)
 }
 
-fn logger_state(state: BrokerLogFilterState) -> Result<LoggerLevelState, ExecutionAgentError> {
+fn logger_state(state: BrokerLogFilterState) -> Result<LoggerLevelState, crate::ExecutionAgentRequestFailure> {
     if !state.supported {
-        return Err(ExecutionAgentError::DriverFailed);
+        return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
     }
     Ok(LoggerLevelState {
         level: state
             .level
-            .ok_or(ExecutionAgentError::DriverFailed)?
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?
             .as_uppercase()
             .to_owned(),
         active_operation_id: state.active_operation_id,
@@ -411,25 +410,25 @@ fn logger_state(state: BrokerLogFilterState) -> Result<LoggerLevelState, Executi
     })
 }
 
-fn parse_level(level: &str) -> Result<BrokerLogLevel, ExecutionAgentError> {
+fn parse_level(level: &str) -> Result<BrokerLogLevel, crate::ExecutionAgentRequestFailure> {
     match level {
         "INFO" => Ok(BrokerLogLevel::Info),
         "DEBUG" => Ok(BrokerLogLevel::Debug),
-        _ => Err(ExecutionAgentError::InvalidRequest),
+        _ => Err(crate::ExecutionAgentRequestFailure::InvalidRequest),
     }
 }
 
-fn ttl_seconds(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> Result<u32, ExecutionAgentError> {
+fn ttl_seconds(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> Result<u32, crate::ExecutionAgentRequestFailure> {
     let milliseconds = expires_at.signed_duration_since(now).num_milliseconds();
     if milliseconds <= 0 {
-        return Err(ExecutionAgentError::InvalidRequest);
+        return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
     }
     let rounded_seconds = milliseconds.saturating_add(999) / 1_000;
-    let seconds = u32::try_from(rounded_seconds).map_err(|_| ExecutionAgentError::InvalidRequest)?;
+    let seconds = u32::try_from(rounded_seconds).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
     if (MIN_TTL_SECONDS..=MAX_TTL_SECONDS).contains(&seconds) {
         Ok(seconds)
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 

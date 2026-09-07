@@ -29,7 +29,6 @@ use rocketmq_sre_contracts::TimeRange;
 use rocketmq_sre_contracts::current_evidence_schema;
 use rocketmq_sre_core::diagnostics::DIAGNOSTIC_OUTPUT_SCHEMA_FAMILY;
 use rocketmq_sre_core::diagnostics::DiagnosticEngine;
-use rocketmq_sre_core::diagnostics::DiagnosticError;
 use rocketmq_sre_core::diagnostics::DiagnosticStatus;
 use rocketmq_sre_core::diagnostics::wave_a_registry;
 use serde_json::Value;
@@ -194,12 +193,11 @@ fn message_path_rejects_body_content_before_rules_run() {
     let fixture = parse_fixture(include_str!(
         "../../../tests/fixtures/diagnostics/message-path.v1/body-rejected.json"
     ));
-    let evidence_id = fixture.evidence[0].evidence_id;
     let engine = DiagnosticEngine::new(wave_a_registry().expect("Wave A registry should be valid"));
 
     assert_eq!(
-        engine.evaluate(&fixture.pack, &fixture.evidence),
-        Err(DiagnosticError::MessageBodyRejected { evidence_id })
+        (engine.evaluate(&fixture.pack, &fixture.evidence)).unwrap_err().code(),
+        rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor
     );
 }
 

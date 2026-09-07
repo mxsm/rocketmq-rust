@@ -37,7 +37,7 @@ use rocketmq_sre_contracts::TenantId;
 use serde::Serialize;
 use sha2::Sha256;
 
-use crate::ControlPlaneError;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const SIGNATURE_PREFIX: &str = "hmac-sha256:";
 
@@ -178,75 +178,81 @@ impl GrantSigner {
         Ok(Self { key: Arc::from(key) })
     }
 
-    pub(super) fn sign_approval(&self, grant: &mut ApprovalGrant) -> Result<(), ControlPlaneError> {
+    pub(super) fn sign_approval(&self, grant: &mut ApprovalGrant) -> Result<(), ControlPlaneRequestFailure> {
         let payload = approval_payload(grant)?;
         grant.signature = self.sign(&payload)?;
         Ok(())
     }
 
-    pub(crate) fn verify_approval(&self, grant: &ApprovalGrant) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_approval(&self, grant: &ApprovalGrant) -> Result<(), ControlPlaneRequestFailure> {
         self.verify(&approval_payload(grant)?, &grant.signature)
     }
 
-    pub(crate) fn sign_execution(&self, request: &mut ExecutionRequest) -> Result<(), ControlPlaneError> {
+    pub(crate) fn sign_execution(&self, request: &mut ExecutionRequest) -> Result<(), ControlPlaneRequestFailure> {
         let payload = execution_payload(request)?;
         request.signature = self.sign(&payload)?;
         Ok(())
     }
 
-    pub(crate) fn verify_execution(&self, request: &ExecutionRequest) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_execution(&self, request: &ExecutionRequest) -> Result<(), ControlPlaneRequestFailure> {
         self.verify(&execution_payload(request)?, &request.signature)
     }
 
-    pub(crate) fn sign_autonomy(&self, grant: &mut AutonomyGrant) -> Result<(), ControlPlaneError> {
+    pub(crate) fn sign_autonomy(&self, grant: &mut AutonomyGrant) -> Result<(), ControlPlaneRequestFailure> {
         grant.signature = self.sign(&autonomy_payload(grant)?)?;
         Ok(())
     }
 
-    pub(crate) fn verify_autonomy(&self, grant: &AutonomyGrant) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_autonomy(&self, grant: &AutonomyGrant) -> Result<(), ControlPlaneRequestFailure> {
         self.verify(&autonomy_payload(grant)?, &grant.signature)
     }
 
-    pub(crate) fn sign_dynamic_safety(&self, decision: &mut DynamicSafetyDecision) -> Result<(), ControlPlaneError> {
+    pub(crate) fn sign_dynamic_safety(
+        &self,
+        decision: &mut DynamicSafetyDecision,
+    ) -> Result<(), ControlPlaneRequestFailure> {
         decision.signature = self.sign(&dynamic_safety_payload(decision)?)?;
         Ok(())
     }
 
-    pub(crate) fn verify_dynamic_safety(&self, decision: &DynamicSafetyDecision) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_dynamic_safety(
+        &self,
+        decision: &DynamicSafetyDecision,
+    ) -> Result<(), ControlPlaneRequestFailure> {
         self.verify(&dynamic_safety_payload(decision)?, &decision.signature)
     }
 
-    pub(crate) fn sign_fence_grant(&self, grant: &mut LeaseFenceGrant) -> Result<(), ControlPlaneError> {
+    pub(crate) fn sign_fence_grant(&self, grant: &mut LeaseFenceGrant) -> Result<(), ControlPlaneRequestFailure> {
         grant.signature = self.sign(&lease_fence_payload(grant)?)?;
         Ok(())
     }
 
-    pub(crate) fn verify_fence_grant(&self, grant: &LeaseFenceGrant) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_fence_grant(&self, grant: &LeaseFenceGrant) -> Result<(), ControlPlaneRequestFailure> {
         self.verify(&lease_fence_payload(grant)?, &grant.signature)
     }
 
-    pub(crate) fn sign_reconcile_grant(&self, grant: &mut ReconcileGrant) -> Result<(), ControlPlaneError> {
+    pub(crate) fn sign_reconcile_grant(&self, grant: &mut ReconcileGrant) -> Result<(), ControlPlaneRequestFailure> {
         grant.signature = self.sign(&reconcile_payload(grant)?)?;
         Ok(())
     }
 
-    pub(crate) fn verify_reconcile_grant(&self, grant: &ReconcileGrant) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_reconcile_grant(&self, grant: &ReconcileGrant) -> Result<(), ControlPlaneRequestFailure> {
         self.verify(&reconcile_payload(grant)?, &grant.signature)
     }
 
-    pub(crate) fn verify_fence_ack(&self, ack: &FenceAck) -> Result<(), ControlPlaneError> {
+    pub(crate) fn verify_fence_ack(&self, ack: &FenceAck) -> Result<(), ControlPlaneRequestFailure> {
         self.verify(&fence_ack_payload(ack)?, &ack.signature)
     }
 
     #[cfg(test)]
-    pub(crate) fn sign_fence_ack(&self, ack: &mut FenceAck) -> Result<(), ControlPlaneError> {
+    pub(crate) fn sign_fence_ack(&self, ack: &mut FenceAck) -> Result<(), ControlPlaneRequestFailure> {
         ack.signature = self.sign(&fence_ack_payload(ack)?)?;
         Ok(())
     }
 
-    fn sign(&self, payload: &[u8]) -> Result<String, ControlPlaneError> {
+    fn sign(&self, payload: &[u8]) -> Result<String, ControlPlaneRequestFailure> {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key)
-            .map_err(|_| ControlPlaneError::configuration("grant signing key is invalid"))?;
+            .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))?;
         mac.update(payload);
         Ok(format!(
             "{SIGNATURE_PREFIX}{}",
@@ -254,18 +260,19 @@ impl GrantSigner {
         ))
     }
 
-    fn verify(&self, payload: &[u8], signature: &str) -> Result<(), ControlPlaneError> {
+    fn verify(&self, payload: &[u8], signature: &str) -> Result<(), ControlPlaneRequestFailure> {
         let encoded = signature.strip_prefix(SIGNATURE_PREFIX).ok_or_else(|| {
-            ControlPlaneError::forbidden("invalid_grant_signature", "grant signature format is invalid")
+            ControlPlaneRequestFailure::forbidden("invalid_grant_signature", "grant signature format is invalid")
         })?;
         let signature = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
-            ControlPlaneError::forbidden("invalid_grant_signature", "grant signature encoding is invalid")
+            ControlPlaneRequestFailure::forbidden("invalid_grant_signature", "grant signature encoding is invalid")
         })?;
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.key)
-            .map_err(|_| ControlPlaneError::configuration("grant signing key is invalid"))?;
+            .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))?;
         mac.update(payload);
-        mac.verify_slice(&signature)
-            .map_err(|_| ControlPlaneError::forbidden("invalid_grant_signature", "grant signature verification failed"))
+        mac.verify_slice(&signature).map_err(|_| {
+            ControlPlaneRequestFailure::forbidden("invalid_grant_signature", "grant signature verification failed")
+        })
     }
 }
 
@@ -278,7 +285,7 @@ impl Debug for GrantSigner {
     }
 }
 
-fn approval_payload(grant: &ApprovalGrant) -> Result<Vec<u8>, ControlPlaneError> {
+fn approval_payload(grant: &ApprovalGrant) -> Result<Vec<u8>, ControlPlaneRequestFailure> {
     serde_jcs::to_vec(&UnsignedApprovalGrant {
         issuer: &grant.issuer,
         audience: &grant.audience,
@@ -293,10 +300,10 @@ fn approval_payload(grant: &ApprovalGrant) -> Result<Vec<u8>, ControlPlaneError>
         expires_at: grant.expires_at,
         nonce: &grant.nonce,
     })
-    .map_err(|error| ControlPlaneError::configuration(format!("approval grant cannot be canonicalized: {error}")))
+    .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn execution_payload(request: &ExecutionRequest) -> Result<Vec<u8>, ControlPlaneError> {
+fn execution_payload(request: &ExecutionRequest) -> Result<Vec<u8>, ControlPlaneRequestFailure> {
     serde_jcs::to_vec(&UnsignedExecutionRequest {
         schema_version: &request.schema_version,
         id: request.id,
@@ -314,10 +321,10 @@ fn execution_payload(request: &ExecutionRequest) -> Result<Vec<u8>, ControlPlane
         expires_at: request.expires_at,
         nonce: &request.nonce,
     })
-    .map_err(|error| ControlPlaneError::configuration(format!("execution request cannot be canonicalized: {error}")))
+    .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn autonomy_payload(grant: &AutonomyGrant) -> Result<Vec<u8>, ControlPlaneError> {
+fn autonomy_payload(grant: &AutonomyGrant) -> Result<Vec<u8>, ControlPlaneRequestFailure> {
     serde_jcs::to_vec(&UnsignedAutonomyGrant {
         issuer: &grant.issuer,
         audience: &grant.audience,
@@ -340,10 +347,10 @@ fn autonomy_payload(grant: &AutonomyGrant) -> Result<Vec<u8>, ControlPlaneError>
         expires_at: grant.expires_at,
         nonce: &grant.nonce,
     })
-    .map_err(|error| ControlPlaneError::configuration(format!("autonomy grant cannot be canonicalized: {error}")))
+    .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn dynamic_safety_payload(decision: &DynamicSafetyDecision) -> Result<Vec<u8>, ControlPlaneError> {
+fn dynamic_safety_payload(decision: &DynamicSafetyDecision) -> Result<Vec<u8>, ControlPlaneRequestFailure> {
     serde_jcs::to_vec(&UnsignedDynamicSafetyDecision {
         id: decision.id,
         tenant_id: decision.tenant_id,
@@ -366,12 +373,10 @@ fn dynamic_safety_payload(decision: &DynamicSafetyDecision) -> Result<Vec<u8>, C
         expires_at: decision.expires_at,
         nonce: &decision.nonce,
     })
-    .map_err(|error| {
-        ControlPlaneError::configuration(format!("dynamic safety decision cannot be canonicalized: {error}"))
-    })
+    .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn lease_fence_payload(grant: &LeaseFenceGrant) -> Result<Vec<u8>, ControlPlaneError> {
+fn lease_fence_payload(grant: &LeaseFenceGrant) -> Result<Vec<u8>, ControlPlaneRequestFailure> {
     serde_jcs::to_vec(&UnsignedLeaseFenceGrant {
         lease_id: grant.lease_id,
         owner: &grant.owner,
@@ -388,10 +393,10 @@ fn lease_fence_payload(grant: &LeaseFenceGrant) -> Result<Vec<u8>, ControlPlaneE
         expires_at: grant.expires_at,
         nonce: &grant.nonce,
     })
-    .map_err(|error| ControlPlaneError::configuration(format!("lease fence grant cannot be canonicalized: {error}")))
+    .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn reconcile_payload(grant: &ReconcileGrant) -> Result<Vec<u8>, ControlPlaneError> {
+fn reconcile_payload(grant: &ReconcileGrant) -> Result<Vec<u8>, ControlPlaneRequestFailure> {
     serde_jcs::to_vec(&UnsignedReconcileGrant {
         lease_id: grant.lease_id,
         owner: &grant.owner,
@@ -402,10 +407,10 @@ fn reconcile_payload(grant: &ReconcileGrant) -> Result<Vec<u8>, ControlPlaneErro
         expires_at: grant.expires_at,
         nonce: &grant.nonce,
     })
-    .map_err(|error| ControlPlaneError::configuration(format!("reconcile grant cannot be canonicalized: {error}")))
+    .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn fence_ack_payload(ack: &FenceAck) -> Result<Vec<u8>, ControlPlaneError> {
+fn fence_ack_payload(ack: &FenceAck) -> Result<Vec<u8>, ControlPlaneRequestFailure> {
     serde_jcs::to_vec(&UnsignedFenceAck {
         cluster_id: ack.cluster_id,
         epoch: ack.epoch,
@@ -413,9 +418,7 @@ fn fence_ack_payload(ack: &FenceAck) -> Result<Vec<u8>, ControlPlaneError> {
         agent_subject: &ack.agent_subject,
         acknowledged_at: ack.acknowledged_at,
     })
-    .map_err(|error| {
-        ControlPlaneError::configuration(format!("fence acknowledgement cannot be canonicalized: {error}"))
-    })
+    .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
 #[cfg(test)]

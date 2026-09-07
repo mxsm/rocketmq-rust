@@ -28,15 +28,18 @@ use rocketmq_sre_model_gateway::ModelMessage;
 use rocketmq_sre_model_gateway::ModelRole;
 use rocketmq_sre_model_gateway::ModelTool;
 use rocketmq_sre_model_gateway::ProviderError;
-use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::ProviderOperationalFailure;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::ResponseFormat;
 use rocketmq_sre_model_gateway::ToolChoice;
 use serde_json::Value;
 use serde_json::json;
 
 use super::ModelGatewayService;
+use super::control_plane_provider_rejection;
 use super::lifecycle::require_model_governance;
-use crate::ControlPlaneError;
+use super::provider_error;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::models::lifecycle::ModelProfileLifecycleState;
 use crate::models::lifecycle::ProviderSmokeResultView;
@@ -62,7 +65,7 @@ impl ModelGatewayService {
         &self,
         auth: &AuthContext,
         profile_id: ModelProfileId,
-    ) -> Result<ProviderSmokeResultView, ControlPlaneError> {
+    ) -> Result<ProviderSmokeResultView, ControlPlaneRequestFailure> {
         require_model_governance(auth)?;
         let profiles = self.configured_profiles(auth).await?;
         let lifecycle = self
@@ -70,7 +73,7 @@ impl ModelGatewayService {
             .model_profile_lifecycle(auth.tenant_id, profile_id)
             .await?;
         if lifecycle.state == ModelProfileLifecycleState::Retired {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "model_profile_retired",
                 "a retired model profile cannot run provider smoke",
             ));
@@ -78,11 +81,11 @@ impl ModelGatewayService {
         let profile = profiles
             .into_iter()
             .find(|profile| profile.id == profile_id)
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         self.execute_provider_smoke(auth.tenant_id, &profile).await
     }
 
-    pub(crate) async fn run_due_provider_smokes(&self) -> Result<ProviderSmokeRunSummary, ControlPlaneError> {
+    pub(crate) async fn run_due_provider_smokes(&self) -> Result<ProviderSmokeRunSummary, ControlPlaneRequestFailure> {
         if !self.config.enabled || self.transport.is_none() {
             return Ok(ProviderSmokeRunSummary::default());
         }
@@ -140,7 +143,7 @@ impl ModelGatewayService {
         &self,
         tenant_id: TenantId,
         profile: &RuntimeModelProfile,
-    ) -> Result<ProviderSmokeResultView, ControlPlaneError> {
+    ) -> Result<ProviderSmokeResultView, ControlPlaneRequestFailure> {
         let started_at = Instant::now();
         let correlation_id = CorrelationId::new();
         let mut connectivity_ok = false;
@@ -154,11 +157,19 @@ impl ModelGatewayService {
         let client = self
             .transport
             .clone()
-            .ok_or_else(|| ProviderError::new(ProviderErrorCode::ServiceUnavailable, "model transport is disabled"))
+            .ok_or_else(|| {
+                ProviderStatusOutcome::from(provider_error(
+                    ProviderOperationalFailure::ServiceUnavailable,
+                    "model transport is disabled",
+                ))
+            })
             .and_then(|transport| AsyncBuiltinProviderClient::new(profile.profile.clone(), transport));
         let credential = match self.resolve_credential(&profile.profile).await {
             Ok(credential) => Some(credential),
-            Err(error) => {
+            Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                return Err(control_plane_provider_rejection(rejection));
+            }
+            Err(ProviderStatusOutcome::Operational(error)) => {
                 push_provider_failure(&mut failure_codes, "credential", &error);
                 None
             }
@@ -184,7 +195,12 @@ impl ModelGatewayService {
                             failure_codes.push("connectivity.empty_response".to_owned());
                         }
                     }
-                    Err(error) => push_provider_failure(&mut failure_codes, "connectivity", &error),
+                    Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                        return Err(control_plane_provider_rejection(rejection));
+                    }
+                    Err(ProviderStatusOutcome::Operational(error)) => {
+                        push_provider_failure(&mut failure_codes, "connectivity", &error);
+                    }
                 }
 
                 calls_attempted = calls_attempted.saturating_add(1);
@@ -214,7 +230,12 @@ impl ModelGatewayService {
                             failure_codes.push("evidence_citation.invalid".to_owned());
                         }
                     }
-                    Err(error) => push_provider_failure(&mut failure_codes, "structured_output", &error),
+                    Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                        return Err(control_plane_provider_rejection(rejection));
+                    }
+                    Err(ProviderStatusOutcome::Operational(error)) => {
+                        push_provider_failure(&mut failure_codes, "structured_output", &error);
+                    }
                 }
 
                 calls_attempted = calls_attempted.saturating_add(1);
@@ -238,10 +259,20 @@ impl ModelGatewayService {
                             failure_codes.push("tool_arguments.invalid".to_owned());
                         }
                     }
-                    Err(error) => push_provider_failure(&mut failure_codes, "tool_arguments", &error),
+                    Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                        return Err(control_plane_provider_rejection(rejection));
+                    }
+                    Err(ProviderStatusOutcome::Operational(error)) => {
+                        push_provider_failure(&mut failure_codes, "tool_arguments", &error);
+                    }
                 }
             }
-            (Err(error), _) => push_provider_failure(&mut failure_codes, "profile", &error),
+            (Err(ProviderStatusOutcome::Rejected { rejection, .. }), _) => {
+                return Err(control_plane_provider_rejection(rejection));
+            }
+            (Err(ProviderStatusOutcome::Operational(error)), _) => {
+                push_provider_failure(&mut failure_codes, "profile", &error);
+            }
             (Ok(_), None) => {}
         }
 
@@ -281,7 +312,7 @@ impl ModelGatewayService {
         correlation_id: CorrelationId,
         request: CanonicalModelRequest,
         credential: Option<rocketmq_sre_model_gateway::SecretMaterial>,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         let mut context = InvocationContext::new(correlation_id);
         context.max_response_bytes = 64 * 1024;
         context.deadline_unix_ms = Some(
@@ -375,7 +406,7 @@ fn tool_request(correlation_id: CorrelationId, model: &str) -> CanonicalModelReq
 }
 
 fn push_provider_failure(failure_codes: &mut Vec<String>, check: &str, error: &ProviderError) {
-    let code = serde_json::to_value(error.code)
+    let code = serde_json::to_value(error.failure())
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".to_owned());
@@ -401,13 +432,18 @@ mod tests {
     use crate::models::lifecycle::ModelProfileRollbackRequest;
 
     struct QueueTransport {
-        responses: Mutex<VecDeque<Result<TransportResponse, ProviderError>>>,
+        responses: Mutex<VecDeque<Result<TransportResponse, ProviderStatusOutcome>>>,
     }
 
     impl QueueTransport {
         fn new(responses: impl IntoIterator<Item = Result<TransportResponse, ProviderError>>) -> Self {
             Self {
-                responses: Mutex::new(responses.into_iter().collect()),
+                responses: Mutex::new(
+                    responses
+                        .into_iter()
+                        .map(|response| response.map_err(Into::into))
+                        .collect(),
+                ),
             }
         }
     }
@@ -447,7 +483,7 @@ mod tests {
         push_provider_failure(
             &mut codes,
             "connectivity",
-            &ProviderError::new(ProviderErrorCode::Timeout, "redacted"),
+            &provider_error(ProviderOperationalFailure::Timeout, "redacted"),
         );
         assert_eq!(codes, vec!["connectivity.timeout"]);
     }
@@ -601,15 +637,24 @@ mod tests {
             )
             .await
             .expect_err("retired lifecycle must be terminal");
-        assert!(matches!(retired_transition, ControlPlaneError::Conflict { .. }));
+        assert_eq!(retired_transition.failure(), crate::ControlPlaneFailure::Conflict);
 
         let failing_service = ModelGatewayService::for_tests(
             repository.clone(),
             vec![profile_a, profile_b],
             Arc::new(QueueTransport::new([
-                Err(ProviderError::new(ProviderErrorCode::ServiceUnavailable, "redacted")),
-                Err(ProviderError::new(ProviderErrorCode::ServiceUnavailable, "redacted")),
-                Err(ProviderError::new(ProviderErrorCode::ServiceUnavailable, "redacted")),
+                Err(provider_error(
+                    ProviderOperationalFailure::ServiceUnavailable,
+                    "redacted",
+                )),
+                Err(provider_error(
+                    ProviderOperationalFailure::ServiceUnavailable,
+                    "redacted",
+                )),
+                Err(provider_error(
+                    ProviderOperationalFailure::ServiceUnavailable,
+                    "redacted",
+                )),
             ])),
         );
         let failed_smoke = failing_service

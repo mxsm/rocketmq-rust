@@ -24,10 +24,45 @@ use super::secret_provider::EnvSecretProvider;
 use super::secret_provider::SecretProvider;
 use super::secret_provider::hmac_sha256;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 const MAX_ADAPTER_BODY_BYTES: usize = 8 * 1024;
 const ITSM_TICKET_HEADER: &str = "x-itsm-ticket-key";
+
+#[derive(Debug)]
+enum AdapterDeliveryFailure {
+    Rejected(&'static str),
+    Operational(ControlPlaneError),
+}
+
+impl AdapterDeliveryFailure {
+    const fn rejected(code: &'static str) -> Self {
+        Self::Rejected(code)
+    }
+
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Rejected(code) => code,
+            Self::Operational(error) => error.code(),
+        }
+    }
+}
+
+impl From<ControlPlaneError> for AdapterDeliveryFailure {
+    fn from(error: ControlPlaneError) -> Self {
+        Self::Operational(error)
+    }
+}
+
+impl From<ControlPlaneRequestFailure> for AdapterDeliveryFailure {
+    fn from(failure: ControlPlaneRequestFailure) -> Self {
+        match failure {
+            ControlPlaneRequestFailure::Rejected(_rejection) => Self::Rejected("secret_unavailable"),
+            ControlPlaneRequestFailure::Operational(error) => Self::Operational(error),
+        }
+    }
+}
 
 /// Bounded ITSM outbox worker. ChatOps, Pager, and Email deliveries remain on
 /// the Phase 2 notification worker and are never claimed here.
@@ -45,7 +80,7 @@ impl IntegrationOutboxWorker {
             .timeout(Duration::from_secs(8))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| ControlPlaneError::configuration("integration HTTP client cannot be built"))?;
+            .map_err(ControlPlaneError::configuration_source)?;
         Ok(Self {
             repository,
             client,
@@ -63,7 +98,11 @@ impl IntegrationOutboxWorker {
         };
         for claim in claims {
             let result = self.deliver(&claim).await;
-            if let Err(_error) = self.repository.finish_integration_delivery(&claim, result).await {
+            if let Err(_error) = self
+                .repository
+                .finish_integration_delivery(&claim, result.map_err(|failure| failure.code()))
+                .await
+            {
                 tracing::warn!(
                     delivery_id = %claim.delivery.id,
                     error_class = "source_unavailable",
@@ -73,30 +112,39 @@ impl IntegrationOutboxWorker {
         }
     }
 
-    async fn deliver(&self, claim: &IntegrationDeliveryClaim) -> Result<AdapterDeliveryReceipt, &'static str> {
+    async fn deliver(
+        &self,
+        claim: &IntegrationDeliveryClaim,
+    ) -> Result<AdapterDeliveryReceipt, AdapterDeliveryFailure> {
         match claim.adapter_kind {
             IntegrationAdapterKind::MockItsm => Ok(AdapterDeliveryReceipt {
                 external_ticket_key: Some(mock_ticket_key(claim)),
             }),
             IntegrationAdapterKind::SignedWebhookItsm => self.deliver_signed_itsm(claim).await,
             IntegrationAdapterKind::ChatOpsWebhook | IntegrationAdapterKind::Pager | IntegrationAdapterKind::Email => {
-                Err("adapter_boundary_mismatch")
+                Err(AdapterDeliveryFailure::rejected("adapter_boundary_mismatch"))
             }
             IntegrationAdapterKind::MockCmdb
             | IntegrationAdapterKind::MockGitOps
-            | IntegrationAdapterKind::SignedReleaseWebhook => Err("inbound_only_adapter"),
+            | IntegrationAdapterKind::SignedReleaseWebhook => {
+                Err(AdapterDeliveryFailure::rejected("inbound_only_adapter"))
+            }
         }
     }
 
     async fn deliver_signed_itsm(
         &self,
         claim: &IntegrationDeliveryClaim,
-    ) -> Result<AdapterDeliveryReceipt, &'static str> {
-        let endpoint = url::Url::parse(&claim.endpoint).map_err(|_| "invalid_endpoint")?;
+    ) -> Result<AdapterDeliveryReceipt, AdapterDeliveryFailure> {
+        let endpoint =
+            url::Url::parse(&claim.endpoint).map_err(|_| AdapterDeliveryFailure::rejected("invalid_endpoint"))?;
         if !allowed_endpoint(&endpoint) {
-            return Err("endpoint_not_allowed");
+            return Err(AdapterDeliveryFailure::rejected("endpoint_not_allowed"));
         }
-        let secret_reference = claim.secret_reference.as_deref().ok_or("secret_reference_missing")?;
+        let secret_reference = claim
+            .secret_reference
+            .as_deref()
+            .ok_or_else(|| AdapterDeliveryFailure::rejected("secret_reference_missing"))?;
         let secret = self.secrets.resolve(secret_reference)?;
         let payload = ItsmPayload {
             schema_version: "rocketmq-sre.itsm-delivery.v1",
@@ -108,9 +156,10 @@ impl IntegrationOutboxWorker {
             summary: &claim.delivery.sanitized_summary,
             deep_link: &claim.delivery.deep_link,
         };
-        let body = serde_json::to_vec(&payload).map_err(|_| "payload_encoding_failed")?;
+        let body = serde_json::to_vec(&payload)
+            .map_err(|source| ControlPlaneError::validation_source("payload_encoding_failed", source))?;
         if body.len() > MAX_ADAPTER_BODY_BYTES {
-            return Err("payload_too_large");
+            return Err(AdapterDeliveryFailure::rejected("payload_too_large"));
         }
         let signature = hmac_sha256(&secret, &body)?;
         let response = self
@@ -122,15 +171,15 @@ impl IntegrationOutboxWorker {
             .body(body)
             .send()
             .await
-            .map_err(|_| "transport_unavailable")?
+            .map_err(|source| ControlPlaneError::validation_source("transport_unavailable", source))?
             .error_for_status()
-            .map_err(|_| "remote_rejected")?;
+            .map_err(|source| ControlPlaneError::validation_source("remote_rejected", source))?;
         let ticket_key = response
             .headers()
             .get(ITSM_TICKET_HEADER)
             .and_then(|value| value.to_str().ok())
             .filter(|value| valid_ticket_key(value))
-            .ok_or("ticket_key_missing")?
+            .ok_or_else(|| AdapterDeliveryFailure::rejected("ticket_key_missing"))?
             .to_owned();
         Ok(AdapterDeliveryReceipt {
             external_ticket_key: Some(ticket_key),

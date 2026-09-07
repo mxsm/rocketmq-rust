@@ -24,7 +24,7 @@ use super::canonical::MetricDiagnosticProfile;
 use super::canonical::RouteDiagnosticProfile;
 use super::common::SourceOutput;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 
 const DIAGNOSTIC_SCHEMA: &str = "rocketmq.sre-diagnostic-source.v1";
 
@@ -503,7 +503,7 @@ const fn route_profile_name(profile: RouteDiagnosticProfile) -> &'static str {
 
 fn schema_mismatch() -> ConnectorError {
     ConnectorError::capability(
-        ConnectorErrorCode::CapabilityMismatch,
+        ConnectorFailure::CapabilityMismatch,
         "diagnostic source response does not match the supported projection schema",
     )
 }

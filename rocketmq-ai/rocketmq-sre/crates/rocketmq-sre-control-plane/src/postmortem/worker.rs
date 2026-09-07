@@ -14,11 +14,13 @@
 
 use chrono::Utc;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 /// Materializes idempotent operator todos without mutating knowledge or
 /// RocketMQ resources.
-pub(crate) async fn materialize_due_operator_todos(repository: &PostgresRepository) -> Result<u64, ControlPlaneError> {
+pub(crate) async fn materialize_due_operator_todos(
+    repository: &PostgresRepository,
+) -> Result<u64, ControlPlaneRequestFailure> {
     repository.materialize_due_todos(Utc::now()).await
 }

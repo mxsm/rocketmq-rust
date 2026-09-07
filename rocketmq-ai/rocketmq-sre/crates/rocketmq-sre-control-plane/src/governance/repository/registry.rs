@@ -32,7 +32,7 @@ use super::support::dependency_value;
 use super::support::lifecycle_state_name;
 use super::support::object_kind_name;
 use super::support::version_from_row;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::governance::model::GovernanceArtifactQuery;
 use crate::governance::model::GovernanceVersionQuery;
 use crate::governance::model::bounded_limit;
@@ -46,7 +46,7 @@ impl GovernanceRepository {
     pub(in crate::governance) async fn create_artifact(
         &self,
         artifact: &GovernanceArtifact,
-    ) -> Result<GovernanceArtifact, ControlPlaneError> {
+    ) -> Result<GovernanceArtifact, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "INSERT INTO governance_artifacts (
                 id, tenant_id, object_kind, logical_key, owner_name,
@@ -70,13 +70,13 @@ impl GovernanceRepository {
         &self,
         tenant_id: TenantId,
         id: GovernanceArtifactId,
-    ) -> Result<GovernanceArtifact, ControlPlaneError> {
+    ) -> Result<GovernanceArtifact, ControlPlaneRequestFailure> {
         let row = sqlx::query("SELECT * FROM governance_artifacts WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id.as_uuid())
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         artifact_from_row(&row)
     }
 
@@ -84,7 +84,7 @@ impl GovernanceRepository {
         &self,
         tenant_id: TenantId,
         query: &GovernanceArtifactQuery,
-    ) -> Result<(Vec<GovernanceArtifact>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<GovernanceArtifact>, bool), ControlPlaneRequestFailure> {
         let limit = bounded_limit(query.limit);
         let kind = query.kind.map(object_kind_name);
         let rows = sqlx::query(
@@ -114,10 +114,9 @@ impl GovernanceRepository {
         &self,
         version: &GovernanceVersion,
         event: &GovernanceEvent,
-    ) -> Result<GovernanceVersion, ControlPlaneError> {
-        let components = serde_json::to_value(&version.applicable_components).map_err(|_| {
-            ControlPlaneError::validation("invalid_governance_version", "applicable components cannot be encoded")
-        })?;
+    ) -> Result<GovernanceVersion, ControlPlaneRequestFailure> {
+        let components = serde_json::to_value(&version.applicable_components)
+            .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_governance_version", source))?;
         let dependencies = dependency_value(&version.dependencies)?;
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
@@ -150,7 +149,7 @@ impl GovernanceRepository {
         .bind(version.created_at)
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         insert_event(&mut transaction, event).await?;
         transaction.commit().await?;
         version_from_row(&row)
@@ -160,13 +159,13 @@ impl GovernanceRepository {
         &self,
         tenant_id: TenantId,
         id: GovernanceVersionId,
-    ) -> Result<GovernanceVersion, ControlPlaneError> {
+    ) -> Result<GovernanceVersion, ControlPlaneRequestFailure> {
         let row = sqlx::query("SELECT * FROM governance_versions WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id.as_uuid())
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         version_from_row(&row)
     }
 
@@ -175,7 +174,7 @@ impl GovernanceRepository {
         tenant_id: TenantId,
         artifact_id: GovernanceArtifactId,
         query: &GovernanceVersionQuery,
-    ) -> Result<(Vec<GovernanceVersion>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<GovernanceVersion>, bool), ControlPlaneRequestFailure> {
         let limit = bounded_limit(query.limit);
         let state = query.state.map(lifecycle_state_name);
         let rows = sqlx::query(
@@ -208,7 +207,7 @@ impl GovernanceRepository {
         replacement_version_id: Option<GovernanceVersionId>,
         rollback_version_id: Option<GovernanceVersionId>,
         event: &GovernanceEvent,
-    ) -> Result<GovernanceVersion, ControlPlaneError> {
+    ) -> Result<GovernanceVersion, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         if event.to_state == GovernanceLifecycleState::Active
             && let Some(previous) = sqlx::query(
@@ -278,7 +277,7 @@ impl GovernanceRepository {
         .fetch_optional(&mut *transaction)
         .await?
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "governance_state_conflict",
                 "governance version changed before the transition was persisted",
             )
@@ -324,7 +323,7 @@ impl GovernanceRepository {
         kind: GovernanceObjectKind,
         logical_key: &str,
         version: &str,
-    ) -> Result<GovernanceOverride, ControlPlaneError> {
+    ) -> Result<GovernanceOverride, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT artifact.id AS artifact_id, version.*
              FROM governance_artifacts artifact
@@ -358,7 +357,7 @@ impl GovernanceRepository {
 async fn insert_event(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     event: &GovernanceEvent,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO governance_events (
             id, tenant_id, artifact_id, version_id, from_state, to_state,

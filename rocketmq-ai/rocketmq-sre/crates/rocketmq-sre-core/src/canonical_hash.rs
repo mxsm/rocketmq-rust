@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use rocketmq_sre_contracts::ActionPlan;
-use rocketmq_sre_contracts::ContractError;
+use rocketmq_sre_contracts::SreContractError;
 
 /// Recomputes the canonical protected-field plan hash.
 ///
 /// # Errors
 ///
 /// Returns a contract error when canonicalization fails.
-pub fn canonical_plan_hash(plan: &ActionPlan) -> Result<String, ContractError> {
+pub fn canonical_plan_hash(plan: &ActionPlan) -> Result<String, SreContractError> {
     plan.compute_plan_hash()
 }

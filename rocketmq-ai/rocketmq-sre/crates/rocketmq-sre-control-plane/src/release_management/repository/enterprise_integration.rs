@@ -27,6 +27,7 @@ use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 impl PostgresRepository {
@@ -34,7 +35,7 @@ impl PostgresRepository {
         &self,
         event: &EnterpriseIntegrationEvent,
         nonce: &str,
-    ) -> Result<(EnterpriseIntegrationEvent, bool, Option<Uuid>), ControlPlaneError> {
+    ) -> Result<(EnterpriseIntegrationEvent, bool, Option<Uuid>), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let existing = sqlx::query(
             "SELECT id, target_id, tenant_id, cluster_id, event_kind,
@@ -53,7 +54,7 @@ impl PostgresRepository {
                 || persisted.event_kind != event.event_kind
                 || persisted.source_version != event.source_version
             {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "integration_idempotency_conflict",
                     "external integration event identifier was reused with different content",
                 ));
@@ -74,7 +75,7 @@ impl PostgresRepository {
         .fetch_one(&mut *transaction)
         .await?;
         if replayed {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "integration_replay_detected",
                 "integration nonce has already been consumed",
             ));
@@ -100,9 +101,8 @@ impl PostgresRepository {
         .bind(nonce)
         .bind(&event.payload_digest)
         .bind(
-            serde_json::to_value(&event.payload).map_err(|_| {
-                ControlPlaneError::validation("integration_payload_invalid", "payload cannot be encoded")
-            })?,
+            serde_json::to_value(&event.payload)
+                .map_err(|source| ControlPlaneError::validation_source("integration_payload_invalid", source))?,
         )
         .bind(event.signature_verified)
         .bind(event.occurred_at)
@@ -118,7 +118,7 @@ impl PostgresRepository {
         tenant_id: TenantId,
         event_id: EnterpriseIntegrationEventId,
         followup_id: Uuid,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let updated = sqlx::query(
             "UPDATE enterprise_integration_events
              SET followup_kind = 'upgrade_readiness', followup_id = $3
@@ -130,7 +130,7 @@ impl PostgresRepository {
         .execute(&self.pool)
         .await?;
         if updated.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "integration_followup_conflict",
                 "integration event follow-up was already recorded",
             ));
@@ -151,7 +151,7 @@ impl PostgresRepository {
         .bind(target_id.as_uuid())
         .fetch_one(&self.pool)
         .await?;
-        u64::try_from(count).map_err(|_| ControlPlaneError::configuration("integration event count is invalid"))
+        u64::try_from(count).map_err(ControlPlaneError::configuration_source)
     }
 
     pub(in crate::release_management) async fn enterprise_events(
@@ -229,7 +229,7 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         target_id: IntegrationTargetId,
-    ) -> Result<IntegrationHealth, ControlPlaneError> {
+    ) -> Result<IntegrationHealth, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT health.target_id, health.health_status, health.config_valid,
                     health.secret_available, health.endpoint_valid,
@@ -245,14 +245,14 @@ impl PostgresRepository {
         .bind(target_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
-        integration_health_from_row(&row)
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
+        Ok(integration_health_from_row(&row)?)
     }
 }
 
 fn enterprise_event_from_row(row: &PgRow) -> Result<EnterpriseIntegrationEvent, ControlPlaneError> {
     let payload = serde_json::from_value::<EnterpriseIntegrationPayload>(row.try_get("payload")?)
-        .map_err(|_| ControlPlaneError::configuration("integration payload contains an invalid persisted value"))?;
+        .map_err(ControlPlaneError::configuration_source)?;
     Ok(EnterpriseIntegrationEvent {
         schema_version: ENTERPRISE_INTEGRATION_EVENT_SCHEMA_VERSION.to_owned(),
         id: EnterpriseIntegrationEventId::from_uuid(row.try_get("id")?),

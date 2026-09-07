@@ -21,7 +21,7 @@ use super::FleetRepository;
 use super::support::endpoint_from_row;
 use super::support::endpoint_health_name;
 use super::support::endpoint_kind_name;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::fleet::model::RegionalEndpointQuery;
 use crate::fleet::model::bounded_limit;
 
@@ -29,13 +29,11 @@ impl FleetRepository {
     pub(in crate::fleet) async fn upsert_regional_endpoint(
         &self,
         endpoint: &RegionalEndpoint,
-    ) -> Result<RegionalEndpoint, ControlPlaneError> {
-        let capabilities = serde_json::to_value(&endpoint.capabilities).map_err(|_| {
-            ControlPlaneError::validation("invalid_request", "regional endpoint capabilities are invalid")
-        })?;
-        let residency_tags = serde_json::to_value(&endpoint.residency_tags).map_err(|_| {
-            ControlPlaneError::validation("invalid_request", "regional endpoint residency tags are invalid")
-        })?;
+    ) -> Result<RegionalEndpoint, ControlPlaneRequestFailure> {
+        let capabilities = serde_json::to_value(&endpoint.capabilities)
+            .map_err(|source| ControlPlaneRequestFailure::validation_source("invalid_request", source))?;
+        let residency_tags = serde_json::to_value(&endpoint.residency_tags)
+            .map_err(|source| ControlPlaneRequestFailure::validation_source("invalid_request", source))?;
         let row = sqlx::query(
             "INSERT INTO regional_endpoints (
                 id, fleet_id, tenant_id, region_id, cluster_id, endpoint_kind,
@@ -86,12 +84,12 @@ impl FleetRepository {
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| {
-            ControlPlaneError::forbidden(
+            ControlPlaneRequestFailure::forbidden(
                 "regional_endpoint_scope_mismatch",
                 "regional endpoint identity cannot move across tenant or region",
             )
         })?;
-        endpoint_from_row(&row)
+        Ok(endpoint_from_row(&row)?)
     }
 
     pub(in crate::fleet) async fn regional_endpoints(
@@ -99,7 +97,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         allowed_clusters: &[ClusterId],
         query: &RegionalEndpointQuery,
-    ) -> Result<(Vec<RegionalEndpoint>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<RegionalEndpoint>, bool), ControlPlaneRequestFailure> {
         let allowed = cluster_uuids(allowed_clusters);
         let requested = i64::from(bounded_limit(query.limit));
         let rows = sqlx::query(

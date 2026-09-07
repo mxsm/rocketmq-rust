@@ -42,7 +42,8 @@ use rocketmq_sre_model_gateway::ModelRole;
 use rocketmq_sre_model_gateway::ModelStreamEvent;
 use rocketmq_sre_model_gateway::ModelTool;
 use rocketmq_sre_model_gateway::ProviderDialect;
-use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::ProviderFailure;
+use rocketmq_sre_model_gateway::ProviderRejection;
 use rocketmq_sre_model_gateway::ResponseFormat;
 use rocketmq_sre_model_gateway::SecretMaterial;
 use rocketmq_sre_model_gateway::StreamBounds;
@@ -436,8 +437,8 @@ async fn async_provider_client_maps_text_json_tools_and_status_errors() {
         .invoke(&context, &rate_request, Some(secret("test-secret")))
         .await
         .expect_err("rate limit");
-    assert_eq!(error.code, ProviderErrorCode::RateLimited);
-    assert!(error.retryable);
+    assert_eq!(error.failure(), ProviderFailure::RateLimited);
+    assert!(error.retryable());
 
     server.stop().await;
 }
@@ -532,7 +533,7 @@ async fn transport_rejects_insecure_non_loopback_redirects_and_expired_deadlines
         ))
         .await
         .expect_err("non-loopback HTTP");
-    assert_eq!(insecure.code, ProviderErrorCode::PolicyDenied);
+    assert_eq!(insecure.failure(), ProviderFailure::PolicyDenied);
 
     let mut expired = request(
         &server.endpoint,
@@ -542,7 +543,7 @@ async fn transport_rejects_insecure_non_loopback_redirects_and_expired_deadlines
     );
     expired.deadline_unix_ms = Some(0);
     let expired = transport.invoke(expired).await.expect_err("expired deadline");
-    assert_eq!(expired.code, ProviderErrorCode::Timeout);
+    assert_eq!(expired.failure(), ProviderFailure::Timeout);
 
     let redirect = transport
         .invoke(request(
@@ -553,8 +554,8 @@ async fn transport_rejects_insecure_non_loopback_redirects_and_expired_deadlines
         ))
         .await
         .expect_err("redirect");
-    assert_eq!(redirect.code, ProviderErrorCode::PolicyDenied);
-    assert_eq!(redirect.provider_status, Some(307));
+    assert_eq!(redirect.failure(), ProviderFailure::PolicyDenied);
+    assert_eq!(redirect.provider_status(), Some(307));
     assert_eq!(server.state.redirect_target_hits.load(Ordering::Relaxed), 0);
 
     server.stop().await;
@@ -578,7 +579,7 @@ async fn transport_enforces_timeout_response_and_request_bounds() {
         ))
         .await
         .expect_err("timeout");
-    assert_eq!(timeout.code, ProviderErrorCode::Timeout);
+    assert_eq!(timeout.failure(), ProviderFailure::Timeout);
 
     let too_large = transport
         .invoke(request(
@@ -589,7 +590,7 @@ async fn transport_enforces_timeout_response_and_request_bounds() {
         ))
         .await
         .expect_err("response bound");
-    assert_eq!(too_large.code, ProviderErrorCode::OutputTooLarge);
+    assert_eq!(too_large.failure(), ProviderFailure::OutputTooLarge);
 
     let mut request_too_large = request(
         &server.endpoint,
@@ -599,7 +600,7 @@ async fn transport_enforces_timeout_response_and_request_bounds() {
     );
     request_too_large.body = json!({"payload": "x".repeat(256)});
     let request_too_large = transport.invoke(request_too_large).await.expect_err("request bound");
-    assert_eq!(request_too_large.code, ProviderErrorCode::OutputTooLarge);
+    assert_eq!(request_too_large.failure(), ProviderFailure::OutputTooLarge);
 
     server.stop().await;
 }
@@ -618,7 +619,7 @@ async fn invalid_json_and_expired_credentials_fail_closed() {
         ))
         .await
         .expect_err("invalid JSON");
-    assert_eq!(invalid_json.code, ProviderErrorCode::ProtocolError);
+    assert_eq!(invalid_json.failure(), ProviderFailure::ProtocolError);
 
     let expired_secret = SecretMaterial::new("test-secret", "expired", Some(0));
     let expired_secret = transport
@@ -630,7 +631,7 @@ async fn invalid_json_and_expired_credentials_fail_closed() {
         ))
         .await
         .expect_err("expired secret");
-    assert_eq!(expired_secret.code, ProviderErrorCode::SecretUnavailable);
+    assert_eq!(expired_secret.failure(), ProviderFailure::SecretUnavailable);
 
     server.stop().await;
 }
@@ -709,8 +710,12 @@ async fn deepseek_http_stream_maps_semantic_events_and_enforces_termination() {
         Some(ModelStreamEvent::TextDelta { .. })
     ));
     assert_eq!(
-        stream.recv().await.expect_err("premature EOF must fail closed").code,
-        ProviderErrorCode::ProtocolError
+        stream
+            .recv()
+            .await
+            .expect_err("premature EOF must fail closed")
+            .failure(),
+        ProviderFailure::ProtocolError
     );
     server.stop().await;
 }
@@ -731,8 +736,8 @@ async fn deepseek_http_stream_honors_cancellation_and_event_bounds() {
     ));
     stream.cancel();
     assert_eq!(
-        stream.recv().await.expect_err("cancelled stream").code,
-        ProviderErrorCode::Cancelled
+        stream.recv().await.expect_err("cancelled stream").failure(),
+        ProviderFailure::Cancelled
     );
 
     let mut bounded_context = InvocationContext::new(request.correlation_id);
@@ -750,8 +755,8 @@ async fn deepseek_http_stream_honors_cancellation_and_event_bounds() {
         Some(ModelStreamEvent::Start { .. })
     ));
     assert_eq!(
-        stream.recv().await.expect_err("event bound").code,
-        ProviderErrorCode::OutputTooLarge
+        stream.recv().await.expect_err("event bound").failure(),
+        ProviderFailure::OutputTooLarge
     );
     server.stop().await;
 }
@@ -784,10 +789,14 @@ async fn deepseek_http_tool_selection_and_error_matrix_are_stable() {
     assert_eq!(response.tool_calls[0].name, "query_consumer_lag");
     assert_eq!(response.tool_calls[0].arguments["consumer_group"], "synthetic-group");
 
-    for (prompt, expected) in [
-        ("STATUS_401", ProviderErrorCode::AuthenticationFailed),
-        ("STATUS_429", ProviderErrorCode::RateLimited),
-        ("STATUS_503", ProviderErrorCode::ServiceUnavailable),
+    for (prompt, expected, rejection) in [
+        (
+            "STATUS_401",
+            ProviderFailure::AuthenticationFailed,
+            Some(ProviderRejection::AuthenticationFailed),
+        ),
+        ("STATUS_429", ProviderFailure::RateLimited, None),
+        ("STATUS_503", ProviderFailure::ServiceUnavailable, None),
     ] {
         let request = deepseek_request(prompt);
         let error = client
@@ -798,7 +807,9 @@ async fn deepseek_http_tool_selection_and_error_matrix_are_stable() {
             )
             .await
             .expect_err("provider status must fail");
-        assert_eq!(error.code, expected, "{prompt}");
+        assert_eq!(error.failure(), expected, "{prompt}");
+        assert_eq!(error.rejection(), rejection, "{prompt}");
+        assert_eq!(error.operational_error().is_some(), rejection.is_none(), "{prompt}");
     }
 
     let timeout_client = deepseek_client(&server.endpoint, Duration::from_millis(40));
@@ -811,7 +822,8 @@ async fn deepseek_http_tool_selection_and_error_matrix_are_stable() {
         )
         .await
         .expect_err("stream handshake timeout");
-    assert_eq!(error.code, ProviderErrorCode::Timeout);
+    assert_eq!(error.failure(), ProviderFailure::Timeout);
+    assert!(error.operational_error().is_some());
     server.stop().await;
 }
 
@@ -823,7 +835,8 @@ fn tls_configuration_is_validated_and_redacted() {
             .with_only_custom_roots(true),
     );
     let error = HttpModelTransport::new(invalid_root).expect_err("invalid root");
-    assert_eq!(error.code, ProviderErrorCode::ProfileInvalid);
+    assert_eq!(error.failure(), ProviderFailure::MutualTlsFailed);
+    assert_eq!(error.rejection(), Some(ProviderRejection::MutualTlsFailed));
 
     let identity =
         TlsClientIdentity::from_pem(b"certificate-secret", b"private-key-secret").expect("non-empty identity");
@@ -833,5 +846,6 @@ fn tls_configuration_is_validated_and_redacted() {
     let invalid_identity =
         HttpTransportConfig::default().with_tls(HttpTlsConfig::default().with_client_identity(identity));
     let error = HttpModelTransport::new(invalid_identity).expect_err("invalid identity");
-    assert_eq!(error.code, ProviderErrorCode::ProfileInvalid);
+    assert_eq!(error.failure(), ProviderFailure::TransportFailed);
+    assert!(error.operational_error().is_some());
 }

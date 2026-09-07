@@ -36,8 +36,9 @@ use sqlx::Row;
 use sqlx::Transaction;
 use uuid::Uuid;
 
-use crate::JournalError;
 use crate::VerificationPhase;
+use crate::error::JournalError;
+use crate::error::JournalFailure;
 use crate::error::database_message;
 
 /// Idempotent execution creation result.
@@ -59,6 +60,10 @@ pub struct PendingIntent {
 
 /// Immutable verification Evidence projection loaded from the journal.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "private verification-history reads are retained for fenced recovery"
+)]
 pub struct VerificationEvidenceRecord {
     pub execution_id: ExecutionId,
     pub step_id: rocketmq_sre_contracts::ExecutionStepId,
@@ -82,6 +87,7 @@ pub struct ExecutionJournal {
     expected_audience: String,
 }
 
+#[allow(dead_code, reason = "private journal operations are retained for fenced recovery")]
 impl ExecutionJournal {
     #[must_use]
     pub fn new(pool: PgPool, expected_audience: impl Into<String>) -> Self {
@@ -96,7 +102,7 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Returns the database failure without exposing connection details.
-    pub async fn ready(&self) -> Result<(), JournalError> {
+    pub(crate) async fn ready(&self) -> Result<(), JournalFailure> {
         sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(&self.pool).await?;
         Ok(())
     }
@@ -107,23 +113,23 @@ impl ExecutionJournal {
     ///
     /// Rejects invalid plans, action drift, and reuse of an idempotency key for
     /// a different request.
-    pub async fn create_execution(
+    pub(crate) async fn create_execution(
         &self,
         request: &ExecutionRequest,
         resource_key: &str,
         action: ExecutionAction,
         started_at: DateTime<Utc>,
-    ) -> Result<ExecutionCreation, JournalError> {
+    ) -> Result<ExecutionCreation, JournalFailure> {
         if self.expected_audience.trim().is_empty() {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "executor audience must be configured".to_owned(),
             ));
         }
         request
             .validate_at(started_at, &self.expected_audience)
-            .map_err(|error| JournalError::InvalidInput(error.to_string()))?;
+            .map_err(JournalFailure::from)?;
         if resource_key.trim().is_empty() || !request.plan.steps.iter().any(|step| step.action == action) {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "execution resource and action must match the approved plan".to_owned(),
             ));
         }
@@ -170,7 +176,7 @@ impl ExecutionJournal {
         .await?;
         let existing_snapshot: Value = row.try_get("request_snapshot")?;
         if existing_snapshot != snapshot {
-            return Err(JournalError::IdempotencyConflict);
+            return Err(JournalFailure::idempotency_conflict());
         }
         Ok(ExecutionCreation {
             id: ExecutionId::from_uuid(row.try_get("id")?),
@@ -183,10 +189,12 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Rejects illegal graph edges and stale current states.
-    pub async fn transition(&self, id: ExecutionId, transition: &ExecutionTransition) -> Result<bool, JournalError> {
-        transition
-            .validate()
-            .map_err(|error| JournalError::InvalidInput(error.to_string()))?;
+    pub(crate) async fn transition(
+        &self,
+        id: ExecutionId,
+        transition: &ExecutionTransition,
+    ) -> Result<bool, JournalFailure> {
+        transition.validate().map_err(JournalFailure::from)?;
         let completed_at = if matches!(
             transition.to,
             ExecutionState::Succeeded | ExecutionState::RolledBack | ExecutionState::Escalated
@@ -219,20 +227,18 @@ impl ExecutionJournal {
     ///
     /// Rejects illegal graph edges, stale current state, audit scope drift,
     /// and non-state-change audit kinds.
-    pub async fn transition_with_audit(
+    pub(crate) async fn transition_with_audit(
         &self,
         id: ExecutionId,
         transition: &ExecutionTransition,
         audit: &AuditEvent,
-    ) -> Result<bool, JournalError> {
+    ) -> Result<bool, JournalFailure> {
         if audit.event_kind != AuditEventKind::StateChanged {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "execution transition requires a state_changed audit event".to_owned(),
             ));
         }
-        transition
-            .validate()
-            .map_err(|error| JournalError::InvalidInput(error.to_string()))?;
+        transition.validate().map_err(JournalFailure::from)?;
         let completed_at = if matches!(
             transition.to,
             ExecutionState::Succeeded | ExecutionState::RolledBack | ExecutionState::Escalated
@@ -270,7 +276,11 @@ impl ExecutionJournal {
     ///
     /// Rejects scope drift, duplicate IDs with different content, and
     /// database failures.
-    pub async fn append_audit_event(&self, execution_id: ExecutionId, audit: &AuditEvent) -> Result<(), JournalError> {
+    pub(crate) async fn append_audit_event(
+        &self,
+        execution_id: ExecutionId,
+        audit: &AuditEvent,
+    ) -> Result<(), JournalFailure> {
         let mut transaction = self.pool.begin().await?;
         ensure_execution_scope(&mut transaction, execution_id, audit).await?;
         append_audit(&mut transaction, audit).await?;
@@ -284,13 +294,13 @@ impl ExecutionJournal {
     ///
     /// Rejects inactive/stale lease epochs, scope drift, and non-identical
     /// duplicate intents.
-    pub async fn append_intent_with_audit(
+    pub(crate) async fn append_intent_with_audit(
         &self,
         intent: &StepIntent,
         audit: &AuditEvent,
-    ) -> Result<bool, JournalError> {
+    ) -> Result<bool, JournalFailure> {
         if audit.event_kind != AuditEventKind::StepIntentPersisted {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "intent transaction requires a step_intent_persisted audit event".to_owned(),
             ));
         }
@@ -323,7 +333,7 @@ impl ExecutionJournal {
         let result = match insert {
             Ok(result) => result,
             Err(error) if database_message(&error) == Some("invalid_executor_lease") => {
-                return Err(JournalError::LeaseRejected);
+                return Err(JournalFailure::lease_rejected());
             }
             Err(error) => return Err(error.into()),
         };
@@ -342,7 +352,7 @@ impl ExecutionJournal {
             .fetch_one(&mut *transaction)
             .await?;
             if existing != snapshot {
-                return Err(JournalError::IdempotencyConflict);
+                return Err(JournalFailure::idempotency_conflict());
             }
         }
         append_audit(&mut transaction, audit).await?;
@@ -355,15 +365,15 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Rejects scope drift and non-identical duplicate results.
-    pub async fn append_result_with_audit(
+    pub(crate) async fn append_result_with_audit(
         &self,
         execution_id: ExecutionId,
         attempt: u16,
         result: &StepResult,
         audit: &AuditEvent,
-    ) -> Result<bool, JournalError> {
+    ) -> Result<bool, JournalFailure> {
         if audit.event_kind != AuditEventKind::StepResultPersisted {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "result transaction requires a step_result_persisted audit event".to_owned(),
             ));
         }
@@ -406,7 +416,7 @@ impl ExecutionJournal {
             .fetch_one(&mut *transaction)
             .await?;
             if existing != snapshot {
-                return Err(JournalError::IdempotencyConflict);
+                return Err(JournalFailure::idempotency_conflict());
             }
         }
         append_audit(&mut transaction, audit).await?;
@@ -420,14 +430,14 @@ impl ExecutionJournal {
     ///
     /// Rejects malformed Evidence, execution scope drift, invalid attempts,
     /// and non-identical duplicate IDs.
-    pub async fn append_verification_evidence(
+    pub(crate) async fn append_verification_evidence(
         &self,
         execution_id: ExecutionId,
         step_id: rocketmq_sre_contracts::ExecutionStepId,
         attempt: u16,
         phase: VerificationPhase,
         evidence: &EvidenceSnapshot,
-    ) -> Result<bool, JournalError> {
+    ) -> Result<bool, JournalFailure> {
         self.append_verification_evidence_internal(execution_id, step_id, attempt, phase, evidence, None)
             .await
     }
@@ -439,7 +449,7 @@ impl ExecutionJournal {
     ///
     /// Rejects malformed Evidence, execution scope drift, invalid attempts,
     /// wrong audit kinds, and non-identical duplicate IDs.
-    pub async fn append_verification_evidence_with_audit(
+    pub(crate) async fn append_verification_evidence_with_audit(
         &self,
         execution_id: ExecutionId,
         step_id: rocketmq_sre_contracts::ExecutionStepId,
@@ -447,9 +457,9 @@ impl ExecutionJournal {
         phase: VerificationPhase,
         evidence: &EvidenceSnapshot,
         audit: &AuditEvent,
-    ) -> Result<bool, JournalError> {
+    ) -> Result<bool, JournalFailure> {
         if audit.event_kind != AuditEventKind::VerificationCaptured {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "verification Evidence requires a verification_captured audit".to_owned(),
             ));
         }
@@ -465,15 +475,13 @@ impl ExecutionJournal {
         phase: VerificationPhase,
         evidence: &EvidenceSnapshot,
         audit: Option<&AuditEvent>,
-    ) -> Result<bool, JournalError> {
+    ) -> Result<bool, JournalFailure> {
         if attempt == 0 {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "verification Evidence attempt must be positive".to_owned(),
             ));
         }
-        evidence
-            .verify_content_hash()
-            .map_err(|error| JournalError::InvalidInput(error.to_string()))?;
+        evidence.verify_content_hash().map_err(JournalFailure::from)?;
         let mut transaction = self.pool.begin().await?;
         if let Some(audit) = audit {
             ensure_execution_scope(&mut transaction, execution_id, audit).await?;
@@ -486,12 +494,12 @@ impl ExecutionJournal {
         .bind(execution_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(JournalError::NotFound)?;
+        .ok_or(JournalFailure::not_found())?;
         if scope.try_get::<Uuid, _>("tenant_id")? != evidence.tenant_id.as_uuid()
             || scope.try_get::<Uuid, _>("cluster_id")? != evidence.cluster_id.as_uuid()
             || scope.try_get::<Uuid, _>("correlation_id")? != evidence.correlation_id.as_uuid()
         {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "verification Evidence scope does not match execution".to_owned(),
             ));
         }
@@ -531,7 +539,7 @@ impl ExecutionJournal {
             .fetch_one(&mut *transaction)
             .await?;
             if existing != snapshot {
-                return Err(JournalError::IdempotencyConflict);
+                return Err(JournalFailure::idempotency_conflict());
             }
         }
         if let Some(audit) = audit {
@@ -547,16 +555,16 @@ impl ExecutionJournal {
     ///
     /// Rejects scope drift, wrong audit kind, invalid attempts, and
     /// non-identical duplicate results.
-    pub async fn append_verification_result_with_audit(
+    pub(crate) async fn append_verification_result_with_audit(
         &self,
         execution_id: ExecutionId,
         attempt: u16,
         compensation: bool,
         result: &VerificationResult,
         audit: &AuditEvent,
-    ) -> Result<bool, JournalError> {
+    ) -> Result<bool, JournalFailure> {
         if attempt == 0 || audit.event_kind != AuditEventKind::VerificationCompleted {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "verification result requires a positive attempt and verification_completed audit".to_owned(),
             ));
         }
@@ -598,7 +606,7 @@ impl ExecutionJournal {
             .fetch_one(&mut *transaction)
             .await?;
             if existing != snapshot {
-                return Err(JournalError::IdempotencyConflict);
+                return Err(JournalFailure::idempotency_conflict());
             }
         }
         append_audit(&mut transaction, audit).await?;
@@ -611,10 +619,10 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Returns database or snapshot decoding failures.
-    pub async fn verification_evidence(
+    pub(crate) async fn verification_evidence(
         &self,
         execution_id: ExecutionId,
-    ) -> Result<Vec<VerificationEvidenceRecord>, JournalError> {
+    ) -> Result<Vec<VerificationEvidenceRecord>, JournalFailure> {
         let rows = sqlx::query(
             "SELECT execution_id, step_id, attempt, phase, evidence_snapshot
              FROM execution_verification_evidence
@@ -630,8 +638,9 @@ impl ExecutionJournal {
                 Ok(VerificationEvidenceRecord {
                     execution_id: ExecutionId::from_uuid(row.try_get("execution_id")?),
                     step_id: rocketmq_sre_contracts::ExecutionStepId::from_uuid(row.try_get("step_id")?),
-                    attempt: u16::try_from(attempt)
-                        .map_err(|_| JournalError::InvalidInput("stored verification attempt is invalid".to_owned()))?,
+                    attempt: u16::try_from(attempt).map_err(|_| {
+                        JournalFailure::invalid_input("stored verification attempt is invalid".to_owned())
+                    })?,
                     phase: parse_verification_phase(row.try_get::<String, _>("phase")?.as_str())?,
                     evidence: from_json(row.try_get("evidence_snapshot")?)?,
                 })
@@ -655,7 +664,7 @@ impl ExecutionJournal {
         clippy::too_many_arguments,
         reason = "the atomic safety transaction requires three independently typed audit events"
     )]
-    pub async fn escalate_manual_takeover(
+    pub(crate) async fn escalate_manual_takeover(
         &self,
         execution_id: ExecutionId,
         transition: &ExecutionTransition,
@@ -663,7 +672,7 @@ impl ExecutionJournal {
         state_audit: &AuditEvent,
         quarantine_audit: &AuditEvent,
         manual_takeover_audit: &AuditEvent,
-    ) -> Result<ManualTakeoverEscalation, JournalError> {
+    ) -> Result<ManualTakeoverEscalation, JournalFailure> {
         if transition.from != ExecutionState::Compensating
             || transition.to != ExecutionState::Escalated
             || quarantine.source_execution_id != Some(execution_id)
@@ -675,13 +684,11 @@ impl ExecutionJournal {
             || quarantine_audit.event_kind != AuditEventKind::QuarantineCreated
             || manual_takeover_audit.event_kind != AuditEventKind::ManualTakeoverRequired
         {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "manual takeover requires a compensating escalation, active quarantine, and typed audits".to_owned(),
             ));
         }
-        transition
-            .validate()
-            .map_err(|error| JournalError::InvalidInput(error.to_string()))?;
+        transition.validate().map_err(JournalFailure::from)?;
 
         let mut transaction = self.pool.begin().await?;
         for audit in [state_audit, quarantine_audit, manual_takeover_audit] {
@@ -698,12 +705,12 @@ impl ExecutionJournal {
         .bind(execution_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(JournalError::NotFound)?;
+        .ok_or(JournalFailure::not_found())?;
         if execution.try_get::<Uuid, _>("tenant_id")? != quarantine.tenant_id.as_uuid()
             || execution.try_get::<Uuid, _>("cluster_id")? != quarantine.cluster_id.as_uuid()
             || execution.try_get::<Uuid, _>("correlation_id")? != state_audit.correlation_id.as_uuid()
         {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "manual takeover quarantine scope does not match execution".to_owned(),
             ));
         }
@@ -727,7 +734,7 @@ impl ExecutionJournal {
             .fetch_optional(&mut *transaction)
             .await?;
             if existing.is_none() {
-                return Err(JournalError::IdempotencyConflict);
+                return Err(JournalFailure::idempotency_conflict());
             }
             transaction.commit().await?;
             return Ok(ManualTakeoverEscalation {
@@ -737,7 +744,7 @@ impl ExecutionJournal {
             });
         }
         if current_state != transition.from {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "execution is not in the compensating state".to_owned(),
             ));
         }
@@ -776,14 +783,14 @@ impl ExecutionJournal {
         let quarantine_insert = match quarantine_insert {
             Ok(result) => result,
             Err(error) if database_message(&error) == Some("invalid_quarantine_source_scope") => {
-                return Err(JournalError::InvalidInput(
+                return Err(JournalFailure::invalid_input(
                     "quarantine source scope does not match its execution".to_owned(),
                 ));
             }
             Err(error) => return Err(error.into()),
         };
         if quarantine_insert.rows_affected() != 1 {
-            return Err(JournalError::IdempotencyConflict);
+            return Err(JournalFailure::idempotency_conflict());
         }
 
         let state_update = sqlx::query(
@@ -798,7 +805,7 @@ impl ExecutionJournal {
         .execute(&mut *transaction)
         .await?;
         if state_update.rows_affected() != 1 {
-            return Err(JournalError::IdempotencyConflict);
+            return Err(JournalFailure::idempotency_conflict());
         }
         append_audit(&mut transaction, state_audit).await?;
         append_audit(&mut transaction, quarantine_audit).await?;
@@ -860,7 +867,7 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Returns a database or snapshot decoding failure.
-    pub async fn pending_intents(&self, limit: u32) -> Result<Vec<PendingIntent>, JournalError> {
+    pub(crate) async fn pending_intents(&self, limit: u32) -> Result<Vec<PendingIntent>, JournalFailure> {
         let rows = sqlx::query(
             "SELECT intent.intent_snapshot, execution.state,
                     execution.tenant_id, execution.cluster_id,
@@ -900,11 +907,11 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Returns persistence or snapshot-decoding failures.
-    pub async fn pending_intents_for_cluster(
+    pub(crate) async fn pending_intents_for_cluster(
         &self,
         cluster_id: rocketmq_sre_contracts::ClusterId,
         limit: u32,
-    ) -> Result<Vec<PendingIntent>, JournalError> {
+    ) -> Result<Vec<PendingIntent>, JournalFailure> {
         let rows = sqlx::query(
             "SELECT intent.intent_snapshot, execution.state,
                     execution.tenant_id, execution.cluster_id,
@@ -945,12 +952,12 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Returns not-found, database, or unknown-state failures.
-    pub async fn execution_state(&self, id: ExecutionId) -> Result<ExecutionState, JournalError> {
+    pub(crate) async fn execution_state(&self, id: ExecutionId) -> Result<ExecutionState, JournalFailure> {
         let state: Option<String> = sqlx::query_scalar("SELECT state FROM executions WHERE id = $1")
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?;
-        parse_execution_state(state.ok_or(JournalError::NotFound)?.as_str())
+        parse_execution_state(state.ok_or(JournalFailure::not_found())?.as_str())
     }
 
     /// Loads the immutable request that was accepted when an execution was
@@ -963,12 +970,12 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Returns not-found, database, or snapshot-decoding failures.
-    pub async fn execution_request(&self, id: ExecutionId) -> Result<ExecutionRequest, JournalError> {
+    pub(crate) async fn execution_request(&self, id: ExecutionId) -> Result<ExecutionRequest, JournalFailure> {
         let snapshot: Option<Value> = sqlx::query_scalar("SELECT request_snapshot FROM executions WHERE id = $1")
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?;
-        from_json(snapshot.ok_or(JournalError::NotFound)?)
+        from_json(snapshot.ok_or(JournalFailure::not_found())?)
     }
 
     /// Loads the ordered forward intents whose live effects must be reconciled
@@ -977,7 +984,10 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Returns database or snapshot-decoding failures.
-    pub async fn forward_intents_for_execution(&self, id: ExecutionId) -> Result<Vec<StepIntent>, JournalError> {
+    pub(crate) async fn forward_intents_for_execution(
+        &self,
+        id: ExecutionId,
+    ) -> Result<Vec<StepIntent>, JournalFailure> {
         let rows = sqlx::query(
             "SELECT intent_snapshot
              FROM execution_steps
@@ -1000,7 +1010,7 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Returns database failures.
-    pub async fn compensating_execution_ids(&self, limit: u32) -> Result<Vec<ExecutionId>, JournalError> {
+    pub(crate) async fn compensating_execution_ids(&self, limit: u32) -> Result<Vec<ExecutionId>, JournalFailure> {
         let rows: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id
              FROM executions
@@ -1019,7 +1029,7 @@ impl ExecutionJournal {
     /// # Errors
     ///
     /// Returns a database failure.
-    pub async fn has_intent(&self, id: ExecutionId) -> Result<bool, JournalError> {
+    pub(crate) async fn has_intent(&self, id: ExecutionId) -> Result<bool, JournalFailure> {
         sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -1034,11 +1044,198 @@ impl ExecutionJournal {
     }
 }
 
+/// Public durable-journal operations with closed, non-error failure codes.
+#[allow(
+    async_fn_in_trait,
+    reason = "journal persistence is inherently asynchronous and callers must handle closed failures"
+)]
+pub trait ExecutionJournalOperations {
+    async fn create_execution(
+        &self,
+        request: &ExecutionRequest,
+        resource_key: &str,
+        action: ExecutionAction,
+        started_at: DateTime<Utc>,
+    ) -> Result<ExecutionCreation, JournalFailure>;
+
+    async fn transition(&self, id: ExecutionId, transition: &ExecutionTransition) -> Result<bool, JournalFailure>;
+
+    async fn transition_with_audit(
+        &self,
+        id: ExecutionId,
+        transition: &ExecutionTransition,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalFailure>;
+
+    async fn append_intent_with_audit(&self, intent: &StepIntent, audit: &AuditEvent) -> Result<bool, JournalFailure>;
+
+    async fn append_result_with_audit(
+        &self,
+        execution_id: ExecutionId,
+        attempt: u16,
+        result: &StepResult,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalFailure>;
+
+    async fn append_verification_evidence_with_audit(
+        &self,
+        execution_id: ExecutionId,
+        step_id: rocketmq_sre_contracts::ExecutionStepId,
+        attempt: u16,
+        phase: VerificationPhase,
+        evidence: &EvidenceSnapshot,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalFailure>;
+
+    async fn append_verification_result_with_audit(
+        &self,
+        execution_id: ExecutionId,
+        attempt: u16,
+        compensation: bool,
+        result: &VerificationResult,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalFailure>;
+
+    async fn verification_evidence(
+        &self,
+        execution_id: ExecutionId,
+    ) -> Result<Vec<VerificationEvidenceRecord>, JournalFailure>;
+
+    async fn escalate_manual_takeover(
+        &self,
+        execution_id: ExecutionId,
+        transition: &ExecutionTransition,
+        quarantine: &ResourceQuarantine,
+        state_audit: &AuditEvent,
+        quarantine_audit: &AuditEvent,
+        manual_takeover_audit: &AuditEvent,
+    ) -> Result<ManualTakeoverEscalation, JournalFailure>;
+
+    async fn pending_intents(&self, limit: u32) -> Result<Vec<PendingIntent>, JournalFailure>;
+
+    async fn execution_state(&self, id: ExecutionId) -> Result<ExecutionState, JournalFailure>;
+}
+
+impl ExecutionJournalOperations for ExecutionJournal {
+    async fn create_execution(
+        &self,
+        request: &ExecutionRequest,
+        resource_key: &str,
+        action: ExecutionAction,
+        started_at: DateTime<Utc>,
+    ) -> Result<ExecutionCreation, JournalFailure> {
+        ExecutionJournal::create_execution(self, request, resource_key, action, started_at).await
+    }
+
+    async fn transition(&self, id: ExecutionId, transition: &ExecutionTransition) -> Result<bool, JournalFailure> {
+        ExecutionJournal::transition(self, id, transition).await
+    }
+
+    async fn transition_with_audit(
+        &self,
+        id: ExecutionId,
+        transition: &ExecutionTransition,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalFailure> {
+        ExecutionJournal::transition_with_audit(self, id, transition, audit).await
+    }
+
+    async fn append_intent_with_audit(&self, intent: &StepIntent, audit: &AuditEvent) -> Result<bool, JournalFailure> {
+        ExecutionJournal::append_intent_with_audit(self, intent, audit).await
+    }
+
+    async fn append_result_with_audit(
+        &self,
+        execution_id: ExecutionId,
+        attempt: u16,
+        result: &StepResult,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalFailure> {
+        ExecutionJournal::append_result_with_audit(self, execution_id, attempt, result, audit).await
+    }
+
+    async fn append_verification_evidence_with_audit(
+        &self,
+        execution_id: ExecutionId,
+        step_id: rocketmq_sre_contracts::ExecutionStepId,
+        attempt: u16,
+        phase: VerificationPhase,
+        evidence: &EvidenceSnapshot,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalFailure> {
+        ExecutionJournal::append_verification_evidence_with_audit(
+            self,
+            execution_id,
+            step_id,
+            attempt,
+            phase,
+            evidence,
+            audit,
+        )
+        .await
+    }
+
+    async fn append_verification_result_with_audit(
+        &self,
+        execution_id: ExecutionId,
+        attempt: u16,
+        compensation: bool,
+        result: &VerificationResult,
+        audit: &AuditEvent,
+    ) -> Result<bool, JournalFailure> {
+        ExecutionJournal::append_verification_result_with_audit(
+            self,
+            execution_id,
+            attempt,
+            compensation,
+            result,
+            audit,
+        )
+        .await
+    }
+
+    async fn verification_evidence(
+        &self,
+        execution_id: ExecutionId,
+    ) -> Result<Vec<VerificationEvidenceRecord>, JournalFailure> {
+        ExecutionJournal::verification_evidence(self, execution_id).await
+    }
+
+    async fn escalate_manual_takeover(
+        &self,
+        execution_id: ExecutionId,
+        transition: &ExecutionTransition,
+        quarantine: &ResourceQuarantine,
+        state_audit: &AuditEvent,
+        quarantine_audit: &AuditEvent,
+        manual_takeover_audit: &AuditEvent,
+    ) -> Result<ManualTakeoverEscalation, JournalFailure> {
+        ExecutionJournal::escalate_manual_takeover(
+            self,
+            execution_id,
+            transition,
+            quarantine,
+            state_audit,
+            quarantine_audit,
+            manual_takeover_audit,
+        )
+        .await
+    }
+
+    async fn pending_intents(&self, limit: u32) -> Result<Vec<PendingIntent>, JournalFailure> {
+        ExecutionJournal::pending_intents(self, limit).await
+    }
+
+    async fn execution_state(&self, id: ExecutionId) -> Result<ExecutionState, JournalFailure> {
+        ExecutionJournal::execution_state(self, id).await
+    }
+}
+
 async fn ensure_execution_scope(
     transaction: &mut Transaction<'_, Postgres>,
     execution_id: ExecutionId,
     audit: &AuditEvent,
-) -> Result<(), JournalError> {
+) -> Result<(), JournalFailure> {
     let row = sqlx::query(
         "SELECT tenant_id, cluster_id, correlation_id
          FROM executions
@@ -1047,7 +1244,7 @@ async fn ensure_execution_scope(
     .bind(execution_id.as_uuid())
     .fetch_optional(&mut **transaction)
     .await?
-    .ok_or(JournalError::NotFound)?;
+    .ok_or(JournalFailure::not_found())?;
     let tenant_id: Uuid = row.try_get("tenant_id")?;
     let cluster_id: Uuid = row.try_get("cluster_id")?;
     let correlation_id: Uuid = row.try_get("correlation_id")?;
@@ -1055,14 +1252,14 @@ async fn ensure_execution_scope(
         || cluster_id != audit.cluster_id.as_uuid()
         || correlation_id != audit.correlation_id.as_uuid()
     {
-        return Err(JournalError::InvalidInput(
+        return Err(JournalFailure::invalid_input(
             "audit event scope does not match execution".to_owned(),
         ));
     }
     Ok(())
 }
 
-async fn append_audit(transaction: &mut Transaction<'_, Postgres>, event: &AuditEvent) -> Result<(), JournalError> {
+async fn append_audit(transaction: &mut Transaction<'_, Postgres>, event: &AuditEvent) -> Result<(), JournalFailure> {
     let snapshot = json_value(event)?;
     let result = sqlx::query(
         "INSERT INTO audit_events (
@@ -1101,29 +1298,29 @@ async fn append_audit(transaction: &mut Transaction<'_, Postgres>, event: &Audit
         .fetch_one(&mut **transaction)
         .await?;
         if existing != snapshot {
-            return Err(JournalError::IdempotencyConflict);
+            return Err(JournalFailure::idempotency_conflict());
         }
     }
     Ok(())
 }
 
-fn json_value(value: &impl Serialize) -> Result<Value, JournalError> {
-    serde_json::to_value(value).map_err(JournalError::SnapshotEncoding)
+fn json_value(value: &impl Serialize) -> Result<Value, JournalFailure> {
+    Ok(serde_json::to_value(value).map_err(JournalError::SnapshotEncoding)?)
 }
 
-fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, JournalError> {
-    serde_json::from_value(value).map_err(JournalError::SnapshotDecoding)
+fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, JournalFailure> {
+    Ok(serde_json::from_value(value).map_err(JournalError::SnapshotDecoding)?)
 }
 
-fn enum_name(value: &impl Serialize) -> Result<String, JournalError> {
+fn enum_name(value: &impl Serialize) -> Result<String, JournalFailure> {
     json_value(value)?
         .as_str()
         .map(ToOwned::to_owned)
-        .ok_or_else(|| JournalError::InvalidInput("enum did not encode as a string".to_owned()))
+        .ok_or_else(|| JournalFailure::invalid_input("enum did not encode as a string".to_owned()))
 }
 
-fn epoch_i64(epoch: u64) -> Result<i64, JournalError> {
-    i64::try_from(epoch).map_err(|_| JournalError::InvalidInput("lease epoch exceeds BIGINT".to_owned()))
+fn epoch_i64(epoch: u64) -> Result<i64, JournalFailure> {
+    i64::try_from(epoch).map_err(|_| JournalFailure::invalid_input("lease epoch exceeds BIGINT".to_owned()))
 }
 
 const fn verification_phase_name(phase: VerificationPhase) -> &'static str {
@@ -1135,13 +1332,13 @@ const fn verification_phase_name(phase: VerificationPhase) -> &'static str {
     }
 }
 
-fn parse_verification_phase(value: &str) -> Result<VerificationPhase, JournalError> {
+fn parse_verification_phase(value: &str) -> Result<VerificationPhase, JournalFailure> {
     match value {
         "pre" => Ok(VerificationPhase::Pre),
         "during" => Ok(VerificationPhase::During),
         "post" => Ok(VerificationPhase::Post),
         "rollback_post" => Ok(VerificationPhase::RollbackPost),
-        _ => Err(JournalError::InvalidInput(
+        _ => Err(JournalFailure::invalid_input(
             "stored verification phase is unsupported".to_owned(),
         )),
     }
@@ -1163,7 +1360,7 @@ const fn execution_state_name(state: ExecutionState) -> &'static str {
     }
 }
 
-fn parse_execution_state(value: &str) -> Result<ExecutionState, JournalError> {
+fn parse_execution_state(value: &str) -> Result<ExecutionState, JournalFailure> {
     match value {
         "pending" => Ok(ExecutionState::Pending),
         "prechecking" => Ok(ExecutionState::Prechecking),
@@ -1176,7 +1373,7 @@ fn parse_execution_state(value: &str) -> Result<ExecutionState, JournalError> {
         "succeeded" => Ok(ExecutionState::Succeeded),
         "rolled_back" => Ok(ExecutionState::RolledBack),
         "escalated" => Ok(ExecutionState::Escalated),
-        _ => Err(JournalError::InvalidInput(
+        _ => Err(JournalFailure::invalid_input(
             "stored execution state is unsupported".to_owned(),
         )),
     }

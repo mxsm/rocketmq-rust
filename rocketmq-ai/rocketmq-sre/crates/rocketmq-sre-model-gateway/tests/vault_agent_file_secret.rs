@@ -24,8 +24,8 @@ use std::time::UNIX_EPOCH;
 use rocketmq_sre_model_gateway::ExternalSecretClient;
 use rocketmq_sre_model_gateway::ExternalSecretManagerProvider;
 use rocketmq_sre_model_gateway::ExternalSecretValue;
-use rocketmq_sre_model_gateway::ProviderError;
-use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::ProviderFailure;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::SecretProvider;
 use rocketmq_sre_model_gateway::SecretReference;
 use rocketmq_sre_model_gateway::VaultAgentFileSecretClient;
@@ -107,7 +107,7 @@ fn locator_and_namespace_boundaries_fail_closed_with_redacted_errors() {
     let foreign = SecretReference::external("team-a/models-foreign/openai").expect("foreign reference");
 
     let namespace_error = provider.resolve(&foreign).expect_err("foreign namespace");
-    assert_eq!(namespace_error.code, ProviderErrorCode::SecretAccessDenied);
+    assert_eq!(namespace_error.failure(), ProviderFailure::SecretAccessDenied);
     assert!(!format!("{namespace_error:?}").contains("models-foreign"));
 
     for invalid in [
@@ -118,7 +118,7 @@ fn locator_and_namespace_boundaries_fail_closed_with_redacted_errors() {
         "team-a//models/openai",
     ] {
         let error = expect_read_error(client.read_secret(invalid), "unsafe locator");
-        assert_eq!(error.code, ProviderErrorCode::SecretAccessDenied);
+        assert_eq!(error.failure(), ProviderFailure::SecretAccessDenied);
         let rendered = format!("{error:?}");
         assert!(!rendered.contains(invalid));
         assert!(!rendered.contains("do-not-leak"));
@@ -140,14 +140,14 @@ fn directories_and_oversized_files_are_rejected_before_secret_material_is_return
         .expect("bounded client");
 
     let oversized = expect_read_error(client.read_secret("team-a/models/oversized"), "oversized secret");
-    assert_eq!(oversized.code, ProviderErrorCode::OutputTooLarge);
+    assert_eq!(oversized.failure(), ProviderFailure::OutputTooLarge);
     assert!(!format!("{oversized:?}").contains("123456789"));
 
     let directory = expect_read_error(
         client.read_secret("team-a/models/directory"),
         "directory is not a secret",
     );
-    assert_eq!(directory.code, ProviderErrorCode::SecretAccessDenied);
+    assert_eq!(directory.failure(), ProviderFailure::SecretAccessDenied);
 }
 
 #[test]
@@ -192,9 +192,9 @@ fn final_and_intermediate_symbolic_links_are_rejected() {
 
     let client = VaultAgentFileSecretClient::new(&root.path).expect("Vault Agent client");
     let final_error = expect_read_error(client.read_secret("team-a/models/final-link"), "final symlink");
-    assert_eq!(final_error.code, ProviderErrorCode::SecretAccessDenied);
+    assert_eq!(final_error.failure(), ProviderFailure::SecretAccessDenied);
     let intermediate_error = expect_read_error(client.read_secret("intermediate-link/secret"), "intermediate symlink");
-    assert_eq!(intermediate_error.code, ProviderErrorCode::SecretAccessDenied);
+    assert_eq!(intermediate_error.failure(), ProviderFailure::SecretAccessDenied);
 }
 
 #[cfg(unix)]
@@ -217,7 +217,10 @@ fn create_dir_symlink(target: &Path, link: &Path) -> io::Result<()> {
     std::os::windows::fs::symlink_dir(target, link)
 }
 
-fn expect_read_error(result: Result<ExternalSecretValue, ProviderError>, context: &str) -> ProviderError {
+fn expect_read_error(
+    result: Result<ExternalSecretValue, ProviderStatusOutcome>,
+    context: &str,
+) -> ProviderStatusOutcome {
     match result {
         Ok(_) => panic!("{context} unexpectedly returned secret material"),
         Err(error) => error,

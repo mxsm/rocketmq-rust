@@ -45,6 +45,8 @@ use crate::ExecutionAgent;
 use crate::ExecutionAgentCapabilities;
 use crate::ExecutionAgentConfig;
 use crate::ExecutionAgentError;
+use crate::ExecutionAgentOperationOutcome;
+use crate::ExecutionAgentRejection;
 use crate::FenceAckSigner;
 use crate::HttpLeaseAuthorityClient;
 use crate::LoggerLevelTtlHandler;
@@ -129,7 +131,7 @@ pub async fn run(
         .max_connections(16)
         .connect(&config.database_url)
         .await
-        .map_err(crate::AgentStoreError::Database)?;
+        .map_err(crate::error::AgentStoreError::Database)?;
     let broker_driver = if config.broker_config_patch_enabled || config.logger_ttl_enabled {
         let driver_config = config.broker_admin.as_ref().ok_or(ExecutionAgentError::Configuration)?;
         Some(Arc::new(
@@ -219,56 +221,57 @@ pub async fn run(
     let mut registry = AgentDriverRegistry::empty();
     if let Some(driver) = &broker_driver {
         if config.broker_config_patch_enabled {
-            registry.register_admin(
+            registry.register_configured_admin(
                 ExecutionAction::BrokerConfigPatchAllowlisted,
                 BrokerConfigPatchHandler::new(Arc::clone(driver)),
-            )?;
+            );
         }
         if config.logger_ttl_enabled {
-            registry.register_config(
+            registry.register_configured_config(
                 ExecutionAction::ObservabilityLoggerLevelTtl,
                 LoggerLevelTtlHandler::new(Arc::clone(driver)),
-            )?;
+            );
         }
     }
     if let Some(driver) = &topic_driver {
-        registry.register_admin(
+        registry.register_configured_admin(
             ExecutionAction::TopicConfigPatchAllowlisted,
             TopicConfigPatchHandler::new(Arc::clone(driver)),
-        )?;
+        );
     }
     if let Some(driver) = &subscription_group_driver {
-        registry.register_admin(
+        registry.register_configured_admin(
             ExecutionAction::SubscriptionGroupPatchAllowlisted,
             SubscriptionGroupPatchHandler::new(Arc::clone(driver)),
-        )?;
+        );
     }
     if let Some(driver) = proxy_scale_driver {
-        registry.register_kubernetes(ExecutionAction::ProxyScaleOutOne, ProxyScaleOutOneHandler::new(driver))?;
+        registry
+            .register_configured_kubernetes(ExecutionAction::ProxyScaleOutOne, ProxyScaleOutOneHandler::new(driver));
     }
     if let Some(driver) = proxy_image_canary_driver {
-        registry.register_kubernetes(
+        registry.register_configured_kubernetes(
             ExecutionAction::ProxyRolloutImageCanary,
             ProxyImageCanaryHandler::new(driver),
-        )?;
+        );
     }
     if let Some(driver) = credential_rotation_driver {
-        registry.register_config(
+        registry.register_configured_config(
             ExecutionAction::SecurityCredentialRotateOverlap,
             CredentialRotationHandler::new(driver),
-        )?;
+        );
     }
     if let Some(driver) = &proxy_restart_driver {
-        registry.register_kubernetes(
+        registry.register_configured_kubernetes(
             ExecutionAction::ProxyRestartOne,
             ProxyRestartOneHandler::new(Arc::clone(driver)),
-        )?;
+        );
     }
     if let Some(driver) = telemetry_collector_restart_driver {
-        registry.register_kubernetes(
+        registry.register_configured_kubernetes(
             ExecutionAction::TelemetryCollectorRestartOne,
             TelemetryCollectorRestartOneHandler::new(driver),
-        )?;
+        );
     }
     let authority = Arc::new(HttpLeaseAuthorityClient::new(
         config.authority_url.clone(),
@@ -320,7 +323,7 @@ pub async fn run(
         driver.shutdown().await;
     }
     service_context.task_group().cancel();
-    server_result.map_err(|_| ExecutionAgentError::Io(std::io::Error::other("Execution Agent server failed")))
+    server_result.map_err(ExecutionAgentError::Io)
 }
 
 async fn health() -> Json<ServiceStatus> {
@@ -353,12 +356,15 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ServiceStatus
 async fn capabilities(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<ExecutionAgentCapabilities>, ExecutionAgentError> {
+) -> Result<Json<ExecutionAgentCapabilities>, ExecutionAgentApiFailure> {
     authorize(&state, &headers)?;
     Ok(Json(state.agent.capabilities()))
 }
 
-async fn status(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<MetricsStatus>, ExecutionAgentError> {
+async fn status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<MetricsStatus>, ExecutionAgentApiFailure> {
     authorize(&state, &headers)?;
     let metrics = state.agent.metrics();
     Ok(Json(MetricsStatus {
@@ -375,19 +381,31 @@ async fn precheck(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<AgentReadRequest>,
-) -> Result<Json<AgentReadResult>, ExecutionAgentError> {
+) -> Result<Json<AgentReadResult>, ExecutionAgentApiFailure> {
     authorize(&state, &headers)?;
-    state.agent.read_state(&request).await.map(Json)
+    match state.agent.read_state(&request).await? {
+        ExecutionAgentOperationOutcome::Accepted(result) => Ok(Json(result)),
+        ExecutionAgentOperationOutcome::Rejected(rejection) => Err(rejection.into()),
+    }
 }
 
 async fn dispatch(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<AgentDispatchRequest>,
-) -> Result<Json<AgentDispatchResponse>, ExecutionAgentError> {
+) -> Result<Json<AgentDispatchResponse>, ExecutionAgentApiFailure> {
     authorize(&state, &headers)?;
     match state.agent.dispatch(&request).await {
-        Ok(response) => Ok(Json(response)),
+        Ok(ExecutionAgentOperationOutcome::Accepted(response)) => Ok(Json(response)),
+        Ok(ExecutionAgentOperationOutcome::Rejected(rejection)) => {
+            tracing::warn!(
+                error_code = rejection.http_classification().1,
+                action = request.request.action.id(),
+                compensation = request.request.intent.compensation,
+                "Execution Agent dispatch was rejected before returning a result"
+            );
+            Err(rejection.into())
+        }
         Err(error) => {
             tracing::warn!(
                 error_code = error.stable_code(),
@@ -395,7 +413,7 @@ async fn dispatch(
                 compensation = request.request.intent.compensation,
                 "Execution Agent dispatch failed before returning a result"
             );
-            Err(error)
+            Err(error.into())
         }
     }
 }
@@ -404,46 +422,87 @@ async fn reconcile(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<ReconcileEffectRequest>,
-) -> Result<Json<ReconcileEffectResponse>, ExecutionAgentError> {
+) -> Result<Json<ReconcileEffectResponse>, ExecutionAgentApiFailure> {
     authorize(&state, &headers)?;
-    state.agent.reconcile_effect(&request).await.map(Json)
+    match state.agent.reconcile_effect(&request).await? {
+        ExecutionAgentOperationOutcome::Accepted(response) => Ok(Json(response)),
+        ExecutionAgentOperationOutcome::Rejected(rejection) => Err(rejection.into()),
+    }
 }
 
 async fn advance_fence(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<AdvanceFenceRequest>,
-) -> Result<Json<AdvanceFenceResponse>, ExecutionAgentError> {
+) -> Result<Json<AdvanceFenceResponse>, ExecutionAgentApiFailure> {
     authorize(&state, &headers)?;
-    state.agent.advance_fence(&request).await.map(|fence_ack| {
-        Json(AdvanceFenceResponse {
+    match state.agent.advance_fence(&request).await? {
+        ExecutionAgentOperationOutcome::Accepted(fence_ack) => Ok(Json(AdvanceFenceResponse {
             schema_version: crate::EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
             fence_ack,
-        })
-    })
+        })),
+        ExecutionAgentOperationOutcome::Rejected(rejection) => Err(rejection.into()),
+    }
 }
 
-fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ExecutionAgentError> {
+fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ExecutionAgentRejection> {
     let bearer = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or(ExecutionAgentError::Unauthorized)?;
+        .ok_or(ExecutionAgentRejection::Unauthorized)?;
     let token_matches = bearer.len() == state.executor_token.len()
         && bool::from(bearer.as_bytes().ct_eq(state.executor_token.as_bytes()));
     if !token_matches {
-        return Err(ExecutionAgentError::Unauthorized);
+        return Err(ExecutionAgentRejection::Unauthorized);
     }
     if state.require_mtls_identity {
         let identity = headers
             .get("x-forwarded-client-cert")
             .and_then(|value| value.to_str().ok())
-            .ok_or(ExecutionAgentError::Unauthorized)?;
+            .ok_or(ExecutionAgentRejection::Unauthorized)?;
         if !has_spiffe_identity(identity, "spiffe://rocketmq-sre/executor") {
-            return Err(ExecutionAgentError::Unauthorized);
+            return Err(ExecutionAgentRejection::Unauthorized);
         }
     }
     Ok(())
+}
+
+enum ExecutionAgentApiFailure {
+    Rejected(ExecutionAgentRejection),
+    Operational(ExecutionAgentError),
+}
+
+impl From<ExecutionAgentRejection> for ExecutionAgentApiFailure {
+    fn from(rejection: ExecutionAgentRejection) -> Self {
+        Self::Rejected(rejection)
+    }
+}
+
+impl From<ExecutionAgentError> for ExecutionAgentApiFailure {
+    fn from(error: ExecutionAgentError) -> Self {
+        Self::Operational(error)
+    }
+}
+
+impl IntoResponse for ExecutionAgentApiFailure {
+    fn into_response(self) -> Response {
+        let (status, code, retryable) = match self {
+            Self::Rejected(rejection) => rejection.http_classification(),
+            Self::Operational(error) => error.http_classification(),
+        };
+        (
+            status,
+            Json(ErrorEnvelope {
+                schema_version: "rocketmq-sre.error.v1",
+                code,
+                message: "Execution Agent rejected the request without exposing target details",
+                retryable,
+                correlation_id: CorrelationId::new(),
+            }),
+        )
+            .into_response()
+    }
 }
 
 fn has_spiffe_identity(header: &str, expected: &str) -> bool {
@@ -460,21 +519,7 @@ fn has_spiffe_identity(header: &str, expected: &str) -> bool {
 
 impl IntoResponse for ExecutionAgentError {
     fn into_response(self) -> Response {
-        let (status, code, retryable) = match self {
-            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized_workload_identity", false),
-            Self::InvalidRequest => (StatusCode::BAD_REQUEST, "invalid_agent_request", false),
-            Self::ActionNotRegistered => (StatusCode::CONFLICT, "action_not_registered", false),
-            Self::AuthorityRejected => (StatusCode::FORBIDDEN, "stale_lease_epoch", false),
-            Self::UnresolvedEffect => (StatusCode::CONFLICT, "unresolved_old_effects", false),
-            Self::DriverFailed => (StatusCode::CONFLICT, "driver_failed", false),
-            Self::DriverUnknown => (StatusCode::CONFLICT, "effect_unknown", false),
-            Self::Configuration => (StatusCode::INTERNAL_SERVER_ERROR, "source_unavailable", false),
-            Self::AuthorityUnavailable
-            | Self::DispatchBarrierUnavailable
-            | Self::Store(_)
-            | Self::Http(_)
-            | Self::Io(_) => (StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true),
-        };
+        let (status, code, retryable) = self.http_classification();
         (
             status,
             Json(ErrorEnvelope {

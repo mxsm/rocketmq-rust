@@ -53,9 +53,9 @@ impl ExecutorConfig {
         let bind_addr = env_or(
             "ROCKETMQ_SRE_EXECUTOR_BIND_ADDR",
             &format!("0.0.0.0:{DEFAULT_EXECUTOR_PORT}"),
-        )
+        )?
         .parse()
-        .map_err(|_| ExecutorError::Configuration)?;
+        .map_err(ExecutorError::configuration_source)?;
         let database_url = required("DATABASE_URL")?;
         let authority_url = url_env("ROCKETMQ_SRE_LEASE_AUTHORITY_URL")?;
         let authority_token = required("ROCKETMQ_SRE_EXECUTOR_AUTHORITY_TOKEN")?;
@@ -124,24 +124,30 @@ impl Debug for ExecutorConfig {
 }
 
 fn required(name: &str) -> Result<String, ExecutorError> {
-    std::env::var(name)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(ExecutorError::Configuration)
+    let value = std::env::var(name).map_err(ExecutorError::configuration_source)?;
+    if value.trim().is_empty() {
+        return Err(ExecutorError::Configuration);
+    }
+    Ok(value)
 }
 
-fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_owned())
+fn env_or(name: &str, default: &str) -> Result<String, ExecutorError> {
+    match std::env::var(name) {
+        Ok(value) => Ok(value),
+        Err(std::env::VarError::NotPresent) => Ok(default.to_owned()),
+        Err(error) => Err(ExecutorError::configuration_source(error)),
+    }
 }
 
 fn parse_env<T>(name: &str, default: T) -> Result<T, ExecutorError>
 where
     T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
 {
     match std::env::var(name) {
-        Ok(value) => value.parse().map_err(|_| ExecutorError::Configuration),
+        Ok(value) => value.parse().map_err(ExecutorError::configuration_source),
         Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(_) => Err(ExecutorError::Configuration),
+        Err(error) => Err(ExecutorError::configuration_source(error)),
     }
 }
 
@@ -154,7 +160,7 @@ fn duration_env(name: &str, default: u64) -> Result<Duration, ExecutorError> {
 }
 
 fn url_env(name: &str) -> Result<Url, ExecutorError> {
-    required(name)?.parse().map_err(|_| ExecutorError::Configuration)
+    required(name)?.parse().map_err(ExecutorError::configuration_source)
 }
 
 pub(crate) fn validate_internal_service_url(url: &Url, dev_insecure_http: bool) -> Result<(), ExecutorError> {
@@ -174,7 +180,34 @@ pub(crate) fn validate_internal_service_url(url: &Url, dev_insecure_http: bool) 
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
+
+    #[test]
+    fn configuration_sources_remain_typed_and_redacted() {
+        let cases = [
+            ExecutorError::configuration_source("invalid-secret".parse::<SocketAddr>().unwrap_err()),
+            ExecutorError::configuration_source("invalid-secret".parse::<u64>().unwrap_err()),
+            ExecutorError::configuration_source(Url::parse("invalid-secret").unwrap_err()),
+            ExecutorError::configuration_source(std::env::VarError::NotUnicode("invalid-secret".into())),
+        ];
+        assert!(cases[0].source().unwrap().is::<std::net::AddrParseError>());
+        assert!(cases[1].source().unwrap().is::<std::num::ParseIntError>());
+        assert!(cases[2].source().unwrap().is::<url::ParseError>());
+        assert!(cases[3].source().unwrap().is::<std::env::VarError>());
+        for error in cases {
+            assert_eq!(
+                error.http_classification(),
+                ExecutorError::Configuration.http_classification()
+            );
+            assert!(!format!("{error} {error:?}").contains("invalid-secret"));
+            assert!(matches!(
+                crate::ExecutorRequestFailure::from(error),
+                crate::ExecutorRequestFailure::Operational(_)
+            ));
+        }
+    }
 
     #[test]
     fn plaintext_internal_urls_require_explicit_dev_mode() {

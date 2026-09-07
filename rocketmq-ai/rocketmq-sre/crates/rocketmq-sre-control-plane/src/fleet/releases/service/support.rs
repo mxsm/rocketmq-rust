@@ -26,6 +26,7 @@ use rocketmq_sre_contracts::ReleaseStatus;
 use semver::Version;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::fleet::repository::FleetRepository;
 
@@ -35,7 +36,9 @@ const MAX_FLEET_RELEASE_TARGETS: usize = 100;
 const MAX_REASON_CODES: usize = 32;
 const MAX_WINDOW_DAYS: i64 = 30;
 
-pub(super) fn build_batches(request: &CreateFleetReleaseRequest) -> Result<Vec<FleetReleaseBatch>, ControlPlaneError> {
+pub(super) fn build_batches(
+    request: &CreateFleetReleaseRequest,
+) -> Result<Vec<FleetReleaseBatch>, ControlPlaneRequestFailure> {
     let canary = request
         .targets
         .iter()
@@ -69,13 +72,11 @@ pub(super) fn build_batches(request: &CreateFleetReleaseRequest) -> Result<Vec<F
         let clusters = regional
             .remove(&region_id)
             .ok_or_else(|| ControlPlaneError::configuration("Fleet release regional batch is missing"))?;
-        let chunk_size = usize::try_from(request.regional_max_concurrency)
-            .map_err(|_| ControlPlaneError::configuration("Fleet release concurrency is invalid"))?;
+        let chunk_size =
+            usize::try_from(request.regional_max_concurrency).map_err(ControlPlaneError::configuration_source)?;
         for chunk in clusters.chunks(chunk_size) {
-            let sequence = u32::try_from(batches.len())
-                .map_err(|_| ControlPlaneError::configuration("Fleet release batch count is invalid"))?;
-            let max_concurrency = u32::try_from(chunk.len())
-                .map_err(|_| ControlPlaneError::configuration("Fleet release batch size is invalid"))?;
+            let sequence = u32::try_from(batches.len()).map_err(ControlPlaneError::configuration_source)?;
+            let max_concurrency = u32::try_from(chunk.len()).map_err(ControlPlaneError::configuration_source)?;
             batches.push(FleetReleaseBatch {
                 sequence,
                 region_id,
@@ -143,7 +144,7 @@ pub(super) async fn require_linked_outcome(
     auth: &AuthContext,
     target: &FleetReleaseTarget,
     state: FleetReleaseTargetState,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if state == FleetReleaseTargetState::Skipped {
         return Ok(());
     }
@@ -167,14 +168,14 @@ pub(super) async fn require_linked_outcome(
     if matches {
         Ok(())
     } else {
-        Err(ControlPlaneError::conflict_code(
+        Err(ControlPlaneRequestFailure::conflict_code(
             "fleet_release_outcome_mismatch",
             "Fleet target outcome does not match its independently supervised release workflow",
         ))
     }
 }
 
-pub(super) fn validate_create_request(request: &CreateFleetReleaseRequest) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_create_request(request: &CreateFleetReleaseRequest) -> Result<(), ControlPlaneRequestFailure> {
     if request.targets.len() < 2 || request.targets.len() > MAX_FLEET_RELEASE_TARGETS {
         return Err(invalid_request("Fleet release must target between 2 and 100 clusters"));
     }
@@ -212,7 +213,7 @@ pub(super) fn validate_target_transition(
     next: FleetReleaseTargetState,
     regression_detected: bool,
     canary: bool,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let allowed = matches!(
         (current, next),
         (
@@ -244,7 +245,7 @@ pub(super) fn validate_target_transition(
     Ok(())
 }
 
-pub(super) fn validate_reason_codes(values: &[String]) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_reason_codes(values: &[String]) -> Result<(), ControlPlaneRequestFailure> {
     if values.len() > MAX_REASON_CODES {
         return Err(invalid_request("Fleet release readiness reason list is too large"));
     }
@@ -265,14 +266,14 @@ pub(super) fn validate_optional_safe_text(
     value: Option<&str>,
     field: &str,
     max: usize,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if let Some(value) = value {
         validate_safe_text(value, field, max)?;
     }
     Ok(())
 }
 
-pub(super) fn validate_safe_text(value: &str, field: &str, max: usize) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_safe_text(value: &str, field: &str, max: usize) -> Result<(), ControlPlaneRequestFailure> {
     let trimmed = value.trim();
     let lowercase = trimmed.to_ascii_lowercase();
     if trimmed.is_empty()
@@ -299,7 +300,7 @@ pub(super) fn transition_time(previous: chrono::DateTime<Utc>) -> chrono::DateTi
     Utc::now().max(previous + Duration::microseconds(1))
 }
 
-pub(super) fn require_read_role(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_read_role(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
@@ -308,29 +309,29 @@ pub(super) fn require_read_role(auth: &AuthContext) -> Result<(), ControlPlaneEr
     }) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "Fleet release read access requires a diagnose or operator role",
         ))
     }
 }
 
-pub(super) fn require_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains("operator") {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "Fleet release coordination requires the operator role",
         ))
     }
 }
 
-pub(super) fn authorize_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+pub(super) fn authorize_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneRequestFailure> {
     if auth.clusters.contains(&cluster_id) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "cluster is outside the authenticated Fleet release scope",
         ))
@@ -341,15 +342,15 @@ pub(super) fn allowed_clusters(auth: &AuthContext) -> Vec<ClusterId> {
     auth.clusters.iter().copied().collect()
 }
 
-pub(super) fn state_conflict(message: &str) -> ControlPlaneError {
-    ControlPlaneError::conflict_code("fleet_release_state_invalid", message)
+pub(super) fn state_conflict(message: &str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::conflict_code("fleet_release_state_invalid", message)
 }
 
-pub(super) fn invalid_request(message: &str) -> ControlPlaneError {
-    ControlPlaneError::validation("invalid_request", message)
+pub(super) fn invalid_request(message: &str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::validation("invalid_request", message)
 }
 
-fn validate_digest(value: &str, field: &str) -> Result<(), ControlPlaneError> {
+fn validate_digest(value: &str, field: &str) -> Result<(), ControlPlaneRequestFailure> {
     let value = value.strip_prefix("sha256:").unwrap_or_default();
     if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         Ok(())

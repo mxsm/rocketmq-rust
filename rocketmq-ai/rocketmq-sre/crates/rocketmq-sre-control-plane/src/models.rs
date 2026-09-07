@@ -20,6 +20,66 @@ mod repository;
 mod service;
 mod smoke_repository;
 
+use rocketmq_sre_model_gateway::ProviderRejection;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
+
+use crate::ControlPlaneRequestFailure;
+
+pub(crate) fn provider_rejection_failure(rejection: ProviderRejection) -> ControlPlaneRequestFailure {
+    match rejection {
+        ProviderRejection::InvalidRequest => {
+            ControlPlaneRequestFailure::validation("model_provider_invalid_request", "provider rejected request")
+        }
+        ProviderRejection::AuthenticationFailed => ControlPlaneRequestFailure::unauthorized(),
+        ProviderRejection::AuthorizationFailed => {
+            ControlPlaneRequestFailure::forbidden("model_provider_authorization_failed", "provider denied request")
+        }
+        ProviderRejection::PolicyDenied => {
+            ControlPlaneRequestFailure::forbidden("model_provider_policy_denied", "provider policy denied request")
+        }
+        ProviderRejection::SafetyRefusal => {
+            ControlPlaneRequestFailure::forbidden("model_provider_safety_refusal", "provider refused request")
+        }
+        ProviderRejection::CapabilityUnsupported => ControlPlaneRequestFailure::validation(
+            "model_provider_capability_unsupported",
+            "provider capability is unsupported",
+        ),
+        ProviderRejection::DataResidencyDenied => ControlPlaneRequestFailure::forbidden(
+            "model_provider_data_residency_denied",
+            "provider data-residency policy denied request",
+        ),
+        ProviderRejection::Cancelled => {
+            ControlPlaneRequestFailure::conflict_code("model_provider_cancelled", "provider request was cancelled")
+        }
+        ProviderRejection::SchemaValidationFailed => ControlPlaneRequestFailure::validation(
+            "model_provider_schema_validation_failed",
+            "provider response failed schema validation",
+        ),
+        ProviderRejection::SecretAccessDenied => ControlPlaneRequestFailure::forbidden(
+            "model_provider_secret_access_denied",
+            "provider credential access was denied",
+        ),
+        ProviderRejection::UnsupportedWireVersion => ControlPlaneRequestFailure::validation(
+            "model_provider_unsupported_wire_version",
+            "provider wire version is unsupported",
+        ),
+        ProviderRejection::MutualTlsFailed => ControlPlaneRequestFailure::forbidden(
+            "model_provider_mutual_tls_failed",
+            "provider mutual TLS authentication failed",
+        ),
+        ProviderRejection::ProfileInvalid => {
+            ControlPlaneRequestFailure::validation("model_provider_profile_invalid", "provider profile is invalid")
+        }
+    }
+}
+
+pub(crate) fn provider_configuration_failure(outcome: ProviderStatusOutcome) -> ControlPlaneRequestFailure {
+    match outcome {
+        ProviderStatusOutcome::Rejected { rejection, .. } => provider_rejection_failure(rejection),
+        ProviderStatusOutcome::Operational(source) => ControlPlaneRequestFailure::configuration_source(source),
+    }
+}
+
 pub(crate) use lifecycle::ModelProfileLifecyclePage;
 pub(crate) use lifecycle::ModelProfileLifecycleTransitionRequest;
 pub(crate) use lifecycle::ModelProfileLifecycleView;

@@ -33,7 +33,6 @@ use super::ProxyImageCanaryClient;
 use super::ProxyImageCanaryRestore;
 use super::ProxyImageCanaryState;
 use super::ProxyImageCanaryWrite;
-use crate::ExecutionAgentError;
 
 /// Exact parameters accepted by `proxy.rollout_image_canary.v1`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -107,7 +106,7 @@ where
                 parameters: &parameters,
                 live_state: &state,
             })
-            .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             Ok(AgentReadResult {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                 action: request.action,
@@ -242,16 +241,16 @@ where
     }
 }
 
-fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
+fn require_action(action: ExecutionAction) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if action == ExecutionAction::ProxyRolloutImageCanary {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 
-fn parameters(value: &serde_json::Value) -> Result<ProxyImageCanaryParameters, ExecutionAgentError> {
-    serde_json::from_value(value.clone()).map_err(|_| ExecutionAgentError::InvalidRequest)
+fn parameters(value: &serde_json::Value) -> Result<ProxyImageCanaryParameters, crate::ExecutionAgentRequestFailure> {
+    serde_json::from_value(value.clone()).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)
 }
 
 fn validate_parameters(parameters: &ProxyImageCanaryParameters) -> Vec<String> {
@@ -277,11 +276,11 @@ fn validate_parameters(parameters: &ProxyImageCanaryParameters) -> Vec<String> {
     reasons
 }
 
-fn validate_for_mutation(parameters: &ProxyImageCanaryParameters) -> Result<(), ExecutionAgentError> {
+fn validate_for_mutation(parameters: &ProxyImageCanaryParameters) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if validate_parameters(parameters).is_empty() {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 

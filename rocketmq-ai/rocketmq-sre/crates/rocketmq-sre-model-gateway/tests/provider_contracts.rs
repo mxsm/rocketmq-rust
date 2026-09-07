@@ -37,14 +37,18 @@ use rocketmq_sre_model_gateway::ModelTransport;
 use rocketmq_sre_model_gateway::ProviderCapabilities;
 use rocketmq_sre_model_gateway::ProviderCapability;
 use rocketmq_sre_model_gateway::ProviderError;
-use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::ProviderFailure;
+use rocketmq_sre_model_gateway::ProviderFallbackDecision;
 use rocketmq_sre_model_gateway::ProviderHealth;
+use rocketmq_sre_model_gateway::ProviderOperationalFailure;
 use rocketmq_sre_model_gateway::ProviderProfile;
 use rocketmq_sre_model_gateway::ProviderProfileManifest;
 use rocketmq_sre_model_gateway::ProviderRegistry;
+use rocketmq_sre_model_gateway::ProviderRejection;
 use rocketmq_sre_model_gateway::ProviderRouter;
 use rocketmq_sre_model_gateway::ProviderSpi;
 use rocketmq_sre_model_gateway::ProviderSpiClient;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::ResponseFormat;
 use rocketmq_sre_model_gateway::RoutingPolicy;
 use rocketmq_sre_model_gateway::RoutingRequirements;
@@ -69,7 +73,7 @@ use serde_json::Value;
 struct TestSecrets;
 
 impl SecretProvider for TestSecrets {
-    fn resolve(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderError> {
+    fn resolve(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderStatusOutcome> {
         Ok(SecretMaterial::new(
             format!("credential-for-{:?}", reference.kind()),
             "version:test-v1",
@@ -77,20 +81,20 @@ impl SecretProvider for TestSecrets {
         ))
     }
 
-    fn refresh(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderError> {
+    fn refresh(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderStatusOutcome> {
         self.resolve(reference)
     }
 }
 
 struct MockTransport {
-    responses: Mutex<VecDeque<Result<TransportResponse, ProviderError>>>,
+    responses: Mutex<VecDeque<Result<TransportResponse, ProviderStatusOutcome>>>,
     requests: Mutex<Vec<TransportRequest>>,
 }
 
 impl MockTransport {
     fn returning(responses: Vec<Result<TransportResponse, ProviderError>>) -> Self {
         Self {
-            responses: Mutex::new(responses.into()),
+            responses: Mutex::new(responses.into_iter().map(|result| result.map_err(Into::into)).collect()),
             requests: Mutex::new(Vec::new()),
         }
     }
@@ -116,7 +120,7 @@ impl MockTransport {
 }
 
 impl ModelTransport for MockTransport {
-    fn invoke(&self, request: TransportRequest) -> Result<TransportResponse, ProviderError> {
+    fn invoke(&self, request: TransportRequest) -> Result<TransportResponse, ProviderStatusOutcome> {
         self.requests.lock().expect("request lock").push(request);
         self.responses
             .lock()
@@ -206,9 +210,9 @@ fn every_protocol_maps_text_json_tool_and_retryable_errors() {
         assert_eq!(tool.tool_calls[0].name, "query_consumer_lag", "{profile_id}");
 
         let error = provider.invoke(&context, &text_request()).expect_err("429 must fail");
-        assert_eq!(error.code, ProviderErrorCode::RateLimited, "{profile_id}");
-        assert!(error.retryable);
-        assert!(error.fallback_allowed());
+        assert_eq!(error.failure(), ProviderFailure::RateLimited, "{profile_id}");
+        assert!(error.retryable());
+        assert_eq!(error.fallback_decision(), ProviderFallbackDecision::TryNextProvider);
     }
 }
 
@@ -269,7 +273,7 @@ fn deepseek_responses_maps_instructions_structured_output_tools_and_usage() {
     let error = provider
         .invoke(&InvocationContext::new(CorrelationId::new()), &strict_request)
         .expect_err("standard DeepSeek Responses endpoint does not advertise strict tools");
-    assert_eq!(error.code, ProviderErrorCode::CapabilityUnsupported);
+    assert_eq!(error.failure(), ProviderFailure::CapabilityUnsupported);
 
     let mut specific_request = strict_request;
     specific_request.tools[0].strict = false;
@@ -279,7 +283,7 @@ fn deepseek_responses_maps_instructions_structured_output_tools_and_usage() {
     let error = provider
         .invoke(&InvocationContext::new(CorrelationId::new()), &specific_request)
         .expect_err("qualified DeepSeek Responses endpoint does not advertise forced tool selection");
-    assert_eq!(error.code, ProviderErrorCode::CapabilityUnsupported);
+    assert_eq!(error.failure(), ProviderFailure::CapabilityUnsupported);
     assert!(sent.body.get("response_format").is_none());
     assert_eq!(response.model, "deepseek-v4-flash");
     assert_eq!(response.usage.input_tokens, Some(11));
@@ -359,9 +363,9 @@ fn zhipu_rejects_required_tool_choice_instead_of_simulating_it() {
         .invoke(&InvocationContext::new(CorrelationId::new()), &request)
         .expect_err("unsupported tool choice must fail closed");
 
-    assert_eq!(error.code, ProviderErrorCode::CapabilityUnsupported);
-    assert!(!error.retryable);
-    assert!(!error.fallback_allowed());
+    assert_eq!(error.failure(), ProviderFailure::CapabilityUnsupported);
+    assert!(!error.retryable());
+    assert_eq!(error.fallback_decision(), ProviderFallbackDecision::DoNotFallback);
 
     let mut strict_request = text_request();
     strict_request.tools.push(
@@ -375,7 +379,7 @@ fn zhipu_rejects_required_tool_choice_instead_of_simulating_it() {
     let strict_error = provider
         .invoke(&InvocationContext::new(CorrelationId::new()), &strict_request)
         .expect_err("strict tools are a separate capability");
-    assert_eq!(strict_error.code, ProviderErrorCode::CapabilityUnsupported);
+    assert_eq!(strict_error.failure(), ProviderFailure::CapabilityUnsupported);
 }
 
 #[test]
@@ -394,8 +398,8 @@ fn kimi_mfjs_requires_an_explicit_profile_flag() {
         disabled
             .invoke(&InvocationContext::new(CorrelationId::new()), &request)
             .expect_err("MFJS must be profile-gated")
-            .code,
-        ProviderErrorCode::CapabilityUnsupported
+            .failure(),
+        ProviderFailure::CapabilityUnsupported
     );
 
     let transport = Arc::new(MockTransport::returning(vec![Ok(fixture(
@@ -431,8 +435,8 @@ fn built_in_adapters_reject_mutating_tool_contracts_before_transport() {
         .invoke(&InvocationContext::new(CorrelationId::new()), &request)
         .expect_err("mutation surface must fail closed");
 
-    assert_eq!(error.code, ProviderErrorCode::PolicyDenied);
-    assert!(!error.retryable);
+    assert_eq!(error.failure(), ProviderFailure::PolicyDenied);
+    assert!(!error.retryable());
 }
 
 #[test]
@@ -441,7 +445,7 @@ fn router_uses_only_limited_fallback_and_records_actual_identity() {
     let fallback_profile = profile("deepseek");
     let primary = Arc::new(ScriptedProvider::new(
         primary_profile.clone(),
-        Err(ProviderError::timeout("primary timed out")),
+        Err(ProviderError::from_operational_failure(ProviderOperationalFailure::Timeout).into()),
     ));
     let fallback = Arc::new(ScriptedProvider::new(
         fallback_profile.clone(),
@@ -491,7 +495,7 @@ fn router_does_not_fallback_on_policy_denial() {
     let fallback_profile = profile("deepseek");
     let primary = Arc::new(ScriptedProvider::new(
         primary_profile.clone(),
-        Err(ProviderError::policy_denied("policy denied")),
+        Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied)),
     ));
     let fallback = Arc::new(ScriptedProvider::new(
         fallback_profile.clone(),
@@ -516,7 +520,7 @@ fn router_does_not_fallback_on_policy_denial() {
         )
         .expect_err("policy denial must stop routing");
 
-    assert_eq!(error.code, ProviderErrorCode::PolicyDenied);
+    assert_eq!(error.failure(), ProviderFailure::PolicyDenied);
 }
 
 #[test]
@@ -557,8 +561,9 @@ fn router_validates_json_schema_locally_and_does_not_fallback_on_invalid_output(
         .invoke(&request, &RoutingRequirements::new(DataClass::Internal), &metadata)
         .expect_err("invalid structured output must fail locally");
 
-    assert_eq!(error.code, ProviderErrorCode::SchemaValidationFailed);
-    assert!(!error.fallback_allowed());
+    assert_eq!(error.failure(), ProviderFailure::ProtocolError);
+    assert!(error.operational_error().is_some());
+    assert_eq!(error.fallback_decision(), ProviderFallbackDecision::DoNotFallback);
 }
 
 #[test]
@@ -639,11 +644,11 @@ fn profile_manifest_registers_only_existing_readable_contract_fixtures() {
 
 struct ScriptedProvider {
     profile: ProviderProfile,
-    result: Mutex<Result<CanonicalModelResponse, ProviderError>>,
+    result: Mutex<Result<CanonicalModelResponse, ProviderStatusOutcome>>,
 }
 
 impl ScriptedProvider {
-    fn new(profile: ProviderProfile, result: Result<CanonicalModelResponse, ProviderError>) -> Self {
+    fn new(profile: ProviderProfile, result: Result<CanonicalModelResponse, ProviderStatusOutcome>) -> Self {
         Self {
             profile,
             result: Mutex::new(result),
@@ -668,7 +673,7 @@ impl ChatModelProvider for ScriptedProvider {
         &self,
         _context: &InvocationContext,
         _request: &CanonicalModelRequest,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         self.result.lock().expect("script lock").clone()
     }
 }
@@ -683,7 +688,7 @@ struct MockSpi {
 }
 
 impl ProviderSpi for MockSpi {
-    fn handshake(&self, request: &SpiHandshakeRequest) -> Result<SpiHandshakeResponse, ProviderError> {
+    fn handshake(&self, request: &SpiHandshakeRequest) -> Result<SpiHandshakeResponse, ProviderStatusOutcome> {
         Ok(SpiHandshakeResponse {
             wire_version: request.wire_version.clone(),
             adapter_identity: "spiffe://sre/provider/example".to_owned(),
@@ -693,28 +698,29 @@ impl ProviderSpi for MockSpi {
         })
     }
 
-    fn invoke(&self, _request: &SpiInvokeRequest) -> Result<CanonicalModelResponse, ProviderError> {
+    fn invoke(&self, _request: &SpiInvokeRequest) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         Ok(success_response("spi", "example-model"))
     }
 
     fn invoke_stream(
         &self,
         request: &SpiStreamRequest,
-    ) -> Result<rocketmq_sre_model_gateway::BoundedModelStream, ProviderError> {
+    ) -> Result<rocketmq_sre_model_gateway::BoundedModelStream, ProviderStatusOutcome> {
         let cancellation = rocketmq_sre_model_gateway::CancellationToken::default();
         let (sink, stream) = rocketmq_sre_model_gateway::BoundedModelStream::channel(request.bounds, cancellation)?;
-        sink.try_send(rocketmq_sre_model_gateway::ModelStreamEvent::Finish {
+        let outcome = sink.try_send(rocketmq_sre_model_gateway::ModelStreamEvent::Finish {
             reason: FinishReason::Stop,
         })?;
+        let _ = outcome;
         Ok(stream)
     }
 
-    fn cancel(&self, _request: &SpiCancelRequest) -> Result<(), ProviderError> {
+    fn cancel(&self, _request: &SpiCancelRequest) -> Result<(), ProviderStatusOutcome> {
         *self.cancelled.lock().expect("cancel lock") = true;
         Ok(())
     }
 
-    fn health(&self) -> Result<SpiHealth, ProviderError> {
+    fn health(&self) -> Result<SpiHealth, ProviderStatusOutcome> {
         Ok(SpiHealth {
             status: ProviderHealth::Healthy,
             credential_version_fingerprint: Some("version:adapter-v1".to_owned()),
@@ -751,14 +757,14 @@ fn provider_spi_enforces_version_mtls_health_and_cancel_contracts() {
         SpiClientConfig::mutual_tls("spiffe://sre/gateway", "spiffe://sre/provider/not-the-adapter"),
     )
     .expect_err("adapter identity mismatch must fail closed");
-    assert_eq!(wrong_identity.code, ProviderErrorCode::MutualTlsFailed);
+    assert_eq!(wrong_identity.failure(), ProviderFailure::MutualTlsFailed);
 
     let wrong_version = ProviderSpiClient::connect(
         Arc::new(VersionMismatchSpi),
         SpiClientConfig::mutual_tls("spiffe://sre/gateway", "spiffe://sre/provider/example"),
     )
     .expect_err("wire version mismatch must fail closed");
-    assert_eq!(wrong_version.code, ProviderErrorCode::UnsupportedWireVersion);
+    assert_eq!(wrong_version.failure(), ProviderFailure::UnsupportedWireVersion);
 
     let mut bounded_config = SpiClientConfig::mutual_tls("spiffe://sre/gateway", "spiffe://sre/provider/example");
     bounded_config.max_payload_bytes = 1;
@@ -768,8 +774,8 @@ fn provider_spi_enforces_version_mtls_health_and_cancel_contracts() {
         bounded_client
             .invoke(&InvocationContext::new(CorrelationId::new()), &text_request())
             .expect_err("SPI payload bound")
-            .code,
-        ProviderErrorCode::OutputTooLarge
+            .failure(),
+        ProviderFailure::OutputTooLarge
     );
 
     let expired_request = text_request();
@@ -779,15 +785,15 @@ fn provider_spi_enforces_version_mtls_health_and_cancel_contracts() {
         client
             .invoke(&expired_context, &expired_request)
             .expect_err("expired SPI deadline")
-            .code,
-        ProviderErrorCode::Timeout
+            .failure(),
+        ProviderFailure::Timeout
     );
 }
 
 struct VersionMismatchSpi;
 
 impl ProviderSpi for VersionMismatchSpi {
-    fn handshake(&self, _request: &SpiHandshakeRequest) -> Result<SpiHandshakeResponse, ProviderError> {
+    fn handshake(&self, _request: &SpiHandshakeRequest) -> Result<SpiHandshakeResponse, ProviderStatusOutcome> {
         Ok(SpiHandshakeResponse {
             wire_version: "rocketmq-sre.provider-spi.v999".to_owned(),
             adapter_identity: "spiffe://sre/provider/example".to_owned(),
@@ -797,22 +803,22 @@ impl ProviderSpi for VersionMismatchSpi {
         })
     }
 
-    fn invoke(&self, _request: &SpiInvokeRequest) -> Result<CanonicalModelResponse, ProviderError> {
-        Err(ProviderError::service_unavailable("not connected"))
+    fn invoke(&self, _request: &SpiInvokeRequest) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
+        Err(ProviderError::from_operational_failure(ProviderOperationalFailure::ServiceUnavailable).into())
     }
 
     fn invoke_stream(
         &self,
         _request: &SpiStreamRequest,
-    ) -> Result<rocketmq_sre_model_gateway::BoundedModelStream, ProviderError> {
-        Err(ProviderError::service_unavailable("not connected"))
+    ) -> Result<rocketmq_sre_model_gateway::BoundedModelStream, ProviderStatusOutcome> {
+        Err(ProviderError::from_operational_failure(ProviderOperationalFailure::ServiceUnavailable).into())
     }
 
-    fn cancel(&self, _request: &SpiCancelRequest) -> Result<(), ProviderError> {
-        Err(ProviderError::service_unavailable("not connected"))
+    fn cancel(&self, _request: &SpiCancelRequest) -> Result<(), ProviderStatusOutcome> {
+        Err(ProviderError::from_operational_failure(ProviderOperationalFailure::ServiceUnavailable).into())
     }
 
-    fn health(&self) -> Result<SpiHealth, ProviderError> {
-        Err(ProviderError::service_unavailable("not connected"))
+    fn health(&self) -> Result<SpiHealth, ProviderStatusOutcome> {
+        Err(ProviderError::from_operational_failure(ProviderOperationalFailure::ServiceUnavailable).into())
     }
 }

@@ -29,17 +29,21 @@ use uuid::Uuid;
 
 use super::model::AutomationRunListQuery;
 use super::model::CompleteAutomationRunRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 impl PostgresRepository {
     pub(super) async fn create_no_side_effect_run(
         &self,
         request: &NoSideEffectAutomationRequest,
-    ) -> Result<NoSideEffectAutomationRun, ControlPlaneError> {
-        request
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_automation_request", error.to_string()))?;
+    ) -> Result<NoSideEffectAutomationRun, ControlPlaneRequestFailure> {
+        request.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_automation_request",
+                error,
+            )
+        })?;
         let run = NoSideEffectAutomationRun {
             schema_version: AUTOMATION_SCHEMA_VERSION.to_owned(),
             id: request.id,
@@ -57,8 +61,13 @@ impl PostgresRepository {
             started_at: request.requested_at,
             completed_at: None,
         };
-        run.validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_automation_run", error.to_string()))?;
+        run.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_automation_run",
+                error,
+            )
+        })?;
         let mut transaction = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO no_side_effect_automation_runs (
@@ -113,7 +122,7 @@ impl PostgresRepository {
         .await?;
         let stored_request: NoSideEffectAutomationRequest = from_json(row.try_get("request_snapshot")?)?;
         if !same_request(&stored_request, request) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "automation_idempotency_conflict",
                 "automation idempotency key already binds different request content",
             ));
@@ -128,9 +137,9 @@ impl PostgresRepository {
         tenant_id: TenantId,
         run_id: AutomationRunId,
         completion: &CompleteAutomationRunRequest,
-    ) -> Result<NoSideEffectAutomationRun, ControlPlaneError> {
+    ) -> Result<NoSideEffectAutomationRun, ControlPlaneRequestFailure> {
         if !completion.status.is_terminal() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_automation_transition",
                 "automation completion must use a terminal status",
             ));
@@ -146,7 +155,7 @@ impl PostgresRepository {
         .bind(tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let current: NoSideEffectAutomationRun = from_json(row.try_get("result_snapshot")?)?;
         if current.status.is_terminal() {
             let expected = completed_run(&current, completion);
@@ -154,7 +163,7 @@ impl PostgresRepository {
                 transaction.commit().await?;
                 return Ok(current);
             }
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "automation_completion_conflict",
                 "terminal automation result is immutable",
             ));
@@ -178,9 +187,13 @@ impl PostgresRepository {
             current
         };
         let completed = completed_run(&running, completion);
-        completed
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_automation_result", error.to_string()))?;
+        completed.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_automation_result",
+                error,
+            )
+        })?;
         update_run(&mut transaction, &running, &completed).await?;
         insert_run_event(
             &mut transaction,
@@ -198,7 +211,7 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         run_id: AutomationRunId,
-    ) -> Result<(NoSideEffectAutomationRun, bool), ControlPlaneError> {
+    ) -> Result<(NoSideEffectAutomationRun, bool), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT result_snapshot
@@ -210,7 +223,7 @@ impl PostgresRepository {
         .bind(tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let current: NoSideEffectAutomationRun = from_json(row.try_get("result_snapshot")?)?;
         if current.status != AutomationRunStatus::Pending {
             transaction.commit().await?;
@@ -238,7 +251,7 @@ impl PostgresRepository {
         tenant_id: TenantId,
         query: &AutomationRunListQuery,
         limit: i64,
-    ) -> Result<Vec<NoSideEffectAutomationRun>, ControlPlaneError> {
+    ) -> Result<Vec<NoSideEffectAutomationRun>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT result_snapshot
              FROM no_side_effect_automation_runs
@@ -266,10 +279,14 @@ impl PostgresRepository {
     pub(super) async fn store_automation_feedback(
         &self,
         feedback: &AutomationOperatorFeedback,
-    ) -> Result<AutomationOperatorFeedback, ControlPlaneError> {
-        feedback
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_automation_feedback", error.to_string()))?;
+    ) -> Result<AutomationOperatorFeedback, ControlPlaneRequestFailure> {
+        feedback.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_automation_feedback",
+                error,
+            )
+        })?;
         sqlx::query(
             "INSERT INTO autonomy_operator_feedback (
                 id, tenant_id, cluster_id, incident_id, subject_kind,
@@ -314,7 +331,7 @@ async fn update_run(
     transaction: &mut Transaction<'_, Postgres>,
     current: &NoSideEffectAutomationRun,
     next: &NoSideEffectAutomationRun,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let updated = sqlx::query(
         "UPDATE no_side_effect_automation_runs
          SET status = $3,
@@ -338,7 +355,7 @@ async fn update_run(
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "automation_transition_conflict",
             "automation run changed concurrently",
         ));
@@ -352,7 +369,7 @@ async fn insert_run_event(
     from: Option<AutomationRunStatus>,
     to: AutomationRunStatus,
     reason_code: &str,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO automation_run_events (
             id, run_id, run_family, tenant_id, cluster_id, correlation_id,
@@ -441,16 +458,13 @@ const fn feedback_verdict_name(verdict: rocketmq_sre_contracts::AutomationFeedba
     }
 }
 
-fn json_value(value: &impl serde::Serialize) -> Result<Value, ControlPlaneError> {
+fn json_value(value: &impl serde::Serialize) -> Result<Value, ControlPlaneRequestFailure> {
     serde_json::to_value(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_automation_json", "automation value is not valid JSON"))
+        .map_err(|source| ControlPlaneRequestFailure::operational_validation_source("invalid_automation_json", source))
 }
 
-fn from_json<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, ControlPlaneError> {
-    serde_json::from_value(value).map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_persisted_automation",
-            "persisted automation data is incompatible",
-        )
+fn from_json<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, ControlPlaneRequestFailure> {
+    serde_json::from_value(value).map_err(|source| {
+        ControlPlaneRequestFailure::operational_validation_source("invalid_persisted_automation", source)
     })
 }

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::fmt;
 
 use rocketmq_sre_contracts::ActionDescriptor;
@@ -22,40 +21,48 @@ use rocketmq_sre_contracts::CompensationMode;
 use rocketmq_sre_contracts::DescriptorStatus;
 use rocketmq_sre_contracts::DescriptorVersion;
 use rocketmq_sre_contracts::ExecutionAction;
+use rocketmq_sre_contracts::PublicErrorCode;
+use rocketmq_sre_contracts::SreContractError;
+
+/// Closed result for catalog validation and lookup outcomes.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum ActionCatalogRejection {
+    InvalidDescriptor,
+    DuplicateDescriptor,
+    DescriptorNotFound,
+    ExecutionDisabled,
+}
+
+impl fmt::Display for ActionCatalogRejection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SRE operation was rejected")
+    }
+}
+
+impl fmt::Debug for ActionCatalogRejection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl From<ActionCatalogRejection> for SreContractError {
+    fn from(rejection: ActionCatalogRejection) -> Self {
+        let code = match rejection {
+            ActionCatalogRejection::InvalidDescriptor | ActionCatalogRejection::DuplicateDescriptor => {
+                PublicErrorCode::InvalidDescriptor
+            }
+            ActionCatalogRejection::DescriptorNotFound => PublicErrorCode::DescriptorNotFound,
+            ActionCatalogRejection::ExecutionDisabled => PublicErrorCode::ExecutionDisabled,
+        };
+        Self::new(code)
+    }
+}
 
 /// Closed, versioned catalog used by planning and execution validation.
 #[derive(Clone, Debug, Default)]
 pub struct ActionCatalog {
     descriptors: BTreeMap<(ExecutionAction, String), ActionDescriptor>,
 }
-
-/// Fail-closed Action Catalog error.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ActionCatalogError {
-    UnknownAction(String),
-    UnknownVersion { action: String, version: String },
-    InvalidDescriptor { action: String, reason: String },
-    ExecutionUnsupported(String),
-}
-
-impl fmt::Display for ActionCatalogError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnknownAction(action) => write!(formatter, "unknown execution action `{action}`"),
-            Self::UnknownVersion { action, version } => {
-                write!(formatter, "unknown descriptor version `{action}@{version}`")
-            }
-            Self::InvalidDescriptor { action, reason } => {
-                write!(formatter, "invalid descriptor `{action}`: {reason}")
-            }
-            Self::ExecutionUnsupported(action) => {
-                write!(formatter, "action `{action}` has no registered execution handler")
-            }
-        }
-    }
-}
-
-impl Error for ActionCatalogError {}
 
 impl ActionCatalog {
     /// Registers one exact R1/R2 descriptor version.
@@ -64,45 +71,26 @@ impl ActionCatalog {
     ///
     /// Rejects unknown/R3 actions, inactive descriptors, version duplicates,
     /// and contradictory execution flags.
-    pub fn register(&mut self, descriptor: ActionDescriptor) -> Result<(), ActionCatalogError> {
-        let action = ExecutionAction::from_id(&descriptor.id)
-            .ok_or_else(|| ActionCatalogError::UnknownAction(descriptor.id.clone()))?;
+    pub fn register(&mut self, descriptor: ActionDescriptor) -> Result<(), ActionCatalogRejection> {
+        let action = ExecutionAction::from_id(&descriptor.id).ok_or(ActionCatalogRejection::DescriptorNotFound)?;
         let parsed_version =
-            DescriptorVersion::parse(&descriptor.version).map_err(|error| ActionCatalogError::InvalidDescriptor {
-                action: descriptor.id.clone(),
-                reason: format!("version must be semantic: {error}"),
-            })?;
+            DescriptorVersion::parse(&descriptor.version).map_err(|_| ActionCatalogRejection::InvalidDescriptor)?;
         if parsed_version.major != 1 {
-            return Err(ActionCatalogError::InvalidDescriptor {
-                action: descriptor.id,
-                reason: "Phase 3 action ids accept only descriptor major 1".to_owned(),
-            });
+            return Err(ActionCatalogRejection::InvalidDescriptor);
         }
         if !matches!(descriptor.risk, ActionRisk::R1 | ActionRisk::R2) {
-            return Err(ActionCatalogError::InvalidDescriptor {
-                action: descriptor.id,
-                reason: "execution catalog accepts only R1 or R2".to_owned(),
-            });
+            return Err(ActionCatalogRejection::InvalidDescriptor);
         }
         if descriptor.status != DescriptorStatus::Active {
-            return Err(ActionCatalogError::InvalidDescriptor {
-                action: descriptor.id,
-                reason: "descriptor must be active".to_owned(),
-            });
+            return Err(ActionCatalogRejection::InvalidDescriptor);
         }
         if descriptor.execution_supported && descriptor.plan_only {
-            return Err(ActionCatalogError::InvalidDescriptor {
-                action: descriptor.id,
-                reason: "plan-only descriptor cannot advertise execution support".to_owned(),
-            });
+            return Err(ActionCatalogRejection::InvalidDescriptor);
         }
         if !descriptor.supported_versions.iter().any(|version| {
             version.family == "rocketmq-sre.action-plan" && version.major == 1 && version.required_features.is_empty()
         }) {
-            return Err(ActionCatalogError::InvalidDescriptor {
-                action: descriptor.id,
-                reason: "descriptor must support rocketmq-sre.action-plan major 1".to_owned(),
-            });
+            return Err(ActionCatalogRejection::InvalidDescriptor);
         }
         if descriptor.parameter_schema.get("type").and_then(|value| value.as_str()) != Some("object")
             || descriptor
@@ -111,10 +99,7 @@ impl ActionCatalog {
                 .and_then(|value| value.as_bool())
                 != Some(false)
         {
-            return Err(ActionCatalogError::InvalidDescriptor {
-                action: descriptor.id,
-                reason: "parameter schema must be a closed JSON object".to_owned(),
-            });
+            return Err(ActionCatalogRejection::InvalidDescriptor);
         }
         if descriptor.preconditions.is_empty()
             || (descriptor.verification.resource_conditions.is_empty()
@@ -126,18 +111,11 @@ impl ActionCatalog {
             || (descriptor.compensation.mode != CompensationMode::NotAvailable
                 && descriptor.compensation.timeout_seconds == 0)
         {
-            return Err(ActionCatalogError::InvalidDescriptor {
-                action: descriptor.id,
-                reason: "preconditions, bounded verification, timeout, compensation, and forbidden fields are required"
-                    .to_owned(),
-            });
+            return Err(ActionCatalogRejection::InvalidDescriptor);
         }
         let key = (action, descriptor.version.clone());
         if self.descriptors.contains_key(&key) {
-            return Err(ActionCatalogError::InvalidDescriptor {
-                action: descriptor.id,
-                reason: "descriptor version already exists".to_owned(),
-            });
+            return Err(ActionCatalogRejection::DuplicateDescriptor);
         }
         self.descriptors.insert(key, descriptor);
         Ok(())
@@ -148,13 +126,14 @@ impl ActionCatalog {
     /// # Errors
     ///
     /// Rejects unknown actions or versions.
-    pub fn descriptor(&self, action: ExecutionAction, version: &str) -> Result<&ActionDescriptor, ActionCatalogError> {
+    pub fn descriptor(
+        &self,
+        action: ExecutionAction,
+        version: &str,
+    ) -> Result<&ActionDescriptor, ActionCatalogRejection> {
         self.descriptors
             .get(&(action, version.to_owned()))
-            .ok_or_else(|| ActionCatalogError::UnknownVersion {
-                action: action.id().to_owned(),
-                version: version.to_owned(),
-            })
+            .ok_or(ActionCatalogRejection::DescriptorNotFound)
     }
 
     /// Resolves an executable handler contract.
@@ -166,10 +145,10 @@ impl ActionCatalog {
         &self,
         action: ExecutionAction,
         version: &str,
-    ) -> Result<&ActionDescriptor, ActionCatalogError> {
+    ) -> Result<&ActionDescriptor, ActionCatalogRejection> {
         let descriptor = self.descriptor(action, version)?;
         if descriptor.plan_only || !descriptor.execution_supported {
-            return Err(ActionCatalogError::ExecutionUnsupported(action.id().to_owned()));
+            return Err(ActionCatalogRejection::ExecutionDisabled);
         }
         Ok(descriptor)
     }

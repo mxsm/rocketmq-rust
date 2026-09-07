@@ -36,8 +36,8 @@ use rocketmq_sre_model_gateway::DevSecretProvider;
 use rocketmq_sre_model_gateway::HttpModelTransport;
 use rocketmq_sre_model_gateway::HttpTransportConfig;
 use rocketmq_sre_model_gateway::ProviderDialect;
-use rocketmq_sre_model_gateway::ProviderError;
-use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::ProviderRejection;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::SecretReference;
 use rocketmq_sre_model_gateway::StreamBounds;
 use rocketmq_sre_model_gateway::TransportFuture;
@@ -109,44 +109,35 @@ impl QualificationTransport {
         self.capability_calls.load(Ordering::SeqCst)
     }
 
-    fn authorize(&self, request: &TransportRequest) -> Result<(), ProviderError> {
+    fn authorize(&self, request: &TransportRequest) -> Result<(), ProviderStatusOutcome> {
         if request.dialect != ProviderDialect::DeepSeekResponses || request.path != "/responses" {
-            return Err(ProviderError::policy_denied(
-                "provider-failover qualification received an unsupported protocol surface",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied));
         }
         let serialized = serde_json::to_string(&request.body).unwrap_or_default();
         if serialized.contains("message_body")
             || serialized.contains("access_token")
             || serialized.contains("qualification-body-must-not-leave")
         {
-            return Err(ProviderError::policy_denied(
-                "provider-failover qualification received sensitive evidence",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied));
         }
         if request.endpoint == DEEPSEEK_ENDPOINT {
             if request.credential.is_none() {
-                return Err(ProviderError::policy_denied(
-                    "live secondary qualification requires a process-local credential",
-                ));
+                return Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied));
             }
             self.deepseek_calls.fetch_add(1, Ordering::SeqCst);
             return Ok(());
         }
         if request.endpoint == format!("{}/capability", self.loopback_authority) && request.credential.is_some() {
             self.capability_calls.fetch_add(1, Ordering::SeqCst);
-            return Err(ProviderError::new(
-                ProviderErrorCode::CapabilityUnsupported,
-                "qualification primary does not support the requested capability",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::CapabilityUnsupported,
             ));
         }
         let loopback_prefix = format!("{}/", self.loopback_authority);
         if request.endpoint.starts_with(&loopback_prefix) && request.credential.is_some() {
             return Ok(());
         }
-        Err(ProviderError::policy_denied(
-            "provider-failover qualification attempted an unapproved endpoint",
-        ))
+        Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied))
     }
 }
 

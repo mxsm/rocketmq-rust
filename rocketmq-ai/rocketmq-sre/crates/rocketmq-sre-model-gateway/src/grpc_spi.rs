@@ -31,8 +31,11 @@ use crate::InvocationContext;
 use crate::ModelStreamEvent;
 use crate::ProviderCapabilities;
 use crate::ProviderError;
-use crate::ProviderErrorCode;
+use crate::ProviderFailure;
 use crate::ProviderHealth;
+use crate::ProviderOperationalFailure as OperationalFailure;
+use crate::ProviderRejection;
+use crate::ProviderStatusOutcome;
 use crate::SpiHealth;
 use crate::current_unix_ms;
 
@@ -107,15 +110,12 @@ impl GrpcSpiClientTlsConfig {
         self
     }
 
-    fn validate(&self) -> Result<(), ProviderError> {
+    fn validate(&self) -> Result<(), ProviderStatusOutcome> {
         if self.ca_certificate_pem.is_empty()
             || self.client_certificate_pem.is_empty()
             || self.client_private_key_pem.is_empty()
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::MutualTlsFailed,
-                "provider SPI requires CA, client certificate, and client key material",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::MutualTlsFailed));
         }
         if self.server_domain_name.trim().is_empty()
             || self.server_domain_name.chars().count() > 253
@@ -128,20 +128,14 @@ impl GrpcSpiClientTlsConfig {
             || self.gateway_identity.chars().any(char::is_control)
             || self.expected_adapter_identity.chars().any(char::is_control)
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::MutualTlsFailed,
-                "provider SPI mutual-TLS identities are invalid",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::MutualTlsFailed));
         }
         if self.connect_timeout.is_zero()
             || self.request_timeout.is_zero()
             || self.max_payload_bytes == 0
             || self.max_payload_bytes > MAX_PAYLOAD_BYTES
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider SPI timeout and payload bounds must be non-zero",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         Ok(())
     }
@@ -186,7 +180,7 @@ impl GrpcProviderSpiClient {
     ///
     /// Returns a stable redacted transport, mTLS, handshake, identity, version,
     /// credential-owner, or capability error.
-    pub async fn connect(endpoint: &str, config: GrpcSpiClientTlsConfig) -> Result<Self, ProviderError> {
+    pub async fn connect(endpoint: &str, config: GrpcSpiClientTlsConfig) -> Result<Self, ProviderStatusOutcome> {
         config.validate()?;
         let _ = rustls::crypto::ring::default_provider().install_default();
         let endpoint = normalize_grpc_endpoint(endpoint)?;
@@ -198,19 +192,19 @@ impl GrpcProviderSpiClient {
             ))
             .domain_name(config.server_domain_name.clone());
         let channel = Endpoint::from_shared(endpoint)
-            .map_err(|_| mutual_tls_error())?
+            .map_err(|source| ProviderError::from_source(OperationalFailure::TransportFailed, source))?
             .connect_timeout(config.connect_timeout)
             .timeout(config.request_timeout)
             .tls_config(tls)
-            .map_err(|_| mutual_tls_error())?
+            .map_err(|source| ProviderError::from_source(OperationalFailure::TransportFailed, source))?
             .connect()
             .await
-            .map_err(|_| mutual_tls_error())?;
+            .map_err(|source| ProviderError::from_source(OperationalFailure::TransportFailed, source))?;
         let mut client = wire::provider_adapter_client::ProviderAdapterClient::new(channel)
             .max_decoding_message_size(config.max_payload_bytes)
             .max_encoding_message_size(config.max_payload_bytes);
         let correlation_id = CorrelationId::new();
-        let response = client
+        let response = match client
             .handshake(wire::HandshakeRequest {
                 wire_version: crate::PROVIDER_SPI_WIRE_VERSION.to_owned(),
                 gateway_identity: config.gateway_identity.clone(),
@@ -218,33 +212,29 @@ impl GrpcProviderSpiClient {
                 max_payload_bytes: config.max_payload_bytes as u64,
             })
             .await
-            .map_err(map_handshake_status)?
-            .into_inner();
+        {
+            Ok(response) => response.into_inner(),
+            Err(status) => return Err(map_handshake_status(status)),
+        };
         if response.wire_version != crate::PROVIDER_SPI_WIRE_VERSION {
-            return Err(ProviderError::new(
-                ProviderErrorCode::UnsupportedWireVersion,
-                "provider SPI wire version is incompatible",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::UnsupportedWireVersion,
             ));
         }
         if response.adapter_identity != config.expected_adapter_identity {
-            return Err(ProviderError::new(
-                ProviderErrorCode::MutualTlsFailed,
-                "provider SPI adapter identity did not match the trusted identity",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::MutualTlsFailed));
         }
         if response.credential_owner != "adapter" {
-            return Err(ProviderError::new(
-                ProviderErrorCode::AuthorizationFailed,
-                "provider SPI adapter must own its model credential",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::AuthorizationFailed));
         }
         if response.adapter_identity.chars().count() > MAX_IDENTITY_CHARS
             || response.adapter_identity.chars().any(char::is_control)
         {
             return Err(ProviderError::new(
-                ProviderErrorCode::ProtocolError,
+                OperationalFailure::ProtocolError,
                 "provider SPI handshake metadata exceeded configured bounds",
-            ));
+            )
+            .into());
         }
         let capabilities = decode_json(&response.capabilities_json, config.max_payload_bytes)?;
         let credential_version_fingerprint = bounded_fingerprint(response.credential_version_fingerprint)?;
@@ -294,16 +284,14 @@ impl GrpcProviderSpiClient {
         &mut self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         context.ensure_active()?;
         ensure_request_correlation(context, request)?;
         let payload = encode_json(request, self.max_payload_bytes)?;
-        let response = self
-            .client
-            .invoke(self.invoke_request(context, payload))
-            .await
-            .map_err(map_status)?
-            .into_inner();
+        let response = match self.client.invoke(self.invoke_request(context, payload)).await {
+            Ok(response) => response.into_inner(),
+            Err(status) => return Err(map_status(status)),
+        };
         decode_invoke_response(response, context.max_response_bytes.min(self.max_payload_bytes))
     }
 
@@ -318,25 +306,20 @@ impl GrpcProviderSpiClient {
         &mut self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<GrpcProviderSpiStream, ProviderError> {
+    ) -> Result<GrpcProviderSpiStream, ProviderStatusOutcome> {
         context.ensure_active()?;
         ensure_request_correlation(context, request)?;
         if context.stream_bounds.channel_capacity == 0
             || context.stream_bounds.max_events == 0
             || context.stream_bounds.max_bytes == 0
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "provider SPI stream bounds must be non-zero",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::InvalidRequest));
         }
         let payload = encode_json(request, self.max_payload_bytes)?;
-        let stream = self
-            .client
-            .invoke_stream(self.invoke_request(context, payload))
-            .await
-            .map_err(map_status)?
-            .into_inner();
+        let stream = match self.client.invoke_stream(self.invoke_request(context, payload)).await {
+            Ok(response) => response.into_inner(),
+            Err(status) => return Err(map_status(status)),
+        };
         Ok(GrpcProviderSpiStream {
             inner: stream,
             events: 0,
@@ -355,24 +338,25 @@ impl GrpcProviderSpiClient {
         &mut self,
         invocation_id: impl Into<String>,
         correlation_id: CorrelationId,
-    ) -> Result<(), ProviderError> {
+    ) -> Result<(), ProviderStatusOutcome> {
         let invocation_id = invocation_id.into();
         if invocation_id.is_empty()
             || invocation_id.chars().count() > MAX_IDENTITY_CHARS
             || invocation_id.chars().any(char::is_control)
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "provider SPI cancellation identifier is invalid",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::InvalidRequest));
         }
-        self.client
+        match self
+            .client
             .cancel(wire::CancelRequest {
                 invocation_id,
                 correlation_id: correlation_id.to_string(),
             })
             .await
-            .map_err(map_status)?;
+        {
+            Ok(_) => {}
+            Err(status) => return Err(map_status(status)),
+        }
         Ok(())
     }
 
@@ -381,13 +365,11 @@ impl GrpcProviderSpiClient {
     /// # Errors
     ///
     /// Returns a stable transport, protocol, or adapter error.
-    pub async fn health(&mut self) -> Result<SpiHealth, ProviderError> {
-        let response = self
-            .client
-            .health(wire::HealthRequest {})
-            .await
-            .map_err(map_status)?
-            .into_inner();
+    pub async fn health(&mut self) -> Result<SpiHealth, ProviderStatusOutcome> {
+        let response = match self.client.health(wire::HealthRequest {}).await {
+            Ok(response) => response.into_inner(),
+            Err(status) => return Err(map_status(status)),
+        };
         Ok(SpiHealth {
             status: parse_health(&response.status)?,
             credential_version_fingerprint: bounded_fingerprint(response.credential_version_fingerprint)?,
@@ -439,8 +421,12 @@ impl GrpcProviderSpiStream {
     ///
     /// Fails closed on gRPC status, adapter error, invalid JSON, or cumulative
     /// event/byte overflow.
-    pub async fn message(&mut self) -> Result<Option<ModelStreamEvent>, ProviderError> {
-        let Some(event) = self.inner.message().await.map_err(map_status)? else {
+    pub async fn message(&mut self) -> Result<Option<ModelStreamEvent>, ProviderStatusOutcome> {
+        let event = match self.inner.message().await {
+            Ok(event) => event,
+            Err(status) => return Err(map_status(status)),
+        };
+        let Some(event) = event else {
             return Ok(None);
         };
         if let Some(error) = event.error {
@@ -450,11 +436,14 @@ impl GrpcProviderSpiStream {
         self.bytes = self.bytes.saturating_add(event.canonical_event_json.len());
         if self.events > self.max_events || self.bytes > self.max_bytes {
             return Err(ProviderError::new(
-                ProviderErrorCode::OutputTooLarge,
+                OperationalFailure::OutputTooLarge,
                 "provider SPI stream exceeded configured bounds",
-            ));
+            )
+            .into());
         }
-        decode_json(&event.canonical_event_json, self.max_bytes).map(Some)
+        decode_json(&event.canonical_event_json, self.max_bytes)
+            .map(Some)
+            .map_err(Into::into)
     }
 }
 
@@ -487,17 +476,14 @@ where
         .max_encoding_message_size(max_payload_bytes)
 }
 
-fn normalize_grpc_endpoint(endpoint: &str) -> Result<String, ProviderError> {
+fn normalize_grpc_endpoint(endpoint: &str) -> Result<String, ProviderStatusOutcome> {
     if let Some(rest) = endpoint.strip_prefix("grpcs://") {
         return Ok(format!("https://{rest}"));
     }
     if endpoint.starts_with("https://") {
         return Ok(endpoint.to_owned());
     }
-    Err(ProviderError::new(
-        ProviderErrorCode::MutualTlsFailed,
-        "provider SPI endpoint must use authenticated TLS",
-    ))
+    Err(ProviderStatusOutcome::rejected(ProviderRejection::MutualTlsFailed))
 }
 
 fn remaining_timeout(deadline_unix_ms: Option<u64>, configured: Duration) -> Duration {
@@ -507,15 +493,11 @@ fn remaining_timeout(deadline_unix_ms: Option<u64>, configured: Duration) -> Dur
 }
 
 fn encode_json(value: &impl serde::Serialize, max_bytes: usize) -> Result<Vec<u8>, ProviderError> {
-    let payload = serde_json::to_vec(value).map_err(|_| {
-        ProviderError::new(
-            ProviderErrorCode::ProtocolError,
-            "provider SPI canonical payload could not be encoded",
-        )
-    })?;
+    let payload = serde_json::to_vec(value)
+        .map_err(|source| ProviderError::from_source(OperationalFailure::ProtocolError, source))?;
     if payload.len() > max_bytes {
         return Err(ProviderError::new(
-            ProviderErrorCode::OutputTooLarge,
+            OperationalFailure::OutputTooLarge,
             "provider SPI canonical payload exceeded configured bounds",
         ));
     }
@@ -528,39 +510,33 @@ where
 {
     if payload.is_empty() || payload.len() > max_bytes {
         return Err(ProviderError::new(
-            ProviderErrorCode::OutputTooLarge,
+            OperationalFailure::OutputTooLarge,
             "provider SPI canonical payload was empty or exceeded configured bounds",
         ));
     }
-    serde_json::from_slice(payload).map_err(|_| {
-        ProviderError::new(
-            ProviderErrorCode::ProtocolError,
-            "provider SPI canonical payload could not be decoded",
-        )
-    })
+    serde_json::from_slice(payload)
+        .map_err(|source| ProviderError::from_source(OperationalFailure::ProtocolError, source))
 }
 
 fn decode_invoke_response(
     response: wire::InvokeResponse,
     max_bytes: usize,
-) -> Result<CanonicalModelResponse, ProviderError> {
+) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
     if let Some(error) = response.error {
         return Err(decode_wire_error(error));
     }
-    decode_json(&response.canonical_response_json, max_bytes)
+    decode_json(&response.canonical_response_json, max_bytes).map_err(Into::into)
 }
 
-fn decode_wire_error(error: wire::ProviderError) -> ProviderError {
-    let code = parse_error_code(&error.code).unwrap_or(ProviderErrorCode::ProtocolError);
-    ProviderError {
-        code,
-        message: stable_error_message(code).to_owned(),
-        retryable: code.retryable() && error.retryable,
-        provider_status: None,
+fn decode_wire_error(error: wire::ProviderError) -> ProviderStatusOutcome {
+    let code = parse_error_code(&error.code).unwrap_or(ProviderFailure::ProtocolError);
+    match OperationalFailure::try_from(code) {
+        Ok(failure) => ProviderError::from_remote(failure, error.retryable).into(),
+        Err(rejection) => ProviderStatusOutcome::rejected(rejection),
     }
 }
 
-fn parse_error_code(value: &str) -> Option<ProviderErrorCode> {
+fn parse_error_code(value: &str) -> Option<ProviderFailure> {
     serde_json::from_value(serde_json::Value::String(value.to_owned())).ok()
 }
 
@@ -572,63 +548,42 @@ fn parse_health(value: &str) -> Result<ProviderHealth, ProviderError> {
         "unavailable" => Ok(ProviderHealth::Unavailable),
         "quarantined" => Ok(ProviderHealth::Quarantined),
         _ => Err(ProviderError::new(
-            ProviderErrorCode::ProtocolError,
+            OperationalFailure::ProtocolError,
             "provider SPI health status is invalid",
         )),
     }
 }
 
-fn map_status(status: tonic::Status) -> ProviderError {
-    let code = match status.code() {
-        Code::Unauthenticated => ProviderErrorCode::AuthenticationFailed,
-        Code::PermissionDenied => ProviderErrorCode::AuthorizationFailed,
-        Code::DeadlineExceeded => ProviderErrorCode::Timeout,
-        Code::ResourceExhausted => ProviderErrorCode::RateLimited,
-        Code::Unavailable => ProviderErrorCode::ServiceUnavailable,
-        Code::Cancelled => ProviderErrorCode::Cancelled,
-        Code::InvalidArgument | Code::FailedPrecondition | Code::OutOfRange => ProviderErrorCode::InvalidRequest,
-        _ => ProviderErrorCode::TransportFailed,
-    };
-    ProviderError::new(code, stable_error_message(code))
+fn map_status(status: tonic::Status) -> ProviderStatusOutcome {
+    match status.code() {
+        Code::Unauthenticated => ProviderStatusOutcome::rejected(ProviderRejection::AuthenticationFailed),
+        Code::PermissionDenied => ProviderStatusOutcome::rejected(ProviderRejection::AuthorizationFailed),
+        Code::Cancelled => ProviderStatusOutcome::rejected(ProviderRejection::Cancelled),
+        Code::InvalidArgument | Code::FailedPrecondition | Code::OutOfRange => {
+            ProviderStatusOutcome::rejected(ProviderRejection::InvalidRequest)
+        }
+        Code::DeadlineExceeded => ProviderError::from_source(OperationalFailure::Timeout, status).into(),
+        Code::ResourceExhausted => ProviderError::from_source(OperationalFailure::RateLimited, status).into(),
+        Code::Unavailable => ProviderError::from_source(OperationalFailure::ServiceUnavailable, status).into(),
+        _ => ProviderError::from_source(OperationalFailure::TransportFailed, status).into(),
+    }
 }
 
-fn map_handshake_status(status: tonic::Status) -> ProviderError {
+fn map_handshake_status(status: tonic::Status) -> ProviderStatusOutcome {
     match status.code() {
-        Code::Unknown | Code::Internal | Code::Unavailable => mutual_tls_error(),
+        Code::Unknown | Code::Internal | Code::Unavailable => {
+            ProviderError::from_source(OperationalFailure::TransportFailed, status).into()
+        }
         _ => map_status(status),
     }
-}
-
-const fn stable_error_message(code: ProviderErrorCode) -> &'static str {
-    match code {
-        ProviderErrorCode::AuthenticationFailed => "provider SPI authentication failed",
-        ProviderErrorCode::AuthorizationFailed => "provider SPI authorization failed",
-        ProviderErrorCode::Timeout => "provider SPI request timed out",
-        ProviderErrorCode::RateLimited => "provider SPI rate limit exceeded",
-        ProviderErrorCode::ServiceUnavailable => "provider SPI service unavailable",
-        ProviderErrorCode::Cancelled => "provider SPI request was cancelled",
-        ProviderErrorCode::InvalidRequest => "provider SPI rejected the request",
-        ProviderErrorCode::ProtocolError => "provider SPI protocol response was invalid",
-        _ => "provider SPI transport failed",
-    }
-}
-
-fn mutual_tls_error() -> ProviderError {
-    ProviderError::new(
-        ProviderErrorCode::MutualTlsFailed,
-        "provider SPI mutual-TLS connection failed",
-    )
 }
 
 fn ensure_request_correlation(
     context: &InvocationContext,
     request: &CanonicalModelRequest,
-) -> Result<(), ProviderError> {
+) -> Result<(), ProviderStatusOutcome> {
     if context.correlation_id != request.correlation_id {
-        return Err(ProviderError::new(
-            ProviderErrorCode::InvalidRequest,
-            "provider SPI request correlation did not match the invocation context",
-        ));
+        return Err(ProviderStatusOutcome::rejected(ProviderRejection::InvalidRequest));
     }
     Ok(())
 }
@@ -636,7 +591,7 @@ fn ensure_request_correlation(
 fn bounded_fingerprint(value: String) -> Result<Option<String>, ProviderError> {
     if value.chars().count() > MAX_IDENTITY_CHARS || value.chars().any(char::is_control) {
         return Err(ProviderError::new(
-            ProviderErrorCode::ProtocolError,
+            OperationalFailure::ProtocolError,
             "provider SPI credential fingerprint exceeded configured bounds",
         ));
     }
@@ -645,6 +600,8 @@ fn bounded_fingerprint(value: String) -> Result<Option<String>, ProviderError> {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use super::*;
 
     #[test]
@@ -652,8 +609,8 @@ mod tests {
         assert_eq!(
             normalize_grpc_endpoint("grpc://adapter.internal")
                 .expect_err("plaintext must fail")
-                .code,
-            ProviderErrorCode::MutualTlsFailed
+                .failure(),
+            ProviderFailure::MutualTlsFailed
         );
         assert_eq!(
             normalize_grpc_endpoint("grpcs://adapter.internal").expect("TLS endpoint"),
@@ -669,8 +626,8 @@ mod tests {
             "spiffe://sre/adapter",
         );
         assert_eq!(
-            config.validate().expect_err("empty TLS material").code,
-            ProviderErrorCode::MutualTlsFailed
+            config.validate().expect_err("empty TLS material").failure(),
+            ProviderFailure::MutualTlsFailed
         );
 
         let debug = format!("{config:?}");
@@ -684,8 +641,8 @@ mod tests {
         assert_eq!(
             bounded_fingerprint("valid\nsecret".to_owned())
                 .expect_err("control characters must fail")
-                .code,
-            ProviderErrorCode::ProtocolError
+                .failure(),
+            ProviderFailure::ProtocolError
         );
 
         let context = InvocationContext::new(CorrelationId::new());
@@ -693,19 +650,54 @@ mod tests {
         assert_eq!(
             ensure_request_correlation(&context, &request)
                 .expect_err("different correlations must fail")
-                .code,
-            ProviderErrorCode::InvalidRequest
+                .failure(),
+            ProviderFailure::InvalidRequest
         );
     }
 
     #[test]
     fn wire_errors_do_not_expose_adapter_messages() {
-        let error = decode_wire_error(wire::ProviderError {
+        let outcome = decode_wire_error(wire::ProviderError {
             code: "rate_limited".to_owned(),
             message: "secret provider detail".to_owned(),
             retryable: true,
         });
-        assert_eq!(error.code, ProviderErrorCode::RateLimited);
-        assert!(!error.message.contains("secret"));
+        assert_eq!(outcome.failure(), ProviderFailure::RateLimited);
+        assert!(outcome.operational_error().is_some());
+        assert!(!outcome.message().contains("secret"));
+    }
+
+    #[test]
+    fn grpc_request_refusals_are_closed_and_operational_statuses_keep_sources() {
+        for (status, rejection) in [
+            (
+                tonic::Status::unauthenticated("credential detail"),
+                ProviderRejection::AuthenticationFailed,
+            ),
+            (
+                tonic::Status::permission_denied("policy detail"),
+                ProviderRejection::AuthorizationFailed,
+            ),
+            (
+                tonic::Status::invalid_argument("payload detail"),
+                ProviderRejection::InvalidRequest,
+            ),
+        ] {
+            let outcome = map_status(status);
+            assert_eq!(outcome.rejection(), Some(rejection));
+            assert!(outcome.operational_error().is_none());
+            assert!(!format!("{outcome:?} {outcome}").contains("detail"));
+        }
+
+        let outcome = map_status(tonic::Status::deadline_exceeded("upstream detail"));
+        let error = outcome.operational_error().expect("deadline failures are operational");
+        assert_eq!(error.failure(), ProviderFailure::Timeout);
+        assert!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<tonic::Status>())
+                .is_some()
+        );
+        assert!(!format!("{outcome:?} {outcome}").contains("upstream detail"));
     }
 }

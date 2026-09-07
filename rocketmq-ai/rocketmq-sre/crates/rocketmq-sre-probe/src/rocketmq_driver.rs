@@ -97,7 +97,7 @@ impl RocketMqScenarioDriver {
         producer
             .start()
             .await
-            .map_err(|_| ProbeDriverError::new("producer_start_failed"))?;
+            .map_err(ProbeDriverError::producer_start_failed)?;
 
         let payload = vec![b'x'; batch.payload_bytes as usize];
         let mut accepted = 0_u16;
@@ -114,7 +114,7 @@ impl RocketMqScenarioDriver {
                 producer
                     .send_with_timeout(builder.build_unchecked(), SEND_TIMEOUT_MILLIS)
                     .await
-                    .map_err(|_| ProbeDriverError::new("message_send_failed"))?;
+                    .map_err(ProbeDriverError::message_send_failed)?;
                 accepted += 1;
                 if sequence + 1 < batch.count {
                     tokio::time::sleep(Duration::from_millis(batch.minimum_interval_millis)).await;
@@ -150,7 +150,7 @@ impl RocketMqScenarioDriver {
         producer
             .start()
             .await
-            .map_err(|_| ProbeDriverError::new("transaction_producer_start_failed"))?;
+            .map_err(ProbeDriverError::transaction_producer_start_failed)?;
 
         let payload = vec![b'x'; batch.payload_bytes as usize];
         let mut accepted = 0_u16;
@@ -165,7 +165,7 @@ impl RocketMqScenarioDriver {
                 producer
                     .send_message_in_transaction::<(), _>(message, None)
                     .await
-                    .map_err(|_| ProbeDriverError::new("transaction_send_failed"))?;
+                    .map_err(ProbeDriverError::transaction_send_failed)?;
                 accepted += 1;
                 if sequence + 1 < batch.count {
                     tokio::time::sleep(Duration::from_millis(batch.minimum_interval_millis)).await;
@@ -192,7 +192,7 @@ impl ProbeDriver for RocketMqScenarioDriver {
         let expected_key_prefix = self
             .expected_key_prefix
             .clone()
-            .ok_or_else(|| ProbeDriverError::new("consumer_key_filter_missing"))?;
+            .ok_or_else(ProbeDriverError::consumer_key_filter_missing)?;
         let listener = CountingListener {
             observed: Arc::clone(&self.observed),
             notification: Arc::clone(&self.notification),
@@ -209,13 +209,13 @@ impl ProbeDriver for RocketMqScenarioDriver {
         consumer
             .subscribe(&plan.identity.topic, "*")
             .await
-            .map_err(|_| ProbeDriverError::new("consumer_subscribe_failed"))?;
+            .map_err(ProbeDriverError::consumer_subscribe_failed)?;
         consumer.register_message_listener_concurrently(listener);
         self.consumer_stopped = false;
         consumer
             .start()
             .await
-            .map_err(|_| ProbeDriverError::new("consumer_start_failed"))?;
+            .map_err(ProbeDriverError::consumer_start_failed)?;
         self.consumer = Some(consumer);
         Ok(())
     }

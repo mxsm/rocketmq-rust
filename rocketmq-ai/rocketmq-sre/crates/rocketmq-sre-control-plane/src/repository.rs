@@ -31,6 +31,7 @@ use uuid::Uuid;
 use crate::CapabilitySnapshot;
 use crate::Cluster;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::HandshakeRequest;
 use crate::OffboardRequest;
 use crate::OnboardClusterRequest;
@@ -40,18 +41,18 @@ use crate::model::HandshakeOutcome;
 use crate::model::OnboardOutcome;
 
 pub(crate) trait ClusterRepository: Clone + Send + Sync + 'static {
-    async fn ping(&self) -> Result<(), ControlPlaneError>;
-    async fn onboard(&self, request: &OnboardClusterRequest) -> Result<OnboardOutcome, ControlPlaneError>;
-    async fn list(&self) -> Result<Vec<Cluster>, ControlPlaneError>;
-    async fn get(&self, id: ClusterId) -> Result<Cluster, ControlPlaneError>;
+    async fn ping(&self) -> Result<(), ControlPlaneRequestFailure>;
+    async fn onboard(&self, request: &OnboardClusterRequest) -> Result<OnboardOutcome, ControlPlaneRequestFailure>;
+    async fn list(&self) -> Result<Vec<Cluster>, ControlPlaneRequestFailure>;
+    async fn get(&self, id: ClusterId) -> Result<Cluster, ControlPlaneRequestFailure>;
     async fn handshake(
         &self,
         id: ClusterId,
         request: &HandshakeRequest,
         decision: &HandshakeDecision,
-    ) -> Result<HandshakeOutcome, ControlPlaneError>;
-    async fn capability(&self, id: ClusterId) -> Result<CapabilitySnapshot, ControlPlaneError>;
-    async fn offboard(&self, id: ClusterId, request: &OffboardRequest) -> Result<Cluster, ControlPlaneError>;
+    ) -> Result<HandshakeOutcome, ControlPlaneRequestFailure>;
+    async fn capability(&self, id: ClusterId) -> Result<CapabilitySnapshot, ControlPlaneRequestFailure>;
+    async fn offboard(&self, id: ClusterId, request: &OffboardRequest) -> Result<Cluster, ControlPlaneRequestFailure>;
 }
 
 /// Production PostgreSQL repository. No plaintext connector secret is stored.
@@ -90,7 +91,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         subject: &str,
         issuer: &str,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -103,7 +104,7 @@ impl PostgresRepository {
         .bind(issuer)
         .fetch_one(&self.pool)
         .await
-        .map_err(ControlPlaneError::from)
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::from(source)))
     }
 }
 
@@ -123,12 +124,12 @@ fn migration_error_class(error: &sqlx::migrate::MigrateError) -> &'static str {
 }
 
 impl ClusterRepository for PostgresRepository {
-    async fn ping(&self) -> Result<(), ControlPlaneError> {
+    async fn ping(&self) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
         Ok(())
     }
 
-    async fn onboard(&self, request: &OnboardClusterRequest) -> Result<OnboardOutcome, ControlPlaneError> {
+    async fn onboard(&self, request: &OnboardClusterRequest) -> Result<OnboardOutcome, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         if let Some(row) = sqlx::query(CLUSTER_BY_EXTERNAL_KEY_FOR_UPDATE)
             .bind(&request.tenant_id)
@@ -181,19 +182,19 @@ impl ClusterRepository for PostgresRepository {
         Ok(OnboardOutcome { cluster, created: true })
     }
 
-    async fn list(&self) -> Result<Vec<Cluster>, ControlPlaneError> {
+    async fn list(&self) -> Result<Vec<Cluster>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(cluster_query(" ORDER BY created_at ASC, id ASC"))
             .fetch_all(&self.pool)
             .await?;
         rows.iter().map(cluster_from_row).collect()
     }
 
-    async fn get(&self, id: ClusterId) -> Result<Cluster, ControlPlaneError> {
+    async fn get(&self, id: ClusterId) -> Result<Cluster, ControlPlaneRequestFailure> {
         let row = sqlx::query(cluster_query(" WHERE id = $1"))
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         cluster_from_row(&row)
     }
 
@@ -202,11 +203,14 @@ impl ClusterRepository for PostgresRepository {
         id: ClusterId,
         request: &HandshakeRequest,
         decision: &HandshakeDecision,
-    ) -> Result<HandshakeOutcome, ControlPlaneError> {
+    ) -> Result<HandshakeOutcome, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let current = get_cluster_for_update(&mut transaction, id).await?;
         if current.state.is_terminal() {
-            return Err(ControlPlaneError::conflict("offboarded clusters cannot be handshaken"));
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "conflict",
+                "offboarded clusters cannot be handshaken",
+            ));
         }
 
         let reported_tool_surface_digest = request.capability.tool_surface_digest()?;
@@ -267,12 +271,8 @@ impl ClusterRepository for PostgresRepository {
             .bind(request.capability.mutation_supported)
             .bind(&request.capability.manifest)
             .bind(
-                serde_json::to_value(normalized_data_sources(&request.capability.data_sources)).map_err(|error| {
-                    ControlPlaneError::validation(
-                        "capability_mismatch",
-                        format!("data source status is invalid: {error}"),
-                    )
-                })?,
+                serde_json::to_value(normalized_data_sources(&request.capability.data_sources))
+                    .map_err(|source| ControlPlaneRequestFailure::validation_source("capability_mismatch", source))?,
             )
             .bind(request.capability.observed_at)
             .execute(&mut *transaction)
@@ -331,19 +331,19 @@ impl ClusterRepository for PostgresRepository {
         })
     }
 
-    async fn capability(&self, id: ClusterId) -> Result<CapabilitySnapshot, ControlPlaneError> {
+    async fn capability(&self, id: ClusterId) -> Result<CapabilitySnapshot, ControlPlaneRequestFailure> {
         self.get(id).await?;
         let row = sqlx::query(LATEST_CAPABILITY)
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         capability_from_row(&row)
     }
 
-    async fn offboard(&self, id: ClusterId, request: &OffboardRequest) -> Result<Cluster, ControlPlaneError> {
+    async fn offboard(&self, id: ClusterId, request: &OffboardRequest) -> Result<Cluster, ControlPlaneRequestFailure> {
         if request.actor_subject.trim().is_empty() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "unauthorized_scope",
                 "actor_subject must not be empty",
             ));
@@ -424,7 +424,7 @@ const PINNED_TOOL_SURFACE_DIGEST: &str = "SELECT tool_surface_digest
     ORDER BY created_at ASC, id ASC
     LIMIT 1";
 
-fn cluster_from_row(row: &PgRow) -> Result<Cluster, ControlPlaneError> {
+fn cluster_from_row(row: &PgRow) -> Result<Cluster, ControlPlaneRequestFailure> {
     let id: Uuid = row.try_get("id")?;
     let state: String = row.try_get("onboarding_state")?;
     Ok(Cluster {
@@ -444,11 +444,10 @@ fn cluster_from_row(row: &PgRow) -> Result<Cluster, ControlPlaneError> {
     })
 }
 
-fn capability_from_row(row: &PgRow) -> Result<CapabilitySnapshot, ControlPlaneError> {
+fn capability_from_row(row: &PgRow) -> Result<CapabilitySnapshot, ControlPlaneRequestFailure> {
     let cluster_id: Uuid = row.try_get("cluster_id")?;
-    let data_sources = serde_json::from_value(row.try_get("data_sources")?).map_err(|error| {
-        ControlPlaneError::configuration(format!("stored capability data source payload is invalid: {error}"))
-    })?;
+    let data_sources =
+        serde_json::from_value(row.try_get("data_sources")?).map_err(ControlPlaneError::configuration_source)?;
     Ok(CapabilitySnapshot {
         cluster_id: ClusterId::from_uuid(cluster_id),
         digest: row.try_get("manifest_digest")?,
@@ -465,31 +464,31 @@ fn capability_from_row(row: &PgRow) -> Result<CapabilitySnapshot, ControlPlaneEr
 async fn get_cluster_for_update(
     transaction: &mut Transaction<'_, Postgres>,
     id: ClusterId,
-) -> Result<Cluster, ControlPlaneError> {
+) -> Result<Cluster, ControlPlaneRequestFailure> {
     let row = sqlx::query(cluster_query(" WHERE id = $1 FOR UPDATE"))
         .bind(id.as_uuid())
         .fetch_optional(&mut **transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
     cluster_from_row(&row)
 }
 
 async fn get_cluster_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     id: ClusterId,
-) -> Result<Cluster, ControlPlaneError> {
+) -> Result<Cluster, ControlPlaneRequestFailure> {
     let row = sqlx::query(cluster_query(" WHERE id = $1"))
         .bind(id.as_uuid())
         .fetch_optional(&mut **transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
     cluster_from_row(&row)
 }
 
 async fn latest_capability_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     id: ClusterId,
-) -> Result<Option<CapabilitySnapshot>, ControlPlaneError> {
+) -> Result<Option<CapabilitySnapshot>, ControlPlaneRequestFailure> {
     sqlx::query(LATEST_CAPABILITY)
         .bind(id.as_uuid())
         .fetch_optional(&mut **transaction)
@@ -502,14 +501,14 @@ async fn latest_capability_in_transaction(
 async fn pinned_tool_surface_digest_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     id: ClusterId,
-) -> Result<Option<String>, ControlPlaneError> {
+) -> Result<Option<String>, ControlPlaneRequestFailure> {
     let row = sqlx::query(PINNED_TOOL_SURFACE_DIGEST)
         .bind(id.as_uuid())
         .fetch_optional(&mut **transaction)
         .await?;
     row.map(|row| row.try_get("tool_surface_digest"))
         .transpose()
-        .map_err(ControlPlaneError::from)
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::from(source)))
 }
 
 fn enforce_tool_surface_pin(
@@ -585,7 +584,7 @@ async fn append_event(
     actor_subject: &str,
     correlation_id: CorrelationId,
     event_payload: serde_json::Value,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO cluster_onboarding_events (
             event_id, cluster_id, event_type, actor_subject,
@@ -643,16 +642,20 @@ pub(crate) mod memory {
     }
 
     impl ClusterRepository for InMemoryRepository {
-        async fn ping(&self) -> Result<(), ControlPlaneError> {
+        async fn ping(&self) -> Result<(), ControlPlaneRequestFailure> {
             Ok(())
         }
 
-        async fn onboard(&self, request: &OnboardClusterRequest) -> Result<OnboardOutcome, ControlPlaneError> {
+        async fn onboard(&self, request: &OnboardClusterRequest) -> Result<OnboardOutcome, ControlPlaneRequestFailure> {
             let mut state = self.state.write().await;
             let key = (request.tenant_id.clone(), request.external_cluster_key.clone());
             if let Some(id) = state.external_keys.get(&key) {
                 return Ok(OnboardOutcome {
-                    cluster: state.clusters.get(id).cloned().ok_or(ControlPlaneError::NotFound)?,
+                    cluster: state
+                        .clusters
+                        .get(id)
+                        .cloned()
+                        .ok_or(ControlPlaneRequestFailure::not_found())?,
                     created: false,
                 });
             }
@@ -678,18 +681,18 @@ pub(crate) mod memory {
             Ok(OnboardOutcome { cluster, created: true })
         }
 
-        async fn list(&self) -> Result<Vec<Cluster>, ControlPlaneError> {
+        async fn list(&self) -> Result<Vec<Cluster>, ControlPlaneRequestFailure> {
             Ok(self.state.read().await.clusters.values().cloned().collect())
         }
 
-        async fn get(&self, id: ClusterId) -> Result<Cluster, ControlPlaneError> {
+        async fn get(&self, id: ClusterId) -> Result<Cluster, ControlPlaneRequestFailure> {
             self.state
                 .read()
                 .await
                 .clusters
                 .get(&id)
                 .cloned()
-                .ok_or(ControlPlaneError::NotFound)
+                .ok_or(ControlPlaneRequestFailure::not_found())
         }
 
         async fn handshake(
@@ -697,11 +700,18 @@ pub(crate) mod memory {
             id: ClusterId,
             request: &HandshakeRequest,
             decision: &HandshakeDecision,
-        ) -> Result<HandshakeOutcome, ControlPlaneError> {
+        ) -> Result<HandshakeOutcome, ControlPlaneRequestFailure> {
             let mut state = self.state.write().await;
-            let current = state.clusters.get(&id).cloned().ok_or(ControlPlaneError::NotFound)?;
+            let current = state
+                .clusters
+                .get(&id)
+                .cloned()
+                .ok_or(ControlPlaneRequestFailure::not_found())?;
             if current.state.is_terminal() {
-                return Err(ControlPlaneError::conflict("offboarded clusters cannot be handshaken"));
+                return Err(ControlPlaneRequestFailure::conflict_code(
+                    "conflict",
+                    "offboarded clusters cannot be handshaken",
+                ));
             }
             let reported_tool_surface_digest = request.capability.tool_surface_digest()?;
             let pinned_tool_surface_digest = state
@@ -763,7 +773,10 @@ pub(crate) mod memory {
                     ));
                 }
             }
-            let cluster = state.clusters.get_mut(&id).ok_or(ControlPlaneError::NotFound)?;
+            let cluster = state
+                .clusters
+                .get_mut(&id)
+                .ok_or(ControlPlaneRequestFailure::not_found())?;
             cluster.state = effective_decision.state;
             cluster.updated_at = Utc::now();
             let cluster = cluster.clone();
@@ -775,7 +788,7 @@ pub(crate) mod memory {
             })
         }
 
-        async fn capability(&self, id: ClusterId) -> Result<CapabilitySnapshot, ControlPlaneError> {
+        async fn capability(&self, id: ClusterId) -> Result<CapabilitySnapshot, ControlPlaneRequestFailure> {
             self.state
                 .read()
                 .await
@@ -783,18 +796,26 @@ pub(crate) mod memory {
                 .get(&id)
                 .and_then(|capabilities| capabilities.last())
                 .cloned()
-                .ok_or(ControlPlaneError::NotFound)
+                .ok_or(ControlPlaneRequestFailure::not_found())
         }
 
-        async fn offboard(&self, id: ClusterId, request: &OffboardRequest) -> Result<Cluster, ControlPlaneError> {
+        async fn offboard(
+            &self,
+            id: ClusterId,
+            request: &OffboardRequest,
+        ) -> Result<Cluster, ControlPlaneRequestFailure> {
             if request.actor_subject.trim().is_empty() {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "unauthorized_scope",
                     "actor_subject must not be empty",
                 ));
             }
             let mut state = self.state.write().await;
-            let current = state.clusters.get(&id).cloned().ok_or(ControlPlaneError::NotFound)?;
+            let current = state
+                .clusters
+                .get(&id)
+                .cloned()
+                .ok_or(ControlPlaneRequestFailure::not_found())?;
             if current.state == OnboardingState::Offboarded {
                 return Ok(current);
             }
@@ -803,7 +824,10 @@ pub(crate) mod memory {
                     *revoked = true;
                 }
             }
-            let cluster = state.clusters.get_mut(&id).ok_or(ControlPlaneError::NotFound)?;
+            let cluster = state
+                .clusters
+                .get_mut(&id)
+                .ok_or(ControlPlaneRequestFailure::not_found())?;
             cluster.state = OnboardingState::Offboarded;
             cluster.offboarded_at = Some(Utc::now());
             cluster.updated_at = Utc::now();

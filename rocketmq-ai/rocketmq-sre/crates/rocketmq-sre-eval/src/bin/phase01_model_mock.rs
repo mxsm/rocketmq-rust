@@ -19,6 +19,7 @@
 //! it never executes that tool or accepts an arbitrary tool surface.
 
 use std::net::SocketAddr;
+use std::process::ExitCode;
 
 use axum::Json;
 use axum::Router;
@@ -46,7 +47,7 @@ const PROVIDER_SMOKE_TOOL: &str = "read_smoke_evidence";
 #[derive(Debug, thiserror::Error)]
 enum MockProviderError {
     #[error("invalid Phase 01 model mock configuration")]
-    Configuration,
+    Configuration(#[source] std::net::AddrParseError),
     #[error("Phase 01 model mock listener failed: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -69,7 +70,17 @@ struct ChatMessage {
     content: Value,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> ExitCode {
+    match try_main() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => {
+            eprintln!("Phase 01 model mock failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn try_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("phase01_model_mock=info")),
@@ -80,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = std::env::var("ROCKETMQ_SRE_MODEL_MOCK_BIND_ADDR")
         .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_owned())
         .parse()
-        .map_err(|_| MockProviderError::Configuration)?;
+        .map_err(MockProviderError::Configuration)?;
     let runtime_owner = RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-sre-phase01-model-mock"))
         .expect("runtime configuration is valid")
         .build()?;

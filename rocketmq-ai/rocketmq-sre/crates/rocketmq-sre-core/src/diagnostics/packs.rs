@@ -41,7 +41,7 @@ pub use producer_connectivity_v1::ProducerConnectivityV1;
 pub use telemetry_pipeline_v1::TelemetryPipelineV1;
 
 use super::DiagnosticPackRegistry;
-use super::DiagnosticRegistryError;
+use super::DiagnosticRegistryRejection;
 
 const WAVE_A_IDS: [&str; 8] = [
     "cluster-topology.v1",
@@ -60,7 +60,7 @@ const WAVE_A_IDS: [&str; 8] = [
 ///
 /// Returns a registry validation error if a built-in descriptor violates the
 /// same constraints enforced for external packs.
-pub fn wave_a_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryError> {
+pub fn wave_a_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejection> {
     let mut registry = DiagnosticPackRegistry::default();
     register_wave_a(&mut registry)?;
     Ok(registry)
@@ -72,7 +72,7 @@ pub fn wave_a_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryErr
 ///
 /// Returns a registry validation error if any compiled pack descriptor is
 /// incomplete or ambiguous.
-pub fn wave_b_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryError> {
+pub fn wave_b_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejection> {
     let mut registry = DiagnosticPackRegistry::default();
     register_specs(&mut registry, wave_b_specs())?;
     Ok(registry)
@@ -84,7 +84,7 @@ pub fn wave_b_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryErr
 ///
 /// Returns a registry validation error if any compiled pack descriptor is
 /// incomplete or ambiguous.
-pub fn wave_c_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryError> {
+pub fn wave_c_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejection> {
     let mut registry = DiagnosticPackRegistry::default();
     register_specs(&mut registry, prevention::specs())?;
     Ok(registry)
@@ -96,7 +96,7 @@ pub fn wave_c_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryErr
 ///
 /// Returns a registry validation error if any built-in descriptor violates
 /// the same constraints enforced for external packs.
-pub fn full_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryError> {
+pub fn full_registry() -> Result<DiagnosticPackRegistry, DiagnosticRegistryRejection> {
     let mut registry = DiagnosticPackRegistry::default();
     register_wave_a(&mut registry)?;
     register_specs(&mut registry, wave_b_specs())?;
@@ -119,7 +119,7 @@ pub fn full_pack_ids() -> Vec<String> {
         .collect()
 }
 
-fn register_wave_a(registry: &mut DiagnosticPackRegistry) -> Result<(), DiagnosticRegistryError> {
+fn register_wave_a(registry: &mut DiagnosticPackRegistry) -> Result<(), DiagnosticRegistryRejection> {
     registry.register(ClusterTopologyV1)?;
     registry.register(ConsumerLagV2)?;
     registry.register(ConsumerRuntimeV1)?;
@@ -158,7 +158,7 @@ fn wave_b_specs() -> &'static [&'static catalog::PackSpec] {
 fn register_specs(
     registry: &mut DiagnosticPackRegistry,
     specs: &'static [&'static catalog::PackSpec],
-) -> Result<(), DiagnosticRegistryError> {
+) -> Result<(), DiagnosticRegistryRejection> {
     for spec in specs {
         registry.register(catalog::CatalogPack::new(spec))?;
     }

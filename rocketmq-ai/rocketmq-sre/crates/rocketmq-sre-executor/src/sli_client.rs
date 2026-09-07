@@ -27,12 +27,14 @@ use rocketmq_sre_contracts::ExecutionSliQuery;
 use url::Url;
 
 use crate::ExecutorError;
+use crate::ExecutorRequestFailure;
 use crate::config::validate_internal_service_url;
 
 const MAX_SLI_RESPONSE_BYTES: usize = 128 * 1024;
 const EXECUTOR_SPIFFE: &str = "spiffe://rocketmq-sre/executor";
 
-pub type SliFuture<'a> = Pin<Box<dyn Future<Output = Result<ExecutionSliObservation, ExecutorError>> + Send + 'a>>;
+pub type SliFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<ExecutionSliObservation, ExecutorRequestFailure>> + Send + 'a>>;
 
 /// Narrow read-only Control Plane SLI surface used by the Executor.
 pub trait ExecutionSliClient: Send + Sync {
@@ -87,7 +89,7 @@ impl ExecutionSliClient for HttpExecutionSliClient {
             let url = self
                 .base_url
                 .join("/internal/v1/execution-verification/sli")
-                .map_err(|_| ExecutorError::Configuration)?;
+                .map_err(ExecutorError::configuration_source)?;
             let response = self
                 .client
                 .post(url)
@@ -99,7 +101,7 @@ impl ExecutionSliClient for HttpExecutionSliClient {
                 .json(query)
                 .send()
                 .await
-                .map_err(|_| ExecutorError::VerificationUnavailable)?;
+                .map_err(ExecutorError::Http)?;
             let observation = decode(response).await?;
             validate_observation(query, &observation)?;
             Ok(observation)
@@ -118,33 +120,32 @@ impl Debug for HttpExecutionSliClient {
     }
 }
 
-async fn decode(mut response: reqwest::Response) -> Result<ExecutionSliObservation, ExecutorError> {
+async fn decode(mut response: reqwest::Response) -> Result<ExecutionSliObservation, ExecutorRequestFailure> {
     match response.status() {
         StatusCode::OK => {}
-        status if status.is_client_error() => return Err(ExecutorError::VerificationRejected),
-        _ => return Err(ExecutorError::VerificationUnavailable),
+        status if status.is_client_error() => return Err(ExecutorRequestFailure::VerificationRejected),
+        _ => return Err(ExecutorError::VerificationUnavailable.into()),
     }
     if response
         .content_length()
         .is_some_and(|length| length > MAX_SLI_RESPONSE_BYTES as u64)
     {
-        return Err(ExecutorError::VerificationRejected);
+        return Err(ExecutorError::VerificationUnavailable.into());
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| ExecutorError::VerificationUnavailable)?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(ExecutorError::Http)? {
         if bytes.len().saturating_add(chunk.len()) > MAX_SLI_RESPONSE_BYTES {
-            return Err(ExecutorError::VerificationRejected);
+            return Err(ExecutorError::VerificationUnavailable.into());
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| ExecutorError::VerificationRejected)
+    serde_json::from_slice(&bytes).map_err(|error| ExecutorError::verification_decode(error).into())
 }
 
-fn validate_observation(query: &ExecutionSliQuery, observation: &ExecutionSliObservation) -> Result<(), ExecutorError> {
+fn validate_observation(
+    query: &ExecutionSliQuery,
+    observation: &ExecutionSliObservation,
+) -> Result<(), ExecutorRequestFailure> {
     let expected = query.conditions.iter().collect::<BTreeSet<_>>();
     let actual = observation.conditions.keys().collect::<BTreeSet<_>>();
     if observation.schema_version != EXECUTION_VERIFICATION_SCHEMA_VERSION
@@ -154,7 +155,7 @@ fn validate_observation(query: &ExecutionSliQuery, observation: &ExecutionSliObs
         || expected.len() != query.conditions.len()
         || actual != expected
     {
-        return Err(ExecutorError::VerificationRejected);
+        return Err(ExecutorRequestFailure::VerificationRejected);
     }
     Ok(())
 }

@@ -35,12 +35,13 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::ExecutorError;
+use crate::ExecutorRequestFailure;
 use crate::config::validate_internal_service_url;
 
 const MAX_AGENT_RESPONSE_BYTES: usize = 128 * 1024;
 const EXECUTOR_SPIFFE: &str = "spiffe://rocketmq-sre/executor";
 
-pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorError>> + Send + 'a>>;
+pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorRequestFailure>> + Send + 'a>>;
 
 /// Narrow typed Agent RPC surface. No raw target or driver API is exposed.
 pub trait ExecutionAgentClient: Send + Sync {
@@ -88,11 +89,11 @@ impl HttpExecutionAgentClient {
         })
     }
 
-    async fn get<R>(&self, path: &str) -> Result<R, ExecutorError>
+    async fn get<R>(&self, path: &str) -> Result<R, ExecutorRequestFailure>
     where
         R: DeserializeOwned,
     {
-        let url = self.base_url.join(path).map_err(|_| ExecutorError::Configuration)?;
+        let url = self.base_url.join(path).map_err(ExecutorError::configuration_source)?;
         let response = self
             .client
             .get(url)
@@ -103,12 +104,12 @@ impl HttpExecutionAgentClient {
         decode(response).await
     }
 
-    async fn post<T, R>(&self, path: &str, body: &T) -> Result<R, ExecutorError>
+    async fn post<T, R>(&self, path: &str, body: &T) -> Result<R, ExecutorRequestFailure>
     where
         T: Serialize + ?Sized,
         R: DeserializeOwned,
     {
-        let url = self.base_url.join(path).map_err(|_| ExecutorError::Configuration)?;
+        let url = self.base_url.join(path).map_err(ExecutorError::configuration_source)?;
         let response = self
             .client
             .post(url)
@@ -132,7 +133,7 @@ impl ExecutionAgentClient for HttpExecutionAgentClient {
                 || capabilities.shell_supported
                 || !capabilities.durable_fencing
             {
-                return Err(ExecutorError::AgentRejected);
+                return Err(ExecutorRequestFailure::AgentRejected);
             }
             Ok(capabilities)
         })
@@ -145,7 +146,7 @@ impl ExecutionAgentClient for HttpExecutionAgentClient {
                 || result.action != request.action
                 || result.target != request.target
             {
-                return Err(ExecutorError::AgentRejected);
+                return Err(ExecutorRequestFailure::AgentRejected);
             }
             Ok(result)
         })
@@ -158,7 +159,7 @@ impl ExecutionAgentClient for HttpExecutionAgentClient {
                 || result.result.execution_id != request.request.intent.execution_id
                 || result.result.step_id != request.request.intent.step_id
             {
-                return Err(ExecutorError::AgentRejected);
+                return Err(ExecutorRequestFailure::AgentRejected);
             }
             Ok(result)
         })
@@ -168,7 +169,7 @@ impl ExecutionAgentClient for HttpExecutionAgentClient {
         Box::pin(async move {
             let result: ReconcileEffectResponse = self.post("/internal/v1/execution-agent/reconcile", request).await?;
             if result.schema_version != EXECUTION_AGENT_SCHEMA_VERSION {
-                return Err(ExecutorError::AgentRejected);
+                return Err(ExecutorRequestFailure::AgentRejected);
             }
             Ok(result)
         })
@@ -182,7 +183,7 @@ impl ExecutionAgentClient for HttpExecutionAgentClient {
                 || result.fence_ack.epoch != request.reconcile_grant.pending_epoch
                 || result.fence_ack.pending_nonce != request.reconcile_grant.nonce
             {
-                return Err(ExecutorError::AgentRejected);
+                return Err(ExecutorRequestFailure::AgentRejected);
             }
             Ok(result)
         })
@@ -199,29 +200,29 @@ impl Debug for HttpExecutionAgentClient {
     }
 }
 
-async fn decode<R>(mut response: reqwest::Response) -> Result<R, ExecutorError>
+async fn decode<R>(mut response: reqwest::Response) -> Result<R, ExecutorRequestFailure>
 where
     R: DeserializeOwned,
 {
     match response.status() {
         StatusCode::OK => {}
-        status if status.is_client_error() => return Err(ExecutorError::AgentRejected),
-        _ => return Err(ExecutorError::AgentUnavailable),
+        status if status.is_client_error() => return Err(ExecutorRequestFailure::AgentRejected),
+        _ => return Err(ExecutorError::AgentUnavailable.into()),
     }
     if response
         .content_length()
         .is_some_and(|length| length > MAX_AGENT_RESPONSE_BYTES as u64)
     {
-        return Err(ExecutorError::AgentRejected);
+        return Err(ExecutorError::AgentUnavailable.into());
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         if bytes.len().saturating_add(chunk.len()) > MAX_AGENT_RESPONSE_BYTES {
-            return Err(ExecutorError::AgentRejected);
+            return Err(ExecutorError::AgentUnavailable.into());
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| ExecutorError::AgentRejected)
+    serde_json::from_slice(&bytes).map_err(|error| ExecutorError::agent_decode(error).into())
 }
 
 #[cfg(test)]

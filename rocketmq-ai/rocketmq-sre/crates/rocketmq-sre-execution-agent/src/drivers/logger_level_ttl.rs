@@ -34,7 +34,6 @@ use super::LoggerLevelControlClient;
 use super::LoggerLevelState;
 use super::LoggerLevelTtlRestore;
 use super::LoggerLevelTtlWrite;
-use crate::ExecutionAgentError;
 
 const MAX_TTL_SECONDS: i64 = 15 * 60;
 const MIN_TTL_SECONDS: i64 = 60;
@@ -100,7 +99,7 @@ where
                 parameters: &parameters,
                 live_state: &live_state,
             })
-            .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             let override_active = live_state.active_operation_id.is_some();
             Ok(AgentReadResult {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
@@ -132,12 +131,12 @@ where
             require_action(request.action)?;
             let parameters = parameters(&request.parameters)?;
             if !validate_parameters(&parameters).is_empty() {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let broker_addr = broker_addr(&request.target)?.to_owned();
             let expires_at = Utc::now()
                 .checked_add_signed(TimeDelta::seconds(parameters.ttl_seconds))
-                .ok_or(ExecutionAgentError::InvalidRequest)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             self.client
                 .set_logger_level_ttl(&LoggerLevelTtlWrite {
                     component: parameters.component,
@@ -168,7 +167,7 @@ where
             require_action(request.action)?;
             let parameters = parameters(&request.parameters)?;
             if !validate_parameters(&parameters).is_empty() {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let broker_addr = broker_addr(&request.target)?;
             let state = self
@@ -216,7 +215,7 @@ where
             require_action(request.action)?;
             let parameters = parameters(&request.parameters)?;
             if !validate_parameters(&parameters).is_empty() {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let broker_addr = broker_addr(&request.target)?.to_owned();
             self.client
@@ -238,16 +237,16 @@ where
     }
 }
 
-fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
+fn require_action(action: ExecutionAction) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if action == ExecutionAction::ObservabilityLoggerLevelTtl {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 
-fn parameters(value: &serde_json::Value) -> Result<LoggerLevelTtlParameters, ExecutionAgentError> {
-    serde_json::from_value(value.clone()).map_err(|_| ExecutionAgentError::InvalidRequest)
+fn parameters(value: &serde_json::Value) -> Result<LoggerLevelTtlParameters, crate::ExecutionAgentRequestFailure> {
+    serde_json::from_value(value.clone()).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)
 }
 
 fn validate_parameters(parameters: &LoggerLevelTtlParameters) -> Vec<String> {
@@ -276,17 +275,17 @@ fn validate_parameters(parameters: &LoggerLevelTtlParameters) -> Vec<String> {
     reasons
 }
 
-fn broker_addr(target: &str) -> Result<&str, ExecutionAgentError> {
+fn broker_addr(target: &str) -> Result<&str, crate::ExecutionAgentRequestFailure> {
     let broker_addr = target
         .strip_prefix(BROKER_TARGET_PREFIX)
-        .ok_or(ExecutionAgentError::InvalidRequest)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
     if broker_addr.is_empty()
         || broker_addr.len() > MAX_BROKER_ADDR_BYTES
         || broker_addr
             .bytes()
             .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
     {
-        return Err(ExecutionAgentError::InvalidRequest);
+        return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
     }
     Ok(broker_addr)
 }

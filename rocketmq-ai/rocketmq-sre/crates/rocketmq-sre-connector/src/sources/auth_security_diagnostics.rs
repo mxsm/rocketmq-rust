@@ -24,7 +24,7 @@ use serde_json::json;
 
 use super::common::SourceOutput;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 
 pub(super) fn project(result: QueryBrokerDiagnosticsResult) -> Result<SourceOutput, ConnectorError> {
     validate_schema(&result.schema_version)?;
@@ -104,7 +104,7 @@ fn validate_schema(schema_version: &str) -> Result<(), ConnectorError> {
         return Ok(());
     }
     Err(ConnectorError::capability(
-        ConnectorErrorCode::UnsupportedSchemaMajor,
+        ConnectorFailure::UnsupportedSchemaMajor,
         "read-only auth diagnostics schema is unsupported",
     ))
 }

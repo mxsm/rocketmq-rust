@@ -26,7 +26,9 @@ use url::Host;
 use url::Url;
 
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderOperationalFailure;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::secret::SecretMaterial;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -50,24 +52,16 @@ pub(crate) fn sign_bedrock_request(
     body: &[u8],
     credential: &SecretMaterial,
     now: DateTime<Utc>,
-) -> Result<RequestBuilder, ProviderError> {
-    let material: AwsCredentialMaterial = serde_json::from_str(credential.expose_to_transport()).map_err(|_| {
-        ProviderError::new(
-            ProviderErrorCode::AuthenticationFailed,
-            "Bedrock credential material must use the documented JSON shape",
-        )
+) -> Result<RequestBuilder, ProviderStatusOutcome> {
+    let material: AwsCredentialMaterial = serde_json::from_str(credential.expose_to_transport()).map_err(|source| {
+        ProviderError::from_operational_source(ProviderOperationalFailure::SecretUnavailable, source)
     })?;
     validate_material(&material)?;
     let region = material
         .region
         .as_deref()
         .or_else(|| region_from_bedrock_host(url))
-        .ok_or_else(|| {
-            ProviderError::new(
-                ProviderErrorCode::AuthenticationFailed,
-                "Bedrock credential region is unavailable",
-            )
-        })?;
+        .ok_or_else(|| ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid))?;
 
     let date = now.format("%Y%m%d").to_string();
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
@@ -115,7 +109,7 @@ pub(crate) fn sign_bedrock_request(
     Ok(builder)
 }
 
-fn validate_material(material: &AwsCredentialMaterial) -> Result<(), ProviderError> {
+fn validate_material(material: &AwsCredentialMaterial) -> Result<(), ProviderStatusOutcome> {
     let required = [&material.access_key_id, &material.secret_access_key];
     if required
         .iter()
@@ -129,10 +123,7 @@ fn validate_material(material: &AwsCredentialMaterial) -> Result<(), ProviderErr
             .as_ref()
             .is_some_and(|value| value.is_empty() || value.chars().any(char::is_control))
     {
-        return Err(ProviderError::new(
-            ProviderErrorCode::AuthenticationFailed,
-            "Bedrock credential material is invalid",
-        ));
+        return Err(ProviderStatusOutcome::rejected(ProviderRejection::AuthenticationFailed));
     }
     Ok(())
 }
@@ -145,16 +136,13 @@ fn region_from_bedrock_host(url: &Url) -> Option<&str> {
         .filter(|region| !region.is_empty())
 }
 
-fn canonical_host(url: &Url) -> Result<String, ProviderError> {
+fn canonical_host(url: &Url) -> Result<String, ProviderStatusOutcome> {
     let host = match url.host() {
         Some(Host::Domain(domain)) => domain.to_owned(),
         Some(Host::Ipv4(address)) => address.to_string(),
         Some(Host::Ipv6(address)) => format!("[{address}]"),
         None => {
-            return Err(ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "provider endpoint has no host",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
     };
     Ok(url.port().map_or(host.clone(), |port| format!("{host}:{port}")))
@@ -202,11 +190,8 @@ fn hmac_hex(key: &[u8], value: &[u8]) -> Result<String, ProviderError> {
 }
 
 fn hmac_bytes(key: &[u8], value: &[u8]) -> Result<Vec<u8>, ProviderError> {
-    let mut mac = HmacSha256::new_from_slice(key).map_err(|_| {
-        ProviderError::new(
-            ProviderErrorCode::AuthenticationFailed,
-            "Bedrock credential signing failed",
-        )
+    let mut mac = HmacSha256::new_from_slice(key).map_err(|source| {
+        ProviderError::from_operational_source(ProviderOperationalFailure::SecretUnavailable, source)
     })?;
     mac.update(value);
     Ok(mac.finalize().into_bytes().to_vec())
@@ -227,10 +212,6 @@ fn hex(value: &[u8]) -> String {
 }
 
 fn secret_header(value: &str) -> Result<HeaderValue, ProviderError> {
-    HeaderValue::from_str(value).map_err(|_| {
-        ProviderError::new(
-            ProviderErrorCode::AuthenticationFailed,
-            "provider credential contains invalid header material",
-        )
-    })
+    HeaderValue::from_str(value)
+        .map_err(|source| ProviderError::from_operational_source(ProviderOperationalFailure::SecretUnavailable, source))
 }

@@ -26,6 +26,8 @@ use rocketmq_sre_contracts::current_evidence_schema;
 use serde_json::json;
 
 use super::*;
+use crate::ExecutorError;
+use crate::ExecutorRequestFailure;
 
 struct ScriptedSource {
     observations: Mutex<VecDeque<VerificationObservation>>,
@@ -38,7 +40,7 @@ impl VerificationSource for ScriptedSource {
                 .lock()
                 .expect("scripted source lock")
                 .pop_front()
-                .ok_or(ExecutorError::AgentUnavailable)
+                .ok_or(ExecutorRequestFailure::Operational(ExecutorError::AgentUnavailable))
         })
     }
 }

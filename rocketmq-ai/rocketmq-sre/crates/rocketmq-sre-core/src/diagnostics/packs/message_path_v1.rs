@@ -16,7 +16,6 @@ use rocketmq_sre_contracts::EvidenceContent;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 
 use super::super::DiagnosticContext;
-use super::super::DiagnosticError;
 use super::super::DiagnosticPack;
 use super::super::EvidenceRequirement;
 use super::super::FindingOutcome;
@@ -25,6 +24,7 @@ use super::super::PackVersion;
 use super::super::RuleMatch;
 use super::super::Severity;
 use super::common;
+use rocketmq_sre_contracts::SreContractError;
 
 const REQUIRED: &[EvidenceRequirement] = &[EvidenceRequirement {
     key: "message-metadata",
@@ -114,27 +114,27 @@ impl DiagnosticPack for MessagePathV1 {
         FOLLOW_UP
     }
 
-    fn validate_evidence(&self, evidence: &[EvidenceSnapshot]) -> Result<(), DiagnosticError> {
+    fn validate_evidence(&self, evidence: &[EvidenceSnapshot]) -> Result<(), SreContractError> {
         for snapshot in evidence.iter().filter(|snapshot| {
             (snapshot.source == "admin-query" && snapshot.resource.starts_with("message-metadata/"))
                 || (snapshot.source == "tempo" && snapshot.resource.starts_with("message-trace/"))
         }) {
             let EvidenceContent::Inline(content) = &snapshot.content else {
-                return Err(DiagnosticError::MessageMetadataReferenceRejected {
-                    evidence_id: snapshot.evidence_id,
-                });
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+                ));
             };
             let compact = content.to_string().to_ascii_lowercase();
             if FORBIDDEN_JSON_KEYS.iter().any(|key| compact.contains(key)) {
-                return Err(DiagnosticError::MessageBodyRejected {
-                    evidence_id: snapshot.evidence_id,
-                });
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+                ));
             }
         }
         Ok(())
     }
 
-    fn evaluate(&self, context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, DiagnosticError> {
+    fn evaluate(&self, context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, SreContractError> {
         if !context.is_available("message-metadata") {
             return Ok(Vec::new());
         }

@@ -32,7 +32,7 @@ use super::common::parse_json;
 use super::common::pseudonymize_identifier;
 use super::common::validate_identifier;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 
 const ALERT_LABELS: [&str; 6] = [
     "alertname",
@@ -74,7 +74,7 @@ impl AlertmanagerSource {
         validate_identifier(cluster, "cluster")?;
         if !matches!(resource, "alerts" | "alertmanager/alerts" | "active-alerts") {
             return Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
+                ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "Alertmanager source supports only active alert evidence",
             ));
@@ -85,7 +85,7 @@ impl AlertmanagerSource {
             .ok_or_else(|| ConnectorError::source("Alertmanager source is not configured"))?;
         let endpoint = base_url
             .join("api/v2/alerts")
-            .map_err(|_| ConnectorError::configuration("Alertmanager URL cannot be constructed"))?;
+            .map_err(ConnectorError::configuration_source)?;
         let response = bounded_future(deadline, cancel, async {
             self.client
                 .get(endpoint)
@@ -98,7 +98,7 @@ impl AlertmanagerSource {
                 .query(&[("filter", format!(r#"cluster="{cluster}""#))])
                 .send()
                 .await
-                .map_err(|_| ConnectorError::source("Alertmanager query failed"))
+                .map_err(ConnectorError::source_error)
         })
         .await?;
         if !response.status().is_success() {

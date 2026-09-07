@@ -18,6 +18,12 @@
 //! inspection, plan, and OpenAPI reads. It has no execution, approval,
 //! administrative mutation, arbitrary request, or raw shell escape hatch.
 
+mod error;
+
+pub use error::ClientError;
+pub use error::ClientFailure;
+pub use error::ClientFailureCode;
+
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -33,6 +39,7 @@ use rocketmq_sre_contracts::ActionPlanId;
 use rocketmq_sre_contracts::ActionRisk;
 use rocketmq_sre_contracts::ApprovalRecord;
 use rocketmq_sre_contracts::ClusterId;
+use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::CriticGateState;
 use rocketmq_sre_contracts::CriticReview;
 use rocketmq_sre_contracts::Incident;
@@ -45,37 +52,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use thiserror::Error;
 use url::Url;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const CLIENT_USER_AGENT: &str = concat!("rocketmq-sre-client/", env!("CARGO_PKG_VERSION"));
-
-/// Errors returned by the bounded read-only client.
-#[derive(Debug, Error)]
-pub enum ClientError {
-    #[error("invalid Control Plane base URL: {0}")]
-    InvalidBaseUrl(String),
-    #[error("invalid bearer token")]
-    InvalidBearerToken,
-    #[error("response exceeded the configured {limit} byte limit")]
-    ResponseTooLarge { limit: usize },
-    #[error("cluster {cluster_id} is outside the configured client allowlist")]
-    ClusterNotAllowed { cluster_id: ClusterId },
-    #[error("Control Plane request failed: {0}")]
-    Transport(#[from] reqwest::Error),
-    #[error("Control Plane returned HTTP {status}: {code}: {message}")]
-    Api {
-        status: u16,
-        code: String,
-        message: String,
-        retryable: bool,
-        correlation_id: Option<String>,
-    },
-    #[error("Control Plane response did not match the versioned contract: {0}")]
-    Decode(#[from] serde_json::Error),
-}
 
 /// Process liveness response.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -144,11 +125,27 @@ pub struct ActionPlanView {
 
 #[derive(Debug, Deserialize)]
 struct ErrorEnvelope {
-    code: String,
-    message: String,
+    code: RemoteErrorCode,
     retryable: bool,
     #[serde(default)]
-    correlation_id: Option<String>,
+    correlation_id: Option<CorrelationId>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RemoteErrorCode {
+    UnauthorizedScope,
+    TenantMismatch,
+    ClusterNotAllowed,
+    ExecutionDisabled,
+    DescriptorNotFound,
+    InvalidStateTransition,
+    DescriptorAlreadyExists,
+    DescriptorVersionConflict,
+    OutputTooLarge,
+    SourceUnavailable,
+    #[serde(other)]
+    Unknown,
 }
 
 /// Builder for a [`Client`].
@@ -168,28 +165,22 @@ impl ClientBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`ClientError::InvalidBaseUrl`] for a malformed URL, embedded
-    /// credentials, query or fragment data, or a non-HTTP(S) scheme.
-    pub fn new(base_url: impl AsRef<str>) -> Result<Self, ClientError> {
+    /// Rejects a malformed URL, embedded credentials, query or fragment data,
+    /// or a non-HTTP(S) scheme.
+    pub fn new(base_url: impl AsRef<str>) -> Result<Self, ClientFailure> {
         let mut base_url =
-            Url::parse(base_url.as_ref()).map_err(|error| ClientError::InvalidBaseUrl(error.to_string()))?;
+            Url::parse(base_url.as_ref()).map_err(|_| ClientFailure::rejected(ClientFailureCode::InvalidBaseUrl))?;
         if !matches!(base_url.scheme(), "http" | "https") {
-            return Err(ClientError::InvalidBaseUrl("scheme must be http or https".to_owned()));
+            return Err(ClientFailure::rejected(ClientFailureCode::InvalidBaseUrl));
         }
         if !base_url.username().is_empty() || base_url.password().is_some() {
-            return Err(ClientError::InvalidBaseUrl(
-                "embedded credentials are forbidden".to_owned(),
-            ));
+            return Err(ClientFailure::rejected(ClientFailureCode::InvalidBaseUrl));
         }
         if base_url.query().is_some() || base_url.fragment().is_some() {
-            return Err(ClientError::InvalidBaseUrl(
-                "query and fragment data are forbidden".to_owned(),
-            ));
+            return Err(ClientFailure::rejected(ClientFailureCode::InvalidBaseUrl));
         }
         if base_url.cannot_be_a_base() || base_url.host_str().is_none() {
-            return Err(ClientError::InvalidBaseUrl(
-                "URL must identify a network origin".to_owned(),
-            ));
+            return Err(ClientFailure::rejected(ClientFailureCode::InvalidBaseUrl));
         }
         if !base_url.path().ends_with('/') {
             let normalized = format!("{}/", base_url.path());
@@ -243,18 +234,16 @@ impl ClientBuilder {
     /// Returns an error when the token cannot be represented as a sensitive
     /// HTTP header, the response limit is zero, or the HTTP client fails to
     /// initialize.
-    pub fn build(self) -> Result<Client, ClientError> {
+    pub fn build(self) -> Result<Client, ClientFailure> {
         if self.max_response_bytes == 0 {
-            return Err(ClientError::InvalidBaseUrl(
-                "response byte limit must be greater than zero".to_owned(),
-            ));
+            return Err(ClientFailure::rejected(ClientFailureCode::InvalidResponseLimit));
         }
 
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static(CLIENT_USER_AGENT));
         if let Some(token) = self.bearer_token {
-            let mut value =
-                HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| ClientError::InvalidBearerToken)?;
+            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|_| ClientFailure::rejected(ClientFailureCode::InvalidBearerToken))?;
             value.set_sensitive(true);
             headers.insert(AUTHORIZATION, value);
         }
@@ -291,7 +280,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`ClientBuilder::new`].
-    pub fn builder(base_url: impl AsRef<str>) -> Result<ClientBuilder, ClientError> {
+    pub fn builder(base_url: impl AsRef<str>) -> Result<ClientBuilder, ClientFailure> {
         ClientBuilder::new(base_url)
     }
 
@@ -300,7 +289,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns a transport, bounded-response, HTTP API, or decode error.
-    pub async fn status(&self) -> Result<ServiceStatus, ClientError> {
+    pub async fn status(&self) -> Result<ServiceStatus, ClientFailure> {
         self.get("healthz").await
     }
 
@@ -310,7 +299,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns a transport, bounded-response, HTTP API, or decode error.
-    pub async fn readiness(&self) -> Result<Value, ClientError> {
+    pub async fn readiness(&self) -> Result<Value, ClientFailure> {
         self.get("readyz").await
     }
 
@@ -319,7 +308,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns a transport, bounded-response, HTTP API, or decode error.
-    pub async fn openapi(&self) -> Result<Value, ClientError> {
+    pub async fn openapi(&self) -> Result<Value, ClientFailure> {
         self.get("v1/openapi.json").await
     }
 
@@ -329,7 +318,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns a transport, bounded-response, HTTP API, or decode error.
-    pub async fn clusters(&self) -> Result<Vec<Cluster>, ClientError> {
+    pub async fn clusters(&self) -> Result<Vec<Cluster>, ClientFailure> {
         let mut clusters: Vec<Cluster> = self.get("v1/clusters").await?;
         if let Some(allowed) = &self.allowed_clusters {
             clusters.retain(|cluster| allowed.contains(&cluster.id));
@@ -341,9 +330,9 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns [`ClientError::ClusterNotAllowed`] before network I/O when the
-    /// cluster is outside the configured allowlist, or a normal read error.
-    pub async fn cluster(&self, cluster_id: ClusterId) -> Result<Cluster, ClientError> {
+    /// Rejects the request before network I/O when the cluster is outside the
+    /// configured allowlist.
+    pub async fn cluster(&self, cluster_id: ClusterId) -> Result<Cluster, ClientFailure> {
         self.ensure_cluster_allowed(cluster_id)?;
         let cluster: Cluster = self.get(&format!("v1/clusters/{cluster_id}")).await?;
         self.ensure_cluster_allowed(cluster.id)?;
@@ -356,7 +345,7 @@ impl Client {
     ///
     /// Returns a normal read error or rejects a response whose cluster is
     /// outside the configured allowlist.
-    pub async fn incident(&self, incident_id: IncidentId) -> Result<IncidentView, ClientError> {
+    pub async fn incident(&self, incident_id: IncidentId) -> Result<IncidentView, ClientFailure> {
         let view: IncidentView = self.get(&format!("v1/incidents/{incident_id}")).await?;
         self.ensure_cluster_allowed(view.incident.cluster_id)?;
         Ok(view)
@@ -368,7 +357,7 @@ impl Client {
     ///
     /// Returns a normal read error or rejects a response whose cluster is
     /// outside the configured allowlist.
-    pub async fn inspection(&self, inspection_id: InspectionRunId) -> Result<InspectionView, ClientError> {
+    pub async fn inspection(&self, inspection_id: InspectionRunId) -> Result<InspectionView, ClientFailure> {
         let view: InspectionView = self.get(&format!("v1/inspections/{inspection_id}")).await?;
         self.ensure_cluster_allowed(view.run.cluster_id)?;
         Ok(view)
@@ -381,60 +370,50 @@ impl Client {
     ///
     /// Returns a normal read error or rejects a response whose cluster is
     /// outside the configured allowlist.
-    pub async fn plan(&self, plan_id: ActionPlanId) -> Result<ActionPlanView, ClientError> {
+    pub async fn plan(&self, plan_id: ActionPlanId) -> Result<ActionPlanView, ClientFailure> {
         let view: ActionPlanView = self.get(&format!("v1/plans/{plan_id}")).await?;
         self.ensure_cluster_allowed(view.plan.cluster_id)?;
         Ok(view)
     }
 
-    fn endpoint(&self, path: &str) -> Result<Url, ClientError> {
+    fn endpoint(&self, path: &str) -> Result<Url, ClientFailure> {
         self.base_url
             .join(path)
-            .map_err(|error| ClientError::InvalidBaseUrl(error.to_string()))
+            .map_err(|_| ClientFailure::rejected(ClientFailureCode::InvalidBaseUrl))
     }
 
-    fn ensure_cluster_allowed(&self, cluster_id: ClusterId) -> Result<(), ClientError> {
+    fn ensure_cluster_allowed(&self, cluster_id: ClusterId) -> Result<(), ClientFailure> {
         if self
             .allowed_clusters
             .as_ref()
             .is_some_and(|allowed| !allowed.contains(&cluster_id))
         {
-            return Err(ClientError::ClusterNotAllowed { cluster_id });
+            return Err(ClientFailure::rejected(ClientFailureCode::ClusterNotAllowed));
         }
         Ok(())
     }
 
-    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientFailure> {
         let response = self.http.request(Method::GET, self.endpoint(path)?).send().await?;
         let status = response.status();
         let body = self.read_bounded(response).await?;
         if status.is_success() {
-            return serde_json::from_slice(&body).map_err(ClientError::Decode);
+            return serde_json::from_slice(&body).map_err(Into::into);
         }
 
         let envelope = serde_json::from_slice::<ErrorEnvelope>(&body).ok();
-        Err(ClientError::Api {
-            status: status.as_u16(),
-            code: envelope
-                .as_ref()
-                .map_or_else(|| "http_error".to_owned(), |value| value.code.clone()),
-            message: envelope.as_ref().map_or_else(
-                || format!("request failed with HTTP status {}", status.as_u16()),
-                |value| value.message.clone(),
-            ),
-            retryable: envelope.as_ref().is_some_and(|value| value.retryable),
-            correlation_id: envelope.and_then(|value| value.correlation_id),
-        })
+        let code = classify_remote_failure(status.as_u16(), envelope.as_ref().map(|value| value.code));
+        let retryable = envelope.as_ref().is_some_and(|value| value.retryable);
+        let correlation_id = envelope.and_then(|value| value.correlation_id);
+        Err(ClientFailure::remote(code, status.as_u16(), retryable, correlation_id))
     }
 
-    async fn read_bounded(&self, mut response: reqwest::Response) -> Result<Vec<u8>, ClientError> {
+    async fn read_bounded(&self, mut response: reqwest::Response) -> Result<Vec<u8>, ClientFailure> {
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await? {
             let next_len = body.len().saturating_add(chunk.len());
             if next_len > self.max_response_bytes {
-                return Err(ClientError::ResponseTooLarge {
-                    limit: self.max_response_bytes,
-                });
+                return Err(ClientFailure::rejected(ClientFailureCode::ResponseTooLarge));
             }
             body.extend_from_slice(&chunk);
         }
@@ -442,9 +421,38 @@ impl Client {
     }
 }
 
+fn classify_remote_failure(status: u16, code: Option<RemoteErrorCode>) -> ClientFailureCode {
+    match status {
+        401 => ClientFailureCode::Unauthorized,
+        403 => ClientFailureCode::Forbidden,
+        404 => ClientFailureCode::NotFound,
+        409 => ClientFailureCode::Conflict,
+        429 => ClientFailureCode::RateLimited,
+        500..=599 => ClientFailureCode::ServiceUnavailable,
+        _ => match code {
+            Some(
+                RemoteErrorCode::UnauthorizedScope
+                | RemoteErrorCode::TenantMismatch
+                | RemoteErrorCode::ClusterNotAllowed
+                | RemoteErrorCode::ExecutionDisabled,
+            ) => ClientFailureCode::Forbidden,
+            Some(RemoteErrorCode::DescriptorNotFound) => ClientFailureCode::NotFound,
+            Some(
+                RemoteErrorCode::InvalidStateTransition
+                | RemoteErrorCode::DescriptorAlreadyExists
+                | RemoteErrorCode::DescriptorVersionConflict,
+            ) => ClientFailureCode::Conflict,
+            Some(RemoteErrorCode::OutputTooLarge) => ClientFailureCode::ResponseTooLarge,
+            Some(RemoteErrorCode::SourceUnavailable) => ClientFailureCode::ServiceUnavailable,
+            _ => ClientFailureCode::ContractRejected,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
 
     #[test]
     fn builder_normalizes_a_base_path_and_disables_credential_urls() {
@@ -459,11 +467,11 @@ mod tests {
 
         assert!(matches!(
             Client::builder("https://operator:secret@sre.example.test"),
-            Err(ClientError::InvalidBaseUrl(_))
+            Err(error) if error.code() == ClientFailureCode::InvalidBaseUrl
         ));
         assert!(matches!(
             Client::builder("file:///tmp/control-plane.sock"),
-            Err(ClientError::InvalidBaseUrl(_))
+            Err(error) if error.code() == ClientFailureCode::InvalidBaseUrl
         ));
     }
 
@@ -475,12 +483,10 @@ mod tests {
             .build()
             .expect("client");
         let cluster_id = ClusterId::new();
-        assert!(matches!(
-            client.ensure_cluster_allowed(cluster_id),
-            Err(ClientError::ClusterNotAllowed {
-                cluster_id: denied
-            }) if denied == cluster_id
-        ));
+        let error = client
+            .ensure_cluster_allowed(cluster_id)
+            .expect_err("empty allowlist must reject every cluster");
+        assert_eq!(error.code(), ClientFailureCode::ClusterNotAllowed);
     }
 
     #[test]
@@ -491,7 +497,40 @@ mod tests {
             .build()
             .err()
             .expect("invalid bearer token");
-        assert!(matches!(error, ClientError::InvalidBearerToken));
+        assert_eq!(error.code(), ClientFailureCode::InvalidBearerToken);
         assert!(!error.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn remote_failure_classification_is_closed() {
+        assert_eq!(
+            classify_remote_failure(401, Some(RemoteErrorCode::Unknown)),
+            ClientFailureCode::Unauthorized
+        );
+        assert_eq!(
+            classify_remote_failure(500, Some(RemoteErrorCode::SourceUnavailable)),
+            ClientFailureCode::ServiceUnavailable
+        );
+        assert_eq!(
+            classify_remote_failure(418, Some(RemoteErrorCode::Unknown)),
+            ClientFailureCode::ContractRejected
+        );
+        assert_eq!(
+            classify_remote_failure(507, None),
+            ClientFailureCode::ServiceUnavailable
+        );
+    }
+
+    #[test]
+    fn operational_error_preserves_typed_source_without_rendering_it() {
+        let source =
+            serde_json::from_str::<Value>("{secret-value").expect_err("invalid JSON must produce a typed source");
+        let failure = ClientFailure::from(ClientError::decode(source));
+        let error = failure.operational_error().expect("operational error");
+
+        assert_eq!(error.to_string(), "Control Plane response decoding failed");
+        assert_eq!(format!("{error:?}"), "ClientError { kind: \"decode\" }");
+        assert!(error.source().is_some());
+        assert!(!failure.to_string().contains("secret-value"));
     }
 }

@@ -26,7 +26,7 @@ use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 pub(super) const CONVERSATION_QUERY_SCHEMA: &str = "rocketmq-sre.conversation-query-intent.v1";
 const DEFAULT_WINDOW_SECONDS: u32 = 15 * 60;
@@ -54,10 +54,10 @@ pub(crate) struct ConversationTurnRequest {
 }
 
 impl ConversationTurnRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         let question_chars = self.question.trim().chars().count();
         if !(1..=8_192).contains(&question_chars) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "conversation question length must be between 1 and 8192 characters",
             ));
@@ -66,13 +66,13 @@ impl ConversationTurnRequest {
             let chars = value.trim().chars().count();
             !(1..=1_024).contains(&chars)
         }) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "conversation resource length must be between 1 and 1024 characters",
             ));
         }
         if contains_sensitive_text(&self.question) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "sensitive_data_rejected",
                 "conversation question contains prohibited sensitive material",
             ));
@@ -158,7 +158,7 @@ pub(super) fn deterministic_intent(
     question: &str,
     resource: Option<&str>,
     window_seconds: Option<u32>,
-) -> Result<Option<ConversationQueryIntent>, ControlPlaneError> {
+) -> Result<Option<ConversationQueryIntent>, ControlPlaneRequestFailure> {
     let window = bounded_window(window_seconds)?;
     if let Some(resource) = resource.map(str::trim) {
         return resource_intent(resource, window).map(Some);
@@ -206,7 +206,7 @@ pub(super) fn model_intent(
     call: &ModelToolCall,
     scoped_resource: Option<&str>,
     window_seconds: Option<u32>,
-) -> Result<ConversationQueryIntent, ControlPlaneError> {
+) -> Result<ConversationQueryIntent, ControlPlaneRequestFailure> {
     let window = bounded_window(window_seconds)?;
     let selected = match call.name.as_str() {
         "query_cluster_overview" => require_empty_arguments(call).map(|()| {
@@ -285,7 +285,7 @@ pub(super) fn model_intent(
     Ok(selected)
 }
 
-fn resource_intent(resource: &str, window: u32) -> Result<ConversationQueryIntent, ControlPlaneError> {
+fn resource_intent(resource: &str, window: u32) -> Result<ConversationQueryIntent, ControlPlaneRequestFailure> {
     if resource == "cluster/overview" {
         return Ok(intent(
             ConversationQueryKind::ClusterOverview,
@@ -421,10 +421,10 @@ fn intent(kind: ConversationQueryKind, source: &str, resource: String, window_se
     }
 }
 
-fn bounded_window(value: Option<u32>) -> Result<u32, ControlPlaneError> {
+fn bounded_window(value: Option<u32>) -> Result<u32, ControlPlaneRequestFailure> {
     let value = value.unwrap_or(DEFAULT_WINDOW_SECONDS);
     if !(MIN_WINDOW_SECONDS..=MAX_WINDOW_SECONDS).contains(&value) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "conversation metric window must be between 60 and 86400 seconds",
         ));
@@ -432,7 +432,7 @@ fn bounded_window(value: Option<u32>) -> Result<u32, ControlPlaneError> {
     Ok(value)
 }
 
-fn validate_identifier(value: &str) -> Result<(), ControlPlaneError> {
+fn validate_identifier(value: &str) -> Result<(), ControlPlaneRequestFailure> {
     if value.is_empty()
         || value.len() > MAX_IDENTIFIER_BYTES
         || !value
@@ -444,7 +444,7 @@ fn validate_identifier(value: &str) -> Result<(), ControlPlaneError> {
     Ok(())
 }
 
-fn argument_identifier(arguments: &Value, key: &str) -> Result<String, ControlPlaneError> {
+fn argument_identifier(arguments: &Value, key: &str) -> Result<String, ControlPlaneRequestFailure> {
     let value = arguments
         .as_object()
         .and_then(|arguments| arguments.get(key))
@@ -454,14 +454,14 @@ fn argument_identifier(arguments: &Value, key: &str) -> Result<String, ControlPl
     Ok(value.to_owned())
 }
 
-fn require_empty_arguments(call: &ModelToolCall) -> Result<(), ControlPlaneError> {
+fn require_empty_arguments(call: &ModelToolCall) -> Result<(), ControlPlaneRequestFailure> {
     if call.arguments.as_object().is_none_or(|arguments| !arguments.is_empty()) {
         return Err(policy_rejection("model supplied unsupported tool arguments"));
     }
     Ok(())
 }
 
-fn require_exact_arguments(call: &ModelToolCall, expected: &[&str]) -> Result<(), ControlPlaneError> {
+fn require_exact_arguments(call: &ModelToolCall, expected: &[&str]) -> Result<(), ControlPlaneRequestFailure> {
     let arguments = call
         .arguments
         .as_object()
@@ -474,8 +474,8 @@ fn require_exact_arguments(call: &ModelToolCall, expected: &[&str]) -> Result<()
     Ok(())
 }
 
-fn policy_rejection(message: &'static str) -> ControlPlaneError {
-    ControlPlaneError::forbidden("capability_mismatch", message)
+fn policy_rejection(message: &'static str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::forbidden("capability_mismatch", message)
 }
 
 fn empty_object_schema() -> Value {

@@ -222,9 +222,36 @@ impl LoadedReplayDataset {
     }
 }
 
-/// Replay loading or execution failure.
+/// Private mixed replay completion channel. Expected validation failures are
+/// projected as [`crate::EvalRejection`] and never implement [`std::error::Error`].
+pub(crate) enum ReplayFailure {
+    Io { path: String, source: std::io::Error },
+    Yaml { path: String, source: serde_yaml::Error },
+    UnsupportedSchema,
+    DuplicateFixture,
+    UnknownFixture,
+    ScenarioMismatch,
+    EmptyDataset,
+    EmptyPackRuns,
+    InvalidEvidenceId,
+    InvalidEvidence,
+    EvidenceContract(rocketmq_sre_contracts::SreContractError),
+    Uuid(sqlx::types::uuid::Error),
+    Diagnostic(rocketmq_sre_contracts::SreContractError),
+    RegistryRejected,
+    DuplicateManifestEntry,
+    NonDeterministic,
+}
+
+impl std::fmt::Debug for ReplayFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ReplayFailure")
+    }
+}
+
+/// Operational replay failure with its typed source intact.
 #[derive(Debug, Error)]
-pub enum ReplayError {
+pub(crate) enum ReplaySource {
     #[error("failed to read replay file `{path}`: {source}")]
     Io {
         path: String,
@@ -237,39 +264,69 @@ pub enum ReplayError {
         #[source]
         source: serde_yaml::Error,
     },
-    #[error("unsupported replay schema `{actual}`; expected `{expected}`")]
-    UnsupportedSchema { expected: &'static str, actual: String },
-    #[error("duplicate replay fixture `{0}`")]
-    DuplicateFixture(String),
-    #[error("manifest references unknown replay fixture `{0}`")]
-    UnknownFixture(String),
-    #[error("fixture `{fixture_id}` scenario differs between manifest and fixture")]
-    ScenarioMismatch { fixture_id: String },
-    #[error("fixture `{fixture_id}` has no deterministic pack runs")]
-    EmptyPackRuns { fixture_id: String },
-    #[error("invalid evidence id `{value}` in fixture `{fixture_id}`")]
-    InvalidEvidenceId { fixture_id: String, value: String },
-    #[error("failed to build Evidence for fixture `{fixture_id}`: {reason}")]
-    InvalidEvidence { fixture_id: String, reason: String },
-    #[error("diagnostic evaluation failed for fixture `{fixture_id}` and pack `{pack}`: {reason}")]
-    Diagnostic {
-        fixture_id: String,
-        pack: String,
-        reason: String,
-    },
-    #[error("duplicate manifest entry `{0}`")]
-    DuplicateManifestEntry(String),
+    #[error("replay evidence violates its contract")]
+    EvidenceContract(#[source] rocketmq_sre_contracts::SreContractError),
+    #[error("replay identity is invalid")]
+    Uuid(#[source] sqlx::types::uuid::Error),
+    #[error("diagnostic evaluation contract failed")]
+    Diagnostic(#[source] rocketmq_sre_contracts::SreContractError),
+}
+
+impl ReplayFailure {
+    pub(crate) fn into_boundary<T>(self) -> Result<crate::EvalOutcome<T>, crate::EvalError> {
+        let rejection = match self {
+            Self::UnsupportedSchema => crate::EvalRejection::InvalidReplaySchema,
+            Self::DuplicateFixture => crate::EvalRejection::DuplicateReplayFixture,
+            Self::UnknownFixture => crate::EvalRejection::UnknownReplayFixture,
+            Self::ScenarioMismatch => crate::EvalRejection::ReplayScenarioMismatch,
+            Self::EmptyDataset | Self::EmptyPackRuns => crate::EvalRejection::EmptyReplayRun,
+            Self::InvalidEvidenceId | Self::InvalidEvidence => crate::EvalRejection::InvalidReplayEvidence,
+            Self::RegistryRejected => crate::EvalRejection::DiagnosticReplayRejected,
+            Self::DuplicateManifestEntry => crate::EvalRejection::DuplicateReplayManifestEntry,
+            Self::NonDeterministic => crate::EvalRejection::ReplayNonDeterministic,
+            Self::EvidenceContract(source) if std::error::Error::source(&source).is_none() => {
+                crate::EvalRejection::InvalidReplayEvidence
+            }
+            Self::Diagnostic(source) if std::error::Error::source(&source).is_none() => {
+                crate::EvalRejection::DiagnosticReplayRejected
+            }
+            Self::Io { path, source } => {
+                return Err(crate::EvalError::replay_source(ReplaySource::Io { path, source }));
+            }
+            Self::Yaml { path, source } => {
+                return Err(crate::EvalError::replay_source(ReplaySource::Yaml { path, source }));
+            }
+            Self::EvidenceContract(source) => {
+                return Err(crate::EvalError::replay_source(ReplaySource::EvidenceContract(source)));
+            }
+            Self::Uuid(source) => return Err(crate::EvalError::replay_source(ReplaySource::Uuid(source))),
+            Self::Diagnostic(source) => {
+                return Err(crate::EvalError::replay_source(ReplaySource::Diagnostic(source)));
+            }
+        };
+        Ok(crate::EvalOutcome::Rejected(rejection))
+    }
 }
 
 /// Loads and validates a manifest, quality config, and saved fixture collection.
 ///
 /// # Errors
 ///
-/// Returns an error when files are missing, schemas differ, identifiers are
-/// duplicated, or the manifest and fixture scenarios do not match.
-pub fn load_dataset(manifest_path: &Path) -> Result<LoadedReplayDataset, ReplayError> {
+/// Returns an error when replay files cannot be read or decoded. Deterministic
+/// dataset validation failures are returned as a closed [`crate::EvalOutcome`].
+pub fn load_dataset(manifest_path: &Path) -> Result<crate::EvalOutcome<LoadedReplayDataset>, crate::EvalError> {
+    match load_dataset_inner(manifest_path) {
+        Ok(dataset) => Ok(crate::EvalOutcome::Completed(dataset)),
+        Err(failure) => failure.into_boundary(),
+    }
+}
+
+pub(crate) fn load_dataset_inner(manifest_path: &Path) -> Result<LoadedReplayDataset, ReplayFailure> {
     let manifest: ReplayDatasetManifest = read_yaml(manifest_path)?;
     validate_schema(&manifest.schema_version, DATASET_SCHEMA_VERSION)?;
+    if manifest.fixtures.is_empty() {
+        return Err(ReplayFailure::EmptyDataset);
+    }
     let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     let quality_path = base.join(&manifest.quality_file);
     let fixture_path = base.join(&manifest.fixture_file);
@@ -281,26 +338,22 @@ pub fn load_dataset(manifest_path: &Path) -> Result<LoadedReplayDataset, ReplayE
     let mut fixtures = BTreeMap::new();
     for fixture in collection.fixtures {
         if fixture.pack_runs.is_empty() {
-            return Err(ReplayError::EmptyPackRuns { fixture_id: fixture.id });
+            return Err(ReplayFailure::EmptyPackRuns);
         }
         let fixture_id = fixture.id.clone();
         if fixtures.insert(fixture_id.clone(), fixture).is_some() {
-            return Err(ReplayError::DuplicateFixture(fixture_id));
+            return Err(ReplayFailure::DuplicateFixture);
         }
     }
 
     let mut manifest_ids = BTreeSet::new();
     for entry in &manifest.fixtures {
         if !manifest_ids.insert(entry.fixture_id.clone()) {
-            return Err(ReplayError::DuplicateManifestEntry(entry.fixture_id.clone()));
+            return Err(ReplayFailure::DuplicateManifestEntry);
         }
-        let fixture = fixtures
-            .get(&entry.fixture_id)
-            .ok_or_else(|| ReplayError::UnknownFixture(entry.fixture_id.clone()))?;
+        let fixture = fixtures.get(&entry.fixture_id).ok_or(ReplayFailure::UnknownFixture)?;
         if fixture.scenario != entry.scenario {
-            return Err(ReplayError::ScenarioMismatch {
-                fixture_id: entry.fixture_id.clone(),
-            });
+            return Err(ReplayFailure::ScenarioMismatch);
         }
     }
 
@@ -315,13 +368,17 @@ pub fn load_dataset(manifest_path: &Path) -> Result<LoadedReplayDataset, ReplayE
 ///
 /// # Errors
 ///
-/// Returns an error for malformed Evidence or a fail-closed pack evaluation.
-pub fn replay_fixture(fixture: &ReplayFixture) -> Result<ReplayFixtureResult, ReplayError> {
-    let registry = full_registry().map_err(|error| ReplayError::Diagnostic {
-        fixture_id: fixture.id.clone(),
-        pack: "registry".to_owned(),
-        reason: error.to_string(),
-    })?;
+/// Returns an error only for a source-bearing replay operation. Malformed
+/// evidence and fail-closed pack evaluation return a closed outcome.
+pub fn replay_fixture(fixture: &ReplayFixture) -> Result<crate::EvalOutcome<ReplayFixtureResult>, crate::EvalError> {
+    match replay_fixture_inner(fixture) {
+        Ok(result) => Ok(crate::EvalOutcome::Completed(result)),
+        Err(failure) => failure.into_boundary(),
+    }
+}
+
+pub(crate) fn replay_fixture_inner(fixture: &ReplayFixture) -> Result<ReplayFixtureResult, ReplayFailure> {
+    let registry = full_registry().map_err(|_| ReplayFailure::RegistryRejected)?;
     let engine = DiagnosticEngine::new(registry);
     let mut recorder = ToolCallRecorder::default();
     let mut statuses = Vec::with_capacity(fixture.pack_runs.len());
@@ -338,11 +395,7 @@ pub fn replay_fixture(fixture: &ReplayFixture) -> Result<ReplayFixtureResult, Re
             .collect::<Result<Vec<_>, _>>()?;
         let report = engine
             .evaluate(&pack_run.pack, &evidence)
-            .map_err(|error| ReplayError::Diagnostic {
-                fixture_id: fixture.id.clone(),
-                pack: pack_run.pack.clone(),
-                reason: error.to_string(),
-            })?;
+            .map_err(ReplayFailure::Diagnostic)?;
         statuses.push(report.status);
         findings.extend(report.findings);
     }
@@ -359,50 +412,39 @@ pub fn replay_fixture(fixture: &ReplayFixture) -> Result<ReplayFixtureResult, Re
     })
 }
 
-fn read_yaml<T>(path: &Path) -> Result<T, ReplayError>
+fn read_yaml<T>(path: &Path) -> Result<T, ReplayFailure>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let yaml = fs::read_to_string(path).map_err(|source| ReplayError::Io {
+    let yaml = fs::read_to_string(path).map_err(|source| ReplayFailure::Io {
         path: path.display().to_string(),
         source,
     })?;
-    serde_yaml::from_str(&yaml).map_err(|source| ReplayError::Yaml {
+    serde_yaml::from_str(&yaml).map_err(|source| ReplayFailure::Yaml {
         path: path.display().to_string(),
         source,
     })
 }
 
-fn validate_schema(actual: &str, expected: &'static str) -> Result<(), ReplayError> {
+fn validate_schema(actual: &str, expected: &'static str) -> Result<(), ReplayFailure> {
     if actual == expected {
         Ok(())
     } else {
-        Err(ReplayError::UnsupportedSchema {
-            expected,
-            actual: actual.to_owned(),
-        })
+        let _ = expected;
+        Err(ReplayFailure::UnsupportedSchema)
     }
 }
 
-fn seal_evidence(fixture_id: &str, saved: &ReplayEvidence) -> Result<EvidenceSnapshot, ReplayError> {
+fn seal_evidence(fixture_id: &str, saved: &ReplayEvidence) -> Result<EvidenceSnapshot, ReplayFailure> {
     let observed_at = Utc
         .timestamp_opt(FIXED_OBSERVED_AT_SECONDS, 0)
         .single()
-        .ok_or_else(|| ReplayError::InvalidEvidence {
-            fixture_id: fixture_id.to_owned(),
-            reason: "fixed observation timestamp is invalid".to_owned(),
-        })?;
+        .ok_or(ReplayFailure::InvalidEvidence)?;
     let query = EvidenceQuery {
         query_id: QueryId::new(),
         correlation_id: CorrelationId::new(),
-        tenant_id: TenantId::from_str(FIXED_TENANT).map_err(|error| ReplayError::InvalidEvidence {
-            fixture_id: fixture_id.to_owned(),
-            reason: error.to_string(),
-        })?,
-        cluster_id: ClusterId::from_str(FIXED_CLUSTER).map_err(|error| ReplayError::InvalidEvidence {
-            fixture_id: fixture_id.to_owned(),
-            reason: error.to_string(),
-        })?,
+        tenant_id: TenantId::from_str(FIXED_TENANT).map_err(ReplayFailure::Uuid)?,
+        cluster_id: ClusterId::from_str(FIXED_CLUSTER).map_err(ReplayFailure::Uuid)?,
         source: saved.source.clone(),
         resource: saved.resource.clone(),
         time_range: fixed_time_range(observed_at, fixture_id)?,
@@ -413,14 +455,8 @@ fn seal_evidence(fixture_id: &str, saved: &ReplayEvidence) -> Result<EvidenceSna
         observed_at,
         EvidenceContent::Inline(saved.content.clone()),
     )
-    .map_err(|error| ReplayError::InvalidEvidence {
-        fixture_id: fixture_id.to_owned(),
-        reason: error.to_string(),
-    })?;
-    snapshot.evidence_id = EvidenceId::from_str(&saved.evidence_id).map_err(|_| ReplayError::InvalidEvidenceId {
-        fixture_id: fixture_id.to_owned(),
-        value: saved.evidence_id.clone(),
-    })?;
+    .map_err(ReplayFailure::EvidenceContract)?;
+    snapshot.evidence_id = EvidenceId::from_str(&saved.evidence_id).map_err(|_| ReplayFailure::InvalidEvidenceId)?;
     snapshot.freshness_seconds = saved.freshness_seconds;
     snapshot.partial = saved.partial;
     if saved.partial {
@@ -429,11 +465,9 @@ fn seal_evidence(fixture_id: &str, saved: &ReplayEvidence) -> Result<EvidenceSna
     Ok(snapshot)
 }
 
-fn fixed_time_range(observed_at: DateTime<Utc>, fixture_id: &str) -> Result<TimeRange, ReplayError> {
-    TimeRange::new(observed_at, observed_at).map_err(|error| ReplayError::InvalidEvidence {
-        fixture_id: fixture_id.to_owned(),
-        reason: error.to_string(),
-    })
+fn fixed_time_range(observed_at: DateTime<Utc>, fixture_id: &str) -> Result<TimeRange, ReplayFailure> {
+    let _ = fixture_id;
+    TimeRange::new(observed_at, observed_at).map_err(ReplayFailure::EvidenceContract)
 }
 
 fn rank_findings(findings: Vec<DiagnosticFinding>) -> Vec<RankedRootCause> {
@@ -462,7 +496,83 @@ fn rank_findings(findings: Vec<DiagnosticFinding>) -> Vec<RankedRootCause> {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use super::*;
+
+    #[test]
+    fn eval_facade_retains_replay_leaf_without_rendering_it() {
+        let error = crate::EvalError::replay_source(ReplaySource::Io {
+            path: "/private/replay.yml".to_owned(),
+            source: std::io::Error::other("private replay token"),
+        });
+
+        let replay = error.source().expect("replay leaf");
+        assert!(replay.is::<ReplaySource>());
+        assert!(replay.source().is_some_and(|source| source.is::<std::io::Error>()));
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains("private"));
+            assert!(!rendered.contains("replay.yml"));
+            assert!(!rendered.contains("token"));
+        }
+    }
+
+    #[test]
+    fn deterministic_replay_failures_are_closed_rejections() {
+        let cases = [
+            (
+                ReplayFailure::UnsupportedSchema,
+                crate::EvalRejection::InvalidReplaySchema,
+            ),
+            (
+                ReplayFailure::DuplicateFixture,
+                crate::EvalRejection::DuplicateReplayFixture,
+            ),
+            (
+                ReplayFailure::UnknownFixture,
+                crate::EvalRejection::UnknownReplayFixture,
+            ),
+            (
+                ReplayFailure::ScenarioMismatch,
+                crate::EvalRejection::ReplayScenarioMismatch,
+            ),
+            (ReplayFailure::EmptyDataset, crate::EvalRejection::EmptyReplayRun),
+            (ReplayFailure::EmptyPackRuns, crate::EvalRejection::EmptyReplayRun),
+            (
+                ReplayFailure::DuplicateManifestEntry,
+                crate::EvalRejection::DuplicateReplayManifestEntry,
+            ),
+            (
+                ReplayFailure::NonDeterministic,
+                crate::EvalRejection::ReplayNonDeterministic,
+            ),
+        ];
+
+        for (failure, expected) in cases {
+            assert_eq!(
+                failure
+                    .into_boundary::<()>()
+                    .expect("deterministic replay failure must not become an error"),
+                crate::EvalOutcome::Rejected(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn source_bearing_replay_contract_preserves_the_typed_chain() {
+        let error = ReplayFailure::Diagnostic(rocketmq_sre_contracts::SreContractError::with_source(
+            rocketmq_sre_contracts::PublicErrorCode::SourceUnavailable,
+            std::io::Error::other("private replay source"),
+        ))
+        .into_boundary::<()>()
+        .expect_err("source-bearing replay failure must remain operational");
+
+        let replay = error.source().expect("replay source");
+        assert!(replay.is::<ReplaySource>());
+        let contract = replay.source().expect("contract source");
+        assert!(contract.is::<rocketmq_sre_contracts::SreContractError>());
+        assert!(contract.source().is_some_and(|source| source.is::<std::io::Error>()));
+    }
 
     #[test]
     fn recorder_distinguishes_read_model_and_mutation_calls() {

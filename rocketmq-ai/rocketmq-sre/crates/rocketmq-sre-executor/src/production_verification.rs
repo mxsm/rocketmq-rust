@@ -35,7 +35,7 @@ use serde_json::json;
 
 use crate::ExecutionAgentClient;
 use crate::ExecutionSliClient;
-use crate::ExecutorError;
+use crate::ExecutorRequestFailure;
 use crate::VerificationCaptureRequest;
 use crate::VerificationFuture;
 use crate::VerificationObservation;
@@ -89,7 +89,7 @@ fn assemble_observation(
     request: &VerificationCaptureRequest,
     resource: AgentReadResult,
     technical: ExecutionSliObservation,
-) -> Result<VerificationObservation, ExecutorError> {
+) -> Result<VerificationObservation, ExecutorRequestFailure> {
     validate_resource(request, &resource)?;
     validate_technical(request, &technical)?;
     let observed_at = resource.observed_at.max(technical.observed_at);
@@ -120,10 +120,11 @@ fn assemble_observation(
         cluster_id: request.cluster_id,
         source: "execution-verification".to_owned(),
         resource: request.target.clone(),
-        time_range: TimeRange::new(started_at, observed_at).map_err(|_| ExecutorError::VerificationRejected)?,
+        time_range: TimeRange::new(started_at, observed_at)
+            .map_err(|_| ExecutorRequestFailure::VerificationRejected)?,
     };
     let mut evidence = EvidenceSnapshot::capture(query, current_evidence_schema(), observed_at, content)
-        .map_err(|_| ExecutorError::VerificationRejected)?;
+        .map_err(|_| ExecutorRequestFailure::VerificationRejected)?;
     evidence.sensitivity = Sensitivity::Internal;
     evidence.partial = partial;
     evidence.coverage = if partial {
@@ -139,14 +140,17 @@ fn assemble_observation(
     })
 }
 
-fn validate_resource(request: &VerificationCaptureRequest, resource: &AgentReadResult) -> Result<(), ExecutorError> {
+fn validate_resource(
+    request: &VerificationCaptureRequest,
+    resource: &AgentReadResult,
+) -> Result<(), ExecutorRequestFailure> {
     if resource.schema_version != EXECUTION_AGENT_SCHEMA_VERSION
         || resource.action != request.action
         || resource.target != request.target
         || !is_sha256_digest(&resource.precondition_hash)
         || !required_surface(&request.resource_conditions, &resource.resource_conditions)
     {
-        return Err(ExecutorError::VerificationRejected);
+        return Err(ExecutorRequestFailure::VerificationRejected);
     }
     Ok(())
 }
@@ -154,14 +158,14 @@ fn validate_resource(request: &VerificationCaptureRequest, resource: &AgentReadR
 fn validate_technical(
     request: &VerificationCaptureRequest,
     technical: &ExecutionSliObservation,
-) -> Result<(), ExecutorError> {
+) -> Result<(), ExecutorRequestFailure> {
     if technical.schema_version != EXECUTION_VERIFICATION_SCHEMA_VERSION
         || technical.tenant_id != request.tenant_id
         || technical.cluster_id != request.cluster_id
         || technical.correlation_id != request.correlation_id
         || !exact_surface(&request.technical_slis, &technical.conditions)
     {
-        return Err(ExecutorError::VerificationRejected);
+        return Err(ExecutorRequestFailure::VerificationRejected);
     }
     Ok(())
 }

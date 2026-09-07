@@ -78,16 +78,21 @@ use rocketmq_sre_contracts::TimeRange;
 use rocketmq_sre_contracts::VerifyExecutionRequest;
 use rocketmq_sre_contracts::current_evidence_schema;
 use rocketmq_sre_execution_agent::AgentEffectStore;
+use rocketmq_sre_execution_agent::AgentEffectStoreOperations;
 use rocketmq_sre_executor::ChangeExecutor;
 use rocketmq_sre_executor::ExecutionAgentClient;
 use rocketmq_sre_executor::ExecutionJournal;
+use rocketmq_sre_executor::ExecutionJournalOperations;
 use rocketmq_sre_executor::ExecutionPrechecker;
 use rocketmq_sre_executor::ExecutionVerifier;
 use rocketmq_sre_executor::ExecutorActionRegistry;
 use rocketmq_sre_executor::ExecutorAuthorityClient;
 use rocketmq_sre_executor::ExecutorError;
+use rocketmq_sre_executor::ExecutorRequestFailure;
 use rocketmq_sre_executor::LeaseCoordinator;
+use rocketmq_sre_executor::LeaseCoordinatorOperations;
 use rocketmq_sre_executor::ResourceLockRequest;
+use rocketmq_sre_executor::ResourceSafetyOperations;
 use rocketmq_sre_executor::ResourceSafetyStore;
 use rocketmq_sre_executor::VerificationCaptureRequest;
 use rocketmq_sre_executor::VerificationFuture;
@@ -105,7 +110,7 @@ use support::seed_fixture;
 use support::seed_fixture_for_action;
 use support::step_intent;
 
-type TestFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorError>> + Send + 'a>>;
+type TestFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorRequestFailure>> + Send + 'a>>;
 
 #[derive(Clone)]
 struct TestAuthority {
@@ -326,7 +331,7 @@ impl ExecutionAgentClient for TestAgent {
             self.effects
                 .accept_fence(request.tenant_id, request.reconcile_grant.lease_id, &ack)
                 .await
-                .map_err(|_| ExecutorError::AgentRejected)?;
+                .map_err(|_| ExecutorError::unavailable())?;
             Ok(AdvanceFenceResponse {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                 fence_ack: ack,
@@ -355,7 +360,7 @@ impl VerificationSource for ScriptedVerification {
                 .lock()
                 .expect("verification script lock")
                 .pop_front()
-                .ok_or(ExecutorError::AgentUnavailable)?;
+                .ok_or_else(ExecutorError::unavailable)?;
             let observed_at = self.base + TimeDelta::seconds(signal.offset_seconds);
             let resource_conditions = request
                 .resource_conditions
@@ -376,7 +381,7 @@ impl VerificationSource for ScriptedVerification {
                 cluster_id: request.cluster_id,
                 source: "execution-flow-test".to_owned(),
                 resource: request.target.clone(),
-                time_range: TimeRange::new(observed_at, observed_at).map_err(|_| ExecutorError::InvalidRequest)?,
+                time_range: TimeRange::new(observed_at, observed_at).map_err(|_| ExecutorError::unavailable())?,
             };
             let mut evidence = rocketmq_sre_contracts::EvidenceSnapshot::capture(
                 query,
@@ -387,7 +392,7 @@ impl VerificationSource for ScriptedVerification {
                     "sli_ok": signal.sli_ok,
                 })),
             )
-            .map_err(|_| ExecutorError::InvalidRequest)?;
+            .map_err(|_| ExecutorError::unavailable())?;
             evidence.coverage = CoverageStatus::Available;
             evidence.exposure = EvidenceExposure::Synthetic;
             evidence.sensitivity = Sensitivity::Internal;
@@ -1197,7 +1202,12 @@ async fn run_execution_for_action(signals: &[Signal], autonomous: bool, action: 
         Duration::from_secs(300),
     )
     .with_verifier(verifier);
-    let outcome = executor.execute(&fixture.request).await.expect("supervised execution");
+    let outcome = match executor.execute(&fixture.request).await.expect("supervised execution") {
+        rocketmq_sre_executor::ExecutorOperationOutcome::Accepted(outcome) => outcome,
+        rocketmq_sre_executor::ExecutorOperationOutcome::Rejected(rejection) => {
+            panic!("supervised execution was unexpectedly rejected: {rejection:?}")
+        }
+    };
     let active_locks: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM resource_locks
          WHERE holder_execution_id = $1 AND released_at IS NULL",

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::fmt;
 
 use rocketmq_sre_contracts::AutonomyLifecycleState;
@@ -38,8 +37,8 @@ pub struct PromotionQualification {
 }
 
 /// Fail-closed lifecycle transition error.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AutonomyTransitionError {
+#[derive(Clone, Eq, PartialEq)]
+pub enum AutonomyTransitionRejection {
     ModelAuthorityForbidden,
     HumanAuthorityRequired,
     InvalidTransition,
@@ -51,29 +50,16 @@ pub enum AutonomyTransitionError {
     RevisionExhausted,
 }
 
-impl fmt::Display for AutonomyTransitionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ModelAuthorityForbidden => formatter.write_str("models cannot change autonomy lifecycle state"),
-            Self::HumanAuthorityRequired => {
-                formatter.write_str("autonomy lifecycle transition requires a human operator")
-            }
-            Self::InvalidTransition => formatter.write_str("autonomy lifecycle transition is not allowed"),
-            Self::QualificationMissing => formatter.write_str("autonomy promotion qualification is incomplete"),
-            Self::CriticNotReady => formatter.write_str("autonomous promotion requires a valid heterogeneous critic"),
-            Self::OwnerConfirmationRequired => {
-                formatter.write_str("autonomous promotion requires action owner confirmation")
-            }
-            Self::OwnerApprovalReferenceRequired => {
-                formatter.write_str("autonomous promotion requires an auditable owner approval reference")
-            }
-            Self::PauseReasonRequired => formatter.write_str("paused autonomy requires a bounded reason"),
-            Self::RevisionExhausted => formatter.write_str("autonomy lifecycle revision is exhausted"),
-        }
+impl fmt::Display for AutonomyTransitionRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SRE operation was rejected")
     }
 }
-
-impl Error for AutonomyTransitionError {}
+impl fmt::Debug for AutonomyTransitionRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
 
 /// Deterministic operator-controlled autonomy lifecycle.
 pub struct AutonomyStateMachine;
@@ -94,16 +80,16 @@ impl AutonomyStateMachine {
         pause_reason: Option<&str>,
         qualification: PromotionQualification,
         updated_at: SreTimestamp,
-    ) -> Result<AutonomyLifecycleState, AutonomyTransitionError> {
+    ) -> Result<AutonomyLifecycleState, AutonomyTransitionRejection> {
         if actor == AutonomyActor::Model {
-            return Err(AutonomyTransitionError::ModelAuthorityForbidden);
+            return Err(AutonomyTransitionRejection::ModelAuthorityForbidden);
         }
         if current.mode == target {
-            return Err(AutonomyTransitionError::InvalidTransition);
+            return Err(AutonomyTransitionRejection::InvalidTransition);
         }
         let reason = pause_reason.map(str::trim).filter(|value| !value.is_empty());
         if reason.is_some_and(|value| value.chars().count() > 512) {
-            return Err(AutonomyTransitionError::PauseReasonRequired);
+            return Err(AutonomyTransitionRejection::PauseReasonRequired);
         }
         let human = actor == AutonomyActor::HumanOperator;
         match (current.mode, target) {
@@ -111,24 +97,24 @@ impl AutonomyStateMachine {
             (AutonomyMode::Disabled, AutonomyMode::Shadow) if human => {}
             (AutonomyMode::Shadow, AutonomyMode::Supervised) if human => {
                 if !qualification.shadow_qualified {
-                    return Err(AutonomyTransitionError::QualificationMissing);
+                    return Err(AutonomyTransitionRejection::QualificationMissing);
                 }
                 if !qualification.owner_confirmed {
-                    return Err(AutonomyTransitionError::OwnerConfirmationRequired);
+                    return Err(AutonomyTransitionRejection::OwnerConfirmationRequired);
                 }
             }
             (AutonomyMode::Supervised, AutonomyMode::Autonomous) if human => {
                 if !qualification.critic_ready {
-                    return Err(AutonomyTransitionError::CriticNotReady);
+                    return Err(AutonomyTransitionRejection::CriticNotReady);
                 }
                 if !qualification.autonomous_qualified {
-                    return Err(AutonomyTransitionError::QualificationMissing);
+                    return Err(AutonomyTransitionRejection::QualificationMissing);
                 }
                 if !qualification.owner_confirmed {
-                    return Err(AutonomyTransitionError::OwnerConfirmationRequired);
+                    return Err(AutonomyTransitionRejection::OwnerConfirmationRequired);
                 }
                 if !qualification.owner_approval_ref_valid {
-                    return Err(AutonomyTransitionError::OwnerApprovalReferenceRequired);
+                    return Err(AutonomyTransitionRejection::OwnerApprovalReferenceRequired);
                 }
             }
             (AutonomyMode::Shadow | AutonomyMode::Supervised | AutonomyMode::Autonomous, AutonomyMode::Paused)
@@ -138,15 +124,15 @@ impl AutonomyStateMachine {
                 _,
                 AutonomyMode::Disabled | AutonomyMode::Shadow | AutonomyMode::Supervised | AutonomyMode::Autonomous,
             ) if !human => {
-                return Err(AutonomyTransitionError::HumanAuthorityRequired);
+                return Err(AutonomyTransitionRejection::HumanAuthorityRequired);
             }
-            _ => return Err(AutonomyTransitionError::InvalidTransition),
+            _ => return Err(AutonomyTransitionRejection::InvalidTransition),
         }
 
         let lifecycle_revision = current
             .lifecycle_revision
             .checked_add(1)
-            .ok_or(AutonomyTransitionError::RevisionExhausted)?;
+            .ok_or(AutonomyTransitionRejection::RevisionExhausted)?;
         let paused = target == AutonomyMode::Paused;
         Ok(AutonomyLifecycleState {
             tenant_id: current.tenant_id,
@@ -198,7 +184,7 @@ mod tests {
                 PromotionQualification::default(),
                 chrono::Utc::now(),
             ),
-            Err(AutonomyTransitionError::ModelAuthorityForbidden)
+            Err(AutonomyTransitionRejection::ModelAuthorityForbidden)
         );
     }
 
@@ -253,7 +239,7 @@ mod tests {
             chrono::Utc::now(),
         );
 
-        assert_eq!(result, Err(AutonomyTransitionError::OwnerApprovalReferenceRequired));
+        assert_eq!(result, Err(AutonomyTransitionRejection::OwnerApprovalReferenceRequired));
     }
 
     #[test]

@@ -43,7 +43,7 @@ use super::model::RunbookGetQuery;
 use super::model::RunbookListQuery;
 use super::model::RunbookPage;
 use super::model::ScheduleTransitionRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 use crate::observability::CORRELATION_ID_HEADER;
 
@@ -103,7 +103,7 @@ async fn create_runbook(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateRunbookRequest>,
-) -> Result<Json<RunbookDefinition>, ControlPlaneError> {
+) -> Result<Json<RunbookDefinition>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .change_management
@@ -116,7 +116,7 @@ async fn list_runbooks(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<RunbookListQuery>,
-) -> Result<Json<RunbookPage>, ControlPlaneError> {
+) -> Result<Json<RunbookPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state
         .change_management
@@ -130,7 +130,7 @@ async fn get_runbook(
     headers: HeaderMap,
     Path((id, version)): Path<(String, String)>,
     Query(query): Query<RunbookGetQuery>,
-) -> Result<Json<RunbookDefinition>, ControlPlaneError> {
+) -> Result<Json<RunbookDefinition>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state
         .change_management
@@ -143,7 +143,7 @@ async fn create_window(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateChangeWindowRequest>,
-) -> Result<Json<ChangeWindow>, ControlPlaneError> {
+) -> Result<Json<ChangeWindow>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .change_management
@@ -156,7 +156,7 @@ async fn list_windows(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ChangeWindowListQuery>,
-) -> Result<Json<ChangeWindowPage>, ControlPlaneError> {
+) -> Result<Json<ChangeWindowPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state
         .change_management
@@ -169,7 +169,7 @@ async fn preview_schedule(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateChangeScheduleRequest>,
-) -> Result<Json<ChangeSchedulePreview>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedulePreview>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .change_management
@@ -182,7 +182,7 @@ async fn create_schedule(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateChangeScheduleRequest>,
-) -> Result<Json<ChangeSchedule>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedule>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .change_management
@@ -195,7 +195,7 @@ async fn list_schedules(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ChangeScheduleListQuery>,
-) -> Result<Json<ChangeSchedulePage>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedulePage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state
         .change_management
@@ -208,7 +208,7 @@ async fn get_schedule(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<ChangeSchedule>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedule>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .change_management
@@ -222,7 +222,7 @@ async fn pause_schedule(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ScheduleTransitionRequest>,
-) -> Result<Json<ChangeSchedule>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedule>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .change_management
@@ -236,7 +236,7 @@ async fn resume_schedule(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ScheduleTransitionRequest>,
-) -> Result<Json<ChangeSchedule>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedule>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .change_management
@@ -250,7 +250,7 @@ async fn cancel_schedule(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ScheduleTransitionRequest>,
-) -> Result<Json<ChangeSchedule>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedule>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .change_management
@@ -264,7 +264,7 @@ async fn reconcile_schedule(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ScheduleTransitionRequest>,
-) -> Result<Json<ChangeSchedule>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedule>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .change_management
@@ -278,7 +278,7 @@ async fn approve_manual_gate(
     headers: HeaderMap,
     Path((id, step_id)): Path<(String, String)>,
     Json(request): Json<ManualGateDecisionRequest>,
-) -> Result<Json<ChangeSchedule>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedule>, ControlPlaneRequestFailure> {
     decide_manual_gate(state, headers, id, step_id, request, ManualGateDecision::Approved).await
 }
 
@@ -287,7 +287,7 @@ async fn reject_manual_gate(
     headers: HeaderMap,
     Path((id, step_id)): Path<(String, String)>,
     Json(request): Json<ManualGateDecisionRequest>,
-) -> Result<Json<ChangeSchedule>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedule>, ControlPlaneRequestFailure> {
     decide_manual_gate(state, headers, id, step_id, request, ManualGateDecision::Rejected).await
 }
 
@@ -298,7 +298,7 @@ async fn decide_manual_gate(
     step_id: String,
     request: ManualGateDecisionRequest,
     decision: ManualGateDecision,
-) -> Result<Json<ChangeSchedule>, ControlPlaneError> {
+) -> Result<Json<ChangeSchedule>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .change_management
@@ -313,22 +313,22 @@ async fn decide_manual_gate(
         .map(Json)
 }
 
-fn parse_runbook_id(value: &str) -> Result<RunbookId, ControlPlaneError> {
+fn parse_runbook_id(value: &str) -> Result<RunbookId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "runbook identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "runbook id is invalid"))
 }
 
-fn parse_schedule_id(value: &str) -> Result<ChangeScheduleId, ControlPlaneError> {
+fn parse_schedule_id(value: &str) -> Result<ChangeScheduleId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "schedule identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "schedule id is invalid"))
 }
 
-fn parse_step_id(value: &str) -> Result<RunbookStepId, ControlPlaneError> {
+fn parse_step_id(value: &str) -> Result<RunbookStepId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "runbook step identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "runbook step id is invalid"))
 }
 
 fn correlation_id(headers: &HeaderMap) -> CorrelationId {

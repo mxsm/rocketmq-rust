@@ -46,7 +46,7 @@ use super::model::TransitionGovernanceVersionRequest;
 use super::repository::GovernanceRepository;
 use super::repository::human_event;
 use super::signer::GovernanceSigner;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -64,7 +64,7 @@ impl GovernanceService {
     pub(crate) fn new(
         repository: PostgresRepository,
         signing_key: impl AsRef<[u8]>,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         Ok(Self {
             repository: GovernanceRepository::new(repository.pool.clone()),
             signer: GovernanceSigner::new(signing_key.as_ref())?,
@@ -76,19 +76,19 @@ impl GovernanceService {
         &self,
         auth: &AuthContext,
         request: &CreateGovernanceArtifactRequest,
-    ) -> Result<GovernanceArtifact, ControlPlaneError> {
+    ) -> Result<GovernanceArtifact, ControlPlaneRequestFailure> {
         require_governance_human(auth)?;
         validate_text("governance logical key", &request.logical_key, 256)?;
         validate_text("governance owner", &request.owner, 256)?;
         validate_text("governance reviewer", &request.reviewer, 256)?;
         if request.owner != auth.subject {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "governance_owner_mismatch",
                 "the authenticated human must own a newly governed artifact",
             ));
         }
         if request.owner == request.reviewer {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "governance_separation_required",
                 "governance owner and reviewer must be different humans",
             ));
@@ -113,7 +113,7 @@ impl GovernanceService {
         &self,
         auth: &AuthContext,
         query: &GovernanceArtifactQuery,
-    ) -> Result<GovernanceArtifactPage, ControlPlaneError> {
+    ) -> Result<GovernanceArtifactPage, ControlPlaneRequestFailure> {
         require_read(auth)?;
         let (items, truncated) = self.repository.list_artifacts(auth.tenant_id, query).await?;
         Ok(GovernanceArtifactPage {
@@ -128,12 +128,12 @@ impl GovernanceService {
         auth: &AuthContext,
         artifact_id: GovernanceArtifactId,
         request: &CreateGovernanceVersionRequest,
-    ) -> Result<GovernanceVersion, ControlPlaneError> {
+    ) -> Result<GovernanceVersion, ControlPlaneRequestFailure> {
         require_candidate_author(auth)?;
         validate_version_request(request)?;
         let artifact = self.repository.get_artifact(auth.tenant_id, artifact_id).await?;
         if !is_model_actor(auth) && artifact.owner != auth.subject {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "governance_owner_mismatch",
                 "only the artifact owner or a model candidate author can create a draft version",
             ));
@@ -141,7 +141,7 @@ impl GovernanceService {
         if let Some(rollback_id) = request.rollback_version_id {
             let rollback = self.repository.get_version(auth.tenant_id, rollback_id).await?;
             if rollback.artifact_id != artifact.id {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "governance_version_mismatch",
                     "rollback version belongs to a different governed artifact",
                 ));
@@ -191,7 +191,7 @@ impl GovernanceService {
         auth: &AuthContext,
         artifact_id: GovernanceArtifactId,
         query: &GovernanceVersionQuery,
-    ) -> Result<GovernanceVersionPage, ControlPlaneError> {
+    ) -> Result<GovernanceVersionPage, ControlPlaneRequestFailure> {
         require_read(auth)?;
         self.repository.get_artifact(auth.tenant_id, artifact_id).await?;
         let (items, truncated) = self
@@ -210,7 +210,7 @@ impl GovernanceService {
         auth: &AuthContext,
         version_id: GovernanceVersionId,
         request: &TransitionGovernanceVersionRequest,
-    ) -> Result<GovernanceVersion, ControlPlaneError> {
+    ) -> Result<GovernanceVersion, ControlPlaneRequestFailure> {
         require_governance_human(auth)?;
         validate_text("governance transition reason", &request.reason, 2_048)?;
         let current = self.repository.get_version(auth.tenant_id, version_id).await?;
@@ -219,7 +219,7 @@ impl GovernanceService {
             .get_artifact(auth.tenant_id, current.artifact_id)
             .await?;
         if !current.state.permits_transition_to(request.state) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "invalid_governance_transition",
                 "the requested governance lifecycle transition is not allowed",
             ));
@@ -244,7 +244,7 @@ impl GovernanceService {
         let now = Utc::now();
         let signature = if request.state == GovernanceLifecycleState::Active {
             if current.review_due_at <= now || current.expires_at.is_some_and(|expires_at| expires_at <= now) {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "governance_version_expired",
                     "overdue or expired governance versions cannot be activated",
                 ));
@@ -272,7 +272,7 @@ impl GovernanceService {
         auth: &AuthContext,
         version_id: GovernanceVersionId,
         request: &RecordGovernanceImpactRequest,
-    ) -> Result<GovernanceImpact, ControlPlaneError> {
+    ) -> Result<GovernanceImpact, ControlPlaneRequestFailure> {
         require_governance_human(auth)?;
         require_cluster(auth, request.cluster_id)?;
         validate_text("governance impact reference", &request.reference_id, 256)?;
@@ -280,7 +280,7 @@ impl GovernanceService {
         if let Some(cluster_id) = request.cluster_id
             && !self.repository.cluster_in_tenant(auth.tenant_id, cluster_id).await?
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "tenant_mismatch",
                 "governance impact cluster does not belong to the authenticated tenant",
             ));
@@ -304,7 +304,7 @@ impl GovernanceService {
         auth: &AuthContext,
         version_id: GovernanceVersionId,
         query: &GovernanceImpactQuery,
-    ) -> Result<GovernanceImpactPage, ControlPlaneError> {
+    ) -> Result<GovernanceImpactPage, ControlPlaneRequestFailure> {
         require_read(auth)?;
         require_cluster(auth, query.cluster_id)?;
         self.repository.get_version(auth.tenant_id, version_id).await?;
@@ -320,7 +320,7 @@ impl GovernanceService {
         &self,
         auth: &AuthContext,
         request: &EvaluateGovernanceAdmissionRequest,
-    ) -> Result<GovernanceAdmissionView, ControlPlaneError> {
+    ) -> Result<GovernanceAdmissionView, ControlPlaneRequestFailure> {
         require_read(auth)?;
         require_cluster(auth, request.cluster_id)?;
         if request.access_path == GovernanceAccessPath::HighPrivilege {
@@ -345,10 +345,10 @@ impl GovernanceService {
         &self,
         auth: &AuthContext,
         query: &GovernanceAuditQuery,
-    ) -> Result<GovernanceAuditExport, ControlPlaneError> {
+    ) -> Result<GovernanceAuditExport, ControlPlaneRequestFailure> {
         require_read(auth)?;
         if query.from.zip(query.to).is_some_and(|(from, to)| from >= to) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_governance_audit_window",
                 "governance audit end must be after its start",
             ));
@@ -356,7 +356,10 @@ impl GovernanceService {
         self.repository.audit_export(auth.tenant_id, query).await
     }
 
-    pub(crate) async fn compliance(&self, auth: &AuthContext) -> Result<GovernanceComplianceReport, ControlPlaneError> {
+    pub(crate) async fn compliance(
+        &self,
+        auth: &AuthContext,
+    ) -> Result<GovernanceComplianceReport, ControlPlaneRequestFailure> {
         require_read(auth)?;
         self.repository.compliance_report(auth.tenant_id, Utc::now()).await
     }
@@ -368,11 +371,11 @@ async fn validate_related_version(
     artifact_id: GovernanceArtifactId,
     version_id: Option<GovernanceVersionId>,
     relation: &str,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if let Some(version_id) = version_id {
         let version = repository.get_version(auth.tenant_id, version_id).await?;
         if version.artifact_id != artifact_id {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "governance_version_mismatch",
                 format!("{relation} version belongs to a different governed artifact"),
             ));
@@ -381,7 +384,7 @@ async fn validate_related_version(
     Ok(())
 }
 
-fn validate_version_request(request: &CreateGovernanceVersionRequest) -> Result<(), ControlPlaneError> {
+fn validate_version_request(request: &CreateGovernanceVersionRequest) -> Result<(), ControlPlaneRequestFailure> {
     validate_text("governance version", &request.version, 128)?;
     validate_text(
         "applicable RocketMQ version range",
@@ -389,13 +392,13 @@ fn validate_version_request(request: &CreateGovernanceVersionRequest) -> Result<
         256,
     )?;
     if !is_sha256_digest(&request.content_digest) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_governance_digest",
             "governed content must use a SHA-256 digest",
         ));
     }
     if request.applicable_components.len() > MAX_COMPONENTS || request.dependencies.len() > MAX_DEPENDENCIES {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_governance_version",
             "governance components or dependencies exceed the supported bound",
         ));
@@ -409,7 +412,7 @@ fn validate_version_request(request: &CreateGovernanceVersionRequest) -> Result<
     }
     let now = Utc::now();
     if request.review_due_at <= now || request.expires_at.is_some_and(|expires_at| expires_at <= now) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_governance_expiry",
             "review due and expiry must be in the future",
         ));
@@ -422,9 +425,9 @@ fn require_transition_actor(
     artifact: &GovernanceArtifact,
     current: GovernanceLifecycleState,
     next: GovernanceLifecycleState,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if is_model_actor(auth) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "model_governance_transition_forbidden",
             "model identities cannot activate, publish, quarantine, deprecate, or retire governed versions",
         ));
@@ -442,27 +445,27 @@ fn require_transition_actor(
     if auth.subject == expected {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "governance_reviewer_required",
             "the lifecycle transition requires the configured owner or reviewer",
         ))
     }
 }
 
-fn require_candidate_author(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_candidate_author(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if is_model_actor(auth) || is_governance_human(auth) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "governance version candidates require a model-service or governance role",
         ))
     }
 }
 
-fn require_governance_human(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_governance_human(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if is_model_actor(auth) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "model_governance_transition_forbidden",
             "model identities cannot perform governance lifecycle operations",
         ));
@@ -470,7 +473,7 @@ fn require_governance_human(auth: &AuthContext) -> Result<(), ControlPlaneError>
     if is_governance_human(auth) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "governance lifecycle operations require an operator or model-governance role",
         ))
@@ -488,7 +491,7 @@ fn is_model_actor(auth: &AuthContext) -> bool {
         || auth.subject.starts_with("provider:")
 }
 
-fn require_read(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_read(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
@@ -497,7 +500,7 @@ fn require_read(auth: &AuthContext) -> Result<(), ControlPlaneError> {
     }) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "governance reads require diagnose or governance access",
         ))
@@ -507,21 +510,21 @@ fn require_read(auth: &AuthContext) -> Result<(), ControlPlaneError> {
 fn require_cluster(
     auth: &AuthContext,
     cluster_id: Option<rocketmq_sre_contracts::ClusterId>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if cluster_id.is_none_or(|cluster_id| auth.clusters.contains(&cluster_id)) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "the authenticated identity cannot access this governance cluster",
         ))
     }
 }
 
-fn validate_text(name: &str, value: &str, max: usize) -> Result<(), ControlPlaneError> {
+fn validate_text(name: &str, value: &str, max: usize) -> Result<(), ControlPlaneRequestFailure> {
     let value = value.trim();
     if value.is_empty() || value.len() > max {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_governance_request",
             format!("{name} must contain between 1 and {max} bytes"),
         ));

@@ -55,7 +55,7 @@ use super::model::RegionalRouteRequest;
 use super::model::RegisterRegionalEndpointRequest;
 use super::model::UpdateFleetInspectionRequest;
 use super::model::UpsertFleetAssetRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 
 const FLEET_WRITE_BODY_LIMIT: usize = 256 * 1024;
@@ -126,7 +126,7 @@ async fn assess_onboarding(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<FleetOnboardingRequest>,
-) -> Result<Json<FleetOnboardingView>, ControlPlaneError> {
+) -> Result<Json<FleetOnboardingView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.fleet.assess_onboarding(&auth, &request).await.map(Json)
 }
@@ -135,7 +135,7 @@ async fn onboard_cluster(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<FleetOnboardingRequest>,
-) -> Result<Json<FleetOnboardingView>, ControlPlaneError> {
+) -> Result<Json<FleetOnboardingView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.fleet.onboard_cluster(&auth, &request).await.map(Json)
 }
@@ -145,7 +145,7 @@ async fn offboard_cluster(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<FleetOffboardRequest>,
-) -> Result<Json<ClusterRegistration>, ControlPlaneError> {
+) -> Result<Json<ClusterRegistration>, ControlPlaneRequestFailure> {
     let cluster_id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     state
@@ -155,7 +155,10 @@ async fn offboard_cluster(
         .map(Json)
 }
 
-async fn overview(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<FleetOverview>, ControlPlaneError> {
+async fn overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<FleetOverview>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.fleet.overview(&auth).await.map(Json)
 }
@@ -164,7 +167,7 @@ async fn registrations(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<FleetScopeQuery>,
-) -> Result<Json<ClusterRegistrationPage>, ControlPlaneError> {
+) -> Result<Json<ClusterRegistrationPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.fleet.registrations(&auth, &query).await.map(Json)
 }
@@ -173,7 +176,7 @@ async fn create_quota_policy(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateQuotaPolicyRequest>,
-) -> Result<Json<QuotaPolicyView>, ControlPlaneError> {
+) -> Result<Json<QuotaPolicyView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.fleet.create_quota_policy(&auth, &request).await.map(Json)
 }
@@ -182,7 +185,7 @@ async fn quota_policy(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<QuotaPolicyQuery>,
-) -> Result<Json<QuotaPolicyView>, ControlPlaneError> {
+) -> Result<Json<QuotaPolicyView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.fleet.quota_policy(&auth, query.cluster_id).await.map(Json)
 }
@@ -191,7 +194,7 @@ async fn evaluate_quota(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<EvaluateFleetQuotaRequest>,
-) -> Result<Json<FleetQuotaDecisionView>, ControlPlaneError> {
+) -> Result<Json<FleetQuotaDecisionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.fleet.evaluate_quota(&auth, &request).await.map(Json)
 }
@@ -200,7 +203,7 @@ async fn quota_decisions(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<FleetQuotaDecisionQuery>,
-) -> Result<Json<FleetQuotaDecisionPage>, ControlPlaneError> {
+) -> Result<Json<FleetQuotaDecisionPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.fleet.quota_decisions(&auth, &query).await.map(Json)
 }
@@ -209,7 +212,7 @@ async fn register_endpoint(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<RegisterRegionalEndpointRequest>,
-) -> Result<Json<RegionalEndpoint>, ControlPlaneError> {
+) -> Result<Json<RegionalEndpoint>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.endpoint.cluster_id).await?;
     state.fleet.register_endpoint(&auth, &request).await.map(Json)
 }
@@ -218,7 +221,7 @@ async fn endpoints(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<RegionalEndpointQuery>,
-) -> Result<Json<RegionalEndpointPage>, ControlPlaneError> {
+) -> Result<Json<RegionalEndpointPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.fleet.endpoints(&auth, &query).await.map(Json)
 }
@@ -227,7 +230,7 @@ async fn route(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<RegionalRouteRequest>,
-) -> Result<Json<RegionalRouteDecision>, ControlPlaneError> {
+) -> Result<Json<RegionalRouteDecision>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.fleet.route(&auth, &request).await.map(Json)
 }
@@ -236,7 +239,7 @@ async fn upsert_asset(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<UpsertFleetAssetRequest>,
-) -> Result<Json<FleetAssetIndex>, ControlPlaneError> {
+) -> Result<Json<FleetAssetIndex>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.asset.cluster_id)).await?;
     state.fleet.upsert_asset(&auth, &request).await.map(Json)
 }
@@ -245,7 +248,7 @@ async fn assets(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<FleetScopeQuery>,
-) -> Result<Json<FleetAssetPage>, ControlPlaneError> {
+) -> Result<Json<FleetAssetPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.fleet.assets(&auth, &query).await.map(Json)
 }
@@ -254,7 +257,7 @@ async fn evaluate_compliance(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<EvaluateComplianceRequest>,
-) -> Result<Json<ComplianceEvaluationView>, ControlPlaneError> {
+) -> Result<Json<ComplianceEvaluationView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.fleet.evaluate_compliance(&auth, &request).await.map(Json)
 }
@@ -263,7 +266,7 @@ async fn findings(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ComplianceFindingQuery>,
-) -> Result<Json<ComplianceFindingPage>, ControlPlaneError> {
+) -> Result<Json<ComplianceFindingPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.fleet.findings(&auth, &query).await.map(Json)
 }
@@ -272,7 +275,7 @@ async fn create_inspection(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateFleetInspectionRequest>,
-) -> Result<Json<FleetInspectionRun>, ControlPlaneError> {
+) -> Result<Json<FleetInspectionRun>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.fleet.create_inspection(&auth, &request).await.map(Json)
 }
@@ -282,7 +285,7 @@ async fn update_inspection(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<UpdateFleetInspectionRequest>,
-) -> Result<Json<FleetInspectionRun>, ControlPlaneError> {
+) -> Result<Json<FleetInspectionRun>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .fleet
@@ -295,19 +298,19 @@ async fn inspections(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<FleetInspectionQuery>,
-) -> Result<Json<FleetInspectionPage>, ControlPlaneError> {
+) -> Result<Json<FleetInspectionPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.fleet.inspections(&auth, query.limit).await.map(Json)
 }
 
-fn parse_inspection_id(value: &str) -> Result<FleetInspectionRunId, ControlPlaneError> {
+fn parse_inspection_id(value: &str) -> Result<FleetInspectionRunId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "Fleet inspection identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "inspection id is invalid"))
 }
 
-fn parse_cluster_id(value: &str) -> Result<rocketmq_sre_contracts::ClusterId, ControlPlaneError> {
+fn parse_cluster_id(value: &str) -> Result<rocketmq_sre_contracts::ClusterId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "cluster identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "cluster id is invalid"))
 }

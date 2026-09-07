@@ -56,21 +56,21 @@ Compensating -> RolledBack | Escalated
 ```
 
 An edge outside this graph returns
-`ContractError::InvalidStateTransition`. Terminal states have no outgoing
+`SreContractError` with `PublicErrorCode::InvalidStateTransition`. Terminal states have no outgoing
 edges.
 
 ## Fail-closed errors
 
 | Condition | Typed failure |
 | --- | --- |
-| Unknown or R3 action identifier | Serde enum error / `ActionCatalogError::UnknownAction` |
-| Unknown descriptor version | `ActionCatalogError::UnknownVersion` |
-| Inactive, malformed, or unsafe descriptor | `ActionCatalogError::InvalidDescriptor` |
-| Rules-only or nil model invocation | `ContractError::InvalidDescriptor` |
-| Invalid evidence, precondition, or plan digest | `ContractError::InvalidContentHash` or `InvalidDescriptor` |
-| Modified or incompatible plan snapshot | `ContractError::InvalidContentHash` |
-| Illegal plan/execution transition | `ContractError::InvalidStateTransition` |
-| Descriptor without an enabled typed handler | `ActionCatalogError::ExecutionUnsupported` |
+| Unknown or R3 action identifier | `ActionCatalogRejection::UnknownAction` |
+| Unknown descriptor version | `ActionCatalogRejection::UnknownVersion` |
+| Inactive, malformed, or unsafe descriptor | `ActionCatalogRejection::InvalidDescriptor` |
+| Rules-only or nil model invocation | `SreContractError` / `PublicErrorCode::InvalidDescriptor` |
+| Invalid evidence, precondition, or plan digest | `SreContractError` / `PublicErrorCode::InvalidContentHash` or `PublicErrorCode::InvalidDescriptor` |
+| Modified or incompatible plan snapshot | `SreContractError` / `PublicErrorCode::InvalidContentHash` |
+| Illegal plan/execution transition | `SreContractError` / `PublicErrorCode::InvalidStateTransition` |
+| Descriptor without an enabled typed handler | `ActionCatalogRejection::ExecutionUnsupported` |
 
 Unknown JSON fields are rejected on every new supervised-execution DTO.
 Unknown schema versions and exact descriptor-version drift are rejected before

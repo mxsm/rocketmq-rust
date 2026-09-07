@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_sre_contracts::SreContractError;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::error::Error;
-use std::fmt;
 
 use rocketmq_sre_contracts::ActionRisk;
 use rocketmq_sre_contracts::ChangeSchedule;
@@ -28,30 +27,6 @@ use rocketmq_sre_contracts::RunbookStepId;
 use rocketmq_sre_contracts::is_sha256_digest;
 
 use crate::ActionCatalog;
-
-/// Fail-closed composite runbook validation error.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RunbookError {
-    InvalidDefinition(String),
-    UnknownAction(String),
-    RiskUnderstated,
-    UnsafeParameter(String),
-}
-
-impl fmt::Display for RunbookError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidDefinition(reason) => write!(formatter, "invalid runbook: {reason}"),
-            Self::UnknownAction(action) => write!(formatter, "runbook action is not registered: {action}"),
-            Self::RiskUnderstated => {
-                formatter.write_str("runbook risk is below its action, resource-scope, or concurrency upper bound")
-            }
-            Self::UnsafeParameter(field) => write!(formatter, "runbook parameter is forbidden: {field}"),
-        }
-    }
-}
-
-impl Error for RunbookError {}
 
 /// Validates a composite runbook against the exact embedded Action Catalog.
 pub struct RunbookValidator;
@@ -66,15 +41,15 @@ impl RunbookValidator {
     /// Rejects unknown/plan-only actions, shell or raw mutation fields,
     /// dependency cycles, invalid gates, unsafe parallel groups, and risk
     /// understatement.
-    pub fn validate(definition: &RunbookDefinition, catalog: &ActionCatalog) -> Result<(), RunbookError> {
+    pub fn validate(definition: &RunbookDefinition, catalog: &ActionCatalog) -> Result<(), SreContractError> {
         validate_header(definition)?;
         if !definition
             .steps
             .iter()
             .any(|step| matches!(step.body, RunbookStepBody::Action { .. }))
         {
-            return Err(RunbookError::InvalidDefinition(
-                "runbook must contain at least one typed action".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         let steps = index_steps(&definition.steps)?;
@@ -96,7 +71,9 @@ impl RunbookValidator {
             highest_risk = highest_risk.max(ActionRisk::R2);
         }
         if definition.risk < highest_risk {
-            return Err(RunbookError::RiskUnderstated);
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
         Ok(())
     }
@@ -111,21 +88,21 @@ impl RunbookValidator {
     pub fn validate_schedule_bindings(
         definition: &RunbookDefinition,
         schedule: &ChangeSchedule,
-    ) -> Result<(), RunbookError> {
+    ) -> Result<(), SreContractError> {
         if schedule.runbook_id != definition.id
             || schedule.runbook_version != definition.version
             || schedule.next_step_sequence == 0
             || usize::from(schedule.next_step_sequence) > definition.steps.len() + 1
             || (schedule.active_execution_id.is_some() && schedule.waiting_manual_gate.is_some())
         {
-            return Err(RunbookError::InvalidDefinition(
-                "schedule projection does not match the runbook identity or step cursor".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         let all_steps = definition.steps.iter().map(|step| step.id).collect::<BTreeSet<_>>();
         if !schedule.completed_steps.is_subset(&all_steps) {
-            return Err(RunbookError::InvalidDefinition(
-                "completed schedule steps are not present in the runbook".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         if let Some(waiting) = schedule.waiting_manual_gate {
@@ -134,8 +111,8 @@ impl RunbookValidator {
                 .iter()
                 .any(|step| step.id == waiting && matches!(step.body, RunbookStepBody::ManualGate { .. }));
             if !is_gate {
-                return Err(RunbookError::InvalidDefinition(
-                    "waiting manual gate is not a runbook gate".to_owned(),
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
                 ));
             }
         }
@@ -152,21 +129,21 @@ impl RunbookValidator {
                 || !is_sha256_digest(&binding.plan_hash)
                 || !is_sha256_digest(&binding.precondition_hash)
             {
-                return Err(RunbookError::InvalidDefinition(
-                    "action-plan bindings are missing, duplicated, extra, or malformed".to_owned(),
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
                 ));
             }
         }
         if action_steps != bound_steps {
-            return Err(RunbookError::InvalidDefinition(
-                "every runbook action step must have exactly one approved plan binding".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         Ok(())
     }
 }
 
-fn validate_header(definition: &RunbookDefinition) -> Result<(), RunbookError> {
+fn validate_header(definition: &RunbookDefinition) -> Result<(), SreContractError> {
     if definition.schema_version != RunbookDefinition::SCHEMA_VERSION
         || definition.id.as_uuid().is_nil()
         || definition.name.trim().is_empty()
@@ -181,21 +158,22 @@ fn validate_header(definition: &RunbookDefinition) -> Result<(), RunbookError> {
         || definition.steps.len() > 64
         || !matches!(definition.risk, ActionRisk::R1 | ActionRisk::R2)
     {
-        return Err(RunbookError::InvalidDefinition(
-            "header, version, risk, parallelism, or step count is invalid".to_owned(),
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
         ));
     }
     Ok(())
 }
 
-fn index_steps(steps: &[RunbookStep]) -> Result<BTreeMap<RunbookStepId, &RunbookStep>, RunbookError> {
+fn index_steps(steps: &[RunbookStep]) -> Result<BTreeMap<RunbookStepId, &RunbookStep>, SreContractError> {
     let mut indexed = BTreeMap::new();
     for (index, step) in steps.iter().enumerate() {
-        let expected_sequence = u16::try_from(index + 1)
-            .map_err(|_| RunbookError::InvalidDefinition("step sequence exceeds u16".to_owned()))?;
+        let expected_sequence = u16::try_from(index + 1).map_err(|_| {
+            rocketmq_sre_contracts::SreContractError::new(rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor)
+        })?;
         if step.id.as_uuid().is_nil() || step.sequence != expected_sequence || indexed.insert(step.id, step).is_some() {
-            return Err(RunbookError::InvalidDefinition(
-                "step identifiers must be unique and sequences contiguous".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
     }
@@ -208,7 +186,7 @@ fn validate_step(
     steps: &BTreeMap<RunbookStepId, &RunbookStep>,
     catalog: &ActionCatalog,
     highest_risk: &mut ActionRisk,
-) -> Result<(), RunbookError> {
+) -> Result<(), SreContractError> {
     if step.name.trim().is_empty()
         || step.name.chars().count() > 128
         || step.depends_on.contains(&step.id)
@@ -218,18 +196,22 @@ fn validate_step(
                 .is_none_or(|candidate| candidate.sequence >= step.sequence)
         })
     {
-        return Err(RunbookError::InvalidDefinition(
-            "step name or dependency ordering is invalid".to_owned(),
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
         ));
     }
     if index > 0 && step.parallel_group.is_none() {
         let previous = steps
             .values()
             .find(|candidate| candidate.sequence + 1 == step.sequence)
-            .ok_or_else(|| RunbookError::InvalidDefinition("previous serial step is missing".to_owned()))?;
+            .ok_or_else(|| {
+                rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+                )
+            })?;
         if !step.depends_on.contains(&previous.id) {
-            return Err(RunbookError::InvalidDefinition(
-                "steps are serial by default and must depend on the preceding step".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
     }
@@ -245,15 +227,15 @@ fn validate_step(
                 || resource.chars().any(char::is_control)
                 || parameters.as_object().is_none()
             {
-                return Err(RunbookError::InvalidDefinition(
-                    "action resource and parameters must be bounded".to_owned(),
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
                 ));
             }
-            let descriptor = catalog
-                .descriptor(*action, descriptor_version)
-                .map_err(|_| RunbookError::UnknownAction(action.id().to_owned()))?;
+            let descriptor = catalog.descriptor(*action, descriptor_version)?;
             if descriptor.plan_only {
-                return Err(RunbookError::UnknownAction(action.id().to_owned()));
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::DescriptorNotFound,
+                ));
             }
             *highest_risk = (*highest_risk).max(descriptor.risk);
             validate_parameter_fields(parameters, &descriptor.forbidden_fields)?;
@@ -270,7 +252,9 @@ fn validate_step(
                 || gate.timeout_seconds == 0
                 || gate.timeout_seconds > 86400
             {
-                return Err(RunbookError::InvalidDefinition("manual gate is invalid".to_owned()));
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+                ));
             }
         }
     }
@@ -279,7 +263,9 @@ fn validate_step(
             || condition.fact.chars().count() > 128
             || condition.fact.chars().any(char::is_control))
     {
-        return Err(RunbookError::InvalidDefinition("step condition is invalid".to_owned()));
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     Ok(())
 }
@@ -287,7 +273,7 @@ fn validate_step(
 fn validate_parameter_fields(
     value: &ContractJsonValue,
     descriptor_forbidden: &BTreeSet<String>,
-) -> Result<(), RunbookError> {
+) -> Result<(), SreContractError> {
     if let Some(values) = value.as_object() {
         for (field, value) in values {
             let normalized = field.to_ascii_lowercase();
@@ -302,7 +288,9 @@ fn validate_parameter_fields(
                 ]
                 .contains(&normalized.as_str())
             {
-                return Err(RunbookError::UnsafeParameter(field.clone()));
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+                ));
             }
             validate_parameter_fields(value, descriptor_forbidden)?;
         }
@@ -317,7 +305,7 @@ fn validate_parameter_fields(
 fn validate_parallel_groups(
     max_parallelism: u16,
     groups: &BTreeMap<&str, Vec<&RunbookStep>>,
-) -> Result<(), RunbookError> {
+) -> Result<(), SreContractError> {
     for (name, steps) in groups {
         if name.trim().is_empty()
             || name.chars().count() > 128
@@ -328,8 +316,8 @@ fn validate_parallel_groups(
                     .any(|peer| step.id != peer.id && step.depends_on.contains(&peer.id))
             })
         {
-            return Err(RunbookError::InvalidDefinition(
-                "parallel group exceeds its bound or contains internal dependencies".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         let resources = steps
@@ -340,8 +328,8 @@ fn validate_parallel_groups(
             })
             .collect::<BTreeSet<_>>();
         if resources.len() != steps.len() {
-            return Err(RunbookError::InvalidDefinition(
-                "parallel steps must be independent action resources".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
     }
@@ -351,7 +339,7 @@ fn validate_parallel_groups(
 fn validate_compensation_edges(
     definition: &RunbookDefinition,
     steps: &BTreeMap<RunbookStepId, &RunbookStep>,
-) -> Result<(), RunbookError> {
+) -> Result<(), SreContractError> {
     let mut edges = BTreeSet::new();
     for edge in &definition.compensation_edges {
         if edge.from_step == edge.compensation_step
@@ -359,8 +347,8 @@ fn validate_compensation_edges(
             || !steps.contains_key(&edge.compensation_step)
             || !edges.insert((edge.from_step, edge.compensation_step, edge.trigger))
         {
-            return Err(RunbookError::InvalidDefinition(
-                "compensation edge is missing, self-referential, or duplicated".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
     }

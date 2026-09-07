@@ -19,7 +19,7 @@ use rocketmq_sre_contracts::CorrelationId;
 use tokio::sync::Mutex;
 
 use super::ReadAdapterKind;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 
 const MAX_AUDIT_EVENTS: usize = 256;
 
@@ -34,15 +34,15 @@ pub(crate) enum ReadAuditOutcome {
 }
 
 impl ReadAuditOutcome {
-    pub(crate) fn from_error(code: ConnectorErrorCode) -> Self {
+    pub(crate) fn from_error(code: ConnectorFailure) -> Self {
         match code {
-            ConnectorErrorCode::UnauthorizedScope
-            | ConnectorErrorCode::TenantMismatch
-            | ConnectorErrorCode::ClusterNotAllowed
-            | ConnectorErrorCode::InvalidEvidenceQuery => Self::Denied,
-            ConnectorErrorCode::RateLimited => Self::RateLimited,
-            ConnectorErrorCode::DeadlineExceeded => Self::TimedOut,
-            ConnectorErrorCode::QueryCancelled => Self::Cancelled,
+            ConnectorFailure::UnauthorizedScope
+            | ConnectorFailure::TenantMismatch
+            | ConnectorFailure::ClusterNotAllowed
+            | ConnectorFailure::InvalidEvidenceQuery => Self::Denied,
+            ConnectorFailure::RateLimited => Self::RateLimited,
+            ConnectorFailure::DeadlineExceeded => Self::TimedOut,
+            ConnectorFailure::QueryCancelled => Self::Cancelled,
             _ => Self::SourceFailed,
         }
     }

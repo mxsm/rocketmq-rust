@@ -136,7 +136,6 @@ use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Deserialize;
 use serde::Serialize;
-use thiserror::Error;
 
 /// Required-signal manifest schema implemented by Phase 00.
 pub const REQUIRED_SIGNALS_SCHEMA_VERSION: &str = "rocketmq.sre.required-signals.v1";
@@ -205,58 +204,225 @@ pub struct RequiredSignalManifest {
     pub signals: Vec<RequiredSignal>,
 }
 
-/// Coverage or schema utility failure.
-#[derive(Debug, Error)]
-pub enum EvalError {
-    #[error("failed to access `{path}`: {source}")]
-    Io {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("invalid YAML coverage manifest: {0}")]
-    InvalidYaml(#[from] serde_yaml::Error),
-    #[error("duplicate requirement id `{0}`")]
-    DuplicateRequirement(String),
-    #[error("unsupported required-signal schema `{actual}`; expected `{expected}`")]
-    UnsupportedRequiredSignalSchema { expected: &'static str, actual: String },
-    #[error("failed to encode JSON schema: {0}")]
-    SchemaEncoding(#[from] serde_json::Error),
+/// Closed, source-free evaluation refusal or validation result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvalRejection {
+    InvalidQualificationManifest,
+    InvalidEvidenceFixture,
+    QualificationAssertion,
+    InvalidShadowManifest,
+    MutationBoundaryViolation,
+    ClusterNotAllowed,
+    InvalidEvidenceCitation,
+    UnauthorizedTool,
+    DiagnosticReplayRejected,
+    InvalidReplaySchema,
+    DuplicateReplayFixture,
+    UnknownReplayFixture,
+    ReplayScenarioMismatch,
+    EmptyReplayRun,
+    InvalidReplayEvidence,
+    DuplicateReplayManifestEntry,
+    ReplayNonDeterministic,
+}
+
+impl EvalRejection {
+    /// Returns the fixed machine-facing code for this expected result.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidQualificationManifest => "invalid_qualification_manifest",
+            Self::InvalidEvidenceFixture => "invalid_evidence_fixture",
+            Self::QualificationAssertion => "diagnostic_qualification_failed",
+            Self::InvalidShadowManifest => "invalid_shadow_manifest",
+            Self::MutationBoundaryViolation => "mutation_boundary_violation",
+            Self::ClusterNotAllowed => "cluster_not_allowed",
+            Self::InvalidEvidenceCitation => "invalid_evidence_citation",
+            Self::UnauthorizedTool => "unauthorized_tool",
+            Self::DiagnosticReplayRejected => "diagnostic_replay_rejected",
+            Self::InvalidReplaySchema => "invalid_replay_schema",
+            Self::DuplicateReplayFixture => "duplicate_replay_fixture",
+            Self::UnknownReplayFixture => "unknown_replay_fixture",
+            Self::ReplayScenarioMismatch => "replay_scenario_mismatch",
+            Self::EmptyReplayRun => "empty_replay_run",
+            Self::InvalidReplayEvidence => "invalid_replay_evidence",
+            Self::DuplicateReplayManifestEntry => "duplicate_replay_manifest_entry",
+            Self::ReplayNonDeterministic => "replay_non_deterministic",
+        }
+    }
+}
+
+/// Evaluation completion that separates expected rejections from operational
+/// [`EvalError`] failures.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EvalOutcome<T> {
+    Completed(T),
+    Rejected(EvalRejection),
+}
+
+impl<T> EvalOutcome<T> {
+    /// Returns the completed value, if the evaluation was accepted.
+    #[must_use]
+    pub fn completed(self) -> Option<T> {
+        match self {
+            Self::Completed(value) => Some(value),
+            Self::Rejected(_) => None,
+        }
+    }
+
+    /// Returns the closed rejection, if evaluation was refused.
+    #[must_use]
+    pub const fn rejection(&self) -> Option<EvalRejection> {
+        match self {
+            Self::Completed(_) => None,
+            Self::Rejected(rejection) => Some(*rejection),
+        }
+    }
+}
+
+/// Opaque operational failure at the evaluation boundary.
+pub struct EvalError {
+    kind: EvalFailure,
+}
+
+#[derive(Debug)]
+enum EvalFailure {
+    Io { source: std::io::Error },
+    SchemaEncoding(serde_json::Error),
+    Replay(replay::ReplaySource),
+    Shadow(phase1_shadow::ShadowEvalSource),
+    DiagnosticQualification(diagnostic_qualification::DiagnosticQualificationSource),
+}
+
+impl EvalError {
+    /// Returns the stable machine-facing failure category without exposing details.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match &self.kind {
+            EvalFailure::Io { .. } => "source_unavailable",
+            EvalFailure::SchemaEncoding(_) => "evaluation_encoding_failed",
+            EvalFailure::Replay(_) => "evaluation_replay_failed",
+            EvalFailure::Shadow(source) => source.code(),
+            EvalFailure::DiagnosticQualification(source) => source.code(),
+        }
+    }
+
+    #[allow(
+        non_snake_case,
+        reason = "private constructors preserve concise internal source conversions"
+    )]
+    fn Io(_path: String, source: std::io::Error) -> Self {
+        Self {
+            kind: EvalFailure::Io { source },
+        }
+    }
+
+    #[allow(
+        non_snake_case,
+        reason = "private constructors preserve concise internal source conversions"
+    )]
+    fn SchemaEncoding(error: serde_json::Error) -> Self {
+        Self {
+            kind: EvalFailure::SchemaEncoding(error),
+        }
+    }
+
+    pub(crate) fn replay_source(source: replay::ReplaySource) -> Self {
+        Self {
+            kind: EvalFailure::Replay(source),
+        }
+    }
+
+    pub(crate) fn shadow_source(source: phase1_shadow::ShadowEvalSource) -> Self {
+        Self {
+            kind: EvalFailure::Shadow(source),
+        }
+    }
+
+    pub(crate) fn diagnostic_qualification_source(
+        source: diagnostic_qualification::DiagnosticQualificationSource,
+    ) -> Self {
+        Self {
+            kind: EvalFailure::DiagnosticQualification(source),
+        }
+    }
+}
+
+impl std::fmt::Display for EvalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("evaluation operation failed")
+    }
+}
+
+impl std::fmt::Debug for EvalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl std::error::Error for EvalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.kind {
+            EvalFailure::Io { source } => Some(source),
+            EvalFailure::SchemaEncoding(source) => Some(source),
+            EvalFailure::Replay(source) => Some(source),
+            EvalFailure::Shadow(source) => Some(source),
+            EvalFailure::DiagnosticQualification(source) => Some(source),
+        }
+    }
+}
+
+impl From<serde_json::Error> for EvalError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::SchemaEncoding(error)
+    }
+}
+
+/// Closed rejection produced while parsing a required-signal manifest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RequiredSignalRejection {
+    InvalidYaml,
+    UnsupportedSchema,
+    DuplicateRequirement,
+}
+
+/// Deterministic result of parsing a required-signal manifest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RequiredSignalParseOutcome {
+    Accepted(RequiredSignalManifest),
+    Rejected(RequiredSignalRejection),
 }
 
 /// Loads and validates a required-signal YAML manifest.
 ///
 /// # Errors
 ///
-/// Returns an I/O, YAML, or duplicate identifier error.
-pub fn load_required_signals(path: &Path) -> Result<RequiredSignalManifest, EvalError> {
-    let yaml = fs::read_to_string(path).map_err(|source| EvalError::Io {
-        path: path.display().to_string(),
-        source,
-    })?;
-    parse_required_signals(&yaml)
+/// Returns an error only when the manifest cannot be read. Invalid manifest
+/// content is returned as a closed [`RequiredSignalParseOutcome`].
+pub fn load_required_signals(path: &Path) -> Result<RequiredSignalParseOutcome, EvalError> {
+    let yaml = fs::read_to_string(path).map_err(|source| EvalError::Io(path.display().to_string(), source))?;
+    Ok(parse_required_signals(&yaml))
 }
 
 /// Parses a manifest while enforcing unique requirement IDs.
 ///
-/// # Errors
-///
-/// Returns an invalid YAML or duplicate identifier error.
-pub fn parse_required_signals(yaml: &str) -> Result<RequiredSignalManifest, EvalError> {
-    let manifest: RequiredSignalManifest = serde_yaml::from_str(yaml)?;
+/// Invalid YAML, unsupported schema versions, and duplicate identifiers are
+/// deterministic input rejections, not operational failures.
+#[must_use]
+pub fn parse_required_signals(yaml: &str) -> RequiredSignalParseOutcome {
+    let Ok(manifest) = serde_yaml::from_str::<RequiredSignalManifest>(yaml) else {
+        return RequiredSignalParseOutcome::Rejected(RequiredSignalRejection::InvalidYaml);
+    };
     if manifest.schema_version != REQUIRED_SIGNALS_SCHEMA_VERSION {
-        return Err(EvalError::UnsupportedRequiredSignalSchema {
-            expected: REQUIRED_SIGNALS_SCHEMA_VERSION,
-            actual: manifest.schema_version,
-        });
+        return RequiredSignalParseOutcome::Rejected(RequiredSignalRejection::UnsupportedSchema);
     }
     let mut seen = BTreeSet::new();
     for signal in &manifest.signals {
         if !seen.insert(&signal.requirement_id) {
-            return Err(EvalError::DuplicateRequirement(signal.requirement_id.clone()));
+            return RequiredSignalParseOutcome::Rejected(RequiredSignalRejection::DuplicateRequirement);
         }
     }
-    Ok(manifest)
+    RequiredSignalParseOutcome::Accepted(manifest)
 }
 
 /// Writes stable, pretty JSON schemas for Phase 00 public contracts.
@@ -265,18 +431,12 @@ pub fn parse_required_signals(yaml: &str) -> Result<RequiredSignalManifest, Eval
 ///
 /// Returns an I/O or JSON encoding error.
 pub fn export_schemas(output_dir: &Path) -> Result<(), EvalError> {
-    fs::create_dir_all(output_dir).map_err(|source| EvalError::Io {
-        path: output_dir.display().to_string(),
-        source,
-    })?;
+    fs::create_dir_all(output_dir).map_err(|source| EvalError::Io(output_dir.display().to_string(), source))?;
     for (name, schema) in generated_schemas()? {
         let path = output_dir.join(name);
         let mut bytes = serde_json::to_vec_pretty(&schema)?;
         bytes.push(b'\n');
-        fs::write(&path, bytes).map_err(|source| EvalError::Io {
-            path: path.display().to_string(),
-            source,
-        })?;
+        fs::write(&path, bytes).map_err(|source| EvalError::Io(path.display().to_string(), source))?;
     }
     Ok(())
 }
@@ -287,18 +447,12 @@ pub fn export_schemas(output_dir: &Path) -> Result<(), EvalError> {
 ///
 /// Returns an I/O or JSON encoding error.
 pub fn export_phase3_schemas(output_dir: &Path) -> Result<(), EvalError> {
-    fs::create_dir_all(output_dir).map_err(|source| EvalError::Io {
-        path: output_dir.display().to_string(),
-        source,
-    })?;
+    fs::create_dir_all(output_dir).map_err(|source| EvalError::Io(output_dir.display().to_string(), source))?;
     for (name, schema) in phase3_generated_schemas()? {
         let path = output_dir.join(name);
         let mut bytes = serde_json::to_vec_pretty(&schema)?;
         bytes.push(b'\n');
-        fs::write(&path, bytes).map_err(|source| EvalError::Io {
-            path: path.display().to_string(),
-            source,
-        })?;
+        fs::write(&path, bytes).map_err(|source| EvalError::Io(path.display().to_string(), source))?;
     }
     Ok(())
 }
@@ -873,10 +1027,10 @@ signals:
     evidence_field: availability.up
 "#;
 
-        assert!(matches!(
+        assert_eq!(
             parse_required_signals(yaml),
-            Err(EvalError::DuplicateRequirement(id)) if id == "broker.up"
-        ));
+            RequiredSignalParseOutcome::Rejected(RequiredSignalRejection::DuplicateRequirement)
+        );
     }
 
     #[test]
@@ -900,7 +1054,9 @@ signals:
     evidence_field: routing.freshness
 "#;
 
-        let manifest = parse_required_signals(yaml).expect("fixture should parse");
+        let RequiredSignalParseOutcome::Accepted(manifest) = parse_required_signals(yaml) else {
+            panic!("fixture should parse")
+        };
         assert_eq!(
             manifest.signals[0].status,
             SignalImplementationStatus::MissingInstrumentation
@@ -928,11 +1084,10 @@ signals:
     evidence_field: availability.up
 "#;
 
-        assert!(matches!(
+        assert_eq!(
             parse_required_signals(yaml),
-            Err(EvalError::UnsupportedRequiredSignalSchema { actual, .. })
-                if actual == "rocketmq-sre.required-signals.v1"
-        ));
+            RequiredSignalParseOutcome::Rejected(RequiredSignalRejection::UnsupportedSchema)
+        );
     }
 
     #[test]

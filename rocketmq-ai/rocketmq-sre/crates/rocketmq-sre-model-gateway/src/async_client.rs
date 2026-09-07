@@ -19,7 +19,9 @@ use std::sync::Arc;
 use crate::adapters::build_chat_transport_request;
 use crate::adapters::parse_chat_transport_response;
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderOperationalFailure;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::ir::CanonicalModelRequest;
 use crate::ir::CanonicalModelResponse;
 use crate::profile::ProviderCapabilities;
@@ -53,23 +55,20 @@ impl AsyncBuiltinProviderClient {
     ///
     /// Returns a profile error for invalid profiles, Provider SPI profiles, or
     /// adapter-owned credential references.
-    pub fn new(profile: ProviderProfile, transport: Arc<dyn AsyncModelTransport>) -> Result<Self, ProviderError> {
+    pub fn new(
+        profile: ProviderProfile,
+        transport: Arc<dyn AsyncModelTransport>,
+    ) -> Result<Self, ProviderStatusOutcome> {
         profile.validate()?;
         if profile.provider_family == ProviderFamily::ProviderSpi {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider SPI profiles require ProviderSpiClient",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         if profile
             .credential_ref
             .as_ref()
             .is_some_and(|reference| reference.kind() == SecretReferenceKind::Adapter)
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "built-in provider credentials must be gateway-owned",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         Ok(Self { profile, transport })
     }
@@ -107,7 +106,7 @@ impl AsyncBuiltinProviderClient {
         context: &InvocationContext,
         request: &CanonicalModelRequest,
         credential: Option<SecretMaterial>,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         self.validate_credential_presence(credential.as_ref())?;
         let transport_request = build_chat_transport_request(&self.profile, context, request, credential)?;
         let response = self.transport.invoke(transport_request).await?;
@@ -128,7 +127,7 @@ impl AsyncBuiltinProviderClient {
         context: &InvocationContext,
         request: &CanonicalModelRequest,
         credential: Option<SecretMaterial>,
-    ) -> Result<AsyncBoundedModelStream, ProviderError> {
+    ) -> Result<AsyncBoundedModelStream, ProviderStatusOutcome> {
         self.validate_credential_presence(credential.as_ref())?;
         let mut streaming_request = request.clone();
         streaming_request.stream = true;
@@ -138,18 +137,17 @@ impl AsyncBuiltinProviderClient {
             .await
     }
 
-    fn validate_credential_presence(&self, credential: Option<&SecretMaterial>) -> Result<(), ProviderError> {
+    fn validate_credential_presence(&self, credential: Option<&SecretMaterial>) -> Result<(), ProviderStatusOutcome> {
         match (self.profile.credential_ref.is_some(), credential.is_some()) {
             (true, false) => {
                 return Err(ProviderError::new(
-                    ProviderErrorCode::SecretUnavailable,
+                    ProviderOperationalFailure::SecretUnavailable,
                     "model provider credential is unavailable",
-                ));
+                )
+                .into());
             }
             (false, true) => {
-                return Err(ProviderError::policy_denied(
-                    "credential was supplied to a profile without a credential reference",
-                ));
+                return Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied));
             }
             _ => {}
         }

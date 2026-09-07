@@ -95,7 +95,7 @@ impl ProductionTopicConfigPatchClient {
             },
             TelemetryHandle::noop(),
         )
-        .map_err(|_| ExecutionAgentError::Configuration)?;
+        .map_err(ExecutionAgentError::configuration_source)?;
         let timeout_millis = duration_millis(config.request_timeout)?;
         let mut read_builder = ReadAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(config.namesrv_addr.clone())
@@ -109,7 +109,7 @@ impl ProductionTopicConfigPatchClient {
         let mut read_admin = read_builder
             .build_and_start()
             .await
-            .map_err(|_| ExecutionAgentError::Configuration)?;
+            .map_err(ExecutionAgentError::configuration_source)?;
 
         let mut mutation_builder = MutationAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(config.namesrv_addr.clone())
@@ -122,9 +122,9 @@ impl ProductionTopicConfigPatchClient {
         }
         let mutation_admin = match mutation_builder.build_and_start().await {
             Ok(session) => session,
-            Err(_) => {
+            Err(error) => {
                 read_admin.shutdown().await;
-                return Err(ExecutionAgentError::Configuration);
+                return Err(ExecutionAgentError::configuration_source(error));
             }
         };
         Ok(Self {
@@ -140,35 +140,36 @@ impl ProductionTopicConfigPatchClient {
         self.mutation_admin.lock().await.shutdown().await;
     }
 
-    async fn live_state(&self, topic: &str) -> Result<LiveTopicConfig, ExecutionAgentError> {
-        let request = GetTopicRouteRequest::try_new(topic).map_err(|_| ExecutionAgentError::InvalidRequest)?;
+    async fn live_state(&self, topic: &str) -> Result<LiveTopicConfig, crate::ExecutionAgentRequestFailure> {
+        let request =
+            GetTopicRouteRequest::try_new(topic).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
         let (targets, broker_states) = {
             let mut admin = self.read_admin.lock().await;
             let route = admin
                 .get_topic_route(&request)
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+                .map_err(ExecutionAgentError::driver_source)?
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             let mut targets = BTreeSet::new();
             for broker in route.brokers {
                 let master_addr = broker
                     .broker_addrs
                     .get(&MASTER_BROKER_ID)
-                    .ok_or(ExecutionAgentError::DriverFailed)?;
+                    .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
                 targets.insert(master_addr.clone());
             }
             if targets.is_empty() {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let mut broker_states = Vec::with_capacity(targets.len());
             for broker_addr in &targets {
                 let state = admin
                     .query_config_cas_state(
                         &QueryTopicConfigCasRequest::try_new(broker_addr, topic)
-                            .map_err(|_| ExecutionAgentError::InvalidRequest)?,
+                            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?,
                     )
                     .await
-                    .map_err(|_| ExecutionAgentError::DriverFailed)?;
+                    .map_err(ExecutionAgentError::driver_source)?;
                 broker_states.push(LiveTopicBroker {
                     broker_addr: broker_addr.clone(),
                     state,
@@ -181,8 +182,10 @@ impl ProductionTopicConfigPatchClient {
             .iter()
             .map(|broker| broker.state.version)
             .max()
-            .ok_or(ExecutionAgentError::DriverFailed)?;
-        let first = broker_states.first().ok_or(ExecutionAgentError::DriverFailed)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
+        let first = broker_states
+            .first()
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let values = state_patch(first.state);
         let configuration_consistent = broker_states
             .iter()
@@ -209,7 +212,7 @@ impl ProductionTopicConfigPatchClient {
         topic: &str,
         expected_version: u64,
         patch: &TopicConfigPatch,
-    ) -> Result<TopicConfigPatchApplyOutcome, ExecutionAgentError> {
+    ) -> Result<TopicConfigPatchApplyOutcome, crate::ExecutionAgentRequestFailure> {
         let request = PatchTopicConfigRequest::try_new(
             broker_addr,
             topic,
@@ -220,13 +223,13 @@ impl ProductionTopicConfigPatchClient {
                 order: patch.order,
             },
         )
-        .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+        .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
         let outcome = {
             let mut admin = self.mutation_admin.lock().await;
             admin
                 .patch_config_if_version(&request)
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?
+                .map_err(ExecutionAgentError::driver_source)?
         };
         Ok(match outcome {
             PatchTopicConfigOutcome::Applied {
@@ -250,12 +253,11 @@ impl ProductionTopicConfigPatchClient {
         &self,
         request: &TopicConfigPatchWrite,
         applied: &[(TopicBeforeBroker, u64)],
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         for (broker, current_version) in applied.iter().rev() {
             let outcome = self
                 .apply_one(&broker.broker_addr, &request.topic, *current_version, &broker.before)
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)?;
+                .await?;
             self.journal
                 .append_result(
                     request.execution_id,
@@ -268,10 +270,9 @@ impl ProductionTopicConfigPatchClient {
                     outcome,
                     Utc::now(),
                 )
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)?;
+                .await?;
             if !matches!(outcome, TopicConfigPatchApplyOutcome::Applied { .. }) {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
         }
         Ok(())
@@ -282,12 +283,11 @@ impl ProductionTopicConfigPatchClient {
         request: &TopicConfigPatchRestore,
         before: &TopicBeforeState,
         applied: &[(String, u64)],
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         for (broker_addr, current_version) in applied.iter().rev() {
             let outcome = self
                 .apply_one(broker_addr, &request.topic, *current_version, &before.forward_patch)
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)?;
+                .await?;
             self.journal
                 .append_result(
                     request.execution_id,
@@ -300,10 +300,9 @@ impl ProductionTopicConfigPatchClient {
                     outcome,
                     Utc::now(),
                 )
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)?;
+                .await?;
             if !matches!(outcome, TopicConfigPatchApplyOutcome::Applied { .. }) {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
         }
         Ok(())
@@ -322,7 +321,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
         Box::pin(async move {
             let live = self.live_state(&request.topic).await?;
             if !live.aggregate.configuration_consistent {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if live.aggregate.version != request.expected_version {
                 return Ok(TopicConfigPatchApplyOutcome::VersionConflict {
@@ -331,7 +330,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                 });
             }
             if patch_matches(&request.patch, &live.aggregate.values) {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let brokers = live
                 .brokers
@@ -343,7 +342,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                         before: select_before_values(state_patch(broker.state), &request.patch)?,
                     })
                 })
-                .collect::<Result<Vec<_>, ExecutionAgentError>>()?;
+                .collect::<Result<Vec<_>, crate::ExecutionAgentRequestFailure>>()?;
             let before = TopicBeforeState {
                 topic: request.topic.clone(),
                 operation_id: request.operation_id.clone(),
@@ -364,7 +363,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                     Ok(outcome) => outcome,
                     Err(_) => {
                         let _ = self.rollback_known_forward_effects(request, &applied).await;
-                        return Err(ExecutionAgentError::DriverUnknown);
+                        return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                     }
                 };
                 if let TopicConfigPatchApplyOutcome::Applied { version, .. } = outcome {
@@ -387,7 +386,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                     .is_err()
                 {
                     let _ = self.rollback_known_forward_effects(request, &applied).await;
-                    return Err(ExecutionAgentError::DriverUnknown);
+                    return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                 }
                 if let TopicConfigPatchApplyOutcome::VersionConflict {
                     expected_version,
@@ -401,13 +400,13 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                         });
                     }
                     let _ = self.rollback_known_forward_effects(request, &applied).await;
-                    return Err(ExecutionAgentError::DriverUnknown);
+                    return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                 }
             }
             let version = request
                 .expected_version
                 .checked_add(1)
-                .ok_or(ExecutionAgentError::DriverUnknown)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverUnknown)?;
             Ok(TopicConfigPatchApplyOutcome::Applied {
                 previous_version: request.expected_version,
                 version,
@@ -425,7 +424,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                 .load_before(request.execution_id, request.plan_step_id)
                 .await?;
             if before.topic != request.topic {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let live = self.live_state(&request.topic).await?;
             let current_targets = live
@@ -457,7 +456,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
             for broker in &live.brokers {
                 let inverse = before_by_addr
                     .get(broker.broker_addr.as_str())
-                    .ok_or(ExecutionAgentError::DriverFailed)?;
+                    .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
                 let outcome = match self
                     .apply_one(&broker.broker_addr, &request.topic, broker.state.version, inverse)
                     .await
@@ -467,7 +466,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                         let _ = self
                             .reapply_known_compensation_effects(request, &before, &applied)
                             .await;
-                        return Err(ExecutionAgentError::DriverUnknown);
+                        return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                     }
                 };
                 if let TopicConfigPatchApplyOutcome::Applied { version, .. } = outcome {
@@ -492,7 +491,7 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                     let _ = self
                         .reapply_known_compensation_effects(request, &before, &applied)
                         .await;
-                    return Err(ExecutionAgentError::DriverUnknown);
+                    return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                 }
                 if let TopicConfigPatchApplyOutcome::VersionConflict {
                     expected_version,
@@ -508,12 +507,12 @@ impl TopicConfigPatchClient for ProductionTopicConfigPatchClient {
                     let _ = self
                         .reapply_known_compensation_effects(request, &before, &applied)
                         .await;
-                    return Err(ExecutionAgentError::DriverUnknown);
+                    return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                 }
             }
             let version = previous_version
                 .checked_add(1)
-                .ok_or(ExecutionAgentError::DriverUnknown)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverUnknown)?;
             Ok(TopicConfigPatchApplyOutcome::Applied {
                 previous_version,
                 version,
@@ -533,7 +532,7 @@ fn state_patch(state: TopicConfigCasState) -> TopicConfigPatch {
 fn select_before_values(
     live: TopicConfigPatch,
     requested: &TopicConfigPatch,
-) -> Result<TopicConfigPatch, ExecutionAgentError> {
+) -> Result<TopicConfigPatch, crate::ExecutionAgentRequestFailure> {
     Ok(TopicConfigPatch {
         read_queue_nums: requested
             .read_queue_nums
@@ -548,14 +547,14 @@ fn select_before_values(
 }
 
 trait RequiredOption<T> {
-    fn transpose_required(self) -> Result<Option<T>, ExecutionAgentError>;
+    fn transpose_required(self) -> Result<Option<T>, crate::ExecutionAgentRequestFailure>;
 }
 
 impl<T> RequiredOption<T> for Option<Option<T>> {
-    fn transpose_required(self) -> Result<Option<T>, ExecutionAgentError> {
+    fn transpose_required(self) -> Result<Option<T>, crate::ExecutionAgentRequestFailure> {
         match self {
             Some(Some(value)) => Ok(Some(value)),
-            Some(None) => Err(ExecutionAgentError::DriverFailed),
+            Some(None) => Err(crate::ExecutionAgentRequestFailure::DriverFailed),
             None => Ok(None),
         }
     }
@@ -572,7 +571,7 @@ fn patch_matches(patch: &TopicConfigPatch, state: &TopicConfigPatch) -> bool {
 }
 
 fn duration_millis(duration: std::time::Duration) -> Result<u64, ExecutionAgentError> {
-    u64::try_from(duration.as_millis()).map_err(|_| ExecutionAgentError::Configuration)
+    u64::try_from(duration.as_millis()).map_err(ExecutionAgentError::configuration_source)
 }
 
 #[cfg(test)]

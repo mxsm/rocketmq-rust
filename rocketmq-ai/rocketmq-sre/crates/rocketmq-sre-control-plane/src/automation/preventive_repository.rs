@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use super::model::CompletePreventiveRunRequest;
 use super::model::PreventiveRunListQuery;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 impl PostgresRepository {
@@ -37,10 +37,14 @@ impl PostgresRepository {
         &self,
         request: &PreventiveAutomationRequest,
         inspection_run_id: Option<InspectionRunId>,
-    ) -> Result<PreventiveAutomationRun, ControlPlaneError> {
-        request
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_preventive_request", error.to_string()))?;
+    ) -> Result<PreventiveAutomationRun, ControlPlaneRequestFailure> {
+        request.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_preventive_request",
+                error,
+            )
+        })?;
         let run = PreventiveAutomationRun {
             schema_version: AUTOMATION_SCHEMA_VERSION.to_owned(),
             id: request.id,
@@ -59,8 +63,13 @@ impl PostgresRepository {
             started_at: request.requested_at,
             completed_at: None,
         };
-        run.validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_preventive_run", error.to_string()))?;
+        run.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_preventive_run",
+                error,
+            )
+        })?;
         let mut transaction = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO preventive_automation_runs (
@@ -115,7 +124,7 @@ impl PostgresRepository {
         .await?;
         let stored_request: PreventiveAutomationRequest = from_json(row.try_get("request_snapshot")?)?;
         if !same_request(&stored_request, request) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "preventive_idempotency_conflict",
                 "preventive idempotency key already binds different request content",
             ));
@@ -129,7 +138,7 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         run_id: AutomationRunId,
-    ) -> Result<(PreventiveAutomationRun, bool), ControlPlaneError> {
+    ) -> Result<(PreventiveAutomationRun, bool), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT result_snapshot
@@ -141,7 +150,7 @@ impl PostgresRepository {
         .bind(tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let current: PreventiveAutomationRun = from_json(row.try_get("result_snapshot")?)?;
         if current.status != AutomationRunStatus::Pending {
             transaction.commit().await?;
@@ -169,9 +178,9 @@ impl PostgresRepository {
         tenant_id: TenantId,
         run_id: AutomationRunId,
         completion: &CompletePreventiveRunRequest,
-    ) -> Result<PreventiveAutomationRun, ControlPlaneError> {
+    ) -> Result<PreventiveAutomationRun, ControlPlaneRequestFailure> {
         if !completion.status.is_terminal() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_preventive_transition",
                 "preventive completion must use a terminal status",
             ));
@@ -187,7 +196,7 @@ impl PostgresRepository {
         .bind(tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let current: PreventiveAutomationRun = from_json(row.try_get("result_snapshot")?)?;
         if current.status.is_terminal() {
             let expected = completed_run(&current, completion);
@@ -195,7 +204,7 @@ impl PostgresRepository {
                 transaction.commit().await?;
                 return Ok(current);
             }
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "preventive_completion_conflict",
                 "terminal preventive result is immutable",
             ));
@@ -219,9 +228,13 @@ impl PostgresRepository {
             current
         };
         let completed = completed_run(&running, completion);
-        completed
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_preventive_result", error.to_string()))?;
+        completed.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_preventive_result",
+                error,
+            )
+        })?;
         update_preventive_run(&mut transaction, &running, &completed).await?;
         insert_preventive_event(
             &mut transaction,
@@ -240,7 +253,7 @@ impl PostgresRepository {
         tenant_id: TenantId,
         query: &PreventiveRunListQuery,
         limit: i64,
-    ) -> Result<Vec<PreventiveAutomationRun>, ControlPlaneError> {
+    ) -> Result<Vec<PreventiveAutomationRun>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT result_snapshot
              FROM preventive_automation_runs
@@ -286,7 +299,7 @@ async fn update_preventive_run(
     transaction: &mut Transaction<'_, Postgres>,
     current: &PreventiveAutomationRun,
     next: &PreventiveAutomationRun,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let updated = sqlx::query(
         "UPDATE preventive_automation_runs
          SET status = $3,
@@ -311,7 +324,7 @@ async fn update_preventive_run(
     .execute(&mut **transaction)
     .await?;
     if updated.rows_affected() != 1 {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "preventive_transition_conflict",
             "preventive automation run changed concurrently",
         ));
@@ -325,7 +338,7 @@ async fn insert_preventive_event(
     from: Option<AutomationRunStatus>,
     to: AutomationRunStatus,
     reason_code: &str,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO automation_run_events (
             id, run_id, run_family, tenant_id, cluster_id, correlation_id,
@@ -394,20 +407,13 @@ const fn automation_status_name(status: AutomationRunStatus) -> &'static str {
     }
 }
 
-fn json_value(value: &impl serde::Serialize) -> Result<Value, ControlPlaneError> {
-    serde_json::to_value(value).map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_preventive_json",
-            "preventive automation value is not valid JSON",
-        )
-    })
+fn json_value(value: &impl serde::Serialize) -> Result<Value, ControlPlaneRequestFailure> {
+    serde_json::to_value(value)
+        .map_err(|source| ControlPlaneRequestFailure::operational_validation_source("invalid_preventive_json", source))
 }
 
-fn from_json<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, ControlPlaneError> {
-    serde_json::from_value(value).map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_persisted_preventive_run",
-            "persisted preventive automation data is incompatible",
-        )
+fn from_json<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, ControlPlaneRequestFailure> {
+    serde_json::from_value(value).map_err(|source| {
+        ControlPlaneRequestFailure::operational_validation_source("invalid_persisted_preventive_run", source)
     })
 }

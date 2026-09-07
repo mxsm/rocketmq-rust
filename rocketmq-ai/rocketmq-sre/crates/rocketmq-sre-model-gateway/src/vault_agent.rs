@@ -25,7 +25,9 @@ use cap_std::fs::Dir;
 use cap_std::fs::Metadata;
 
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderOperationalFailure as OperationalFailure;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::secret::ExternalSecretClient;
 use crate::secret::ExternalSecretValue;
 
@@ -74,39 +76,22 @@ impl VaultAgentFileSecretClient {
     ///
     /// Returns a redacted error if the configured root is unavailable, is not
     /// a directory, or is itself a symbolic link.
-    pub fn new(root: impl AsRef<Path>) -> Result<Self, ProviderError> {
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, ProviderStatusOutcome> {
         let configured_root = root.as_ref();
-        let configured_metadata = fs::symlink_metadata(configured_root).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
-                "Vault Agent secret root is unavailable",
-            )
-        })?;
+        let configured_metadata = fs::symlink_metadata(configured_root)
+            .map_err(|source| ProviderError::from_source(OperationalFailure::SecretUnavailable, source))?;
         if configured_metadata.file_type().is_symlink() {
-            return Err(ProviderError::new(
-                ProviderErrorCode::SecretAccessDenied,
-                "Vault Agent secret root must not be a symbolic link",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied));
         }
         if !configured_metadata.is_dir() {
-            return Err(ProviderError::new(
-                ProviderErrorCode::SecretAccessDenied,
-                "Vault Agent secret root must be a directory",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied));
         }
 
-        let canonical_root = configured_root.canonicalize().map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
-                "Vault Agent secret root cannot be canonicalized",
-            )
-        })?;
-        let root = Dir::open_ambient_dir(canonical_root, ambient_authority()).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
-                "Vault Agent secret root cannot be opened",
-            )
-        })?;
+        let canonical_root = configured_root
+            .canonicalize()
+            .map_err(|source| ProviderError::from_source(OperationalFailure::SecretUnavailable, source))?;
+        let root = Dir::open_ambient_dir(canonical_root, ambient_authority())
+            .map_err(|source| ProviderError::from_source(OperationalFailure::SecretUnavailable, source))?;
 
         Ok(Self {
             root,
@@ -121,14 +106,11 @@ impl VaultAgentFileSecretClient {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderErrorCode::ProfileInvalid`] for zero or an
+    /// Returns [`ProviderRejection::ProfileInvalid`] for zero or an
     /// unreasonably large limit.
-    pub fn with_max_secret_bytes(mut self, max_secret_bytes: u64) -> Result<Self, ProviderError> {
+    pub fn with_max_secret_bytes(mut self, max_secret_bytes: u64) -> Result<Self, ProviderStatusOutcome> {
         if !(1..=HARD_MAX_SECRET_BYTES).contains(&max_secret_bytes) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "Vault Agent secret byte limit is invalid",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         self.max_secret_bytes = max_secret_bytes;
         Ok(self)
@@ -142,15 +124,12 @@ impl VaultAgentFileSecretClient {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderErrorCode::ProfileInvalid`] unless the suffix starts
+    /// Returns [`ProviderRejection::ProfileInvalid`] unless the suffix starts
     /// with `.` and contains only ASCII letters, digits, `.`, `_`, or `-`.
-    pub fn with_required_version_sidecar(mut self, suffix: impl Into<String>) -> Result<Self, ProviderError> {
+    pub fn with_required_version_sidecar(mut self, suffix: impl Into<String>) -> Result<Self, ProviderStatusOutcome> {
         let suffix = suffix.into();
         if !valid_version_suffix(&suffix) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "Vault Agent version sidecar suffix is invalid",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         self.version_source = VaultAgentVersionSource::RequiredSidecar { suffix };
         Ok(self)
@@ -161,7 +140,7 @@ impl VaultAgentFileSecretClient {
         relative_path: &Path,
         max_bytes: u64,
         kind: RenderedFileKind,
-    ) -> Result<(String, Metadata), ProviderError> {
+    ) -> Result<(String, Metadata), ProviderStatusOutcome> {
         self.ensure_regular_file_without_symlinks(relative_path, kind)?;
 
         let mut file = self.root.open(relative_path).map_err(|_| kind.unavailable())?;
@@ -194,7 +173,7 @@ impl VaultAgentFileSecretClient {
         &self,
         relative_path: &Path,
         kind: RenderedFileKind,
-    ) -> Result<(), ProviderError> {
+    ) -> Result<(), ProviderStatusOutcome> {
         let components = relative_path.components().collect::<Vec<_>>();
         let mut current = PathBuf::new();
         for (index, component) in components.iter().enumerate() {
@@ -211,7 +190,7 @@ impl VaultAgentFileSecretClient {
         Ok(())
     }
 
-    fn metadata_version(metadata: &Metadata) -> Result<String, ProviderError> {
+    fn metadata_version(metadata: &Metadata) -> Result<String, ProviderStatusOutcome> {
         let modified = metadata
             .modified()
             .map_err(|_| version_unavailable())?
@@ -226,7 +205,7 @@ impl VaultAgentFileSecretClient {
         ))
     }
 
-    fn sidecar_version(&self, secret_path: &Path, suffix: &str) -> Result<String, ProviderError> {
+    fn sidecar_version(&self, secret_path: &Path, suffix: &str) -> Result<String, ProviderStatusOutcome> {
         let file_name = secret_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -258,16 +237,17 @@ impl Debug for VaultAgentFileSecretClient {
 }
 
 impl ExternalSecretClient for VaultAgentFileSecretClient {
-    fn read_secret(&self, locator: &str) -> Result<ExternalSecretValue, ProviderError> {
+    fn read_secret(&self, locator: &str) -> Result<ExternalSecretValue, ProviderStatusOutcome> {
         let relative_path = validate_locator(locator)?;
         let (value, metadata) =
             self.read_rendered_file(&relative_path, self.max_secret_bytes, RenderedFileKind::Secret)?;
         let value = value.trim_end_matches(['\r', '\n']).to_owned();
         if value.is_empty() {
             return Err(ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
+                OperationalFailure::SecretUnavailable,
                 "Vault Agent rendered secret is empty",
-            ));
+            )
+            .into());
         }
         let version = match &self.version_source {
             VaultAgentVersionSource::FileMetadata => Self::metadata_version(&metadata)?,
@@ -288,32 +268,28 @@ enum RenderedFileKind {
 }
 
 impl RenderedFileKind {
-    fn unavailable(self) -> ProviderError {
+    fn unavailable(self) -> ProviderStatusOutcome {
         let message = match self {
             Self::Secret => "Vault Agent rendered secret is unavailable",
             Self::Version => "Vault Agent version sidecar is unavailable",
         };
-        ProviderError::new(ProviderErrorCode::SecretUnavailable, message)
+        ProviderError::new(OperationalFailure::SecretUnavailable, message).into()
     }
 
-    fn access_denied(self) -> ProviderError {
-        let message = match self {
-            Self::Secret => "Vault Agent rendered secret path is not an allowed regular file",
-            Self::Version => "Vault Agent version sidecar path is not an allowed regular file",
-        };
-        ProviderError::new(ProviderErrorCode::SecretAccessDenied, message)
+    fn access_denied(self) -> ProviderStatusOutcome {
+        ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied)
     }
 
-    fn output_too_large(self) -> ProviderError {
+    fn output_too_large(self) -> ProviderStatusOutcome {
         let message = match self {
             Self::Secret => "Vault Agent rendered secret exceeds the configured limit",
             Self::Version => "Vault Agent version sidecar exceeds the configured limit",
         };
-        ProviderError::new(ProviderErrorCode::OutputTooLarge, message)
+        ProviderError::new(OperationalFailure::OutputTooLarge, message).into()
     }
 }
 
-fn validate_locator(locator: &str) -> Result<PathBuf, ProviderError> {
+fn validate_locator(locator: &str) -> Result<PathBuf, ProviderStatusOutcome> {
     if locator.is_empty()
         || locator.len() > MAX_LOCATOR_BYTES
         || locator.starts_with('/')
@@ -350,16 +326,14 @@ fn valid_version_suffix(suffix: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-fn invalid_locator() -> ProviderError {
-    ProviderError::new(
-        ProviderErrorCode::SecretAccessDenied,
-        "Vault Agent secret locator must be a safe relative path",
-    )
+fn invalid_locator() -> ProviderStatusOutcome {
+    ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied)
 }
 
-fn version_unavailable() -> ProviderError {
+fn version_unavailable() -> ProviderStatusOutcome {
     ProviderError::new(
-        ProviderErrorCode::SecretUnavailable,
+        OperationalFailure::SecretUnavailable,
         "Vault Agent secret version is unavailable",
     )
+    .into()
 }

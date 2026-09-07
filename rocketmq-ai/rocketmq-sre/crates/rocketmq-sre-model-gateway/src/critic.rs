@@ -14,9 +14,9 @@
 
 use crate::DataClass;
 use crate::ProviderCapability;
-use crate::ProviderError;
-use crate::ProviderErrorCode;
 use crate::ProviderProfile;
+use crate::ProviderRejection;
+use crate::ProviderStatusOutcome;
 
 const MAX_MODEL_FAMILY_CHARS: usize = 128;
 
@@ -28,15 +28,12 @@ const MAX_MODEL_FAMILY_CHARS: usize = 128;
 ///
 /// # Errors
 ///
-/// Returns [`ProviderErrorCode::ProfileInvalid`] when the family is empty,
+/// Returns [`ProviderRejection::ProfileInvalid`] when the family is empty,
 /// contains control characters, or exceeds the bounded identity length.
-pub fn normalize_model_family(value: &str) -> Result<String, ProviderError> {
+pub fn normalize_model_family(value: &str) -> Result<String, ProviderStatusOutcome> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > MAX_MODEL_FAMILY_CHARS || value.chars().any(char::is_control) {
-        return Err(ProviderError::new(
-            ProviderErrorCode::ProfileInvalid,
-            "model family must be a bounded non-empty identity",
-        ));
+        return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
     }
 
     let mut normalized = String::with_capacity(value.len());
@@ -53,10 +50,7 @@ pub fn normalize_model_family(value: &str) -> Result<String, ProviderError> {
         }
     }
     if normalized.is_empty() {
-        return Err(ProviderError::new(
-            ProviderErrorCode::ProfileInvalid,
-            "model family must contain at least one letter or number",
-        ));
+        return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
     }
     Ok(normalized)
 }
@@ -69,13 +63,13 @@ pub fn normalize_model_family(value: &str) -> Result<String, ProviderError> {
 ///
 /// # Errors
 ///
-/// Returns [`ProviderErrorCode::ProfileInvalid`] when either the primary or a
+/// Returns [`ProviderRejection::ProfileInvalid`] when either the primary or a
 /// candidate family cannot be normalized.
 pub fn heterogeneous_critic_profiles<'a>(
     primary_model_family: &str,
     profiles: &'a [ProviderProfile],
     data_class: DataClass,
-) -> Result<Vec<&'a ProviderProfile>, ProviderError> {
+) -> Result<Vec<&'a ProviderProfile>, ProviderStatusOutcome> {
     let primary = normalize_model_family(primary_model_family)?;
     let mut candidates = Vec::new();
     for profile in profiles {

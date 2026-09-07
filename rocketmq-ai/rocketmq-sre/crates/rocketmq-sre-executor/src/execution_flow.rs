@@ -43,7 +43,7 @@ use serde_json::json;
 
 use super::ChangeExecutor;
 use crate::ExecutionVerifier;
-use crate::ExecutorError;
+use crate::ExecutorRequestFailure;
 use crate::ResourceLock;
 use crate::VerificationCaptureRequest;
 use crate::VerificationPhase;
@@ -72,7 +72,7 @@ impl ChangeExecutor {
         request: &ExecutionRequest,
         locks: &[ResourceLock],
         verifier: &ExecutionVerifier,
-    ) -> Result<ExecutionState, ExecutorError> {
+    ) -> Result<ExecutionState, ExecutorRequestFailure> {
         let dispatch = self.dispatch_forward_steps(request, verifier).await?;
         let mut applied = match dispatch {
             ForwardDispatch::Applied(applied) => {
@@ -166,7 +166,7 @@ impl ChangeExecutor {
         &self,
         request: &ExecutionRequest,
         verifier: &ExecutionVerifier,
-    ) -> Result<ForwardDispatch, ExecutorError> {
+    ) -> Result<ForwardDispatch, ExecutorRequestFailure> {
         let mut applied = Vec::with_capacity(request.plan.steps.len());
         for (index, step) in request.plan.steps.iter().enumerate() {
             let step_id = ExecutionStepId::new();
@@ -227,9 +227,9 @@ impl ChangeExecutor {
                     let reconcile = self.ensure_active_lease(request, true).await;
                     return match reconcile {
                         Ok(_) => Err(error),
-                        Err(ExecutorError::ReconcileBlocked) => {
+                        Err(reconcile_error) if reconcile_error.is_reconcile_blocked() => {
                             self.metrics.reconcile_blocks_total.fetch_add(1, Ordering::Relaxed);
-                            Err(ExecutorError::ReconcileBlocked)
+                            Err(ExecutorRequestFailure::ReconcileBlocked)
                         }
                         Err(other) => Err(other),
                     };
@@ -283,7 +283,7 @@ impl ChangeExecutor {
         request: &ExecutionRequest,
         applied: &mut AppliedStep,
         verifier: &ExecutionVerifier,
-    ) -> Result<VerificationOutcome, ExecutorError> {
+    ) -> Result<VerificationOutcome, ExecutorRequestFailure> {
         let capture = verification_request(request, &applied.step, applied.forward_step_id, VerificationPhase::Post);
         let run = verifier
             .verify_post(
@@ -310,7 +310,7 @@ impl ChangeExecutor {
         verifier: &ExecutionVerifier,
         applied: Vec<AppliedStep>,
         trigger: &str,
-    ) -> Result<ExecutionState, ExecutorError> {
+    ) -> Result<ExecutionState, ExecutorRequestFailure> {
         let rollback_started_at = Utc::now();
         self.journal
             .append_audit_event(
@@ -455,7 +455,7 @@ impl ChangeExecutor {
         locks: &[ResourceLock],
         applied: &AppliedStep,
         reason: &str,
-    ) -> Result<ExecutionState, ExecutorError> {
+    ) -> Result<ExecutionState, ExecutorRequestFailure> {
         let occurred_at = Utc::now();
         let mut evidence_ids = applied.pre_evidence_ids.clone();
         evidence_ids.extend(applied.during_evidence_ids.iter().copied());
@@ -531,7 +531,7 @@ impl ChangeExecutor {
         dynamic_safety: Option<DynamicSafetyDecision>,
         compensation: bool,
         direction: &str,
-    ) -> Result<StepIntent, ExecutorError> {
+    ) -> Result<StepIntent, ExecutorRequestFailure> {
         // Verification can legitimately run for the full descriptor window.
         // Re-establish the fenced owner before every dispatch so a lease that
         // expired while observing the previous effect cannot strand rollback.
@@ -599,7 +599,7 @@ impl ChangeExecutor {
         request: &ExecutionRequest,
         step: &PlanStep,
         intent: StepIntent,
-    ) -> Result<AgentDispatchResponse, ExecutorError> {
+    ) -> Result<AgentDispatchResponse, ExecutorRequestFailure> {
         self.agent
             .dispatch(&AgentDispatchRequest {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
@@ -626,7 +626,7 @@ impl ChangeExecutor {
         request: &ExecutionRequest,
         step: &PlanStep,
         step_id: ExecutionStepId,
-    ) -> Result<Option<DynamicSafetyDecision>, ExecutorError> {
+    ) -> Result<Option<DynamicSafetyDecision>, ExecutorRequestFailure> {
         let Some(grant) = request.autonomy_grant.as_ref() else {
             return Ok(None);
         };
@@ -656,7 +656,7 @@ impl ChangeExecutor {
         step_id: ExecutionStepId,
         response: AgentDispatchResponse,
         state: ExecutionState,
-    ) -> Result<(), ExecutorError> {
+    ) -> Result<(), ExecutorRequestFailure> {
         let completed_at = Utc::now();
         let reason_code = if response.replayed {
             "agent_effect_replayed".to_owned()
@@ -701,7 +701,7 @@ impl ChangeExecutor {
         step_id: ExecutionStepId,
         phase: VerificationPhase,
         verifier: &ExecutionVerifier,
-    ) -> Result<EvidenceId, ExecutorError> {
+    ) -> Result<EvidenceId, ExecutorRequestFailure> {
         let observation = verifier
             .capture(&verification_request(request, step, step_id, phase))
             .await?;
@@ -717,7 +717,7 @@ impl ChangeExecutor {
         step_id: ExecutionStepId,
         phase: VerificationPhase,
         evidence: &rocketmq_sre_contracts::EvidenceSnapshot,
-    ) -> Result<(), ExecutorError> {
+    ) -> Result<(), ExecutorRequestFailure> {
         self.journal
             .append_verification_evidence_with_audit(
                 request.id,
@@ -748,7 +748,7 @@ impl ChangeExecutor {
         request: &ExecutionRequest,
         compensation: bool,
         result: &rocketmq_sre_contracts::VerificationResult,
-    ) -> Result<(), ExecutorError> {
+    ) -> Result<(), ExecutorRequestFailure> {
         self.journal
             .append_verification_result_with_audit(
                 request.id,

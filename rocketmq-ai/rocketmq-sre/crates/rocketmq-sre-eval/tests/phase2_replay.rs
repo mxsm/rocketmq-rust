@@ -15,9 +15,17 @@
 use std::path::PathBuf;
 
 use rocketmq_sre_core::diagnostics::DiagnosticStatus;
+use rocketmq_sre_eval::EvalOutcome;
 use rocketmq_sre_eval::assertions::assert_phase2_quality;
 use rocketmq_sre_eval::phase2::run_phase2_dataset;
 use rocketmq_sre_eval::replay::load_dataset;
+
+fn completed<T>(outcome: EvalOutcome<T>) -> T {
+    match outcome {
+        EvalOutcome::Completed(value) => value,
+        EvalOutcome::Rejected(rejection) => panic!("evaluation rejected: {}", rejection.code()),
+    }
+}
 
 fn manifest_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/phase2/dataset-manifest.v1.yaml")
@@ -25,8 +33,8 @@ fn manifest_path() -> PathBuf {
 
 #[test]
 fn phase2_saved_evidence_dataset_meets_the_fixed_quality_contract() {
-    let dataset = load_dataset(&manifest_path()).expect("checked-in Phase 2 dataset should load");
-    let report = run_phase2_dataset(&dataset).expect("saved Evidence should replay deterministically");
+    let dataset = completed(load_dataset(&manifest_path()).expect("checked-in Phase 2 dataset should load"));
+    let report = completed(run_phase2_dataset(&dataset).expect("saved Evidence should replay deterministically"));
 
     assert_eq!(dataset.manifest.fixtures.len(), 20);
     assert_eq!(report.evaluable_fixtures, 18);
@@ -41,7 +49,7 @@ fn phase2_saved_evidence_dataset_meets_the_fixed_quality_contract() {
 
 #[test]
 fn every_declared_scenario_keeps_a_saved_timeline_and_rules_only_input() {
-    let dataset = load_dataset(&manifest_path()).expect("checked-in Phase 2 dataset should load");
+    let dataset = completed(load_dataset(&manifest_path()).expect("checked-in Phase 2 dataset should load"));
 
     for entry in &dataset.manifest.fixtures {
         let fixture = dataset
@@ -58,8 +66,8 @@ fn every_declared_scenario_keeps_a_saved_timeline_and_rules_only_input() {
 
 #[test]
 fn missing_evidence_degrades_confidence_without_inventing_a_healthy_result() {
-    let dataset = load_dataset(&manifest_path()).expect("checked-in Phase 2 dataset should load");
-    let report = run_phase2_dataset(&dataset).expect("saved Evidence should replay deterministically");
+    let dataset = completed(load_dataset(&manifest_path()).expect("checked-in Phase 2 dataset should load"));
+    let report = completed(run_phase2_dataset(&dataset).expect("saved Evidence should replay deterministically"));
     let result = |id: &str| {
         report
             .fixture_results

@@ -28,7 +28,7 @@ use rocketmq_sre_contracts::TimeRange;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::connector_channel::PostgresConnectorChannelService;
@@ -64,17 +64,16 @@ impl AutomationDispatcher {
         connector_channel: PostgresConnectorChannelService,
         evidence: EvidenceService,
         postmortems: PostmortemService,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         let public_base_url =
             std::env::var("ROCKETMQ_SRE_PUBLIC_URL").unwrap_or_else(|_| DEFAULT_PUBLIC_BASE_URL.to_owned());
-        let parsed = url::Url::parse(&public_base_url)
-            .map_err(|_| ControlPlaneError::configuration("ROCKETMQ_SRE_PUBLIC_URL is invalid"))?;
+        let parsed = url::Url::parse(&public_base_url).map_err(ControlPlaneRequestFailure::configuration_source)?;
         if !matches!(parsed.scheme(), "http" | "https")
             || parsed.host_str().is_none()
             || !parsed.username().is_empty()
             || parsed.password().is_some()
         {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "ROCKETMQ_SRE_PUBLIC_URL must be an HTTP(S) origin without credentials",
             ));
         }
@@ -91,7 +90,7 @@ impl AutomationDispatcher {
         &self,
         auth: &AuthContext,
         request: &NoSideEffectAutomationRequest,
-    ) -> Result<AutomationDispatchOutcome, ControlPlaneError> {
+    ) -> Result<AutomationDispatchOutcome, ControlPlaneRequestFailure> {
         match request.kind {
             NoSideEffectAutomationKind::AlertCorrelation => self.alert_correlation(auth, request).await,
             NoSideEffectAutomationKind::SeverityOwnerSuggestion => self.severity_owner_suggestion(auth, request).await,
@@ -106,7 +105,7 @@ impl AutomationDispatcher {
         &self,
         auth: &AuthContext,
         request: &NoSideEffectAutomationRequest,
-    ) -> Result<AutomationDispatchOutcome, ControlPlaneError> {
+    ) -> Result<AutomationDispatchOutcome, ControlPlaneRequestFailure> {
         let cluster_id = required_cluster(request)?;
         let row = sqlx::query(
             "SELECT i.id, i.occurrence_count, COUNT(ia.alert_id) AS linked_alerts
@@ -146,7 +145,7 @@ impl AutomationDispatcher {
         &self,
         auth: &AuthContext,
         request: &NoSideEffectAutomationRequest,
-    ) -> Result<AutomationDispatchOutcome, ControlPlaneError> {
+    ) -> Result<AutomationDispatchOutcome, ControlPlaneRequestFailure> {
         let cluster_id = required_cluster(request)?;
         let incident_id = required_incident(request)?;
         let row = sqlx::query(
@@ -159,7 +158,7 @@ impl AutomationDispatcher {
         .bind(cluster_id.as_uuid())
         .fetch_optional(&self.repository.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let severity = bounded_label(
             row.try_get::<Option<String>, _>("severity")?
                 .as_deref()
@@ -178,12 +177,13 @@ impl AutomationDispatcher {
         &self,
         auth: &AuthContext,
         request: &NoSideEffectAutomationRequest,
-    ) -> Result<AutomationDispatchOutcome, ControlPlaneError> {
+    ) -> Result<AutomationDispatchOutcome, ControlPlaneRequestFailure> {
         let cluster_id = required_cluster(request)?;
         let incident_id = required_incident(request)?;
         let now = Utc::now();
-        let time_range = TimeRange::new(now - Duration::hours(1), now)
-            .map_err(|_| ControlPlaneError::validation("invalid_request", "evidence time range is invalid"))?;
+        let time_range = TimeRange::new(now - Duration::hours(1), now).map_err(|source| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_request", source)
+        })?;
         let query = EvidenceQuery {
             query_id: QueryId::new(),
             correlation_id: request.correlation_id,
@@ -199,7 +199,7 @@ impl AutomationDispatcher {
             .query_and_wait(auth.tenant_id, cluster_id, query, deadline)
             .await?;
         let snapshot = response.evidence.ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "source_unavailable",
                 "Connector did not return a cluster overview Evidence snapshot",
             )
@@ -226,13 +226,13 @@ impl AutomationDispatcher {
         &self,
         auth: &AuthContext,
         request: &NoSideEffectAutomationRequest,
-    ) -> Result<AutomationDispatchOutcome, ControlPlaneError> {
+    ) -> Result<AutomationDispatchOutcome, ControlPlaneRequestFailure> {
         let clusters = request.cluster_id.map_or_else(
             || auth.clusters.iter().map(|id| id.as_uuid()).collect::<Vec<_>>(),
             |id| vec![id.as_uuid()],
         );
         if clusters.is_empty() {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "shift summary requires at least one authorized cluster",
             ));
@@ -272,7 +272,7 @@ impl AutomationDispatcher {
         &self,
         auth: &AuthContext,
         request: &NoSideEffectAutomationRequest,
-    ) -> Result<AutomationDispatchOutcome, ControlPlaneError> {
+    ) -> Result<AutomationDispatchOutcome, ControlPlaneRequestFailure> {
         let cluster_id = required_cluster(request)?;
         let incident_id = required_incident(request)?;
         let incident = sqlx::query(
@@ -285,7 +285,7 @@ impl AutomationDispatcher {
         .bind(cluster_id.as_uuid())
         .fetch_optional(&self.repository.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let severity = bounded_label(
             incident
                 .try_get::<Option<String>, _>("severity")?
@@ -358,7 +358,7 @@ impl AutomationDispatcher {
         &self,
         auth: &AuthContext,
         request: &NoSideEffectAutomationRequest,
-    ) -> Result<AutomationDispatchOutcome, ControlPlaneError> {
+    ) -> Result<AutomationDispatchOutcome, ControlPlaneRequestFailure> {
         let incident_id = required_incident(request)?;
         let mut draft_auth = auth.clone();
         draft_auth.roles = BTreeSet::from(["diagnose".to_owned()]);
@@ -411,17 +411,17 @@ impl AutomationDispatchOutcome {
 
 fn required_cluster(
     request: &NoSideEffectAutomationRequest,
-) -> Result<rocketmq_sre_contracts::ClusterId, ControlPlaneError> {
+) -> Result<rocketmq_sre_contracts::ClusterId, ControlPlaneRequestFailure> {
     request.cluster_id.ok_or_else(|| {
-        ControlPlaneError::validation("invalid_automation_request", "automation kind requires a cluster scope")
+        ControlPlaneRequestFailure::validation("invalid_automation_request", "automation kind requires a cluster scope")
     })
 }
 
 fn required_incident(
     request: &NoSideEffectAutomationRequest,
-) -> Result<rocketmq_sre_contracts::IncidentId, ControlPlaneError> {
+) -> Result<rocketmq_sre_contracts::IncidentId, ControlPlaneRequestFailure> {
     request.incident_id.ok_or_else(|| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "invalid_automation_request",
             "automation kind requires an incident scope",
         )

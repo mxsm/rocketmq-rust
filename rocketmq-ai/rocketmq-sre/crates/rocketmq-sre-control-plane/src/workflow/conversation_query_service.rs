@@ -49,7 +49,7 @@ use super::conversation_query::deterministic_intent;
 use super::conversation_query::diagnostic_pack_for_intent;
 use super::conversation_query::model_intent;
 use super::conversation_repository::ConversationCompletion;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::connector_channel::PostgresConnectorChannelService;
@@ -94,10 +94,9 @@ impl ConversationQueryService {
         evidence: EvidenceService,
         models: ModelGatewayService,
         task_spawner: Option<TaskSpawner>,
-    ) -> Result<Self, ControlPlaneError> {
-        let registry = full_registry().map_err(|error| {
-            ControlPlaneError::configuration(format!("diagnostic pack registry is invalid: {error}"))
-        })?;
+    ) -> Result<Self, ControlPlaneRequestFailure> {
+        let registry =
+            full_registry().map_err(|_| ControlPlaneRequestFailure::configuration("diagnostic registry rejected"))?;
         Ok(Self {
             repository,
             connector,
@@ -115,7 +114,7 @@ impl ConversationQueryService {
         conversation_id: ConversationId,
         request: &ConversationTurnRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ConversationTurnView, ControlPlaneError> {
+    ) -> Result<ConversationTurnView, ControlPlaneRequestFailure> {
         let prepared = self
             .prepare_turn(auth, conversation_id, request, correlation_id)
             .await?;
@@ -128,9 +127,9 @@ impl ConversationQueryService {
         conversation_id: ConversationId,
         request: ConversationTurnRequest,
         correlation_id: CorrelationId,
-    ) -> Result<tokio::sync::mpsc::Receiver<ConversationStreamEvent>, ControlPlaneError> {
+    ) -> Result<tokio::sync::mpsc::Receiver<ConversationStreamEvent>, ControlPlaneRequestFailure> {
         let spawner = self.task_spawner.clone().ok_or_else(|| {
-            ControlPlaneError::configuration("conversation streaming requires a runtime-owned task spawner")
+            ControlPlaneRequestFailure::configuration("conversation streaming requires a runtime-owned task spawner")
         })?;
         let prepared = self
             .prepare_turn(&auth, conversation_id, &request, correlation_id)
@@ -141,7 +140,7 @@ impl ConversationQueryService {
             ConversationStreamWriter::channel(prepared.conversation.id, prepared.turn.id, prepared.turn.correlation_id);
         writer
             .accepted()
-            .map_err(|_| ControlPlaneError::configuration("conversation stream could not queue its accepted event"))?;
+            .map_err(|_| ControlPlaneRequestFailure::configuration("conversation stream rejected the event"))?;
         let service = self.clone();
         let task_auth = auth.clone();
         let task_writer = writer.clone();
@@ -165,7 +164,7 @@ impl ConversationQueryService {
         {
             self.active.lock().await.remove(&conversation_id);
             let _ = self.complete_failed(&auth, &cleanup_turn, cleanup_intent).await;
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "conversation stream task could not be started",
             ));
         }
@@ -178,7 +177,7 @@ impl ConversationQueryService {
         conversation_id: ConversationId,
         request: &ConversationTurnRequest,
         correlation_id: CorrelationId,
-    ) -> Result<PreparedConversationTurn, ControlPlaneError> {
+    ) -> Result<PreparedConversationTurn, ControlPlaneRequestFailure> {
         request.validate()?;
         let conversation_view = self.repository.conversation(auth, conversation_id).await?;
         let scoped_resource = request
@@ -195,7 +194,7 @@ impl ConversationQueryService {
                     entry.insert(cancel_sender);
                 }
                 Entry::Occupied(_) => {
-                    return Err(ControlPlaneError::conflict_code(
+                    return Err(ControlPlaneRequestFailure::conflict_code(
                         "conversation_query_in_progress",
                         "only one read-only query may run per conversation",
                     ));
@@ -234,7 +233,7 @@ impl ConversationQueryService {
         auth: &AuthContext,
         prepared: PreparedConversationTurn,
         stream: Option<&ConversationStreamWriter>,
-    ) -> Result<ConversationTurnView, ControlPlaneError> {
+    ) -> Result<ConversationTurnView, ControlPlaneRequestFailure> {
         let conversation_id = prepared.conversation.id;
         let result = self
             .run_turn(
@@ -263,7 +262,7 @@ impl ConversationQueryService {
         auth: &AuthContext,
         turn: &ConversationTurn,
         intent: Option<ConversationQueryIntent>,
-    ) -> Result<ConversationTurnView, ControlPlaneError> {
+    ) -> Result<ConversationTurnView, ControlPlaneRequestFailure> {
         self.repository
             .complete_conversation_turn(
                 auth,
@@ -288,7 +287,7 @@ impl ConversationQueryService {
         &self,
         auth: &AuthContext,
         conversation_id: ConversationId,
-    ) -> Result<ConversationTurnPage, ControlPlaneError> {
+    ) -> Result<ConversationTurnPage, ControlPlaneRequestFailure> {
         let conversation = self.repository.conversation(auth, conversation_id).await?;
         self.repository
             .conversation_turns(auth, &conversation.conversation)
@@ -299,7 +298,7 @@ impl ConversationQueryService {
         &self,
         auth: &AuthContext,
         conversation_id: ConversationId,
-    ) -> Result<ConversationCancelResult, ControlPlaneError> {
+    ) -> Result<ConversationCancelResult, ControlPlaneRequestFailure> {
         let conversation = self.repository.conversation(auth, conversation_id).await?;
         let persisted = self
             .repository
@@ -332,7 +331,7 @@ impl ConversationQueryService {
         deterministic: Option<ConversationQueryIntent>,
         mut cancel: watch::Receiver<bool>,
         stream: Option<&ConversationStreamWriter>,
-    ) -> Result<ConversationTurnView, ControlPlaneError> {
+    ) -> Result<ConversationTurnView, ControlPlaneRequestFailure> {
         let mut warnings = Vec::new();
         let tool_prompt = scoped_resource.map_or_else(
             || request.question.trim().to_owned(),
@@ -404,7 +403,7 @@ impl ConversationQueryService {
         };
         let now = Utc::now();
         let time_range = TimeRange::new(now - chrono::Duration::seconds(i64::from(intent.window_seconds)), now)
-            .map_err(|_| ControlPlaneError::validation("invalid_request", "conversation time range is invalid"))?;
+            .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "time range is invalid"))?;
         let query = EvidenceQuery {
             query_id: QueryId::new(),
             correlation_id: turn.correlation_id,
@@ -415,8 +414,7 @@ impl ConversationQueryService {
             time_range,
         };
         let deadline = now
-            + chrono::Duration::from_std(QUERY_TIMEOUT)
-                .map_err(|_| ControlPlaneError::configuration("conversation query timeout is invalid"))?;
+            + chrono::Duration::from_std(QUERY_TIMEOUT).map_err(ControlPlaneRequestFailure::configuration_source)?;
         let response = tokio::select! {
             response = self.connector.query_and_wait(
                 auth.tenant_id,
@@ -490,10 +488,11 @@ impl ConversationQueryService {
         let report = self
             .diagnostics
             .evaluate(pack_reference, std::slice::from_ref(&evidence))
-            .map_err(|error| {
-                ControlPlaneError::validation(
+            .map_err(|source| {
+                ControlPlaneRequestFailure::contract(
+                    crate::ControlPlaneFailure::Validation,
                     "diagnostic_evaluation_failed",
-                    format!("conversation evidence could not be evaluated safely: {error}"),
+                    source,
                 )
             })?;
         let deterministic_answer = diagnostic_evidence_answer(&intent, &evidence, &report);
@@ -610,7 +609,7 @@ impl ConversationQueryService {
         auth: &AuthContext,
         turn: &ConversationTurn,
         local: &mut watch::Receiver<bool>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut local_open = true;
         loop {
             let should_poll_repository = if local_open {
@@ -643,7 +642,7 @@ impl ConversationQueryService {
         turn: &ConversationTurn,
         intent: Option<ConversationQueryIntent>,
         mut warnings: Vec<String>,
-    ) -> Result<ConversationTurnView, ControlPlaneError> {
+    ) -> Result<ConversationTurnView, ControlPlaneRequestFailure> {
         warnings.push("query_cancelled".to_owned());
         self.repository
             .complete_conversation_turn(
@@ -671,7 +670,7 @@ impl ConversationQueryService {
         turn: &ConversationTurn,
         intent: ConversationQueryIntent,
         mut warnings: Vec<String>,
-    ) -> Result<ConversationTurnView, ControlPlaneError> {
+    ) -> Result<ConversationTurnView, ControlPlaneRequestFailure> {
         warnings.push("missing_evidence".to_owned());
         self.repository
             .complete_conversation_turn(

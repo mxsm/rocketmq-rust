@@ -683,7 +683,7 @@ fn selector_matches(selector: &BTreeMap<String, String>, labels: &BTreeMap<Strin
 }
 
 fn decode<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, ConnectorError> {
-    serde_json::from_value(value).map_err(|_| schema_mismatch())
+    serde_json::from_value(value).map_err(super::schema_mismatch_source)
 }
 
 #[cfg(test)]

@@ -68,7 +68,7 @@ use super::RecommendationDispositionRequest;
 use super::RecommendationPromotionTarget;
 use super::WorkflowListQuery;
 use super::WorkflowPage;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::inspection::DueInspection;
@@ -81,7 +81,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         request: &ConversationCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ConversationView, ControlPlaneError> {
+    ) -> Result<ConversationView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         ensure_cluster_scope(&mut transaction, auth.tenant_id, request.cluster_id).await?;
         let now = Utc::now();
@@ -169,7 +169,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: ConversationId,
-    ) -> Result<ConversationView, ControlPlaneError> {
+    ) -> Result<ConversationView, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, question, resource, status, investigation_id,
                     created_by_subject, created_by_display_name, created_at, updated_at
@@ -180,7 +180,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let conversation = conversation_from_row(&row)?;
         enforce_auth_cluster(auth, conversation.cluster_id)?;
         let investigation = if let Some(investigation_id) = conversation.investigation_id {
@@ -198,7 +198,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<ConversationView>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<ConversationView>, ControlPlaneRequestFailure> {
         enforce_auth_cluster(auth, query.cluster_id)?;
         let limit = query.bounded_limit()?;
         let cursor = query.cursor_uuid()?;
@@ -247,7 +247,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         request: &InvestigationCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<InvestigationView, ControlPlaneError> {
+    ) -> Result<InvestigationView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         ensure_cluster_scope(&mut transaction, auth.tenant_id, request.cluster_id).await?;
         let now = Utc::now();
@@ -278,7 +278,7 @@ impl PostgresRepository {
             .await?
             .rows_affected();
             if updated != 1 {
-                return Err(ControlPlaneError::NotFound);
+                return Err(ControlPlaneRequestFailure::not_found());
             }
         }
         transaction.commit().await?;
@@ -293,7 +293,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: InvestigationId,
-    ) -> Result<InvestigationView, ControlPlaneError> {
+    ) -> Result<InvestigationView, ControlPlaneRequestFailure> {
         let investigation = self.investigation_record(auth, id).await?;
         let timeline = self.timeline(auth, Some(id), investigation.incident_id).await?;
         let diagnosis_revisions = self.investigation_diagnosis_revisions(auth, id).await?;
@@ -308,7 +308,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<InvestigationView>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<InvestigationView>, ControlPlaneRequestFailure> {
         enforce_auth_cluster(auth, query.cluster_id)?;
         let limit = query.bounded_limit()?;
         let cursor = query.cursor_uuid()?;
@@ -349,7 +349,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: InvestigationId,
-    ) -> Result<Investigation, ControlPlaneError> {
+    ) -> Result<Investigation, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, conversation_id, incident_id, title, resource,
                     symptom_family, fingerprint, status, created_by_subject,
@@ -361,7 +361,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let investigation = investigation_from_row(&row)?;
         enforce_auth_cluster(auth, investigation.cluster_id)?;
         Ok(investigation)
@@ -372,7 +372,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         cluster_id: ClusterId,
         ids: &[InvestigationId],
-    ) -> Result<HashMap<InvestigationId, Investigation>, ControlPlaneError> {
+    ) -> Result<HashMap<InvestigationId, Investigation>, ControlPlaneRequestFailure> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -403,7 +403,7 @@ impl PostgresRepository {
         id: InvestigationId,
         request: &PromoteInvestigationRequest,
         correlation_id: CorrelationId,
-    ) -> Result<IncidentView, ControlPlaneError> {
+    ) -> Result<IncidentView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, conversation_id, incident_id, title, resource,
@@ -417,7 +417,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let investigation = investigation_from_row(&row)?;
         enforce_auth_cluster(auth, investigation.cluster_id)?;
         if let Some(incident_id) = investigation.incident_id {
@@ -484,7 +484,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         request: &IncidentCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<IncidentView, ControlPlaneError> {
+    ) -> Result<IncidentView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         ensure_cluster_scope(&mut transaction, auth.tenant_id, request.cluster_id).await?;
         let id = IncidentId::new();
@@ -538,7 +538,11 @@ impl PostgresRepository {
         self.incident(auth, id).await
     }
 
-    pub(crate) async fn incident(&self, auth: &AuthContext, id: IncidentId) -> Result<IncidentView, ControlPlaneError> {
+    pub(crate) async fn incident(
+        &self,
+        auth: &AuthContext,
+        id: IncidentId,
+    ) -> Result<IncidentView, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, investigation_id, title, resource,
                     symptom_family, fingerprint, status, severity, owner_name,
@@ -551,12 +555,12 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let incident = incident_from_row(&row)?;
         enforce_auth_cluster(auth, incident.cluster_id)?;
         let investigation_id = row
             .try_get::<Option<Uuid>, _>("investigation_id")
-            .map_err(ControlPlaneError::from)?
+            .map_err(ControlPlaneRequestFailure::from)?
             .map(InvestigationId::from_uuid);
         let investigation = if let Some(value) = investigation_id {
             Some(self.investigation_record(auth, value).await?)
@@ -577,7 +581,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<IncidentView>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<IncidentView>, ControlPlaneRequestFailure> {
         enforce_auth_cluster(auth, query.cluster_id)?;
         let limit = query.bounded_limit()?;
         let cursor = query.cursor_uuid()?;
@@ -623,7 +627,7 @@ impl PostgresRepository {
         next: IncidentStatus,
         reason: &str,
         correlation_id: CorrelationId,
-    ) -> Result<IncidentView, ControlPlaneError> {
+    ) -> Result<IncidentView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, investigation_id, title, resource,
@@ -638,7 +642,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let mut incident = incident_from_row(&row)?;
         enforce_auth_cluster(auth, incident.cluster_id)?;
         let investigation_id = row
@@ -647,11 +651,14 @@ impl PostgresRepository {
         let previous = incident.status;
         let now = Utc::now();
         incident.transition(next, now).map_err(|_| {
-            ControlPlaneError::conflict(format!(
-                "incident cannot transition from {} to {}",
-                incident_status_name(previous),
-                incident_status_name(next)
-            ))
+            ControlPlaneRequestFailure::conflict_code(
+                "capability_mismatch",
+                format!(
+                    "incident cannot transition from {} to {}",
+                    incident_status_name(previous),
+                    incident_status_name(next)
+                ),
+            )
         })?;
         let updated = sqlx::query(
             "UPDATE sre_incidents
@@ -671,7 +678,8 @@ impl PostgresRepository {
         .execute(&mut *transaction)
         .await?;
         if updated.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict(
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "capability_mismatch",
                 "incident state changed while applying the transition",
             ));
         }
@@ -726,7 +734,7 @@ impl PostgresRepository {
         primary_model_invocation_id: Option<ModelInvocationId>,
         diagnosis_mode: &'static str,
         correlation_id: CorrelationId,
-    ) -> Result<DiagnosisRevision, ControlPlaneError> {
+    ) -> Result<DiagnosisRevision, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, investigation_id, title, resource,
@@ -741,7 +749,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let mut incident = incident_from_row(&row)?;
         enforce_auth_cluster(auth, incident.cluster_id)?;
         let investigation_id = row
@@ -750,11 +758,14 @@ impl PostgresRepository {
         let previous = incident.status;
         let now = Utc::now();
         incident.transition(next_status, now).map_err(|_| {
-            ControlPlaneError::conflict(format!(
-                "diagnosis cannot transition incident from {} to {}",
-                incident_status_name(previous),
-                incident_status_name(next_status)
-            ))
+            ControlPlaneRequestFailure::conflict_code(
+                "capability_mismatch",
+                format!(
+                    "diagnosis cannot transition incident from {} to {}",
+                    incident_status_name(previous),
+                    incident_status_name(next_status)
+                ),
+            )
         })?;
 
         let revision: i32 = sqlx::query_scalar(
@@ -815,7 +826,8 @@ impl PostgresRepository {
             .fetch_one(&mut *transaction)
             .await?;
             if !linked {
-                return Err(ControlPlaneError::conflict(
+                return Err(ControlPlaneRequestFailure::conflict_code(
+                    "capability_mismatch",
                     "primary model invocation could not be linked to the diagnosis revision",
                 ));
             }
@@ -883,7 +895,7 @@ impl PostgresRepository {
             id,
             incident_id,
             revision: u32::try_from(revision).map_err(|_| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "source_unavailable",
                     "diagnosis revision is outside the supported range",
                 )
@@ -904,7 +916,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         request: &InspectionCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<InspectionView, ControlPlaneError> {
+    ) -> Result<InspectionView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         ensure_cluster_scope(&mut transaction, auth.tenant_id, request.cluster_id).await?;
         let id = InspectionRunId::new();
@@ -915,7 +927,7 @@ impl PostgresRepository {
             .map(chrono::Duration::from_std)
             .transpose()
             .map_err(|_| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "invalid_schedule",
                     "inspection interval cannot be represented by the scheduler",
                 )
@@ -974,7 +986,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: InspectionRunId,
-    ) -> Result<InspectionView, ControlPlaneError> {
+    ) -> Result<InspectionView, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, template, status, schedule, finding_count,
                     partial, started_at, completed_at, created_at
@@ -985,7 +997,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let run = inspection_from_row(&row)?;
         enforce_auth_cluster(auth, run.cluster_id)?;
         let rows = sqlx::query(
@@ -1030,7 +1042,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<InspectionView>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<InspectionView>, ControlPlaneRequestFailure> {
         enforce_auth_cluster(auth, query.cluster_id)?;
         let limit = query.bounded_limit()?;
         let cursor = query.cursor_uuid()?;
@@ -1070,7 +1082,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: InspectionRunId,
-    ) -> Result<InspectionRun, ControlPlaneError> {
+    ) -> Result<InspectionRun, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, template, status, schedule, finding_count,
@@ -1083,22 +1095,27 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let mut run = inspection_from_row(&row)?;
         enforce_auth_cluster(auth, run.cluster_id)?;
         match run.status {
             InspectionStatus::Scheduled => {}
             InspectionStatus::NeedsEvidence if run.schedule.is_none() => {}
             InspectionStatus::NeedsEvidence => {
-                return Err(ControlPlaneError::conflict(
+                return Err(ControlPlaneRequestFailure::conflict_code(
+                    "capability_mismatch",
                     "a recurring inspection already has a scheduled successor",
                 ));
             }
             InspectionStatus::Running => {
-                return Err(ControlPlaneError::conflict("inspection is already running"));
+                return Err(ControlPlaneRequestFailure::conflict_code(
+                    "capability_mismatch",
+                    "inspection is already running",
+                ));
             }
             InspectionStatus::Completed | InspectionStatus::Failed | InspectionStatus::Cancelled => {
-                return Err(ControlPlaneError::conflict(
+                return Err(ControlPlaneRequestFailure::conflict_code(
+                    "capability_mismatch",
                     "completed, failed, or cancelled inspections cannot be run again",
                 ));
             }
@@ -1120,9 +1137,9 @@ impl PostgresRepository {
         Ok(run)
     }
 
-    pub(crate) async fn due_inspections(&self, limit: u32) -> Result<Vec<DueInspection>, ControlPlaneError> {
+    pub(crate) async fn due_inspections(&self, limit: u32) -> Result<Vec<DueInspection>, ControlPlaneRequestFailure> {
         if !(1..=64).contains(&limit) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "scheduled inspection batch must contain between 1 and 64 runs",
             ));
@@ -1160,7 +1177,7 @@ impl PostgresRepository {
         recommendations: Vec<NewRecommendation>,
         partial: bool,
         correlation_id: CorrelationId,
-    ) -> Result<InspectionView, ControlPlaneError> {
+    ) -> Result<InspectionView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, template, status, schedule, finding_count,
@@ -1173,11 +1190,12 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let run = inspection_from_row(&row)?;
         enforce_auth_cluster(auth, run.cluster_id)?;
         if run.status != InspectionStatus::Running {
-            return Err(ControlPlaneError::conflict(
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "capability_mismatch",
                 "only a running inspection can be completed",
             ));
         }
@@ -1240,7 +1258,7 @@ impl PostgresRepository {
             InspectionStatus::Completed
         };
         let finding_count = i32::try_from(recommendations.len()).map_err(|_| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "output_too_large",
                 "inspection recommendation count exceeds the supported range",
             )
@@ -1261,7 +1279,7 @@ impl PostgresRepository {
         if let Some(schedule) = run.schedule.as_deref() {
             let interval = super::schedule_interval_from_expression(schedule)?;
             let interval = chrono::Duration::from_std(interval).map_err(|_| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "invalid_schedule",
                     "inspection interval cannot be represented by the scheduler",
                 )
@@ -1311,7 +1329,7 @@ impl PostgresRepository {
         id: RecommendationId,
         request: &RecommendationDispositionRequest,
         correlation_id: CorrelationId,
-    ) -> Result<Recommendation, ControlPlaneError> {
+    ) -> Result<Recommendation, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT id, inspection_run_id, tenant_id, cluster_id, severity, title, rationale,
@@ -1324,14 +1342,15 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let current = recommendation_from_row(&row)?;
         enforce_auth_cluster(auth, current.cluster_id)?;
         if matches!(
             current.status,
             RecommendationStatus::Dismissed | RecommendationStatus::Resolved | RecommendationStatus::Promoted
         ) {
-            return Err(ControlPlaneError::conflict(
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "capability_mismatch",
                 "terminal recommendation disposition cannot be changed",
             ));
         }
@@ -1452,7 +1471,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<Recommendation>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<Recommendation>, ControlPlaneRequestFailure> {
         enforce_auth_cluster(auth, query.cluster_id)?;
         let limit = query.bounded_limit()?;
         let cursor = query.cursor_uuid()?;
@@ -1491,7 +1510,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         investigation_id: Option<InvestigationId>,
         incident_id: Option<IncidentId>,
-    ) -> Result<Vec<TimelineEvent>, ControlPlaneError> {
+    ) -> Result<Vec<TimelineEvent>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT event_id, tenant_id, cluster_id, investigation_id, incident_id,
                     event_type, summary, details, correlation_id, actor_subject,
@@ -1514,7 +1533,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         incident_id: IncidentId,
-    ) -> Result<Vec<DiagnosisRevision>, ControlPlaneError> {
+    ) -> Result<Vec<DiagnosisRevision>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT d.id, d.incident_id, d.revision, d.status, d.rule_result, d.hypotheses,
                     d.evidence_ids, d.primary_model_invocation_id, d.execution_eligible,
@@ -1535,7 +1554,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         investigation_id: InvestigationId,
-    ) -> Result<Vec<InvestigationDiagnosisRevision>, ControlPlaneError> {
+    ) -> Result<Vec<InvestigationDiagnosisRevision>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT id, investigation_id, conversation_id, turn_id, answer_revision_id,
                     revision, pack_id, pack_version, status, rule_result, hypotheses,
@@ -1559,7 +1578,7 @@ async fn attach_previous_pack_diff(
     cluster_id: ClusterId,
     inspection_run_id: InspectionRunId,
     current: &mut InspectionPackRun,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let previous = sqlx::query(
         "SELECT inspection_run_id, output
          FROM diagnostic_pack_runs
@@ -1590,7 +1609,7 @@ async fn attach_previous_pack_diff(
     let resolved = previous_codes.difference(&current_codes).cloned().collect::<Vec<_>>();
     let unchanged = current_codes.intersection(&previous_codes).cloned().collect::<Vec<_>>();
     let output = current.output.as_object_mut().ok_or_else(|| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "diagnostic_evaluation_failed",
             "inspection pack output must be a JSON object",
         )
@@ -1624,7 +1643,7 @@ pub(super) async fn ensure_cluster_scope(
     transaction: &mut Transaction<'_, Postgres>,
     tenant_id: TenantId,
     cluster_id: ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (
             SELECT 1 FROM clusters
@@ -1636,7 +1655,7 @@ pub(super) async fn ensure_cluster_scope(
     .fetch_one(&mut **transaction)
     .await?;
     if !exists {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "cluster is outside the authenticated tenant or is offboarded",
         ));
@@ -1644,9 +1663,9 @@ pub(super) async fn ensure_cluster_scope(
     Ok(())
 }
 
-fn enforce_auth_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+fn enforce_auth_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "requested cluster is outside the authenticated scope",
         ));
@@ -1668,7 +1687,7 @@ pub(super) async fn insert_investigation(
     symptom_family: &str,
     now: DateTime<Utc>,
     correlation_id: CorrelationId,
-) -> Result<Investigation, ControlPlaneError> {
+) -> Result<Investigation, ControlPlaneRequestFailure> {
     let id = InvestigationId::new();
     let fingerprint = fingerprint(auth.tenant_id, cluster_id, resource, symptom_family, now);
     sqlx::query(
@@ -1746,7 +1765,7 @@ pub(super) async fn insert_incident(
     symptom_family: &str,
     fingerprint: &str,
     now: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO sre_incidents (
             id, tenant_id, cluster_id, investigation_id, title, resource, symptom_family,
@@ -1783,7 +1802,7 @@ pub(super) async fn append_timeline(
     details: Value,
     correlation_id: CorrelationId,
     occurred_at: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO incident_timeline (
             event_id, tenant_id, cluster_id, investigation_id, incident_id,
@@ -1820,7 +1839,7 @@ pub(super) async fn append_workflow_event(
     payload: Value,
     correlation_id: CorrelationId,
     occurred_at: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO workflow_events (
             event_id, tenant_id, cluster_id, aggregate_type, aggregate_id,
@@ -1841,7 +1860,7 @@ pub(super) async fn append_workflow_event(
     Ok(())
 }
 
-fn conversation_from_row(row: &PgRow) -> Result<Conversation, ControlPlaneError> {
+fn conversation_from_row(row: &PgRow) -> Result<Conversation, ControlPlaneRequestFailure> {
     Ok(Conversation {
         id: ConversationId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -1861,7 +1880,7 @@ fn conversation_from_row(row: &PgRow) -> Result<Conversation, ControlPlaneError>
     })
 }
 
-fn investigation_from_row(row: &PgRow) -> Result<Investigation, ControlPlaneError> {
+fn investigation_from_row(row: &PgRow) -> Result<Investigation, ControlPlaneRequestFailure> {
     Ok(Investigation {
         id: InvestigationId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -1886,7 +1905,7 @@ fn investigation_from_row(row: &PgRow) -> Result<Investigation, ControlPlaneErro
     })
 }
 
-fn incident_from_row(row: &PgRow) -> Result<Incident, ControlPlaneError> {
+fn incident_from_row(row: &PgRow) -> Result<Incident, ControlPlaneRequestFailure> {
     let occurrence_count: i32 = row.try_get("occurrence_count")?;
     Ok(Incident {
         id: IncidentId::from_uuid(row.try_get("id")?),
@@ -1900,12 +1919,11 @@ fn incident_from_row(row: &PgRow) -> Result<Incident, ControlPlaneError> {
             .try_get::<Option<String>, _>("severity")?
             .map(|value| {
                 serde_json::from_value(serde_json::Value::String(value))
-                    .map_err(|_| ControlPlaneError::configuration("stored incident severity is invalid"))
+                    .map_err(ControlPlaneRequestFailure::configuration_source)
             })
             .transpose()?,
         owner: row.try_get("owner_name")?,
-        occurrence_count: u32::try_from(occurrence_count)
-            .map_err(|_| ControlPlaneError::configuration("stored incident occurrence count is negative"))?,
+        occurrence_count: u32::try_from(occurrence_count).map_err(ControlPlaneRequestFailure::configuration_source)?,
         last_alert_at: row.try_get("last_alert_at")?,
         reopened_from_incident_id: row
             .try_get::<Option<Uuid>, _>("reopened_from_incident_id")?
@@ -1917,7 +1935,7 @@ fn incident_from_row(row: &PgRow) -> Result<Incident, ControlPlaneError> {
     })
 }
 
-fn timeline_from_row(row: &PgRow) -> Result<TimelineEvent, ControlPlaneError> {
+fn timeline_from_row(row: &PgRow) -> Result<TimelineEvent, ControlPlaneRequestFailure> {
     Ok(TimelineEvent {
         id: TimelineEventId::from_uuid(row.try_get("event_id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -1940,7 +1958,7 @@ fn timeline_from_row(row: &PgRow) -> Result<TimelineEvent, ControlPlaneError> {
     })
 }
 
-fn inspection_from_row(row: &PgRow) -> Result<InspectionRun, ControlPlaneError> {
+fn inspection_from_row(row: &PgRow) -> Result<InspectionRun, ControlPlaneRequestFailure> {
     Ok(InspectionRun {
         id: InspectionRunId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -1949,7 +1967,7 @@ fn inspection_from_row(row: &PgRow) -> Result<InspectionRun, ControlPlaneError> 
         status: parse_inspection_status(row.try_get("status")?)?,
         schedule: row.try_get("schedule")?,
         finding_count: u32::try_from(row.try_get::<i32, _>("finding_count")?).map_err(|_| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "source_unavailable",
                 "inspection finding count is outside the supported range",
             )
@@ -1961,7 +1979,7 @@ fn inspection_from_row(row: &PgRow) -> Result<InspectionRun, ControlPlaneError> 
     })
 }
 
-fn recommendation_from_row(row: &PgRow) -> Result<Recommendation, ControlPlaneError> {
+fn recommendation_from_row(row: &PgRow) -> Result<Recommendation, ControlPlaneRequestFailure> {
     Ok(Recommendation {
         id: RecommendationId::from_uuid(row.try_get("id")?),
         inspection_run_id: InspectionRunId::from_uuid(row.try_get("inspection_run_id")?),
@@ -1988,12 +2006,13 @@ fn recommendation_from_row(row: &PgRow) -> Result<Recommendation, ControlPlaneEr
     })
 }
 
-fn diagnosis_revision_from_row(row: &PgRow) -> Result<DiagnosisRevision, ControlPlaneError> {
+fn diagnosis_revision_from_row(row: &PgRow) -> Result<DiagnosisRevision, ControlPlaneRequestFailure> {
     Ok(DiagnosisRevision {
         id: rocketmq_sre_contracts::DiagnosisRevisionId::from_uuid(row.try_get("id")?),
         incident_id: IncidentId::from_uuid(row.try_get("incident_id")?),
-        revision: u32::try_from(row.try_get::<i32, _>("revision")?)
-            .map_err(|_| ControlPlaneError::validation("source_unavailable", "diagnosis revision is invalid"))?,
+        revision: u32::try_from(row.try_get::<i32, _>("revision")?).map_err(|source| {
+            ControlPlaneRequestFailure::operational_validation_source("source_unavailable", source)
+        })?,
         status: parse_diagnosis_revision_status(row.try_get("status")?)?,
         rule_result: row.try_get("rule_result")?,
         hypotheses: row.try_get("hypotheses")?,
@@ -2013,7 +2032,7 @@ fn diagnosis_revision_from_row(row: &PgRow) -> Result<DiagnosisRevision, Control
 
 pub(super) fn investigation_diagnosis_from_row(
     row: &PgRow,
-) -> Result<InvestigationDiagnosisRevision, ControlPlaneError> {
+) -> Result<InvestigationDiagnosisRevision, ControlPlaneRequestFailure> {
     Ok(InvestigationDiagnosisRevision {
         id: DiagnosisRevisionId::from_uuid(row.try_get("id")?),
         investigation_id: InvestigationId::from_uuid(row.try_get("investigation_id")?),
@@ -2023,7 +2042,7 @@ pub(super) fn investigation_diagnosis_from_row(
             row.try_get("answer_revision_id")?,
         ),
         revision: u32::try_from(row.try_get::<i32, _>("revision")?)
-            .map_err(|_| ControlPlaneError::configuration("stored investigation diagnosis revision is invalid"))?,
+            .map_err(ControlPlaneRequestFailure::configuration_source)?,
         pack_id: row.try_get("pack_id")?,
         pack_version: row.try_get("pack_version")?,
         status: parse_investigation_diagnosis_status(row.try_get("status")?)?,
@@ -2044,7 +2063,7 @@ pub(super) fn investigation_diagnosis_from_row(
     })
 }
 
-fn parse_conversation_status(value: &str) -> Result<ConversationStatus, ControlPlaneError> {
+fn parse_conversation_status(value: &str) -> Result<ConversationStatus, ControlPlaneRequestFailure> {
     match value {
         "active" => Ok(ConversationStatus::Active),
         "promoted" => Ok(ConversationStatus::Promoted),
@@ -2053,7 +2072,7 @@ fn parse_conversation_status(value: &str) -> Result<ConversationStatus, ControlP
     }
 }
 
-fn parse_investigation_status(value: &str) -> Result<InvestigationStatus, ControlPlaneError> {
+fn parse_investigation_status(value: &str) -> Result<InvestigationStatus, ControlPlaneRequestFailure> {
     match value {
         "open" => Ok(InvestigationStatus::Open),
         "collecting" => Ok(InvestigationStatus::Collecting),
@@ -2066,7 +2085,7 @@ fn parse_investigation_status(value: &str) -> Result<InvestigationStatus, Contro
     }
 }
 
-fn parse_incident_status(value: &str) -> Result<IncidentStatus, ControlPlaneError> {
+fn parse_incident_status(value: &str) -> Result<IncidentStatus, ControlPlaneRequestFailure> {
     match value {
         "new" => Ok(IncidentStatus::New),
         "collecting" => Ok(IncidentStatus::Collecting),
@@ -2079,7 +2098,7 @@ fn parse_incident_status(value: &str) -> Result<IncidentStatus, ControlPlaneErro
     }
 }
 
-fn parse_diagnosis_revision_status(value: &str) -> Result<IncidentStatus, ControlPlaneError> {
+fn parse_diagnosis_revision_status(value: &str) -> Result<IncidentStatus, ControlPlaneRequestFailure> {
     if value == "confirmed" {
         // Confirmation is carried by `execution_eligible`; the public
         // diagnosis contract still exposes the owning Incident lifecycle.
@@ -2091,7 +2110,7 @@ fn parse_diagnosis_revision_status(value: &str) -> Result<IncidentStatus, Contro
 
 pub(super) fn parse_investigation_diagnosis_status(
     value: &str,
-) -> Result<InvestigationDiagnosisStatus, ControlPlaneError> {
+) -> Result<InvestigationDiagnosisStatus, ControlPlaneRequestFailure> {
     match value {
         "healthy" => Ok(InvestigationDiagnosisStatus::Healthy),
         "fault" => Ok(InvestigationDiagnosisStatus::Fault),
@@ -2129,7 +2148,7 @@ pub(super) fn inspection_template_name(value: InspectionTemplate) -> &'static st
     }
 }
 
-fn parse_inspection_template(value: &str) -> Result<InspectionTemplate, ControlPlaneError> {
+fn parse_inspection_template(value: &str) -> Result<InspectionTemplate, ControlPlaneRequestFailure> {
     match value {
         "cluster_health" => Ok(InspectionTemplate::ClusterHealth),
         "consumer" => Ok(InspectionTemplate::Consumer),
@@ -2157,7 +2176,7 @@ pub(super) fn inspection_status_name(value: InspectionStatus) -> &'static str {
     }
 }
 
-fn parse_inspection_status(value: &str) -> Result<InspectionStatus, ControlPlaneError> {
+fn parse_inspection_status(value: &str) -> Result<InspectionStatus, ControlPlaneRequestFailure> {
     match value {
         "scheduled" => Ok(InspectionStatus::Scheduled),
         "running" => Ok(InspectionStatus::Running),
@@ -2180,7 +2199,7 @@ fn recommendation_status_name(value: RecommendationStatus) -> &'static str {
     }
 }
 
-fn parse_recommendation_status(value: &str) -> Result<RecommendationStatus, ControlPlaneError> {
+fn parse_recommendation_status(value: &str) -> Result<RecommendationStatus, ControlPlaneRequestFailure> {
     match value {
         "open" => Ok(RecommendationStatus::Open),
         "acknowledged" => Ok(RecommendationStatus::Acknowledged),
@@ -2192,8 +2211,8 @@ fn parse_recommendation_status(value: &str) -> Result<RecommendationStatus, Cont
     }
 }
 
-fn invalid_database_enum(name: &str) -> ControlPlaneError {
-    ControlPlaneError::validation("source_unavailable", format!("stored {name} is not supported"))
+fn invalid_database_enum(name: &str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::validation("source_unavailable", format!("stored {name} is not supported"))
 }
 
 fn actor(auth: &AuthContext) -> WorkflowActor {

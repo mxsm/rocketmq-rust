@@ -20,7 +20,7 @@ use rocketmq_sre_contracts::DrSubject;
 use rocketmq_sre_contracts::RecoveryCheckpointDefinition;
 use rocketmq_sre_contracts::RecoveryCheckpointStatus;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::dr::model::CreateDrPlanRequest;
 use crate::dr::model::RecordRecoveryCheckpointRequest;
@@ -29,23 +29,23 @@ const MAX_PLAN_CHECKPOINTS: usize = 64;
 const MAX_REQUIRED_SOURCES: usize = 64;
 const MAX_EVIDENCE_IDS: usize = 256;
 
-pub(super) fn validate_plan_request(request: &CreateDrPlanRequest) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_plan_request(request: &CreateDrPlanRequest) -> Result<(), ControlPlaneRequestFailure> {
     validate_text("DR plan name", &request.name, 256)?;
     validate_text("DR plan owner", &request.owner, 256)?;
     if request.version == 0 || request.target.rto_seconds == 0 {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_dr_plan",
             "plan version and RTO must be greater than zero",
         ));
     }
     if request.subject == DrSubject::RocketMqCluster && request.cluster_id.is_none() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "cluster_required",
             "RocketMQ DR plans require a cluster scope",
         ));
     }
     if request.allowed_modes.is_empty() || request.checkpoints.is_empty() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_dr_plan",
             "DR plans require at least one mode and checkpoint",
         ));
@@ -53,13 +53,13 @@ pub(super) fn validate_plan_request(request: &CreateDrPlanRequest) -> Result<(),
     if request.allowed_modes.len() > 3
         || request.allowed_modes.iter().copied().collect::<BTreeSet<_>>().len() != request.allowed_modes.len()
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_dr_plan",
             "DR exercise modes must be unique and bounded",
         ));
     }
     if request.checkpoints.len() > MAX_PLAN_CHECKPOINTS || request.required_sources.len() > MAX_REQUIRED_SOURCES {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_dr_plan",
             "DR plan sources or checkpoints exceed the supported bound",
         ));
@@ -69,7 +69,7 @@ pub(super) fn validate_plan_request(request: &CreateDrPlanRequest) -> Result<(),
         validate_text("checkpoint key", &checkpoint.key, 128)?;
         validate_text("checkpoint title", &checkpoint.title, 256)?;
         if !keys.insert(checkpoint.key.as_str()) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "duplicate_recovery_checkpoint",
                 "DR checkpoint keys must be unique",
             ));
@@ -84,21 +84,21 @@ pub(super) fn validate_plan_request(request: &CreateDrPlanRequest) -> Result<(),
 pub(super) fn validate_checkpoint(
     request: &RecordRecoveryCheckpointRequest,
     definition: &RecoveryCheckpointDefinition,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if request.key.trim() != definition.key
         || request.title.trim() != definition.title
         || request.expected_duration_seconds != definition.expected_duration_seconds
         || request.manual_confirmation_required != definition.manual_confirmation_required
         || request.cleanup_required != definition.cleanup_required
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "recovery_checkpoint_definition_mismatch",
             "checkpoint fields do not match the immutable DR plan",
         ));
     }
     bound_evidence(&request.evidence_ids)?;
     if request.note.as_deref().is_some_and(|note| note.len() > 2_048) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_recovery_checkpoint",
             "checkpoint note exceeds 2048 bytes",
         ));
@@ -107,27 +107,27 @@ pub(super) fn validate_checkpoint(
         .completed_at
         .is_some_and(|completed| completed < request.started_at)
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_recovery_checkpoint",
             "checkpoint completion precedes its start",
         ));
     }
     if request.status.is_terminal() {
         if request.completed_at.is_none() || request.actual_duration_seconds.is_none() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_recovery_checkpoint",
                 "terminal checkpoints require completion time and actual duration",
             ));
         }
         if request.status != RecoveryCheckpointStatus::Skipped && request.evidence_ids.is_empty() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "dr_evidence_required",
                 "passed or failed checkpoints require Evidence",
             ));
         }
     }
     if request.status == RecoveryCheckpointStatus::Failed && request.finding_codes.is_empty() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "dr_finding_required",
             "failed checkpoints require at least one finding code",
         ));
@@ -136,13 +136,13 @@ pub(super) fn validate_checkpoint(
         && request.confirmed_by.as_deref().is_none_or(str::is_empty)
         && request.status != RecoveryCheckpointStatus::ManualConfirmationRequired
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "manual_confirmation_required",
             "this checkpoint requires an explicit human confirmation",
         ));
     }
     if request.cleanup_complete && !request.cleanup_required {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_recovery_checkpoint",
             "cleanup cannot be complete when the plan does not require cleanup",
         ));
@@ -153,7 +153,7 @@ pub(super) fn validate_checkpoint(
 pub(super) fn validate_checkpoint_transition(
     current: RecoveryCheckpointStatus,
     next: RecoveryCheckpointStatus,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let allowed = matches!(
         (current, next),
         (RecoveryCheckpointStatus::Pending, RecoveryCheckpointStatus::Running)
@@ -172,7 +172,7 @@ pub(super) fn validate_checkpoint_transition(
     if allowed {
         Ok(())
     } else {
-        Err(ControlPlaneError::conflict_code(
+        Err(ControlPlaneRequestFailure::conflict_code(
             "invalid_recovery_checkpoint_transition",
             "the requested checkpoint transition is not allowed",
         ))
@@ -206,7 +206,7 @@ pub(super) fn action_item_transition_allowed(current: ActionItemStatus, next: Ac
         )
 }
 
-pub(super) fn require_read(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_read(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
@@ -215,39 +215,42 @@ pub(super) fn require_read(auth: &AuthContext) -> Result<(), ControlPlaneError> 
     }) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "DR Center requires diagnose or operator access",
         ))
     }
 }
 
-pub(super) fn require_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains("operator") {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "DR Center writes require the operator role",
         ))
     }
 }
 
-pub(super) fn require_cluster(auth: &AuthContext, cluster_id: Option<ClusterId>) -> Result<(), ControlPlaneError> {
+pub(super) fn require_cluster(
+    auth: &AuthContext,
+    cluster_id: Option<ClusterId>,
+) -> Result<(), ControlPlaneRequestFailure> {
     if cluster_id.is_none_or(|cluster_id| auth.clusters.contains(&cluster_id)) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "the authenticated identity cannot access this DR cluster",
         ))
     }
 }
 
-pub(super) fn validate_text(name: &str, value: &str, max: usize) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_text(name: &str, value: &str, max: usize) -> Result<(), ControlPlaneRequestFailure> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.len() > max {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_dr_request",
             format!("{name} must contain between 1 and {max} bytes"),
         ));
@@ -255,9 +258,11 @@ pub(super) fn validate_text(name: &str, value: &str, max: usize) -> Result<(), C
     Ok(())
 }
 
-pub(super) fn bound_evidence(evidence_ids: &[rocketmq_sre_contracts::EvidenceId]) -> Result<(), ControlPlaneError> {
+pub(super) fn bound_evidence(
+    evidence_ids: &[rocketmq_sre_contracts::EvidenceId],
+) -> Result<(), ControlPlaneRequestFailure> {
     if evidence_ids.len() > MAX_EVIDENCE_IDS {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_dr_request",
             "DR Evidence references exceed the supported bound",
         ));

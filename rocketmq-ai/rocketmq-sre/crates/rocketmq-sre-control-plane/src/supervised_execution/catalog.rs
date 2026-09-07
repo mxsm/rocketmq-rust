@@ -24,7 +24,7 @@ use serde::Deserialize;
 use serde_json::Map;
 use serde_json::Value;
 
-use crate::ControlPlaneError;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const CAPABILITY_CATALOG: &str = include_str!("../../../../config/capabilities/rocketmq-capability-catalog.v1.yaml");
 
@@ -63,9 +63,8 @@ impl ActionCatalog {
     pub(super) fn embedded() -> Result<Self, ControlPlaneError> {
         let mut supervised = BTreeMap::new();
         for yaml in EMBEDDED_ACTION_DESCRIPTOR_YAMLS {
-            let descriptor: ActionDescriptor = serde_yaml::from_str(yaml).map_err(|error| {
-                ControlPlaneError::configuration(format!("Phase 3 action descriptor is invalid: {error}"))
-            })?;
+            let descriptor: ActionDescriptor =
+                serde_yaml::from_str(yaml).map_err(ControlPlaneError::configuration_source)?;
             let action = ExecutionAction::from_id(&descriptor.id).ok_or_else(|| {
                 ControlPlaneError::configuration("action descriptor is outside the closed execution catalog")
             })?;
@@ -76,8 +75,8 @@ impl ActionCatalog {
                 ));
             }
         }
-        let capability_catalog: CapabilityCatalog = serde_yaml::from_str(CAPABILITY_CATALOG)
-            .map_err(|error| ControlPlaneError::configuration(format!("capability catalog is invalid: {error}")))?;
+        let capability_catalog: CapabilityCatalog =
+            serde_yaml::from_str(CAPABILITY_CATALOG).map_err(ControlPlaneError::configuration_source)?;
         let manual_only = capability_catalog
             .capabilities
             .into_iter()
@@ -99,10 +98,10 @@ impl ActionCatalog {
         })
     }
 
-    pub(super) fn resolve(&self, id: &str) -> Result<CatalogResolution<'_>, ControlPlaneError> {
+    pub(super) fn resolve(&self, id: &str) -> Result<CatalogResolution<'_>, ControlPlaneRequestFailure> {
         if let Some(action) = ExecutionAction::from_id(id) {
             let descriptor = self.supervised.get(&action).ok_or_else(|| {
-                ControlPlaneError::configuration("closed supervised action has no embedded descriptor")
+                ControlPlaneRequestFailure::configuration("closed supervised action has no embedded descriptor")
             })?;
             return Ok(CatalogResolution::Supervised(action, descriptor));
         }
@@ -110,7 +109,7 @@ impl ActionCatalog {
             .get(id)
             .map(CatalogResolution::ManualOnly)
             .ok_or_else(|| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "unknown_action",
                     "action is not registered in the supervised or manual-only catalog",
                 )
@@ -140,14 +139,17 @@ fn validate_descriptor(action: ExecutionAction, descriptor: &ActionDescriptor) -
     Ok(())
 }
 
-pub(super) fn validate_parameters(descriptor: &ActionDescriptor, parameters: &Value) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_parameters(
+    descriptor: &ActionDescriptor,
+    parameters: &Value,
+) -> Result<(), ControlPlaneRequestFailure> {
     let mut observed_fields = BTreeSet::new();
     collect_fields(parameters, &mut observed_fields);
     if let Some(field) = observed_fields
         .iter()
         .find(|field| descriptor.forbidden_fields.contains(field.as_str()))
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "forbidden_action_field",
             format!("action parameters contain forbidden field `{field}`"),
         ));
@@ -172,7 +174,7 @@ fn collect_fields(value: &Value, fields: &mut BTreeSet<String>) {
     }
 }
 
-fn validate_schema_value(value: &Value, schema: &Value, path: &str) -> Result<(), ControlPlaneError> {
+fn validate_schema_value(value: &Value, schema: &Value, path: &str) -> Result<(), ControlPlaneRequestFailure> {
     match schema.get("type").and_then(Value::as_str) {
         Some("object") => validate_object(value, schema, path),
         Some("string") => validate_string(value, schema, path),
@@ -184,7 +186,7 @@ fn validate_schema_value(value: &Value, schema: &Value, path: &str) -> Result<()
     }
 }
 
-fn validate_object(value: &Value, schema: &Value, path: &str) -> Result<(), ControlPlaneError> {
+fn validate_object(value: &Value, schema: &Value, path: &str) -> Result<(), ControlPlaneRequestFailure> {
     let values = value
         .as_object()
         .ok_or_else(|| parameter_error(format!("{path} must be an object")))?;
@@ -219,7 +221,11 @@ fn validate_object(value: &Value, schema: &Value, path: &str) -> Result<(), Cont
     Ok(())
 }
 
-fn validate_property_count(values: &Map<String, Value>, schema: &Value, path: &str) -> Result<(), ControlPlaneError> {
+fn validate_property_count(
+    values: &Map<String, Value>,
+    schema: &Value,
+    path: &str,
+) -> Result<(), ControlPlaneRequestFailure> {
     let count =
         u64::try_from(values.len()).map_err(|_| parameter_error(format!("{path} contains too many properties")))?;
     if schema
@@ -239,7 +245,7 @@ fn validate_property_count(values: &Map<String, Value>, schema: &Value, path: &s
     Ok(())
 }
 
-fn validate_string(value: &Value, schema: &Value, path: &str) -> Result<(), ControlPlaneError> {
+fn validate_string(value: &Value, schema: &Value, path: &str) -> Result<(), ControlPlaneRequestFailure> {
     let value = value
         .as_str()
         .ok_or_else(|| parameter_error(format!("{path} must be a string")))?;
@@ -258,7 +264,7 @@ fn validate_string(value: &Value, schema: &Value, path: &str) -> Result<(), Cont
     Ok(())
 }
 
-fn validate_integer(value: &Value, schema: &Value, path: &str) -> Result<(), ControlPlaneError> {
+fn validate_integer(value: &Value, schema: &Value, path: &str) -> Result<(), ControlPlaneRequestFailure> {
     let value = value
         .as_i64()
         .ok_or_else(|| parameter_error(format!("{path} must be an integer")))?;
@@ -276,8 +282,8 @@ fn validate_integer(value: &Value, schema: &Value, path: &str) -> Result<(), Con
     Ok(())
 }
 
-fn parameter_error(detail: String) -> ControlPlaneError {
-    ControlPlaneError::validation("invalid_action_parameters", detail)
+fn parameter_error(detail: String) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::validation("invalid_action_parameters", detail)
 }
 
 #[cfg(test)]

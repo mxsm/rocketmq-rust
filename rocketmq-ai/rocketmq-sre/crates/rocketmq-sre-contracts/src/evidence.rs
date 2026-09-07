@@ -22,11 +22,11 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use crate::ClusterId;
-use crate::ContractError;
 use crate::CorrelationId;
 use crate::EvidenceId;
 use crate::QueryId;
 use crate::SchemaVersion;
+use crate::SreContractError;
 use crate::TenantId;
 
 /// Availability of a required signal or evidence source.
@@ -88,11 +88,11 @@ impl TimeRange {
     ///
     /// # Errors
     ///
-    /// Returns [`ContractError::InvalidTimeRange`] when `start` is later than
+    /// Returns [`crate::SreContractError`] when `start` is later than
     /// `end`.
-    pub fn new(start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Self, ContractError> {
+    pub fn new(start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Self, SreContractError> {
         if start > end {
-            return Err(ContractError::InvalidTimeRange);
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidTimeRange));
         }
         Ok(Self { start, end })
     }
@@ -172,14 +172,14 @@ impl EvidenceSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns [`ContractError::InvalidDescriptor`] if the RFC 8785
+    /// Returns [`crate::SreContractError`] if the RFC 8785
     /// canonicalization step fails.
     pub fn capture(
         query: EvidenceQuery,
         schema: SchemaVersion,
         observed_at: DateTime<Utc>,
         content: EvidenceContent,
-    ) -> Result<Self, ContractError> {
+    ) -> Result<Self, SreContractError> {
         let mut snapshot = Self {
             schema,
             evidence_id: EvidenceId::new(),
@@ -208,9 +208,9 @@ impl EvidenceSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns [`ContractError::InvalidDescriptor`] when the selected content
+    /// Returns [`crate::SreContractError`] when the selected content
     /// cannot be represented by RFC 8785, for example a non-finite number.
-    pub fn compute_content_hash(&self) -> Result<String, ContractError> {
+    pub fn compute_content_hash(&self) -> Result<String, SreContractError> {
         let material = EvidenceHashMaterial {
             schema: &self.schema,
             source: &self.source,
@@ -219,9 +219,7 @@ impl EvidenceSnapshot {
             time_range: &self.time_range,
             content: &self.content,
         };
-        let canonical = serde_jcs::to_vec(&material).map_err(|error| ContractError::InvalidDescriptor {
-            reason: format!("evidence cannot be canonicalized: {error}"),
-        })?;
+        let canonical = serde_jcs::to_vec(&material).map_err(SreContractError::from_source)?;
         let digest = Sha256::digest(canonical);
         Ok(format!("sha256:{}", crate::encode_lower_hex(digest)))
     }
@@ -230,11 +228,11 @@ impl EvidenceSnapshot {
     ///
     /// # Errors
     ///
-    /// Returns [`ContractError::InvalidContentHash`] on a missing or mismatched
+    /// Returns [`crate::SreContractError`] on a missing or mismatched
     /// hash, or the canonicalization error from [`Self::compute_content_hash`].
-    pub fn verify_content_hash(&self) -> Result<(), ContractError> {
+    pub fn verify_content_hash(&self) -> Result<(), SreContractError> {
         if self.content_hash.is_empty() || self.content_hash != self.compute_content_hash()? {
-            return Err(ContractError::InvalidContentHash);
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidContentHash));
         }
         Ok(())
     }
@@ -342,6 +340,9 @@ mod tests {
             changed.compute_content_hash().expect("hash should compute"),
             original.content_hash
         );
-        assert_eq!(changed.verify_content_hash(), Err(ContractError::InvalidContentHash));
+        assert_eq!(
+            (changed.verify_content_hash()).unwrap_err().code(),
+            crate::PublicErrorCode::InvalidContentHash
+        );
     }
 }

@@ -33,6 +33,7 @@ use sqlx::Transaction;
 use uuid::Uuid;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 /// Typed PostgreSQL persistence boundary for Phase 2 read-only operations and
@@ -42,29 +43,30 @@ use crate::PostgresRepository;
     reason = "the control plane intentionally exposes a native async repository contract"
 )]
 pub trait Phase2Repository: Clone + Send + Sync + 'static {
-    async fn store_alert(&self, event: &AlertEvent) -> Result<Uuid, ControlPlaneError>;
-    async fn store_incident_relation(&self, relation: &IncidentRelation) -> Result<(), ControlPlaneError>;
-    async fn enqueue_notification(&self, delivery: &NotificationDelivery) -> Result<bool, ControlPlaneError>;
-    async fn store_capacity_forecast(&self, forecast: &CapacityForecast) -> Result<(), ControlPlaneError>;
-    async fn store_backlog_eta(&self, forecast: &BacklogEta) -> Result<(), ControlPlaneError>;
-    async fn store_simulation(&self, simulation: &WhatIfSimulation) -> Result<(), ControlPlaneError>;
-    async fn store_upgrade_readiness(&self, report: &UpgradeReadinessReport) -> Result<(), ControlPlaneError>;
-    async fn store_dr_readiness(&self, report: &DrReadinessReport) -> Result<(), ControlPlaneError>;
-    async fn create_postmortem(&self, draft: &PostmortemDraft) -> Result<bool, ControlPlaneError>;
-    async fn append_postmortem_revision(&self, revision: &PostmortemRevision) -> Result<(), ControlPlaneError>;
+    async fn store_alert(&self, event: &AlertEvent) -> Result<Uuid, ControlPlaneRequestFailure>;
+    async fn store_incident_relation(&self, relation: &IncidentRelation) -> Result<(), ControlPlaneRequestFailure>;
+    async fn enqueue_notification(&self, delivery: &NotificationDelivery) -> Result<bool, ControlPlaneRequestFailure>;
+    async fn store_capacity_forecast(&self, forecast: &CapacityForecast) -> Result<(), ControlPlaneRequestFailure>;
+    async fn store_backlog_eta(&self, forecast: &BacklogEta) -> Result<(), ControlPlaneRequestFailure>;
+    async fn store_simulation(&self, simulation: &WhatIfSimulation) -> Result<(), ControlPlaneRequestFailure>;
+    async fn store_upgrade_readiness(&self, report: &UpgradeReadinessReport) -> Result<(), ControlPlaneRequestFailure>;
+    async fn store_dr_readiness(&self, report: &DrReadinessReport) -> Result<(), ControlPlaneRequestFailure>;
+    async fn create_postmortem(&self, draft: &PostmortemDraft) -> Result<bool, ControlPlaneRequestFailure>;
+    async fn append_postmortem_revision(&self, revision: &PostmortemRevision)
+    -> Result<(), ControlPlaneRequestFailure>;
     async fn get_postmortem(
         &self,
         id: rocketmq_sre_contracts::PostmortemId,
-    ) -> Result<PostmortemDraft, ControlPlaneError>;
+    ) -> Result<PostmortemDraft, ControlPlaneRequestFailure>;
     async fn list_postmortem_revisions(
         &self,
         id: rocketmq_sre_contracts::PostmortemId,
-    ) -> Result<Vec<PostmortemRevision>, ControlPlaneError>;
-    async fn upsert_action_item(&self, item: &ActionItem) -> Result<(), ControlPlaneError>;
+    ) -> Result<Vec<PostmortemRevision>, ControlPlaneRequestFailure>;
+    async fn upsert_action_item(&self, item: &ActionItem) -> Result<(), ControlPlaneRequestFailure>;
 }
 
 impl Phase2Repository for PostgresRepository {
-    async fn store_alert(&self, event: &AlertEvent) -> Result<Uuid, ControlPlaneError> {
+    async fn store_alert(&self, event: &AlertEvent) -> Result<Uuid, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let alert_id = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO alert_events (
@@ -125,7 +127,7 @@ impl Phase2Repository for PostgresRepository {
         .bind(json_value(&event.labels)?)
         .bind(event.evidence_ids.iter().map(|id| id.as_uuid()).collect::<Vec<_>>())
         .bind(i64::try_from(event.sequence).map_err(|_| {
-            ControlPlaneError::validation("invalid_alert_sequence", "alert sequence exceeds PostgreSQL BIGINT")
+            ControlPlaneRequestFailure::validation("invalid_alert_sequence", "alert sequence exceeds PostgreSQL BIGINT")
         })?)
         .bind(event.occurred_at)
         .bind(event.received_at)
@@ -165,7 +167,7 @@ impl Phase2Repository for PostgresRepository {
         Ok(alert_id)
     }
 
-    async fn store_incident_relation(&self, relation: &IncidentRelation) -> Result<(), ControlPlaneError> {
+    async fn store_incident_relation(&self, relation: &IncidentRelation) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO incident_relations (
                 id, tenant_id, cluster_id, from_incident_id, to_incident_id,
@@ -190,7 +192,7 @@ impl Phase2Repository for PostgresRepository {
         Ok(())
     }
 
-    async fn enqueue_notification(&self, delivery: &NotificationDelivery) -> Result<bool, ControlPlaneError> {
+    async fn enqueue_notification(&self, delivery: &NotificationDelivery) -> Result<bool, ControlPlaneRequestFailure> {
         let result = sqlx::query(
             "INSERT INTO notification_outbox (
                 id, target_id, tenant_id, cluster_id, incident_id, delivery_key,
@@ -220,7 +222,7 @@ impl Phase2Repository for PostgresRepository {
         Ok(result.rows_affected() == 1)
     }
 
-    async fn store_capacity_forecast(&self, forecast: &CapacityForecast) -> Result<(), ControlPlaneError> {
+    async fn store_capacity_forecast(&self, forecast: &CapacityForecast) -> Result<(), ControlPlaneRequestFailure> {
         let report = json_value(forecast)?;
         sqlx::query(
             "INSERT INTO capacity_forecasts (
@@ -257,7 +259,7 @@ impl Phase2Repository for PostgresRepository {
         Ok(())
     }
 
-    async fn store_backlog_eta(&self, forecast: &BacklogEta) -> Result<(), ControlPlaneError> {
+    async fn store_backlog_eta(&self, forecast: &BacklogEta) -> Result<(), ControlPlaneRequestFailure> {
         let report = json_value(forecast)?;
         sqlx::query(
             "INSERT INTO backlog_eta_forecasts (
@@ -289,7 +291,7 @@ impl Phase2Repository for PostgresRepository {
         Ok(())
     }
 
-    async fn store_simulation(&self, simulation: &WhatIfSimulation) -> Result<(), ControlPlaneError> {
+    async fn store_simulation(&self, simulation: &WhatIfSimulation) -> Result<(), ControlPlaneRequestFailure> {
         let report = json_value(simulation)?;
         sqlx::query(
             "INSERT INTO what_if_simulations (
@@ -330,7 +332,7 @@ impl Phase2Repository for PostgresRepository {
         Ok(())
     }
 
-    async fn store_upgrade_readiness(&self, report: &UpgradeReadinessReport) -> Result<(), ControlPlaneError> {
+    async fn store_upgrade_readiness(&self, report: &UpgradeReadinessReport) -> Result<(), ControlPlaneRequestFailure> {
         let report_json = json_value(report)?;
         sqlx::query(
             "INSERT INTO upgrade_readiness_reports (
@@ -355,7 +357,7 @@ impl Phase2Repository for PostgresRepository {
         Ok(())
     }
 
-    async fn store_dr_readiness(&self, report: &DrReadinessReport) -> Result<(), ControlPlaneError> {
+    async fn store_dr_readiness(&self, report: &DrReadinessReport) -> Result<(), ControlPlaneRequestFailure> {
         let report_json = json_value(report)?;
         sqlx::query(
             "INSERT INTO dr_readiness_reports (
@@ -371,11 +373,11 @@ impl Phase2Repository for PostgresRepository {
         .bind(&report.target_region)
         .bind(
             i64::try_from(report.requested_rto_seconds)
-                .map_err(|_| ControlPlaneError::validation("invalid_rto", "RTO exceeds PostgreSQL BIGINT"))?,
+                .map_err(|_| ControlPlaneRequestFailure::validation("invalid_rto", "requested RTO is too large"))?,
         )
         .bind(
             i64::try_from(report.requested_rpo_seconds)
-                .map_err(|_| ControlPlaneError::validation("invalid_rpo", "RPO exceeds PostgreSQL BIGINT"))?,
+                .map_err(|_| ControlPlaneRequestFailure::validation("invalid_rpo", "requested RPO is too large"))?,
         )
         .bind(enum_value(&report.status)?)
         .bind(json_value(&report.findings)?)
@@ -388,7 +390,7 @@ impl Phase2Repository for PostgresRepository {
         Ok(())
     }
 
-    async fn create_postmortem(&self, draft: &PostmortemDraft) -> Result<bool, ControlPlaneError> {
+    async fn create_postmortem(&self, draft: &PostmortemDraft) -> Result<bool, ControlPlaneRequestFailure> {
         let result = sqlx::query(
             "INSERT INTO postmortems (
                 id, tenant_id, cluster_id, incident_id, status, current_revision,
@@ -403,7 +405,7 @@ impl Phase2Repository for PostgresRepository {
         .bind(draft.incident_id.as_uuid())
         .bind(enum_value(&draft.status)?)
         .bind(i32::try_from(draft.current_revision).map_err(|_| {
-            ControlPlaneError::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
+            ControlPlaneRequestFailure::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
         })?)
         .bind(&draft.confirmed_by)
         .bind(draft.confirmed_at)
@@ -416,24 +418,28 @@ impl Phase2Repository for PostgresRepository {
         Ok(result.rows_affected() == 1)
     }
 
-    async fn append_postmortem_revision(&self, revision: &PostmortemRevision) -> Result<(), ControlPlaneError> {
+    async fn append_postmortem_revision(
+        &self,
+        revision: &PostmortemRevision,
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let current_revision: i32 =
             sqlx::query_scalar("SELECT current_revision FROM postmortems WHERE id = $1 FOR UPDATE")
                 .bind(revision.postmortem_id.as_uuid())
                 .fetch_optional(&mut *transaction)
                 .await?
-                .ok_or(ControlPlaneError::NotFound)?;
-        let expected = current_revision
-            .checked_add(1)
-            .ok_or_else(|| ControlPlaneError::conflict("postmortem revision counter cannot be advanced"))?;
+                .ok_or(ControlPlaneRequestFailure::not_found())?;
+        let expected = current_revision.checked_add(1).ok_or_else(|| {
+            ControlPlaneRequestFailure::conflict_code("conflict", "postmortem revision counter cannot be advanced")
+        })?;
         let actual = i32::try_from(revision.revision).map_err(|_| {
-            ControlPlaneError::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
+            ControlPlaneRequestFailure::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
         })?;
         if actual != expected {
-            return Err(ControlPlaneError::conflict(format!(
-                "postmortem revision must be {expected}, received {actual}"
-            )));
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "conflict",
+                format!("postmortem revision must be {expected}, received {actual}"),
+            ));
         }
 
         insert_postmortem_revision(&mut transaction, revision).await?;
@@ -466,7 +472,7 @@ impl Phase2Repository for PostgresRepository {
     async fn get_postmortem(
         &self,
         id: rocketmq_sre_contracts::PostmortemId,
-    ) -> Result<PostmortemDraft, ControlPlaneError> {
+    ) -> Result<PostmortemDraft, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, incident_id, status, current_revision,
                     confirmed_by, confirmed_at, published_knowledge_item_id,
@@ -476,14 +482,14 @@ impl Phase2Repository for PostgresRepository {
         .bind(id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         postmortem_from_row(&row)
     }
 
     async fn list_postmortem_revisions(
         &self,
         id: rocketmq_sre_contracts::PostmortemId,
-    ) -> Result<Vec<PostmortemRevision>, ControlPlaneError> {
+    ) -> Result<Vec<PostmortemRevision>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT id, postmortem_id, revision, summary, impact, detection,
                     timeline, root_causes, contributing_factors, conclusions, recovery,
@@ -499,7 +505,7 @@ impl Phase2Repository for PostgresRepository {
         rows.iter().map(postmortem_revision_from_row).collect()
     }
 
-    async fn upsert_action_item(&self, item: &ActionItem) -> Result<(), ControlPlaneError> {
+    async fn upsert_action_item(&self, item: &ActionItem) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO action_items (
                 id, tenant_id, cluster_id, postmortem_id, incident_id, title,
@@ -543,7 +549,7 @@ impl Phase2Repository for PostgresRepository {
 async fn insert_postmortem_revision(
     transaction: &mut Transaction<'_, Postgres>,
     revision: &PostmortemRevision,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO postmortem_revisions (
             id, postmortem_id, revision, summary, impact, detection, timeline,
@@ -558,7 +564,7 @@ async fn insert_postmortem_revision(
     .bind(revision.id.as_uuid())
     .bind(revision.postmortem_id.as_uuid())
     .bind(i32::try_from(revision.revision).map_err(|_| {
-        ControlPlaneError::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
+        ControlPlaneRequestFailure::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
     })?)
     .bind(&revision.summary)
     .bind(&revision.impact)
@@ -580,7 +586,7 @@ async fn insert_postmortem_revision(
     Ok(())
 }
 
-fn postmortem_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemDraft, ControlPlaneError> {
+fn postmortem_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemDraft, ControlPlaneRequestFailure> {
     let current_revision: i32 = row.try_get("current_revision")?;
     Ok(PostmortemDraft {
         id: rocketmq_sre_contracts::PostmortemId::from_uuid(row.try_get("id")?),
@@ -588,8 +594,7 @@ fn postmortem_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemDraft, C
         cluster_id: rocketmq_sre_contracts::ClusterId::from_uuid(row.try_get("cluster_id")?),
         incident_id: rocketmq_sre_contracts::IncidentId::from_uuid(row.try_get("incident_id")?),
         status: enum_from_column(row.try_get("status")?, "postmortem status")?,
-        current_revision: u32::try_from(current_revision)
-            .map_err(|_| ControlPlaneError::configuration("stored postmortem revision is negative"))?,
+        current_revision: u32::try_from(current_revision).map_err(ControlPlaneError::configuration_source)?,
         confirmed_by: row.try_get("confirmed_by")?,
         confirmed_at: row.try_get("confirmed_at")?,
         published_knowledge_item_id: row
@@ -601,13 +606,12 @@ fn postmortem_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemDraft, C
     })
 }
 
-fn postmortem_revision_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemRevision, ControlPlaneError> {
+fn postmortem_revision_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemRevision, ControlPlaneRequestFailure> {
     let revision: i32 = row.try_get("revision")?;
     Ok(PostmortemRevision {
         id: rocketmq_sre_contracts::PostmortemRevisionId::from_uuid(row.try_get("id")?),
         postmortem_id: rocketmq_sre_contracts::PostmortemId::from_uuid(row.try_get("postmortem_id")?),
-        revision: u32::try_from(revision)
-            .map_err(|_| ControlPlaneError::configuration("stored postmortem revision is negative"))?,
+        revision: u32::try_from(revision).map_err(ControlPlaneError::configuration_source)?,
         summary: row.try_get("summary")?,
         impact: row.try_get("impact")?,
         detection: row.try_get("detection")?,
@@ -632,30 +636,28 @@ fn postmortem_revision_from_row(row: &sqlx::postgres::PgRow) -> Result<Postmorte
     })
 }
 
-fn enum_value<T: Serialize>(value: &T) -> Result<String, ControlPlaneError> {
-    match serde_json::to_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("Phase 2 enum serialization failed: {error}")))?
-    {
+fn enum_value<T: Serialize>(value: &T) -> Result<String, ControlPlaneRequestFailure> {
+    match serde_json::to_value(value).map_err(ControlPlaneError::configuration_source)? {
         Value::String(value) => Ok(value),
-        _ => Err(ControlPlaneError::configuration(
+        _ => Err(ControlPlaneRequestFailure::configuration(
             "Phase 2 enum did not serialize as a string",
         )),
     }
 }
 
-fn enum_from_column<T: DeserializeOwned>(value: String, field: &'static str) -> Result<T, ControlPlaneError> {
+fn enum_from_column<T: DeserializeOwned>(value: String, _field: &'static str) -> Result<T, ControlPlaneRequestFailure> {
     serde_json::from_value(Value::String(value))
-        .map_err(|error| ControlPlaneError::configuration(format!("stored {field} is invalid: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn json_value<T: Serialize>(value: &T) -> Result<Value, ControlPlaneError> {
+fn json_value<T: Serialize>(value: &T) -> Result<Value, ControlPlaneRequestFailure> {
     serde_json::to_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("Phase 2 JSON serialization failed: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn value_from_column<T: DeserializeOwned>(value: Value, field: &'static str) -> Result<T, ControlPlaneError> {
+fn value_from_column<T: DeserializeOwned>(value: Value, _field: &'static str) -> Result<T, ControlPlaneRequestFailure> {
     serde_json::from_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("stored {field} is invalid: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
 #[cfg(test)]

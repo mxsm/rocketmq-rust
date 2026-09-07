@@ -45,9 +45,13 @@ use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 
 use crate::CapabilityManifest;
+use crate::ConnectorAdmissionOutcome;
+use crate::ConnectorAdmissionRejection;
+use crate::ConnectorCapabilityOutcome;
+use crate::ConnectorCapabilityRejection;
 use crate::ConnectorConfig;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::EvidenceOperation;
 use crate::MCP_PROTOCOL_VERSION;
 use crate::VerifiedCapability;
@@ -115,8 +119,11 @@ pub(crate) trait McpGateway: Send + Sync + 'static {
         async { Err(ConnectorError::source("MCP System Resource is unavailable")) }
     }
 
-    fn ensure_cluster_active(&self, _cluster: &str) -> impl Future<Output = Result<(), ConnectorError>> + Send {
-        async { Ok(()) }
+    fn ensure_cluster_active(
+        &self,
+        _cluster: &str,
+    ) -> impl Future<Output = Result<ConnectorAdmissionOutcome<()>, ConnectorError>> + Send {
+        async { Ok(ConnectorAdmissionOutcome::Accepted(())) }
     }
 
     fn close(&self) -> impl Future<Output = ()> + Send;
@@ -164,20 +171,20 @@ fn build_control_plane_client(config: &ConnectorConfig) -> Result<Option<reqwest
     }
     if !control_plane.ca_pem.is_empty() {
         let certificates = reqwest::Certificate::from_pem_bundle(&control_plane.ca_pem)
-            .map_err(|_| ConnectorError::configuration("control-plane CA bundle is invalid"))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::InvalidConfiguration, false, source))?;
         for certificate in certificates {
             builder = builder.add_root_certificate(certificate);
         }
     }
     if !control_plane.client_identity_pem.is_empty() {
         let identity = reqwest::Identity::from_pem(&control_plane.client_identity_pem)
-            .map_err(|_| ConnectorError::configuration("control-plane client identity PEM is invalid"))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::InvalidConfiguration, false, source))?;
         builder = builder.identity(identity);
     }
     builder
         .build()
         .map(Some)
-        .map_err(|_| ConnectorError::configuration("control-plane mTLS HTTP client cannot be built"))
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::InvalidConfiguration, false, source))
 }
 
 impl RmcpGateway {
@@ -195,14 +202,14 @@ impl RmcpGateway {
             .user_agent(concat!("rocketmq-sre-connector/", env!("CARGO_PKG_VERSION")));
         if !config.mcp_ca_pem.is_empty() {
             let certificates = reqwest::Certificate::from_pem_bundle(&config.mcp_ca_pem)
-                .map_err(|_| ConnectorError::configuration("MCP CA file is not a valid PEM certificate bundle"))?;
+                .map_err(|source| ConnectorError::from_source(ConnectorFailure::InvalidConfiguration, false, source))?;
             for certificate in certificates {
                 builder = builder.add_root_certificate(certificate);
             }
         }
         let http = builder
             .build()
-            .map_err(|error| ConnectorError::configuration(format!("TLS HTTP client cannot be built: {error}")))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::InvalidConfiguration, false, source))?;
         let control_plane_http = build_control_plane_client(&config)?;
         let tokens = TokenProvider::new(config.auth.clone(), http.clone(), config.request_timeout);
         Ok(Self {
@@ -241,11 +248,15 @@ impl RmcpGateway {
                 let transport = StreamableHttpClientTransport::with_client(self.http.clone(), transport_config);
                 tokio::time::timeout(self.config.request_timeout, client_info.serve(transport))
                     .await
-                    .map_err(|_| ConnectorError::source("MCP initialize timed out after token refresh"))?
+                    .map_err(|source| ConnectorError::from_source(ConnectorFailure::DeadlineExceeded, true, source))?
                     .map_err(map_initialize_error)
             }
             Ok(Err(error)) => Err(map_initialize_error(error)),
-            Err(_) => Err(ConnectorError::source("MCP initialize timed out")),
+            Err(source) => Err(ConnectorError::from_source(
+                ConnectorFailure::DeadlineExceeded,
+                true,
+                source,
+            )),
         }
     }
 
@@ -262,7 +273,7 @@ impl RmcpGateway {
         if !force_refresh
             && discovered
                 .as_ref()
-                .is_err_and(|error| error.code == ConnectorErrorCode::UnauthorizedScope)
+                .is_err_and(|error| error.failure() == ConnectorFailure::UnauthorizedScope)
         {
             let _ = service.close_with_timeout(self.config.shutdown_timeout).await;
             self.tokens.invalidate().await;
@@ -291,13 +302,13 @@ impl RmcpGateway {
     ) -> Result<(BTreeMap<String, Tool>, BTreeMap<String, VerifiedCapability>), ConnectorError> {
         let peer_info = service.peer_info().ok_or_else(|| {
             ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
+                ConnectorFailure::CapabilityMismatch,
                 "MCP initialize did not provide server information",
             )
         })?;
         if peer_info.protocol_version.as_str() != MCP_PROTOCOL_VERSION {
             return Err(ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
+                ConnectorFailure::CapabilityMismatch,
                 format!(
                     "negotiated protocol `{}` does not equal `{MCP_PROTOCOL_VERSION}`",
                     peer_info.protocol_version
@@ -342,40 +353,36 @@ impl RmcpGateway {
             let text = extract_text_resource(resource.contents, &uri)?;
             if text.len() > self.config.max_response_bytes {
                 return Err(ConnectorError::new(
-                    ConnectorErrorCode::OutputTooLarge,
+                    ConnectorFailure::OutputTooLarge,
                     false,
                     "capability resource exceeds the configured response bound",
                 ));
             }
-            let manifest: CapabilityManifest = serde_json::from_str(&text).map_err(|_| {
-                ConnectorError::capability(
-                    ConnectorErrorCode::CapabilityMismatch,
-                    "capability resource is not valid JSON",
-                )
-            })?;
+            let manifest: CapabilityManifest = serde_json::from_str(&text)
+                .map_err(|source| ConnectorError::from_source(ConnectorFailure::CapabilityMismatch, false, source))?;
             let verified = match verify_manifest(
                 manifest.clone(),
                 cluster,
                 &tools,
                 &resources,
                 self.config.expected_tool_surface_digest.as_deref(),
-            ) {
-                Ok(verified) => verified,
-                Err(error) => {
+            )? {
+                ConnectorCapabilityOutcome::Verified(verified) => verified,
+                ConnectorCapabilityOutcome::Rejected(rejection) => {
                     let incompatible = VerifiedCapability {
                         manifest,
                         observed_at: chrono::Utc::now(),
                     };
                     if let Err(report_error) = self
-                        .report_to_control_plane(&incompatible, false, Some(error.code.as_str()), &data_sources)
+                        .report_to_control_plane(&incompatible, false, Some(rejection.code()), &data_sources)
                         .await
                     {
                         tracing::warn!(
-                            code = report_error.code.as_str(),
+                            code = report_error.failure().as_str(),
                             "failed to report an incompatible MCP handshake"
                         );
                     }
-                    return Err(error);
+                    continue;
                 }
             };
             let surface_drift = {
@@ -385,21 +392,17 @@ impl RmcpGateway {
                     .is_some_and(|previous| previous != &verified.manifest.tool_surface_digest)
             };
             if surface_drift {
+                let rejection = ConnectorCapabilityRejection::SurfaceChanged;
                 if let Err(report_error) = self
-                    .report_to_control_plane(
-                        &verified,
-                        false,
-                        Some(ConnectorErrorCode::SchemaDigestMismatch.as_str()),
-                        &data_sources,
-                    )
+                    .report_to_control_plane(&verified, false, Some(rejection.code()), &data_sources)
                     .await
                 {
-                    tracing::warn!(code = report_error.code.as_str(), "failed to report tool surface drift");
+                    tracing::warn!(
+                        code = report_error.failure().as_str(),
+                        "failed to report tool surface drift"
+                    );
                 }
-                return Err(ConnectorError::capability(
-                    ConnectorErrorCode::SchemaDigestMismatch,
-                    "verified tool surface changed after onboarding",
-                ));
+                continue;
             }
             self.report_to_control_plane(
                 &verified,
@@ -521,7 +524,7 @@ impl RmcpGateway {
                 freshness_ms: Some(freshness_ms),
                 detail: format!("authenticated bounded `{data_schema}` resource"),
             },
-            Err(error) => unavailable_source(id, error.code.as_str()),
+            Err(error) => unavailable_source(id, error.failure().as_str()),
         }
     }
 
@@ -546,8 +549,9 @@ impl RmcpGateway {
                     read_bounded_response(response, self.config.max_response_bytes)
                         .await
                         .and_then(|body| {
-                            serde_json::from_slice::<Value>(&body)
-                                .map_err(|_| ConnectorError::source("Prometheus query response is not valid JSON"))
+                            serde_json::from_slice::<Value>(&body).map_err(|source| {
+                                ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source)
+                            })
                         })
                         .and_then(|value| {
                             (value.get("status").and_then(Value::as_str) == Some("success"))
@@ -559,8 +563,16 @@ impl RmcpGateway {
                 }
             }
             Ok(Ok(_)) => Err(ConnectorError::source("observability backend health query failed")),
-            Ok(Err(_)) => Err(ConnectorError::source("observability backend is unavailable")),
-            Err(_) => Err(ConnectorError::source("observability backend health query timed out")),
+            Ok(Err(source)) => Err(ConnectorError::from_source(
+                ConnectorFailure::SourceUnavailable,
+                true,
+                source,
+            )),
+            Err(source) => Err(ConnectorError::from_source(
+                ConnectorFailure::DeadlineExceeded,
+                true,
+                source,
+            )),
         };
         match result {
             Ok(()) => ConnectorDataSource {
@@ -569,7 +581,7 @@ impl RmcpGateway {
                 freshness_ms: Some(0),
                 detail: "health/query endpoint verified".to_owned(),
             },
-            Err(error) => unavailable_source(id, error.code.as_str()),
+            Err(error) => unavailable_source(id, error.failure().as_str()),
         }
     }
 
@@ -581,7 +593,7 @@ impl RmcpGateway {
                     session.tools = tools;
                     return Ok(capabilities);
                 }
-                Err(error) if error.code == ConnectorErrorCode::UnauthorizedScope => {
+                Err(error) if error.failure() == ConnectorFailure::UnauthorizedScope => {
                     // A periodic discovery request may observe rotation before
                     // a Tool call does. Use the same single forced refresh
                     // path so the reconciler cannot strand the cluster in a
@@ -604,7 +616,7 @@ impl RmcpGateway {
             .ok_or_else(|| ConnectorError::source("MCP session has not completed handshaking"))?;
         let tool = session.tools.get(tool_name).ok_or_else(|| {
             ConnectorError::capability(
-                ConnectorErrorCode::MissingRequiredFeature,
+                ConnectorFailure::MissingRequiredFeature,
                 format!("verified tool `{tool_name}` is unavailable"),
             )
         })?;
@@ -614,7 +626,7 @@ impl RmcpGateway {
             .map(|schema| schema.as_ref().clone())
             .ok_or_else(|| {
                 ConnectorError::capability(
-                    ConnectorErrorCode::SchemaDigestMismatch,
+                    ConnectorFailure::SchemaDigestMismatch,
                     format!("verified tool `{tool_name}` has no output schema"),
                 )
             })?;
@@ -658,21 +670,22 @@ impl RmcpGateway {
         }
         let value = result.structured_content.ok_or_else(|| {
             QueryFailure::Other(ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
+                ConnectorFailure::CapabilityMismatch,
                 "MCP tool did not return structured content",
             ))
         })?;
         let encoded_size = serde_json::to_vec(&value)
-            .map_err(|_| {
-                QueryFailure::Other(ConnectorError::capability(
-                    ConnectorErrorCode::CapabilityMismatch,
-                    "MCP structured result cannot be encoded",
+            .map_err(|source| {
+                QueryFailure::Other(ConnectorError::from_source(
+                    ConnectorFailure::CapabilityMismatch,
+                    false,
+                    source,
                 ))
             })?
             .len();
         if encoded_size > self.config.max_response_bytes {
             return Err(QueryFailure::Other(ConnectorError::new(
-                ConnectorErrorCode::OutputTooLarge,
+                ConnectorFailure::OutputTooLarge,
                 false,
                 "MCP structured result exceeds the configured response bound",
             )));
@@ -703,15 +716,15 @@ impl RmcpGateway {
             OBSERVABILITY_RESOURCE_URI => ("observability", "rocketmq.observability-status.v1"),
             _ => {
                 return Err(ConnectorError::new(
-                    ConnectorErrorCode::InvalidEvidenceQuery,
+                    ConnectorFailure::InvalidEvidenceQuery,
                     false,
                     "only fixed Phase 00 System Resources may be queried",
                 ));
             }
         };
         validate_system_resource(&text, uri, kind, schema, self.config.max_response_bytes)?;
-        let envelope: SystemResourceEnvelope =
-            serde_json::from_str(&text).map_err(|_| ConnectorError::source("MCP System Resource is not valid JSON"))?;
+        let envelope: SystemResourceEnvelope = serde_json::from_str(&text)
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
         Ok(envelope.data)
     }
 
@@ -779,7 +792,7 @@ impl RmcpGateway {
                 "/internal/v1/connectors/v1/clusters/{}/handshake",
                 control_plane.cluster_id
             ))
-            .map_err(|_| ConnectorError::configuration("control-plane handshake URL cannot be constructed"))?;
+            .map_err(ConnectorError::configuration_source)?;
         let response = client
             .post(endpoint)
             .bearer_auth(self.config.internal_token())
@@ -788,7 +801,7 @@ impl RmcpGateway {
             .json(&report)
             .send()
             .await
-            .map_err(|error| ConnectorError::source(format!("control-plane handshake request failed: {error}")))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
         match response.status() {
             status if status.is_success() => {
                 let body = read_bounded_response(response, self.config.max_response_bytes).await?;
@@ -796,14 +809,14 @@ impl RmcpGateway {
             }
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
                 return Err(ConnectorError::new(
-                    ConnectorErrorCode::UnauthorizedScope,
+                    ConnectorFailure::UnauthorizedScope,
                     false,
                     "control plane rejected the connector identity",
                 ));
             }
             reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::CONFLICT => {
                 return Err(ConnectorError::new(
-                    ConnectorErrorCode::ClusterNotAllowed,
+                    ConnectorFailure::ClusterNotAllowed,
                     false,
                     "control plane rejected the cluster handshake",
                 ));
@@ -815,19 +828,20 @@ impl RmcpGateway {
         Ok(())
     }
 
-    async fn ensure_control_plane_cluster_active(&self, cluster: &str) -> Result<(), ConnectorError> {
+    async fn ensure_control_plane_cluster_active(
+        &self,
+        cluster: &str,
+    ) -> Result<ConnectorAdmissionOutcome<()>, ConnectorError> {
         let Some(control_plane) = &self.config.control_plane else {
-            return Ok(());
+            return Ok(ConnectorAdmissionOutcome::Accepted(()));
         };
         let client = self
             .control_plane_http
             .as_ref()
             .ok_or_else(|| ConnectorError::configuration("control-plane mTLS HTTP client is not configured"))?;
         if self.config.cluster_ids.get(cluster) != Some(&control_plane.cluster_id) {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::ClusterNotAllowed,
-                false,
-                "external MCP cluster does not match the control-plane cluster",
+            return Ok(ConnectorAdmissionOutcome::Rejected(
+                ConnectorAdmissionRejection::ClusterNotAllowed,
             ));
         }
 
@@ -837,7 +851,7 @@ impl RmcpGateway {
                 "/internal/v1/connectors/v1/clusters/{}",
                 control_plane.cluster_id
             ))
-            .map_err(|_| ConnectorError::configuration("control-plane cluster URL cannot be constructed"))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::InvalidConfiguration, false, source))?;
         let response = client
             .get(endpoint)
             .bearer_auth(self.config.internal_token())
@@ -845,21 +859,17 @@ impl RmcpGateway {
             .header("x-rocketmq-connector-issuer", &control_plane.connector_issuer)
             .send()
             .await
-            .map_err(|_| ConnectorError::source("control-plane cluster status is unavailable"))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
         match response.status() {
             status if status.is_success() => {}
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
-                return Err(ConnectorError::new(
-                    ConnectorErrorCode::UnauthorizedScope,
-                    false,
-                    "control plane rejected the connector identity",
+                return Ok(ConnectorAdmissionOutcome::Rejected(
+                    ConnectorAdmissionRejection::UnauthorizedScope,
                 ));
             }
             reqwest::StatusCode::NOT_FOUND => {
-                return Err(ConnectorError::new(
-                    ConnectorErrorCode::ClusterNotAllowed,
-                    false,
-                    "control-plane cluster does not exist",
+                return Ok(ConnectorAdmissionOutcome::Rejected(
+                    ConnectorAdmissionRejection::ClusterNotAllowed,
                 ));
             }
             _ => {
@@ -869,39 +879,35 @@ impl RmcpGateway {
 
         let body = read_bounded_response(response, self.config.max_response_bytes.min(64 * 1024)).await?;
         let state: ControlPlaneClusterState = serde_json::from_slice(&body)
-            .map_err(|_| ConnectorError::source("control-plane cluster status is invalid"))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
         if state.id != control_plane.cluster_id
             || state.tenant_id != self.config.tenant_id.to_string()
             || state.external_cluster_key != cluster
             || state.effective_access_profile != "read_only"
         {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::ClusterNotAllowed,
-                false,
-                "control-plane cluster boundary does not match the connector",
+            return Ok(ConnectorAdmissionOutcome::Rejected(
+                ConnectorAdmissionRejection::ClusterNotAllowed,
             ));
         }
         match state.state.as_str() {
-            "ready_read_only" => Ok(()),
-            "offboarded" | "rejected" => Err(ConnectorError::new(
-                ConnectorErrorCode::ClusterNotAllowed,
-                false,
-                "control-plane cluster no longer permits evidence collection",
+            "ready_read_only" => Ok(ConnectorAdmissionOutcome::Accepted(())),
+            "offboarded" | "rejected" => Ok(ConnectorAdmissionOutcome::Rejected(
+                ConnectorAdmissionRejection::ClusterNotAllowed,
             )),
             "pending" | "handshaking" | "read_only_degraded" => Err(ConnectorError::source(
                 "control-plane cluster is not ready for evidence collection",
             )),
             _ => Err(ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
+                ConnectorFailure::CapabilityMismatch,
                 "control-plane returned an unknown cluster state",
             )),
         }
     }
 
-    async fn report_cached_failure(&self, code: ConnectorErrorCode) {
+    async fn report_cached_failure(&self, code: ConnectorFailure) {
         if !matches!(
             code,
-            ConnectorErrorCode::UnauthorizedScope | ConnectorErrorCode::SourceUnavailable
+            ConnectorFailure::UnauthorizedScope | ConnectorFailure::SourceUnavailable
         ) {
             return;
         }
@@ -912,7 +918,7 @@ impl RmcpGateway {
                 .await
             {
                 tracing::warn!(
-                    code = error.code.as_str(),
+                    code = error.failure().as_str(),
                     "failed to report a cached MCP handshake failure"
                 );
             }
@@ -928,7 +934,7 @@ impl McpGateway for RmcpGateway {
                 Ok(capabilities)
             }
             Err(error) => {
-                self.report_cached_failure(error.code).await;
+                self.report_cached_failure(error.failure()).await;
                 Err(error)
             }
         }
@@ -939,11 +945,7 @@ impl McpGateway for RmcpGateway {
         cluster: &str,
         operation: &EvidenceOperation,
     ) -> Result<WireEvidenceEnvelope, ConnectorError> {
-        let _permit = self
-            .concurrency
-            .acquire()
-            .await
-            .map_err(|_| ConnectorError::source("connector concurrency limiter is closed"))?;
+        let _permit = self.concurrency.acquire().await.map_err(ConnectorError::source_error)?;
         if self.session.lock().await.is_none() {
             self.handshake().await?;
         }
@@ -959,7 +961,7 @@ impl McpGateway for RmcpGateway {
                 match self.query_once(&second, cluster, operation).await {
                     Ok(result) => Ok(result),
                     Err(QueryFailure::Unauthorized) => Err(ConnectorError::new(
-                        ConnectorErrorCode::UnauthorizedScope,
+                        ConnectorFailure::UnauthorizedScope,
                         false,
                         "MCP rejected the refreshed connector token",
                     )),
@@ -973,7 +975,7 @@ impl McpGateway for RmcpGateway {
         self.read_system_resource_once(uri).await
     }
 
-    async fn ensure_cluster_active(&self, cluster: &str) -> Result<(), ConnectorError> {
+    async fn ensure_cluster_active(&self, cluster: &str) -> Result<ConnectorAdmissionOutcome<()>, ConnectorError> {
         self.ensure_control_plane_cluster_active(cluster).await
     }
 
@@ -1005,13 +1007,13 @@ fn extract_text_resource(contents: Vec<ResourceContents>, expected_uri: &str) ->
     });
     let text = matches.next().ok_or_else(|| {
         ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "capability resource did not contain the requested text content",
         )
     })?;
     if matches.next().is_some() {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "capability resource contained duplicate text content",
         ));
     }
@@ -1027,17 +1029,13 @@ fn validate_system_resource(
 ) -> Result<u64, ConnectorError> {
     if text.len() > max_bytes {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::OutputTooLarge,
+            ConnectorFailure::OutputTooLarge,
             false,
             "MCP System Resource exceeds the configured response bound",
         ));
     }
-    let envelope: SystemResourceEnvelope = serde_json::from_str(text).map_err(|_| {
-        ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "MCP System Resource is not valid JSON",
-        )
-    })?;
+    let envelope: SystemResourceEnvelope = serde_json::from_str(text)
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::CapabilityMismatch, false, source))?;
     if envelope.schema_version != SYSTEM_RESOURCE_SCHEMA
         || envelope.resource != expected_uri
         || envelope.source != "mcp_process"
@@ -1045,13 +1043,13 @@ fn validate_system_resource(
         || !envelope.warnings.iter().all(|warning| warning.len() <= 512)
     {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "MCP System Resource envelope does not match the verified contract",
         ));
     }
     if envelope.data.get("schema_version").and_then(Value::as_str) != Some(expected_data_schema) {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::UnsupportedSchemaMajor,
+            ConnectorFailure::UnsupportedSchemaMajor,
             "MCP System Resource data schema is unsupported",
         ));
     }
@@ -1062,7 +1060,7 @@ fn validate_system_resource(
         .and_then(|value| value.parse::<chrono::DateTime<chrono::Utc>>().ok())
         .ok_or_else(|| {
             ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
+                ConnectorFailure::CapabilityMismatch,
                 "MCP System Resource has no valid observation time",
             )
         })?;
@@ -1123,23 +1121,19 @@ fn capability_report_digest(capability: &VerifiedCapability, sources: &[Connecto
 }
 
 fn validate_control_plane_handshake_acknowledgement(body: &[u8]) -> Result<(), ConnectorError> {
-    let acknowledgement: ControlPlaneHandshakeAcknowledgement = serde_json::from_slice(body).map_err(|_| {
-        ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "control-plane handshake acknowledgement is invalid",
-        )
-    })?;
+    let acknowledgement: ControlPlaneHandshakeAcknowledgement = serde_json::from_slice(body)
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::CapabilityMismatch, false, source))?;
     match acknowledgement.cluster.state.as_str() {
         "ready_read_only" => Ok(()),
         "read_only_degraded" if acknowledgement.reason.as_deref() == Some("schema_digest_mismatch") => {
             Err(ConnectorError::capability(
-                ConnectorErrorCode::SchemaDigestMismatch,
+                ConnectorFailure::SchemaDigestMismatch,
                 "control plane rejected a changed tool surface",
             ))
         }
         "read_only_degraded" => Ok(()),
         _ => Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "control-plane handshake did not grant read-only access",
         )),
     }
@@ -1151,7 +1145,7 @@ async fn read_bounded_response(mut response: reqwest::Response, max_bytes: usize
         .is_some_and(|length| length > max_bytes as u64)
     {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::OutputTooLarge,
+            ConnectorFailure::OutputTooLarge,
             false,
             "HTTP response exceeds the configured output bound",
         ));
@@ -1160,11 +1154,11 @@ async fn read_bounded_response(mut response: reqwest::Response, max_bytes: usize
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| ConnectorError::source("HTTP response body is unavailable"))?
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?
     {
         if body.len().saturating_add(chunk.len()) > max_bytes {
             return Err(ConnectorError::new(
-                ConnectorErrorCode::OutputTooLarge,
+                ConnectorFailure::OutputTooLarge,
                 false,
                 "HTTP response exceeds the configured output bound",
             ));
@@ -1181,31 +1175,31 @@ async fn timeout_service<T>(
 ) -> Result<T, ConnectorError> {
     tokio::time::timeout(timeout, future)
         .await
-        .map_err(|_| ConnectorError::source(format!("MCP {operation} timed out")))?
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::DeadlineExceeded, true, source))?
         .map_err(|error| map_service_error(operation, error))
 }
 
 fn map_initialize_error(error: ClientInitializeError) -> ConnectorError {
     if is_unauthorized_initialize(&error) {
         ConnectorError::new(
-            ConnectorErrorCode::UnauthorizedScope,
+            ConnectorFailure::UnauthorizedScope,
             false,
             "MCP rejected the connector token during initialize",
         )
     } else {
-        ConnectorError::source(format!("MCP initialize failed: {error}"))
+        ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, error)
     }
 }
 
 fn map_service_error(operation: &'static str, error: ServiceError) -> ConnectorError {
     if is_unauthorized_service(&error) {
         ConnectorError::new(
-            ConnectorErrorCode::UnauthorizedScope,
+            ConnectorFailure::UnauthorizedScope,
             false,
             format!("MCP rejected authorization during {operation}"),
         )
     } else {
-        ConnectorError::source(format!("MCP {operation} failed: {error}"))
+        ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, error)
     }
 }
 
@@ -1309,8 +1303,8 @@ mod tests {
                 4096,
             )
             .expect_err("unknown major must fail closed")
-            .code,
-            ConnectorErrorCode::UnsupportedSchemaMajor
+            .failure(),
+            ConnectorFailure::UnsupportedSchemaMajor
         );
     }
 
@@ -1354,7 +1348,7 @@ mod tests {
         )
         .expect_err("persisted surface drift must fail closed after connector restart");
 
-        assert_eq!(error.code, ConnectorErrorCode::SchemaDigestMismatch);
+        assert_eq!(error.failure(), ConnectorFailure::SchemaDigestMismatch);
     }
 
     #[test]

@@ -22,7 +22,7 @@ use serde_json::json;
 use super::canonical::CanonicalProjection;
 use super::common::SourceOutput;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Completeness {
@@ -399,7 +399,7 @@ fn sample_value(raw: &Value) -> Result<f64, ConnectorError> {
         .as_str()
         .ok_or_else(schema_mismatch)?
         .parse::<f64>()
-        .map_err(|_| schema_mismatch())?;
+        .map_err(schema_mismatch_source)?;
     value.is_finite().then_some(value).ok_or_else(schema_mismatch)
 }
 
@@ -633,9 +633,16 @@ fn finite_number(value: f64) -> Result<Value, ConnectorError> {
 
 fn schema_mismatch() -> ConnectorError {
     ConnectorError::capability(
-        ConnectorErrorCode::CapabilityMismatch,
+        ConnectorFailure::CapabilityMismatch,
         "canonical source response does not match the supported projection schema",
     )
+}
+
+fn schema_mismatch_source<E>(source: E) -> ConnectorError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    ConnectorError::from_source(ConnectorFailure::CapabilityMismatch, false, source)
 }
 
 #[cfg(test)]
@@ -775,7 +782,7 @@ mod tests {
             CanonicalProjection::BrokerHealth,
         )
         .expect_err("invalid sample");
-        assert_eq!(error.code, ConnectorErrorCode::CapabilityMismatch);
+        assert_eq!(error.failure(), ConnectorFailure::CapabilityMismatch);
     }
 
     #[test]

@@ -38,7 +38,7 @@ use super::TopologyDiff;
 use super::TopologyDiffEntry;
 use super::TopologyObservation;
 use super::TopologyRelation;
-use crate::ControlPlaneError;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 #[derive(Serialize)]
 struct AssetHashMaterial<'a> {
@@ -78,7 +78,7 @@ struct DiffHashMaterial<'a> {
 pub(crate) fn materialize_snapshot(
     tenant_id: TenantId,
     request: &IngestInventoryRequest,
-) -> Result<InventorySnapshot, ControlPlaneError> {
+) -> Result<InventorySnapshot, ControlPlaneRequestFailure> {
     request.validate()?;
     let mut assets = request
         .assets
@@ -122,7 +122,7 @@ pub(crate) fn materialize_snapshot(
     Ok(snapshot)
 }
 
-pub(crate) fn verify_snapshot(snapshot: &InventorySnapshot) -> Result<(), ControlPlaneError> {
+pub(crate) fn verify_snapshot(snapshot: &InventorySnapshot) -> Result<(), ControlPlaneRequestFailure> {
     for asset in &snapshot.assets {
         if asset.content_hash != compute_asset_hash(asset)? {
             return Err(super::invalid_stored_inventory("asset content hash"));
@@ -142,7 +142,7 @@ pub(crate) fn verify_snapshot(snapshot: &InventorySnapshot) -> Result<(), Contro
 pub(crate) fn calculate_diff(
     previous: Option<&InventorySnapshot>,
     current: &InventorySnapshot,
-) -> Result<TopologyDiff, ControlPlaneError> {
+) -> Result<TopologyDiff, ControlPlaneRequestFailure> {
     let previous_assets = previous
         .map(|snapshot| {
             snapshot
@@ -196,7 +196,7 @@ pub(crate) fn calculate_diff(
 
     let suppressed_removals = if current.partial {
         let count = u32::try_from(removals.len()).map_err(|_| {
-            ControlPlaneError::validation("output_too_large", "topology diff exceeds the supported bound")
+            ControlPlaneRequestFailure::validation("output_too_large", "topology diff exceeds the supported bound")
         })?;
         removals.clear();
         count
@@ -223,14 +223,14 @@ pub(crate) fn calculate_diff(
     Ok(diff)
 }
 
-pub(crate) fn verify_diff(diff: &TopologyDiff) -> Result<(), ControlPlaneError> {
+pub(crate) fn verify_diff(diff: &TopologyDiff) -> Result<(), ControlPlaneRequestFailure> {
     if diff.content_hash != compute_diff_hash(diff)? {
         return Err(super::invalid_stored_inventory("topology diff content hash"));
     }
     Ok(())
 }
 
-fn normalize_asset(observation: &AssetObservation) -> Result<NormalizedAsset, ControlPlaneError> {
+fn normalize_asset(observation: &AssetObservation) -> Result<NormalizedAsset, ControlPlaneRequestFailure> {
     let mut asset = NormalizedAsset {
         id: AssetSnapshotId::new(),
         key: AssetKey::new(observation.kind, observation.external_key.clone())?,
@@ -246,7 +246,7 @@ fn normalize_asset(observation: &AssetObservation) -> Result<NormalizedAsset, Co
     Ok(asset)
 }
 
-fn normalize_edge(observation: &TopologyObservation) -> Result<NormalizedTopologyEdge, ControlPlaneError> {
+fn normalize_edge(observation: &TopologyObservation) -> Result<NormalizedTopologyEdge, ControlPlaneRequestFailure> {
     let mut edge = NormalizedTopologyEdge {
         id: TopologyEdgeId::new(),
         from: observation.from.clone(),
@@ -262,7 +262,7 @@ fn normalize_edge(observation: &TopologyObservation) -> Result<NormalizedTopolog
     Ok(edge)
 }
 
-fn compute_asset_hash(asset: &NormalizedAsset) -> Result<String, ControlPlaneError> {
+fn compute_asset_hash(asset: &NormalizedAsset) -> Result<String, ControlPlaneRequestFailure> {
     canonical_digest(&AssetHashMaterial {
         key: &asset.key,
         display_name: &asset.display_name,
@@ -271,7 +271,7 @@ fn compute_asset_hash(asset: &NormalizedAsset) -> Result<String, ControlPlaneErr
     })
 }
 
-fn compute_edge_hash(edge: &NormalizedTopologyEdge) -> Result<String, ControlPlaneError> {
+fn compute_edge_hash(edge: &NormalizedTopologyEdge) -> Result<String, ControlPlaneRequestFailure> {
     canonical_digest(&EdgeHashMaterial {
         from: &edge.from,
         to: &edge.to,
@@ -280,7 +280,7 @@ fn compute_edge_hash(edge: &NormalizedTopologyEdge) -> Result<String, ControlPla
     })
 }
 
-fn compute_snapshot_hash(snapshot: &InventorySnapshot) -> Result<String, ControlPlaneError> {
+fn compute_snapshot_hash(snapshot: &InventorySnapshot) -> Result<String, ControlPlaneRequestFailure> {
     let mut assets = snapshot
         .assets
         .iter()
@@ -300,7 +300,7 @@ fn compute_snapshot_hash(snapshot: &InventorySnapshot) -> Result<String, Control
     })
 }
 
-fn compute_diff_hash(diff: &TopologyDiff) -> Result<String, ControlPlaneError> {
+fn compute_diff_hash(diff: &TopologyDiff) -> Result<String, ControlPlaneRequestFailure> {
     canonical_digest(&DiffHashMaterial {
         cluster_id: diff.cluster_id,
         previous_snapshot_id: diff.previous_snapshot_id,
@@ -365,11 +365,13 @@ fn edge_order(left: &NormalizedTopologyEdge, right: &NormalizedTopologyEdge) -> 
     (&left.from, &left.to, left.relation).cmp(&(&right.from, &right.to, right.relation))
 }
 
-fn canonical_digest<T: Serialize>(value: &T) -> Result<String, ControlPlaneError> {
-    let serialized = serde_json::to_value(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "inventory content cannot be serialized"))?;
-    let bytes = serde_json::to_vec(&sorted_json(&serialized))
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "inventory content cannot be canonicalized"))?;
+fn canonical_digest<T: Serialize>(value: &T) -> Result<String, ControlPlaneRequestFailure> {
+    let serialized = serde_json::to_value(value).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_request", source))
+    })?;
+    let bytes = serde_json::to_vec(&sorted_json(&serialized)).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_request", source))
+    })?;
     Ok(format!(
         "sha256:{}",
         rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(bytes))

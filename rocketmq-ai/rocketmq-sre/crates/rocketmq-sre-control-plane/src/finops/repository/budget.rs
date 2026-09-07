@@ -31,7 +31,7 @@ use super::support::budget_scope_name;
 use super::support::decision_from_row;
 use super::support::degradation_name;
 use super::support::work_class_name;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::finops::model::FinOpsBudgetQuery;
 use crate::finops::model::bounded_limit;
 
@@ -39,7 +39,7 @@ impl FinOpsRepository {
     pub(in crate::finops) async fn create_budget(
         &self,
         budget: &FinOpsBudget,
-    ) -> Result<FinOpsBudget, ControlPlaneError> {
+    ) -> Result<FinOpsBudget, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "UPDATE finops_budgets
@@ -80,7 +80,7 @@ impl FinOpsRepository {
         tenant_id: TenantId,
         scope_kind: rocketmq_sre_contracts::FinOpsBudgetScopeKind,
         scope_key: &str,
-    ) -> Result<u64, ControlPlaneError> {
+    ) -> Result<u64, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT COALESCE(MAX(budget_version), 0) AS version
              FROM finops_budgets
@@ -93,10 +93,10 @@ impl FinOpsRepository {
         .await?;
         let version = row.try_get::<i64, _>("version")?;
         u64::try_from(version)
-            .map_err(|_| invalid_persisted("budget version"))
+            .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_persisted_finops_state", source))
             .and_then(|version| {
                 version.checked_add(1).ok_or_else(|| {
-                    ControlPlaneError::validation(
+                    ControlPlaneRequestFailure::state(
                         "invalid_finops_budget",
                         "FinOps budget version exhausted the supported range",
                     )
@@ -108,13 +108,13 @@ impl FinOpsRepository {
         &self,
         tenant_id: TenantId,
         budget_id: FinOpsBudgetId,
-    ) -> Result<FinOpsBudget, ControlPlaneError> {
+    ) -> Result<FinOpsBudget, ControlPlaneRequestFailure> {
         let row = sqlx::query("SELECT * FROM finops_budgets WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id.as_uuid())
             .bind(budget_id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         budget_from_row(&row)
     }
 
@@ -122,7 +122,7 @@ impl FinOpsRepository {
         &self,
         tenant_id: TenantId,
         query: &FinOpsBudgetQuery,
-    ) -> Result<(Vec<FinOpsBudget>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<FinOpsBudget>, bool), ControlPlaneRequestFailure> {
         let limit = bounded_limit(query.limit);
         let scope = query.scope_kind.map(budget_scope_name);
         let rows = sqlx::query(
@@ -153,7 +153,7 @@ impl FinOpsRepository {
         budget: &FinOpsBudget,
         from: DateTime<Utc>,
         to: DateTime<Utc>,
-    ) -> Result<(u64, u64), ControlPlaneError> {
+    ) -> Result<(u64, u64), ControlPlaneRequestFailure> {
         let scope = budget_scope_name(budget.scope_kind);
         let row = sqlx::query(
             "WITH ledger AS (
@@ -218,7 +218,7 @@ impl FinOpsRepository {
     pub(in crate::finops) async fn record_decision(
         &self,
         decision: &FinOpsBudgetDecision,
-    ) -> Result<FinOpsBudgetDecision, ControlPlaneError> {
+    ) -> Result<FinOpsBudgetDecision, ControlPlaneRequestFailure> {
         let controls = decision
             .protected_controls
             .iter()
@@ -260,10 +260,9 @@ impl FinOpsRepository {
     pub(in crate::finops) async fn create_allocation_policy(
         &self,
         policy: &FinOpsAllocationPolicy,
-    ) -> Result<FinOpsAllocationPolicy, ControlPlaneError> {
-        let keys = serde_json::to_value(&policy.allocation_keys).map_err(|_| {
-            ControlPlaneError::validation("invalid_finops_allocation", "FinOps allocation keys cannot be encoded")
-        })?;
+    ) -> Result<FinOpsAllocationPolicy, ControlPlaneRequestFailure> {
+        let keys = serde_json::to_value(&policy.allocation_keys)
+            .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_finops_allocation", source))?;
         let mut transaction = self.pool.begin().await?;
         sqlx::query("UPDATE finops_allocation_policies SET active = FALSE WHERE tenant_id = $1 AND active")
             .bind(policy.tenant_id.as_uuid())
@@ -293,7 +292,7 @@ impl FinOpsRepository {
     pub(in crate::finops) async fn next_allocation_version(
         &self,
         tenant_id: TenantId,
-    ) -> Result<u64, ControlPlaneError> {
+    ) -> Result<u64, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT COALESCE(MAX(policy_version), 0) AS version
              FROM finops_allocation_policies
@@ -304,7 +303,7 @@ impl FinOpsRepository {
         .await?;
         let version = unsigned(row.try_get("version")?, "allocation version")?;
         version.checked_add(1).ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::state(
                 "invalid_finops_allocation",
                 "FinOps allocation version exhausted the supported range",
             )
@@ -314,7 +313,7 @@ impl FinOpsRepository {
     pub(in crate::finops) async fn allocation_policy(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Option<FinOpsAllocationPolicy>, ControlPlaneError> {
+    ) -> Result<Option<FinOpsAllocationPolicy>, ControlPlaneRequestFailure> {
         sqlx::query(
             "SELECT *
              FROM finops_allocation_policies
@@ -328,22 +327,16 @@ impl FinOpsRepository {
     }
 }
 
-fn stored(value: u64, field: &str) -> Result<i64, ControlPlaneError> {
+fn stored(value: u64, field: &str) -> Result<i64, ControlPlaneRequestFailure> {
     i64::try_from(value).map_err(|_| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "invalid_finops_budget",
             format!("FinOps {field} exceeds the supported storage range"),
         )
     })
 }
 
-fn unsigned(value: i64, field: &str) -> Result<u64, ControlPlaneError> {
-    u64::try_from(value).map_err(|_| invalid_persisted(field))
-}
-
-fn invalid_persisted(field: &str) -> ControlPlaneError {
-    ControlPlaneError::validation(
-        "invalid_persisted_finops_state",
-        format!("persisted FinOps {field} is invalid"),
-    )
+fn unsigned(value: i64, _field: &str) -> Result<u64, ControlPlaneRequestFailure> {
+    u64::try_from(value)
+        .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_persisted_finops_state", source))
 }

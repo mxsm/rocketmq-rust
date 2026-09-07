@@ -17,25 +17,66 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_sre_control_plane::ControlPlaneConfig;
 use tracing_subscriber::EnvFilter;
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> std::process::ExitCode {
+    match run_main() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(failure) => {
+            eprintln!("{}", failure.safe_message());
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+enum ControlPlaneProcessFailure {
+    Bootstrap(Box<dyn std::error::Error + Send + Sync>),
+    Service(rocketmq_sre_control_plane::ControlPlaneRequestFailure),
+}
+
+impl ControlPlaneProcessFailure {
+    fn bootstrap<E>(source: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::Bootstrap(Box::new(source))
+    }
+
+    fn safe_message(&self) -> &'static str {
+        match self {
+            Self::Bootstrap(source) => {
+                let _ = source;
+                "RocketMQ SRE control plane bootstrap failed"
+            }
+            Self::Service(failure) => {
+                let _ = failure.code();
+                "RocketMQ SRE control plane service failed"
+            }
+        }
+    }
+}
+
+fn run_main() -> Result<(), ControlPlaneProcessFailure> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("rocketmq_sre_control_plane=info")),
         )
         .json()
-        .try_init()?;
+        .try_init()
+        .map_err(ControlPlaneProcessFailure::Bootstrap)?;
 
-    let config = ControlPlaneConfig::from_env()?;
+    let config = ControlPlaneConfig::from_env().map_err(ControlPlaneProcessFailure::bootstrap)?;
     let mut runtime_config = RuntimeConfig::server_default("rocketmq-sre-control-plane");
     runtime_config.shutdown_timeout = config.shutdown_timeout();
-    let runtime_owner = RuntimeOwner::plan(runtime_config)?.build()?;
+    let runtime_owner = RuntimeOwner::plan(runtime_config)
+        .map_err(ControlPlaneProcessFailure::bootstrap)?
+        .build()
+        .map_err(ControlPlaneProcessFailure::bootstrap)?;
     let service_context = runtime_owner
         .root_context()
         .component("rocketmq-sre-control-plane.http");
 
     let service_result = runtime_owner.block_on(rocketmq_sre_control_plane::run(config, service_context));
     let shutdown_result = runtime_owner.shutdown_runtime_blocking();
-    service_result?;
-    shutdown_result?;
+    service_result.map_err(ControlPlaneProcessFailure::Service)?;
+    shutdown_result.map_err(ControlPlaneProcessFailure::bootstrap)?;
     Ok(())
 }

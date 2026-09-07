@@ -103,10 +103,12 @@ impl ProductionCredentialRotationClient {
         if config.targets.is_empty() {
             return Err(ExecutionAgentError::Configuration);
         }
-        let mut kubernetes_config = Config::infer().await.map_err(|_| ExecutionAgentError::Configuration)?;
+        let mut kubernetes_config = Config::infer()
+            .await
+            .map_err(ExecutionAgentError::configuration_source)?;
         kubernetes_config.proxy_url = None;
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::try_from(kubernetes_config).map_err(|_| ExecutionAgentError::Configuration)?;
+        let client = Client::try_from(kubernetes_config).map_err(ExecutionAgentError::configuration_source)?;
         let timeout_millis = u64::try_from(config.request_timeout.as_millis())
             .ok()
             .filter(|value| *value > 0)
@@ -119,7 +121,7 @@ impl ProductionCredentialRotationClient {
             },
             TelemetryHandle::noop(),
         )
-        .map_err(|_| ExecutionAgentError::Configuration)?;
+        .map_err(ExecutionAgentError::configuration_source)?;
         Ok(Self {
             client,
             targets: Arc::new(config.targets.clone()),
@@ -131,18 +133,18 @@ impl ProductionCredentialRotationClient {
         })
     }
 
-    fn target(&self, credential_set: &str) -> Result<&CredentialRotationTarget, ExecutionAgentError> {
+    fn target(&self, credential_set: &str) -> Result<&CredentialRotationTarget, crate::ExecutionAgentRequestFailure> {
         self.targets
             .get(credential_set)
-            .ok_or(ExecutionAgentError::InvalidRequest)
+            .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 
-    async fn selector_state(&self, credential_set: &str) -> Result<SelectorState, ExecutionAgentError> {
+    async fn selector_state(&self, credential_set: &str) -> Result<SelectorState, crate::ExecutionAgentRequestFailure> {
         let target = self.target(credential_set)?;
         let selector = Api::<ConfigMap>::namespaced(self.client.clone(), &target.namespace)
             .get(&target.selector_name)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(ExecutionAgentError::driver_source)?;
         parse_selector(selector, credential_set)
     }
 
@@ -152,7 +154,7 @@ impl ProductionCredentialRotationClient {
         version: &str,
         secret_reference: &str,
         target: &CredentialRotationTarget,
-    ) -> Result<bool, ExecutionAgentError> {
+    ) -> Result<bool, crate::ExecutionAgentRequestFailure> {
         let credentials = self
             .load_credentials(credential_set, version, secret_reference, &target.namespace)
             .await?;
@@ -180,51 +182,55 @@ impl ProductionCredentialRotationClient {
         version: &str,
         secret_reference: &str,
         required_namespace: &str,
-    ) -> Result<AdminCredentials, ExecutionAgentError> {
+    ) -> Result<AdminCredentials, crate::ExecutionAgentRequestFailure> {
         let reference = parse_secret_reference(secret_reference)?;
         if reference.namespace != required_namespace {
-            return Err(ExecutionAgentError::InvalidRequest);
+            return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
         }
         let secret = Api::<Secret>::namespaced(self.client.clone(), &reference.namespace)
             .get(&reference.name)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(ExecutionAgentError::driver_source)?;
         if secret.immutable != Some(true)
             || annotation(&secret.metadata.annotations, CREDENTIAL_SET_ANNOTATION) != Some(credential_set)
             || annotation(&secret.metadata.annotations, CREDENTIAL_VERSION_ANNOTATION) != Some(version)
         {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
-        let data = secret.data.as_ref().ok_or(ExecutionAgentError::DriverFailed)?;
+        let data = secret
+            .data
+            .as_ref()
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let access_key = secret_string(data, ACCESS_KEY_DATA, 128)?;
         let secret_key = secret_string(data, SECRET_KEY_DATA, 4096)?;
         let security_token = data
             .get(SECURITY_TOKEN_DATA)
             .map(|value| bounded_utf8(value.0.as_slice(), 16 * 1024))
             .transpose()?;
-        AdminCredentials::try_new(access_key, secret_key, security_token).map_err(|_| ExecutionAgentError::DriverFailed)
+        AdminCredentials::try_new(access_key, secret_key, security_token)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
     async fn replace_selector(
         &self,
         target: &CredentialRotationTarget,
         selector: ConfigMap,
-    ) -> Result<SelectorState, ExecutionAgentError> {
+    ) -> Result<SelectorState, crate::ExecutionAgentRequestFailure> {
         let replaced = Api::<ConfigMap>::namespaced(self.client.clone(), &target.namespace)
             .replace(&target.selector_name, &PostParams::default(), &selector)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(ExecutionAgentError::driver_source)?;
         parse_selector(
             replaced,
             annotation(&selector.metadata.annotations, CREDENTIAL_SET_ANNOTATION)
-                .ok_or(ExecutionAgentError::DriverFailed)?,
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?,
         )
     }
 
     async fn state_with_probes(
         &self,
         credential_set: &str,
-    ) -> Result<(SelectorState, bool, bool), ExecutionAgentError> {
+    ) -> Result<(SelectorState, bool, bool), crate::ExecutionAgentRequestFailure> {
         let target = self.target(credential_set)?;
         let state = self.selector_state(credential_set).await?;
         let candidate_healthy = self
@@ -233,7 +239,7 @@ impl ProductionCredentialRotationClient {
         let retiring_healthy = match (state.retiring_version.as_deref(), state.retiring_secret_ref.as_deref()) {
             (Some(version), Some(reference)) => self.probe(credential_set, version, reference, target).await?,
             (None, None) => true,
-            _ => return Err(ExecutionAgentError::DriverFailed),
+            _ => return Err(crate::ExecutionAgentRequestFailure::DriverFailed),
         };
         Ok((state, candidate_healthy && retiring_healthy, candidate_healthy))
     }
@@ -260,7 +266,7 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
         Box::pin(async move {
             let target = self.target(&request.credential_set)?;
             if request.validation_probe_topic != target.validation_probe_topic {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let state = self.selector_state(&request.credential_set).await?;
             if state.active_version == request.candidate_version
@@ -278,14 +284,14 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
                     )
                     .await?
                     .then_some(())
-                    .ok_or(ExecutionAgentError::DriverFailed);
+                    .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if state.active_version != request.active_version
                 || state.retiring_version.is_some()
                 || state.retiring_secret_ref.is_some()
                 || state.overlap_deadline.is_some()
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if !self
                 .probe(
@@ -304,10 +310,10 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
                     )
                     .await?
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let candidate_secret_ref_hash = canonical_precondition_hash(&request.candidate_secret_ref)
-                .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+                .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             let before = CredentialBeforeState {
                 credential_set: request.credential_set.clone(),
                 selector_namespace: target.namespace.clone(),
@@ -326,7 +332,7 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
                 .await?;
             let overlap_deadline = Utc::now()
                 .checked_add_signed(chrono::Duration::seconds(i64::from(request.overlap_seconds)))
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             let mut selector = state.resource;
             let annotations = selector.metadata.annotations.get_or_insert_with(BTreeMap::new);
             annotations.insert(ACTIVE_VERSION_ANNOTATION.to_owned(), request.candidate_version.clone());
@@ -351,7 +357,7 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
                 || replaced.last_operation_id.as_deref() != Some(request.operation_id.as_str())
                 || !replaced.candidate_probe_healthy
             {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
             self.journal
                 .append_result(
@@ -381,18 +387,18 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
                 .load_before(request.execution_id, request.plan_step_id)
                 .await?;
             if before.credential_set != request.credential_set {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let target = self.target(&request.credential_set)?;
             if before.selector_namespace != target.namespace
                 || before.selector_name != target.selector_name
                 || before.validation_probe_topic != target.validation_probe_topic
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let state = self.selector_state(&request.credential_set).await?;
             if state.uid != before.selector_uid {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if state.active_version == before.previous_active_version
                 && state.active_secret_ref == before.previous_active_secret_ref
@@ -402,8 +408,8 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
             {
                 return Ok(());
             }
-            let candidate_hash =
-                canonical_precondition_hash(&state.active_secret_ref).map_err(|_| ExecutionAgentError::DriverFailed)?;
+            let candidate_hash = canonical_precondition_hash(&state.active_secret_ref)
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
             let execution_id = request.execution_id.to_string();
             let plan_step_id = request.plan_step_id.to_string();
             if state.active_version != before.candidate_version
@@ -414,7 +420,7 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
                 || annotation(&state.resource.metadata.annotations, EXECUTION_ANNOTATION) != Some(execution_id.as_str())
                 || annotation(&state.resource.metadata.annotations, PLAN_STEP_ANNOTATION) != Some(plan_step_id.as_str())
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if !self
                 .probe(
@@ -425,7 +431,7 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
                 )
                 .await?
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let mut selector = state.resource;
             let annotations = selector.metadata.annotations.get_or_insert_with(BTreeMap::new);
@@ -453,7 +459,7 @@ impl CredentialRotationClient for ProductionCredentialRotationClient {
                 || restored.overlap_deadline.is_some()
                 || restored.last_operation_id.as_deref() != Some(request.operation_id.as_str())
             {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
             self.journal
                 .append_result(
@@ -482,30 +488,33 @@ struct KubernetesSecretReference {
     name: String,
 }
 
-fn parse_secret_reference(value: &str) -> Result<KubernetesSecretReference, ExecutionAgentError> {
+fn parse_secret_reference(value: &str) -> Result<KubernetesSecretReference, crate::ExecutionAgentRequestFailure> {
     let path = value
         .strip_prefix("kubernetes://")
-        .ok_or(ExecutionAgentError::InvalidRequest)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
     let (namespace, name) = path
         .split_once('/')
         .filter(|(namespace, name)| {
             !namespace.is_empty() && !name.is_empty() && !name.contains('/') && dns_name(namespace) && dns_name(name)
         })
-        .ok_or(ExecutionAgentError::InvalidRequest)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
     Ok(KubernetesSecretReference {
         namespace: namespace.to_owned(),
         name: name.to_owned(),
     })
 }
 
-fn parse_selector(selector: ConfigMap, credential_set: &str) -> Result<SelectorState, ExecutionAgentError> {
+fn parse_selector(
+    selector: ConfigMap,
+    credential_set: &str,
+) -> Result<SelectorState, crate::ExecutionAgentRequestFailure> {
     let annotations = selector
         .metadata
         .annotations
         .as_ref()
-        .ok_or(ExecutionAgentError::DriverFailed)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     if annotation(&selector.metadata.annotations, CREDENTIAL_SET_ANNOTATION) != Some(credential_set) {
-        return Err(ExecutionAgentError::DriverFailed);
+        return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
     }
     let active_version = required_annotation(annotations, ACTIVE_VERSION_ANNOTATION, 128)?;
     let active_secret_ref = required_annotation(annotations, ACTIVE_SECRET_REF_ANNOTATION, 255)?;
@@ -513,7 +522,7 @@ fn parse_selector(selector: ConfigMap, credential_set: &str) -> Result<SelectorS
     let retiring_version = optional_annotation(annotations, RETIRING_VERSION_ANNOTATION, 128)?;
     let retiring_secret_ref = optional_annotation(annotations, RETIRING_SECRET_REF_ANNOTATION, 255)?;
     if retiring_version.is_some() != retiring_secret_ref.is_some() {
-        return Err(ExecutionAgentError::DriverFailed);
+        return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
     }
     if let Some(reference) = &retiring_secret_ref {
         parse_secret_reference(reference)?;
@@ -522,16 +531,16 @@ fn parse_selector(selector: ConfigMap, credential_set: &str) -> Result<SelectorS
         .map(|value| {
             DateTime::parse_from_rfc3339(&value)
                 .map(|value| value.with_timezone(&Utc))
-                .map_err(|_| ExecutionAgentError::DriverFailed)
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)
         })
         .transpose()?;
     if overlap_deadline.is_some() != retiring_version.is_some() {
-        return Err(ExecutionAgentError::DriverFailed);
+        return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
     }
     let candidate_probe_healthy = match annotation(&selector.metadata.annotations, PROBE_HEALTHY_ANNOTATION) {
         Some("true") => true,
         Some("false") | None => false,
-        Some(_) => return Err(ExecutionAgentError::DriverFailed),
+        Some(_) => return Err(crate::ExecutionAgentRequestFailure::DriverFailed),
     };
     let last_operation_id = optional_annotation(annotations, OPERATION_ANNOTATION, 128)?;
     let uid = selector
@@ -539,13 +548,13 @@ fn parse_selector(selector: ConfigMap, credential_set: &str) -> Result<SelectorS
         .uid
         .clone()
         .filter(|value| !value.is_empty() && value.len() <= 128)
-        .ok_or(ExecutionAgentError::DriverFailed)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     let resource_version = selector
         .metadata
         .resource_version
         .clone()
         .filter(|value| !value.is_empty() && value.len() <= 128)
-        .ok_or(ExecutionAgentError::DriverFailed)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     Ok(SelectorState {
         resource: selector,
         uid,
@@ -564,41 +573,41 @@ fn secret_string(
     data: &BTreeMap<String, k8s_openapi::ByteString>,
     key: &str,
     maximum: usize,
-) -> Result<String, ExecutionAgentError> {
+) -> Result<String, crate::ExecutionAgentRequestFailure> {
     data.get(key)
-        .ok_or(ExecutionAgentError::DriverFailed)
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
         .and_then(|value| bounded_utf8(value.0.as_slice(), maximum))
 }
 
-fn bounded_utf8(value: &[u8], maximum: usize) -> Result<String, ExecutionAgentError> {
+fn bounded_utf8(value: &[u8], maximum: usize) -> Result<String, crate::ExecutionAgentRequestFailure> {
     if value.is_empty() || value.len() > maximum {
-        return Err(ExecutionAgentError::DriverFailed);
+        return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
     }
     String::from_utf8(value.to_vec())
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .ok_or(ExecutionAgentError::DriverFailed)
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
 fn required_annotation(
     annotations: &BTreeMap<String, String>,
     key: &str,
     maximum: usize,
-) -> Result<String, ExecutionAgentError> {
-    optional_annotation(annotations, key, maximum)?.ok_or(ExecutionAgentError::DriverFailed)
+) -> Result<String, crate::ExecutionAgentRequestFailure> {
+    optional_annotation(annotations, key, maximum)?.ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
 fn optional_annotation(
     annotations: &BTreeMap<String, String>,
     key: &str,
     maximum: usize,
-) -> Result<Option<String>, ExecutionAgentError> {
+) -> Result<Option<String>, crate::ExecutionAgentRequestFailure> {
     annotations
         .get(key)
         .map(|value| {
             (!value.is_empty() && value.len() <= maximum)
                 .then(|| value.clone())
-                .ok_or(ExecutionAgentError::DriverFailed)
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
         })
         .transpose()
 }

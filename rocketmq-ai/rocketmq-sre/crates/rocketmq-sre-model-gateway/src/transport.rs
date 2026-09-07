@@ -20,7 +20,8 @@ use std::pin::Pin;
 use rocketmq_sre_contracts::CorrelationId;
 use serde_json::Value;
 
-use crate::error::ProviderError;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::profile::ProviderDialect;
 use crate::secret::SecretMaterial;
 use crate::stream::AsyncBoundedModelStream;
@@ -86,8 +87,9 @@ pub trait ModelTransport: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns a stable redacted [`ProviderError`].
-    fn invoke(&self, request: TransportRequest) -> Result<TransportResponse, ProviderError>;
+    /// Expected request refusals are returned as a closed status outcome;
+    /// operational failures remain stable, redacted provider errors.
+    fn invoke(&self, request: TransportRequest) -> Result<TransportResponse, ProviderStatusOutcome>;
 
     /// Starts an optional bounded stream.
     ///
@@ -100,19 +102,20 @@ pub trait ModelTransport: Send + Sync {
         _request: TransportRequest,
         _bounds: StreamBounds,
         _cancellation: CancellationToken,
-    ) -> Result<BoundedModelStream, ProviderError> {
-        Err(ProviderError::capability_unsupported(
-            "injected transport does not implement streaming",
+    ) -> Result<BoundedModelStream, ProviderStatusOutcome> {
+        Err(ProviderStatusOutcome::rejected(
+            ProviderRejection::CapabilityUnsupported,
         ))
     }
 }
 
 /// Heap-owned future returned by the object-safe asynchronous transport.
-pub type TransportFuture<'a> = Pin<Box<dyn Future<Output = Result<TransportResponse, ProviderError>> + Send + 'a>>;
+pub type TransportFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<TransportResponse, ProviderStatusOutcome>> + Send + 'a>>;
 
 /// Heap-owned future returned by an object-safe asynchronous stream transport.
 pub type TransportStreamFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<AsyncBoundedModelStream, ProviderError>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<AsyncBoundedModelStream, ProviderStatusOutcome>> + Send + 'a>>;
 
 /// Non-blocking model-provider transport used by production HTTP integrations.
 ///
@@ -133,8 +136,8 @@ pub trait AsyncModelTransport: Send + Sync {
         _cancellation: CancellationToken,
     ) -> TransportStreamFuture<'_> {
         Box::pin(async {
-            Err(ProviderError::capability_unsupported(
-                "asynchronous transport does not implement streaming",
+            Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::CapabilityUnsupported,
             ))
         })
     }

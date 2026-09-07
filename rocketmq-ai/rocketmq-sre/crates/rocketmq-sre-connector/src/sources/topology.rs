@@ -47,7 +47,7 @@ impl TopologySource {
             )
         } else {
             return Err(ConnectorError::new(
-                crate::ConnectorErrorCode::InvalidEvidenceQuery,
+                crate::ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "topology source supports cluster or topic topology",
             ));
@@ -56,7 +56,7 @@ impl TopologySource {
         let mut output = match read_gateway.mcp_query(session, &operation).await {
             Ok(output) => output,
             Err(error)
-                if error.code == crate::ConnectorErrorCode::SourceUnavailable && read_gateway.admin_configured() =>
+                if error.failure() == crate::ConnectorFailure::SourceUnavailable && read_gateway.admin_configured() =>
             {
                 read_gateway.admin_query(session, &admin_resource).await?
             }

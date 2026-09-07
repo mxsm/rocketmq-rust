@@ -15,7 +15,6 @@
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::future::Future;
-use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +23,8 @@ use object_store::CredentialProvider;
 use object_store::aws::AwsCredential;
 use object_store::aws::AwsCredentialProvider;
 use rocketmq_sre_model_gateway::ExternalSecretManagerProvider;
+use rocketmq_sre_model_gateway::ProviderRejection;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::SecretProvider;
 use rocketmq_sre_model_gateway::SecretReference;
 use rocketmq_sre_model_gateway::SecretReferenceKind;
@@ -32,6 +33,7 @@ use rocketmq_sre_model_gateway::VaultAgentFileSecretClient;
 use super::optional_env;
 use super::required_env;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 const VAULT_AGENT_ROOT_ENV: &str = "ROCKETMQ_SRE_OBJECT_STORE_VAULT_AGENT_ROOT";
 const SECRET_NAMESPACE_ENV: &str = "ROCKETMQ_SRE_OBJECT_STORE_SECRET_NAMESPACE";
@@ -62,20 +64,14 @@ impl S3SecretCredentialProvider {
     }
 
     fn resolve(&self) -> Result<Arc<AwsCredential>, object_store::Error> {
-        let key_id = self
-            .secrets
-            .resolve(&self.access_key)
-            .map_err(|_| s3_credential_error())?;
-        let secret_key = self
-            .secrets
-            .resolve(&self.secret_key)
-            .map_err(|_| s3_credential_error())?;
+        let key_id = self.secrets.resolve(&self.access_key).map_err(s3_credential_error)?;
+        let secret_key = self.secrets.resolve(&self.secret_key).map_err(s3_credential_error)?;
         let token = self
             .session_token
             .as_ref()
             .map(|reference| self.secrets.resolve(reference))
             .transpose()
-            .map_err(|_| s3_credential_error())?;
+            .map_err(s3_credential_error)?;
         Ok(Arc::new(AwsCredential {
             key_id: key_id.expose_to_transport().to_owned(),
             secret_key: secret_key.expose_to_transport().to_owned(),
@@ -113,35 +109,24 @@ impl CredentialProvider for S3SecretCredentialProvider {
     }
 }
 
-pub(super) fn s3_credentials(dev_mode: bool) -> Result<AwsCredentialProvider, ControlPlaneError> {
+pub(super) fn s3_credentials(dev_mode: bool) -> Result<AwsCredentialProvider, ControlPlaneRequestFailure> {
     if let Some(root) = optional_env(VAULT_AGENT_ROOT_ENV) {
         let namespace = required_env(SECRET_NAMESPACE_ENV)?;
         let access_key = secret_reference(ACCESS_KEY_REF_ENV)?;
         let secret_key = secret_reference(SECRET_KEY_REF_ENV)?;
         let session_token = optional_env(SESSION_TOKEN_REF_ENV)
-            .map(|value| {
-                SecretReference::parse(&value).map_err(|_| {
-                    ControlPlaneError::configuration(format!("{SESSION_TOKEN_REF_ENV} is not a valid secret reference"))
-                })
-            })
+            .map(|value| SecretReference::parse(&value).map_err(crate::models::provider_configuration_failure))
             .transpose()?;
         let cache_seconds = optional_env("ROCKETMQ_SRE_OBJECT_STORE_SECRET_CACHE_SECONDS")
-            .map(|value| {
-                value.parse::<u64>().map_err(|error| {
-                    ControlPlaneError::configuration(format!(
-                        "ROCKETMQ_SRE_OBJECT_STORE_SECRET_CACHE_SECONDS is invalid: {error}"
-                    ))
-                })
-            })
+            .map(|value| value.parse::<u64>().map_err(ControlPlaneError::configuration_source))
             .transpose()?
             .unwrap_or(30);
         if cache_seconds > 300 {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "ROCKETMQ_SRE_OBJECT_STORE_SECRET_CACHE_SECONDS must not exceed 300",
             ));
         }
-        let client = VaultAgentFileSecretClient::new(root)
-            .map_err(|_| ControlPlaneError::configuration("Vault Agent object-store secret root is unavailable"))?;
+        let client = VaultAgentFileSecretClient::new(root).map_err(crate::models::provider_configuration_failure)?;
         let secrets: Arc<dyn SecretProvider> = Arc::new(ExternalSecretManagerProvider::new(
             Arc::new(client),
             namespace,
@@ -156,7 +141,7 @@ pub(super) fn s3_credentials(dev_mode: bool) -> Result<AwsCredentialProvider, Co
     }
 
     if !dev_mode {
-        return Err(ControlPlaneError::configuration(format!(
+        return Err(ControlPlaneRequestFailure::configuration(format!(
             "production object storage requires {VAULT_AGENT_ROOT_ENV} and external secret references"
         )));
     }
@@ -169,22 +154,36 @@ pub(super) fn s3_credentials(dev_mode: bool) -> Result<AwsCredentialProvider, Co
     })))
 }
 
-fn secret_reference(name: &'static str) -> Result<SecretReference, ControlPlaneError> {
+fn secret_reference(name: &'static str) -> Result<SecretReference, ControlPlaneRequestFailure> {
     let value = required_env(name)?;
-    let reference = SecretReference::parse(&value)
-        .map_err(|_| ControlPlaneError::configuration(format!("{name} is not a valid secret reference")))?;
+    let reference = SecretReference::parse(&value).map_err(crate::models::provider_configuration_failure)?;
     if reference.kind() != SecretReferenceKind::External {
-        return Err(ControlPlaneError::configuration(format!(
+        return Err(ControlPlaneRequestFailure::configuration(format!(
             "{name} must use the external secret reference scheme"
         )));
     }
     Ok(reference)
 }
 
-fn s3_credential_error() -> object_store::Error {
-    object_store::Error::Generic {
-        store: "S3",
-        source: Box::new(io::Error::other("external object-store credential is unavailable")),
+fn s3_credential_error(outcome: ProviderStatusOutcome) -> object_store::Error {
+    match outcome {
+        ProviderStatusOutcome::Operational(source) => object_store::Error::Generic {
+            store: "S3",
+            source: Box::new(source),
+        },
+        ProviderStatusOutcome::Rejected { rejection, .. } => {
+            let source = Box::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+            match rejection {
+                ProviderRejection::AuthenticationFailed => object_store::Error::Unauthenticated {
+                    path: "[CREDENTIAL REDACTED]".to_owned(),
+                    source,
+                },
+                _ => object_store::Error::PermissionDenied {
+                    path: "[CREDENTIAL REDACTED]".to_owned(),
+                    source,
+                },
+            }
+        }
     }
 }
 
@@ -196,6 +195,31 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+
+    #[test]
+    fn object_store_credentials_keep_the_provider_and_io_source_chain() {
+        use std::error::Error as _;
+        let provider = rocketmq_sre_model_gateway::ProviderError::from_operational_source(
+            rocketmq_sre_model_gateway::ProviderOperationalFailure::SecretUnavailable,
+            std::io::Error::other("secret-token /private/credential-path"),
+        );
+        let error = ControlPlaneError::object_store_source(s3_credential_error(provider.into()));
+        let store = error.source().unwrap().downcast_ref::<object_store::Error>().unwrap();
+        let provider = store
+            .source()
+            .unwrap()
+            .downcast_ref::<rocketmq_sre_model_gateway::ProviderError>()
+            .unwrap();
+        assert!(provider.source().unwrap().is::<std::io::Error>());
+        for text in [
+            error.to_string(),
+            format!("{error:?}"),
+            serde_json::to_string(&error.view()).unwrap(),
+        ] {
+            assert!(!text.contains("secret-token"));
+            assert!(!text.contains("/private/credential-path"));
+        }
+    }
 
     #[tokio::test]
     async fn vault_agent_credentials_rotate_without_rebuilding_the_object_store() {

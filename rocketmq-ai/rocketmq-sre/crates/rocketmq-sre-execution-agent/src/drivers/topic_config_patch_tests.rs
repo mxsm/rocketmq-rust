@@ -38,6 +38,7 @@ use rocketmq_sre_contracts::VerificationSpec;
 use serde_json::json;
 
 use super::*;
+use crate::ExecutionAgentRequestFailure;
 
 struct FakeTopicConfigClient {
     state: Mutex<TopicConfigPatchState>,
@@ -106,7 +107,7 @@ impl TopicConfigPatchClient for FakeTopicConfigClient {
                 .lock()
                 .expect("fake before lock")
                 .clone()
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+                .ok_or(ExecutionAgentRequestFailure::DriverFailed)?;
             let mut state = self.state.lock().expect("fake state lock");
             let previous_version = state.version;
             state.values = before;
@@ -186,10 +187,14 @@ async fn unknown_or_permission_fields_are_not_deserializable() {
     value["patch"]["perm"] = json!(6);
     let handler = TopicConfigPatchHandler::new(Arc::new(FakeTopicConfigClient::new()));
 
-    assert!(matches!(
-        handler.read_state(&read_request_with(value)).await,
-        Err(ExecutionAgentError::InvalidRequest)
-    ));
+    assert_eq!(
+        handler
+            .read_state(&read_request_with(value))
+            .await
+            .expect_err("malformed topic patch must be rejected")
+            .stable_code(),
+        "invalid_agent_request"
+    );
 }
 
 fn merge_patch(current: &mut TopicConfigPatch, patch: &TopicConfigPatch) {

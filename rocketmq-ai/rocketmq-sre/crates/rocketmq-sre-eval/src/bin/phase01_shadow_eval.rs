@@ -17,9 +17,46 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 
+use rocketmq_sre_eval::EvalError;
+use rocketmq_sre_eval::EvalOutcome;
+use rocketmq_sre_eval::EvalRejection;
 use rocketmq_sre_eval::phase1_shadow::ProviderMode;
-use rocketmq_sre_eval::phase1_shadow::ShadowEvalError;
 use rocketmq_sre_eval::phase1_shadow::ShadowHarness;
+
+enum ShadowCommandFailure {
+    Eval(EvalError),
+    Rejected(EvalRejection),
+    InvalidArguments,
+    Encoding(serde_json::Error),
+    SuiteFailed,
+}
+
+impl ShadowCommandFailure {
+    const fn code(&self) -> &'static str {
+        match self {
+            Self::Eval(source) => source.code(),
+            Self::Rejected(rejection) => rejection.code(),
+            Self::InvalidArguments => "invalid_shadow_manifest",
+            Self::Encoding(source) => {
+                let _ = source;
+                "invalid_model_synthesis"
+            }
+            Self::SuiteFailed => "invalid_model_synthesis",
+        }
+    }
+}
+
+impl From<EvalError> for ShadowCommandFailure {
+    fn from(source: EvalError) -> Self {
+        Self::Eval(source)
+    }
+}
+
+impl From<serde_json::Error> for ShadowCommandFailure {
+    fn from(source: serde_json::Error) -> Self {
+        Self::Encoding(source)
+    }
+}
 
 struct Arguments {
     manifest: PathBuf,
@@ -32,14 +69,14 @@ struct Arguments {
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("{}: {error}", error.code());
+        Err(failure) => {
+            eprintln!("shadow_evaluation_failed: {}", failure.code());
             ExitCode::FAILURE
         }
     }
 }
 
-fn run() -> Result<(), ShadowEvalError> {
+fn run() -> Result<(), ShadowCommandFailure> {
     let arguments = parse_arguments()?;
     if arguments.help {
         println!(
@@ -48,30 +85,34 @@ fn run() -> Result<(), ShadowEvalError> {
         );
         return Ok(());
     }
-    let harness = ShadowHarness::load(&arguments.manifest, &arguments.fixtures_root)?;
+    let harness = match ShadowHarness::load(&arguments.manifest, &arguments.fixtures_root)? {
+        EvalOutcome::Completed(harness) => harness,
+        EvalOutcome::Rejected(rejection) => return Err(ShadowCommandFailure::Rejected(rejection)),
+    };
     let cluster_id = harness.manifest().cluster_id;
-    let summary = harness.run(arguments.provider_mode, cluster_id)?;
+    let summary = match harness.run(arguments.provider_mode, cluster_id)? {
+        EvalOutcome::Completed(summary) => summary,
+        EvalOutcome::Rejected(rejection) => return Err(ShadowCommandFailure::Rejected(rejection)),
+    };
     if !summary.passed {
-        return Err(ShadowEvalError::InvalidSynthesis(
-            "shadow suite completed without satisfying the mutation-zero invariant".to_owned(),
-        ));
+        return Err(ShadowCommandFailure::SuiteFailed);
     }
     let output = if arguments.compact {
         serde_json::to_string(&summary)
     } else {
         serde_json::to_string_pretty(&summary)
-    }
-    .map_err(|error| ShadowEvalError::InvalidSynthesis(error.to_string()))?;
+    }?;
     println!("{output}");
     Ok(())
 }
 
-fn parse_arguments() -> Result<Arguments, ShadowEvalError> {
+fn parse_arguments() -> Result<Arguments, ShadowCommandFailure> {
     let mut manifest = PathBuf::from("tests/fixtures/e2e/wave-a-manifest.v1.yaml");
     let mut fixtures_root = PathBuf::from("tests/fixtures");
     let mut provider_mode = env::var("ROCKETMQ_SRE_SHADOW_PROVIDER_MODE")
         .ok()
-        .map_or(Ok(ProviderMode::Mock), |value| ProviderMode::from_str(&value))?;
+        .map_or(Ok(ProviderMode::Mock), |value| ProviderMode::from_str(&value))
+        .map_err(|_| ShadowCommandFailure::InvalidArguments)?;
     let mut compact = false;
     let mut help = false;
     let mut arguments = env::args().skip(1);
@@ -84,12 +125,14 @@ fn parse_arguments() -> Result<Arguments, ShadowEvalError> {
                 fixtures_root = PathBuf::from(required_value(&mut arguments, "--fixtures-root")?);
             }
             "--provider" => {
-                provider_mode = ProviderMode::from_str(&required_value(&mut arguments, "--provider")?)?;
+                provider_mode = ProviderMode::from_str(&required_value(&mut arguments, "--provider")?)
+                    .map_err(|_| ShadowCommandFailure::InvalidArguments)?;
             }
             "--compact" => compact = true,
             "--help" | "-h" => help = true,
             other => {
-                return Err(ShadowEvalError::InvalidManifest(format!("unknown argument `{other}`")));
+                let _ = other;
+                return Err(ShadowCommandFailure::InvalidArguments);
             }
         }
     }
@@ -102,8 +145,7 @@ fn parse_arguments() -> Result<Arguments, ShadowEvalError> {
     })
 }
 
-fn required_value(arguments: &mut impl Iterator<Item = String>, option: &str) -> Result<String, ShadowEvalError> {
-    arguments
-        .next()
-        .ok_or_else(|| ShadowEvalError::InvalidManifest(format!("option `{option}` requires a value")))
+fn required_value(arguments: &mut impl Iterator<Item = String>, option: &str) -> Result<String, ShadowCommandFailure> {
+    let _ = option;
+    arguments.next().ok_or(ShadowCommandFailure::InvalidArguments)
 }

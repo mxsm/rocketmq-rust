@@ -30,31 +30,31 @@ impl SupervisedExecutionService {
         id: ActionPlanId,
         request: &CriticReviewRequest,
         correlation_id: CorrelationId,
-    ) -> Result<CriticReviewResponse, ControlPlaneError> {
+    ) -> Result<CriticReviewResponse, ControlPlaneRequestFailure> {
         self.policy.require_operator(auth)?;
         let projection = self.repository.supervised_plan(auth, id).await?;
         let plan = projection.plan;
         if projection.risk != ActionRisk::R2 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "critic_not_required",
                 "only R2 plans may enter the heterogeneous Critic gate",
             ));
         }
         if request.plan_hash != plan.plan_hash {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_hash_mismatch",
                 "Critic request does not bind the current immutable plan hash",
             ));
         }
         if plan.status != PlanStatus::NeedsCritic {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_state_changed",
                 "R2 plan is not awaiting a Critic review",
             ));
         }
         let now = self.now();
         if plan.expires_at <= now {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_expired",
                 "plan expired before the Critic review",
             ));
@@ -67,14 +67,14 @@ impl SupervisedExecutionService {
             || live.facts.resource_quarantined
             || !live.facts.rollback_available
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "critic_preconditions_invalid",
                 "local plan, Evidence, rollback, or quarantine checks prevent Critic review",
             ));
         }
         let primary = self.repository.exact_primary_model_invocation(auth, &plan).await?;
         let primary_family = rocketmq_sre_model_gateway::normalize_model_family(&primary.model_family)
-            .map_err(|_| ControlPlaneError::configuration("primary model family cannot be normalized"))?;
+            .map_err(crate::models::provider_configuration_failure)?;
         let evidence_ids = plan
             .steps
             .iter()
@@ -157,23 +157,23 @@ fn validate_critic_decision(
     decision: &ModelCriticDecision,
     primary_family: &str,
     evidence_ids: &[EvidenceId],
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if let Some(assessment) = decision.assessment.as_ref() {
-        assessment
-            .validate(evidence_ids)
-            .map_err(|error| ControlPlaneError::validation("critic_output_invalid", error.to_string()))?;
+        assessment.validate(evidence_ids).map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "critic_output_invalid", error)
+        })?;
     }
     if let Some(invocation) = decision.invocation.as_ref() {
         let critic_family = rocketmq_sre_model_gateway::normalize_model_family(&invocation.model_family)
-            .map_err(|_| ControlPlaneError::configuration("Critic model family cannot be normalized"))?;
+            .map_err(crate::models::provider_configuration_failure)?;
         if critic_family == primary_family {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "critic_model_family_mismatch",
                 "Critic actual model family must differ from the primary invocation family",
             ));
         }
     } else if decision.status == CriticReviewStatus::Valid {
-        return Err(ControlPlaneError::configuration(
+        return Err(ControlPlaneRequestFailure::configuration(
             "a valid Critic decision must contain an actual invocation identity",
         ));
     }

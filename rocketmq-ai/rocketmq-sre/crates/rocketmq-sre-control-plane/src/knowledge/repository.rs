@@ -34,6 +34,7 @@ use super::model::KnowledgePage;
 use super::model::KnowledgeSearchPage;
 use super::model::KnowledgeSearchQuery;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -42,7 +43,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &KnowledgeListQuery,
-    ) -> Result<KnowledgePage, ControlPlaneError> {
+    ) -> Result<KnowledgePage, ControlPlaneRequestFailure> {
         enforce_optional_cluster(auth, Some(query.cluster_id))?;
         let limit = query.bounded_limit()?;
         let cursor = query
@@ -51,7 +52,7 @@ impl PostgresRepository {
             .map(|value| {
                 value
                     .parse::<Uuid>()
-                    .map_err(|_| ControlPlaneError::validation("invalid_request", "knowledge cursor must be a UUID"))
+                    .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "cursor is invalid"))
             })
             .transpose()?;
         let rows = sqlx::query(
@@ -92,7 +93,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         import: KnowledgeImport,
-    ) -> Result<KnowledgeImportResult, ControlPlaneError> {
+    ) -> Result<KnowledgeImportResult, ControlPlaneRequestFailure> {
         enforce_optional_cluster(auth, import.item.cluster_id)?;
         let mut transaction = self.pool.begin().await?;
         let existing = sqlx::query(
@@ -213,7 +214,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: KnowledgeItemId,
-    ) -> Result<KnowledgeItem, ControlPlaneError> {
+    ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, title, component, rocketmq_version_range,
                     source_uri, source_version, valid_from, valid_until, owner_name,
@@ -226,7 +227,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let item = knowledge_item_from_row(&row)?;
         enforce_optional_cluster(auth, item.cluster_id)?;
         Ok(item)
@@ -238,7 +239,7 @@ impl PostgresRepository {
         mut item: KnowledgeItem,
         status: KnowledgeReviewStatus,
         reason: &str,
-    ) -> Result<KnowledgeItem, ControlPlaneError> {
+    ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
         let now = Utc::now();
         let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
@@ -254,7 +255,8 @@ impl PostgresRepository {
         .execute(&mut *transaction)
         .await?;
         if result.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict(
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "knowledge_review_state_changed",
                 "knowledge review state changed concurrently",
             ));
         }
@@ -286,10 +288,10 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &KnowledgeSearchQuery,
-    ) -> Result<KnowledgeSearchPage, ControlPlaneError> {
+    ) -> Result<KnowledgeSearchPage, ControlPlaneRequestFailure> {
         enforce_optional_cluster(auth, Some(query.cluster_id))?;
         let version = Version::parse(&query.rocketmq_version)
-            .map_err(|_| ControlPlaneError::validation("invalid_request", "RocketMQ version must be semantic"))?;
+            .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "RocketMQ version is invalid"))?;
         let candidate_limit = i64::from(query.bounded_limit()) * 4;
         let rows = sqlx::query(
             "SELECT c.id AS chunk_id, c.heading, c.content, c.content_hash AS chunk_hash,
@@ -378,7 +380,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         id: KnowledgeItemId,
         request: &KnowledgeFeedbackRequest,
-    ) -> Result<KnowledgeItem, ControlPlaneError> {
+    ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
         let item = self.knowledge_item(auth, id).await?;
         let mut transaction = self.pool.begin().await?;
         let now = Utc::now();
@@ -414,7 +416,7 @@ impl PostgresRepository {
     }
 }
 
-fn knowledge_item_from_row(row: &PgRow) -> Result<KnowledgeItem, ControlPlaneError> {
+fn knowledge_item_from_row(row: &PgRow) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
     Ok(KnowledgeItem {
         id: KnowledgeItemId::from_uuid(row.try_get("id")?),
         tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -437,21 +439,22 @@ fn knowledge_item_from_row(row: &PgRow) -> Result<KnowledgeItem, ControlPlaneErr
     })
 }
 
-fn parse_sensitivity(value: &str) -> Result<rocketmq_sre_contracts::Sensitivity, ControlPlaneError> {
+fn parse_sensitivity(value: &str) -> Result<rocketmq_sre_contracts::Sensitivity, ControlPlaneRequestFailure> {
     match value {
         "public" => Ok(rocketmq_sre_contracts::Sensitivity::Public),
         "internal" => Ok(rocketmq_sre_contracts::Sensitivity::Internal),
         "confidential" => Ok(rocketmq_sre_contracts::Sensitivity::Confidential),
         "restricted" => Ok(rocketmq_sre_contracts::Sensitivity::Restricted),
-        _ => Err(ControlPlaneError::configuration(
-            "stored knowledge sensitivity is invalid",
-        )),
+        _ => Err(ControlPlaneError::configuration("stored knowledge sensitivity is invalid").into()),
     }
 }
 
-fn enforce_optional_cluster(auth: &AuthContext, cluster_id: Option<ClusterId>) -> Result<(), ControlPlaneError> {
+fn enforce_optional_cluster(
+    auth: &AuthContext,
+    cluster_id: Option<ClusterId>,
+) -> Result<(), ControlPlaneRequestFailure> {
     if cluster_id.is_some_and(|cluster_id| !auth.clusters.contains(&cluster_id)) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "knowledge cluster is outside the authenticated scope",
         ));
@@ -469,14 +472,14 @@ pub(super) fn review_status_name(status: KnowledgeReviewStatus) -> &'static str 
     }
 }
 
-fn parse_review_status(value: &str) -> Result<KnowledgeReviewStatus, ControlPlaneError> {
+fn parse_review_status(value: &str) -> Result<KnowledgeReviewStatus, ControlPlaneRequestFailure> {
     match value {
         "draft" => Ok(KnowledgeReviewStatus::Draft),
         "in_review" => Ok(KnowledgeReviewStatus::InReview),
         "validated" => Ok(KnowledgeReviewStatus::Validated),
         "deprecated" => Ok(KnowledgeReviewStatus::Deprecated),
         "expired" => Ok(KnowledgeReviewStatus::Expired),
-        _ => Err(ControlPlaneError::validation(
+        _ => Err(ControlPlaneRequestFailure::validation(
             "source_unavailable",
             "stored knowledge review status is invalid",
         )),

@@ -352,11 +352,11 @@ fn inspection_state(value: String) -> Result<FleetInspectionState, ControlPlaneE
 }
 
 fn string_set(value: Value) -> Result<BTreeSet<String>, ControlPlaneError> {
-    serde_json::from_value(value).map_err(|_| stored_value_error("Fleet string set"))
+    serde_json::from_value(value).map_err(ControlPlaneError::configuration_source)
 }
 
 fn string_map(value: Value) -> Result<BTreeMap<String, String>, ControlPlaneError> {
-    serde_json::from_value(value).map_err(|_| stored_value_error("Fleet attribute map"))
+    serde_json::from_value(value).map_err(ControlPlaneError::configuration_source)
 }
 
 fn u64_value(value: i64, field: &str) -> Result<u64, ControlPlaneError> {
@@ -369,4 +369,23 @@ fn u32_value(value: i32, field: &str) -> Result<u32, ControlPlaneError> {
 
 fn stored_value_error(field: &str) -> ControlPlaneError {
     ControlPlaneError::configuration(format!("{field} contains an invalid persisted value"))
+}
+
+#[cfg(test)]
+mod source_tests {
+    use std::error::Error as _;
+
+    #[test]
+    fn persisted_json_decode_preserves_typed_source_without_projecting_values() {
+        let error = super::string_set(serde_json::json!({"secret-token": "/private/path"})).unwrap_err();
+        assert!(error.source().unwrap().is::<serde_json::Error>());
+        for text in [
+            error.to_string(),
+            format!("{error:?}"),
+            serde_json::to_string(&error.view()).unwrap(),
+        ] {
+            assert!(!text.contains("secret-token"));
+            assert!(!text.contains("/private/path"));
+        }
+    }
 }

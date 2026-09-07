@@ -20,6 +20,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -95,7 +96,7 @@ impl IssuerConfig {
         Ok(Self {
             bind_addr: env_or("ROCKETMQ_SRE_DEV_ISSUER_BIND_ADDR", DEFAULT_BIND_ADDR)
                 .parse()
-                .map_err(|_| IssuerError::Config("issuer bind address is invalid".to_owned()))?,
+                .map_err(IssuerError::InvalidBindAddress)?,
             issuer: env_or("ROCKETMQ_SRE_DEV_ISSUER_URL", DEFAULT_ISSUER),
             audience: env_or("ROCKETMQ_SRE_DEV_ISSUER_AUDIENCE", DEFAULT_AUDIENCE),
             client_id: env_or("ROCKETMQ_SRE_DEV_ISSUER_CLIENT_ID", DEFAULT_CLIENT_ID),
@@ -113,10 +114,12 @@ impl IssuerConfig {
 enum IssuerError {
     #[error("invalid development issuer configuration: {0}")]
     Config(String),
+    #[error("development issuer bind address is invalid")]
+    InvalidBindAddress(#[source] std::net::AddrParseError),
     #[error("development issuer private key cannot be read")]
-    PrivateKey,
+    PrivateKey(#[source] std::io::Error),
     #[error("development issuer private key is invalid")]
-    InvalidPrivateKey,
+    InvalidPrivateKey(#[source] jsonwebtoken::errors::Error),
     #[error("development issuer listener failed: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -165,7 +168,17 @@ struct TokenClaims<'a> {
     rocketmq_clusters: [&'a str; 1],
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> ExitCode {
+    match try_main() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => {
+            eprintln!("development issuer failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn try_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("phase00_dev_issuer=info")),
@@ -194,8 +207,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 fn read_signing_key(path: &Path, modulus: &'static str) -> Result<SigningKey, IssuerError> {
-    let private_key = std::fs::read(path).map_err(|_| IssuerError::PrivateKey)?;
-    let encoding_key = EncodingKey::from_rsa_pem(&private_key).map_err(|_| IssuerError::InvalidPrivateKey)?;
+    let private_key = std::fs::read(path).map_err(IssuerError::PrivateKey)?;
+    let encoding_key = EncodingKey::from_rsa_pem(&private_key).map_err(IssuerError::InvalidPrivateKey)?;
     Ok(SigningKey { encoding_key, modulus })
 }
 

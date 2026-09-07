@@ -38,11 +38,12 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::ExecutorError;
+use crate::ExecutorRequestFailure;
 use crate::config::validate_internal_service_url;
 
 const MAX_AUTHORITY_RESPONSE_BYTES: usize = 64 * 1024;
 
-pub type AuthorityFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorError>> + Send + 'a>>;
+pub type AuthorityFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutorRequestFailure>> + Send + 'a>>;
 
 /// Minimal online Lease Authority surface available to Executor.
 ///
@@ -117,12 +118,12 @@ impl HttpExecutorAuthorityClient {
         tenant_id: TenantId,
         cluster_id: ClusterId,
         body: &T,
-    ) -> Result<R, ExecutorError>
+    ) -> Result<R, ExecutorRequestFailure>
     where
         T: Serialize + ?Sized,
         R: DeserializeOwned,
     {
-        let url = self.base_url.join(path).map_err(|_| ExecutorError::Configuration)?;
+        let url = self.base_url.join(path).map_err(ExecutorError::configuration_source)?;
         let response = self
             .client
             .post(url)
@@ -135,12 +136,13 @@ impl HttpExecutorAuthorityClient {
             .await?;
         match response.status() {
             StatusCode::OK => {}
-            status if status.is_client_error() => return Err(ExecutorError::AuthorityRejected),
-            _ => return Err(ExecutorError::AuthorityUnavailable),
+            status if status.is_client_error() => return Err(ExecutorRequestFailure::AuthorityRejected),
+            _ => return Err(ExecutorError::AuthorityUnavailable.into()),
         }
         read_bounded(response).await.map_err(|error| match error {
-            BoundedResponseError::Http(error) => ExecutorError::Http(error),
-            BoundedResponseError::Rejected => ExecutorError::AuthorityRejected,
+            BoundedResponseError::Http(error) => ExecutorError::Http(error).into(),
+            BoundedResponseError::Oversized => ExecutorError::AuthorityUnavailable.into(),
+            BoundedResponseError::Decode(error) => ExecutorError::authority_decode(error).into(),
         })
     }
 }
@@ -162,7 +164,7 @@ impl ExecutorAuthorityClient for HttpExecutorAuthorityClient {
                 || response.expires_at != request.execution.expires_at
                 || response.epoch.0 != 0
             {
-                return Err(ExecutorError::AuthorityRejected);
+                return Err(ExecutorRequestFailure::AuthorityRejected);
             }
             Ok(response)
         })
@@ -188,7 +190,7 @@ impl ExecutorAuthorityClient for HttpExecutorAuthorityClient {
                 || response.reconcile_grant.lease_id != response.lease.id
                 || response.reconcile_grant.pending_epoch != response.lease.epoch
             {
-                return Err(ExecutorError::AuthorityRejected);
+                return Err(ExecutorRequestFailure::AuthorityRejected);
             }
             Ok(response)
         })
@@ -216,7 +218,7 @@ impl ExecutorAuthorityClient for HttpExecutorAuthorityClient {
                 || lease.state != rocketmq_sre_contracts::LeaseState::Active
                 || lease.epoch != request.fence_ack.epoch
             {
-                return Err(ExecutorError::AuthorityRejected);
+                return Err(ExecutorRequestFailure::AuthorityRejected);
             }
             Ok(lease)
         })
@@ -242,7 +244,7 @@ impl ExecutorAuthorityClient for HttpExecutorAuthorityClient {
                 || grant.owner != self.subject.as_ref()
                 || grant.expires_at <= chrono::Utc::now()
             {
-                return Err(ExecutorError::AuthorityRejected);
+                return Err(ExecutorRequestFailure::AuthorityRejected);
             }
             Ok(grant)
         })
@@ -273,7 +275,7 @@ impl ExecutorAuthorityClient for HttpExecutorAuthorityClient {
                 || decision.policy_definition_version != request.policy_definition_version
                 || decision.lifecycle_revision != request.lifecycle_revision
             {
-                return Err(ExecutorError::AuthorityRejected);
+                return Err(ExecutorRequestFailure::AuthorityRejected);
             }
             Ok(decision)
         })
@@ -293,7 +295,8 @@ impl Debug for HttpExecutorAuthorityClient {
 
 enum BoundedResponseError {
     Http(reqwest::Error),
-    Rejected,
+    Decode(serde_json::Error),
+    Oversized,
 }
 
 async fn read_bounded<R>(mut response: reqwest::Response) -> Result<R, BoundedResponseError>
@@ -304,16 +307,16 @@ where
         .content_length()
         .is_some_and(|length| length > MAX_AUTHORITY_RESPONSE_BYTES as u64)
     {
-        return Err(BoundedResponseError::Rejected);
+        return Err(BoundedResponseError::Oversized);
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(BoundedResponseError::Http)? {
         if bytes.len().saturating_add(chunk.len()) > MAX_AUTHORITY_RESPONSE_BYTES {
-            return Err(BoundedResponseError::Rejected);
+            return Err(BoundedResponseError::Oversized);
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| BoundedResponseError::Rejected)
+    serde_json::from_slice(&bytes).map_err(BoundedResponseError::Decode)
 }
 
 #[cfg(test)]

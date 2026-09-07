@@ -22,7 +22,6 @@ use chrono::Utc;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use thiserror::Error;
 use uuid::Uuid;
 
 use crate::ProbePlan;
@@ -81,7 +80,7 @@ impl ProbeScenario {
 }
 
 impl std::str::FromStr for ProbeScenario {
-    type Err = ProbeScenarioParseError;
+    type Err = ProbeScenarioRejection;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
@@ -90,15 +89,14 @@ impl std::str::FromStr for ProbeScenario {
             "transaction-commit" => Ok(Self::TransactionCommit),
             "delayed-timer" => Ok(Self::DelayedTimer),
             "pop-ack" => Ok(Self::PopAck),
-            _ => Err(ProbeScenarioParseError),
+            _ => Err(ProbeScenarioRejection),
         }
     }
 }
 
-/// Invalid scenario identifier.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-#[error("unknown probe scenario")]
-pub struct ProbeScenarioParseError;
+/// Closed scenario-selection rejection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProbeScenarioRejection;
 
 /// Stable scenario completion status.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
@@ -135,18 +133,124 @@ pub struct ProbeRunResult {
     pub cleanup: ProbeCleanupResult,
 }
 
-/// Sanitized driver failure.
-#[derive(Clone, Debug, Eq, Error, PartialEq)]
-#[error("probe driver failed with code `{code}`")]
+/// Opaque, sanitized failure at the probe driver boundary.
 pub struct ProbeDriverError {
-    pub code: String,
+    kind: ProbeDriverFailure,
+}
+
+enum ProbeDriverFailure {
+    Operation {
+        code: &'static str,
+    },
+    RocketMq {
+        code: &'static str,
+        source: Box<rocketmq_error::RocketMQError>,
+    },
+    Evidence {
+        source: Box<crate::evidence::ProbeEvidenceFailure>,
+    },
 }
 
 impl ProbeDriverError {
-    /// Creates a stable, non-sensitive error.
+    /// Creates a closed failure for a driver implementation without a more
+    /// specific typed source.
     #[must_use]
-    pub fn new(code: impl Into<String>) -> Self {
-        Self { code: code.into() }
+    pub const fn operation_failed() -> Self {
+        Self::operation("probe_driver_failed")
+    }
+
+    /// Wraps a RocketMQ producer-start failure without exposing its details.
+    #[must_use]
+    pub fn producer_start_failed(source: rocketmq_error::RocketMQError) -> Self {
+        Self::rocketmq("producer_start_failed", source)
+    }
+
+    /// Wraps a RocketMQ message-send failure without exposing its details.
+    #[must_use]
+    pub fn message_send_failed(source: rocketmq_error::RocketMQError) -> Self {
+        Self::rocketmq("message_send_failed", source)
+    }
+
+    /// Wraps a RocketMQ transaction-producer start failure without exposing its details.
+    #[must_use]
+    pub fn transaction_producer_start_failed(source: rocketmq_error::RocketMQError) -> Self {
+        Self::rocketmq("transaction_producer_start_failed", source)
+    }
+
+    /// Wraps a RocketMQ transaction-send failure without exposing its details.
+    #[must_use]
+    pub fn transaction_send_failed(source: rocketmq_error::RocketMQError) -> Self {
+        Self::rocketmq("transaction_send_failed", source)
+    }
+
+    /// Wraps a RocketMQ subscription failure without exposing its details.
+    #[must_use]
+    pub fn consumer_subscribe_failed(source: rocketmq_error::RocketMQError) -> Self {
+        Self::rocketmq("consumer_subscribe_failed", source)
+    }
+
+    /// Wraps a RocketMQ consumer-start failure without exposing its details.
+    #[must_use]
+    pub fn consumer_start_failed(source: rocketmq_error::RocketMQError) -> Self {
+        Self::rocketmq("consumer_start_failed", source)
+    }
+
+    /// Creates the fixed failure emitted when the driver lacks a key filter.
+    #[must_use]
+    pub const fn consumer_key_filter_missing() -> Self {
+        Self::operation("consumer_key_filter_missing")
+    }
+
+    pub(crate) const fn operation(code: &'static str) -> Self {
+        Self {
+            kind: ProbeDriverFailure::Operation { code },
+        }
+    }
+
+    fn rocketmq(code: &'static str, source: rocketmq_error::RocketMQError) -> Self {
+        Self {
+            kind: ProbeDriverFailure::RocketMq {
+                code,
+                source: Box::new(source),
+            },
+        }
+    }
+
+    pub(crate) fn evidence(source: crate::evidence::ProbeEvidenceFailure) -> Self {
+        Self {
+            kind: ProbeDriverFailure::Evidence {
+                source: Box::new(source),
+            },
+        }
+    }
+
+    pub(crate) fn code(&self) -> &str {
+        match &self.kind {
+            ProbeDriverFailure::Operation { code } | ProbeDriverFailure::RocketMq { code, .. } => code,
+            ProbeDriverFailure::Evidence { .. } => "evidence_capture_failed",
+        }
+    }
+}
+
+impl std::fmt::Display for ProbeDriverError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("probe driver operation failed")
+    }
+}
+
+impl std::fmt::Debug for ProbeDriverError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl std::error::Error for ProbeDriverError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.kind {
+            ProbeDriverFailure::Operation { .. } => None,
+            ProbeDriverFailure::RocketMq { source, .. } => Some(source.as_ref()),
+            ProbeDriverFailure::Evidence { source } => Some(source.as_ref()),
+        }
     }
 }
 
@@ -198,32 +302,27 @@ impl ProbeBudget {
 
     /// Charges a batch before it can reach a producer.
     ///
-    /// # Errors
-    ///
-    /// Returns a stable limit code without clamping the requested work.
-    pub fn charge(&mut self, messages: u16, payload_bytes: u32) -> Result<(), ProbeBudgetError> {
+    /// Returns a closed limit rejection without clamping the requested work.
+    pub fn charge(&mut self, messages: u16, payload_bytes: u32) -> Result<(), ProbeBudgetRejection> {
         if payload_bytes > self.payload_limit {
-            return Err(ProbeBudgetError::Payload);
+            return Err(ProbeBudgetRejection::Payload);
         }
         if self.charged_messages.saturating_add(messages) > self.message_limit {
-            return Err(ProbeBudgetError::Messages);
+            return Err(ProbeBudgetRejection::Messages);
         }
         if self.started.elapsed() >= self.duration_limit {
-            return Err(ProbeBudgetError::Duration);
+            return Err(ProbeBudgetRejection::Duration);
         }
         self.charged_messages += messages;
         Ok(())
     }
 }
 
-/// Hard probe budget exceeded.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum ProbeBudgetError {
-    #[error("message budget exceeded")]
+/// Closed hard-budget rejection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeBudgetRejection {
     Messages,
-    #[error("payload budget exceeded")]
     Payload,
-    #[error("duration budget exceeded")]
     Duration,
 }
 
@@ -246,52 +345,52 @@ where
     let (send_mode, consumer_mode) = scenario.modes();
     let timeout = Duration::from_secs(u64::from(plan.max_duration_seconds));
 
-    let operation = async {
-        plan.identity
-            .validate()
-            .map_err(|_| ProbeDriverError::new("resource_namespace_rejected"))?;
-        budget.charge(batch.count, batch.payload_bytes).map_err(|error| {
-            ProbeDriverError::new(match error {
-                ProbeBudgetError::Messages => "message_budget_exceeded",
-                ProbeBudgetError::Payload => "payload_budget_exceeded",
-                ProbeBudgetError::Duration => "duration_budget_exceeded",
-            })
-        })?;
-        driver.set_expected_key_prefix(&batch.key_prefix);
-
-        record_stage(
-            &mut stages,
-            "consumer_start",
-            driver.start_consumer(plan, consumer_mode),
-        )
-        .await?;
-        let send = record_stage(&mut stages, "send", driver.send(plan, send_mode, &batch)).await?;
-        let consumed = record_stage(
-            &mut stages,
-            "consume_ack",
-            driver.await_acknowledgements(send.accepted_messages),
-        )
-        .await?;
-        Ok::<_, ProbeDriverError>((send, consumed))
+    let preflight_rejection = if plan.identity.validate().is_err() {
+        Some((ProbeRunStatus::Failed, "resource_namespace_rejected"))
+    } else {
+        budget.charge(batch.count, batch.payload_bytes).err().map(|rejection| {
+            let code = match rejection {
+                ProbeBudgetRejection::Messages => "message_budget_exceeded",
+                ProbeBudgetRejection::Payload => "payload_budget_exceeded",
+                ProbeBudgetRejection::Duration => "duration_budget_exceeded",
+            };
+            (ProbeRunStatus::BudgetExceeded, code)
+        })
     };
 
-    let (status, sent, received, acknowledged, error_code) = match tokio::time::timeout(timeout, operation).await {
-        Ok(Ok((send, consumed))) => (
-            ProbeRunStatus::Succeeded,
-            send.accepted_messages,
-            consumed.received_messages,
-            consumed.acknowledged_messages,
-            None,
-        ),
-        Ok(Err(error)) => {
-            let status = if error.code.ends_with("budget_exceeded") {
-                ProbeRunStatus::BudgetExceeded
-            } else {
-                ProbeRunStatus::Failed
+    let (status, sent, received, acknowledged, error_code) = match preflight_rejection {
+        Some((status, code)) => (status, 0, 0, 0, Some(code.to_owned())),
+        None => {
+            let operation = async {
+                driver.set_expected_key_prefix(&batch.key_prefix);
+
+                record_stage(
+                    &mut stages,
+                    "consumer_start",
+                    driver.start_consumer(plan, consumer_mode),
+                )
+                .await?;
+                let send = record_stage(&mut stages, "send", driver.send(plan, send_mode, &batch)).await?;
+                let consumed = record_stage(
+                    &mut stages,
+                    "consume_ack",
+                    driver.await_acknowledgements(send.accepted_messages),
+                )
+                .await?;
+                Ok::<_, ProbeDriverError>((send, consumed))
             };
-            (status, 0, 0, 0, Some(error.code))
+            match tokio::time::timeout(timeout, operation).await {
+                Ok(Ok((send, consumed))) => (
+                    ProbeRunStatus::Succeeded,
+                    send.accepted_messages,
+                    consumed.received_messages,
+                    consumed.acknowledged_messages,
+                    None,
+                ),
+                Ok(Err(error)) => (ProbeRunStatus::Failed, 0, 0, 0, Some(error.code().to_owned())),
+                Err(_) => (ProbeRunStatus::TimedOut, 0, 0, 0, Some("probe_timeout".to_owned())),
+            }
         }
-        Err(_) => (ProbeRunStatus::TimedOut, 0, 0, 0, Some("probe_timeout".to_owned())),
     };
     let cleanup = driver.cleanup().await;
 
@@ -360,7 +459,7 @@ mod tests {
         ) -> Result<ProbeSendObservation, ProbeDriverError> {
             self.send_modes.push(mode);
             if self.fail_send {
-                return Err(ProbeDriverError::new("fixture_send_failed"));
+                return Err(ProbeDriverError::operation("fixture_send_failed"));
             }
             Ok(ProbeSendObservation {
                 accepted_messages: batch.count,
@@ -422,10 +521,26 @@ mod tests {
         let plan = plan();
         let mut budget = ProbeBudget::from_plan(&plan);
 
-        assert_eq!(budget.charge(4, 1), Err(ProbeBudgetError::Messages));
-        assert_eq!(budget.charge(1, 33), Err(ProbeBudgetError::Payload));
+        assert_eq!(budget.charge(4, 1), Err(ProbeBudgetRejection::Messages));
+        assert_eq!(budget.charge(1, 33), Err(ProbeBudgetRejection::Payload));
         assert_eq!(budget.charge(3, 32), Ok(()));
-        assert_eq!(budget.charge(1, 32), Err(ProbeBudgetError::Messages));
+        assert_eq!(budget.charge(1, 32), Err(ProbeBudgetRejection::Messages));
+    }
+
+    #[tokio::test]
+    async fn invalid_identity_is_a_closed_result_before_driver_admission() {
+        let mut invalid_plan = plan();
+        invalid_plan.identity.topic = "outside-probe-namespace".to_owned();
+        let mut driver = FixtureDriver::default();
+
+        let result = run_scenario(&mut driver, &invalid_plan, ProbeScenario::SendConsumeAck).await;
+
+        assert_eq!(result.status, ProbeRunStatus::Failed);
+        assert_eq!(result.error_code.as_deref(), Some("resource_namespace_rejected"));
+        assert_eq!(driver.cleanup_calls, 1);
+        assert!(driver.send_modes.is_empty());
+        assert!(driver.consumer_modes.is_empty());
+        assert!(driver.expected_key_prefix.is_none());
     }
 
     #[tokio::test]

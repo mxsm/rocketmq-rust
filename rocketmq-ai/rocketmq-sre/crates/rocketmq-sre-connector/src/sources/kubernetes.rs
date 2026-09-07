@@ -72,7 +72,7 @@ impl KubernetesResource {
             "kubernetes/certificates" | "certificates" | "certs" => Ok(Self::Certificates),
             "kubernetes/change-timeline" | "change-timeline" | "release-events" => Ok(Self::ChangeTimeline),
             _ => Err(ConnectorError::new(
-                crate::ConnectorErrorCode::InvalidEvidenceQuery,
+                crate::ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "Kubernetes source supports only bounded workload, Event, Node, PVC, PDB, Certificate, and change \
                  metadata",
@@ -175,7 +175,7 @@ impl KubernetesSource {
         let endpoint = config
             .api_url
             .join(&resource.endpoint(&config.namespace))
-            .map_err(|_| ConnectorError::configuration("Kubernetes query URL cannot be constructed"))?;
+            .map_err(ConnectorError::configuration_source)?;
         let (selector_name, selector_value) = resource.query_scope(cluster, &config.namespace);
         let bearer_token = self.bearer_token(config, deadline, cancel).await?;
         let request = client
@@ -183,10 +183,7 @@ impl KubernetesSource {
             .bearer_auth(bearer_token.expose())
             .query(&[(selector_name, selector_value), ("limit", max_rows.to_string())]);
         let response = bounded_future(deadline, cancel, async {
-            request
-                .send()
-                .await
-                .map_err(|_| ConnectorError::source("Kubernetes metadata query failed"))
+            request.send().await.map_err(ConnectorError::source_error)
         })
         .await?;
         if !response.status().is_success() {
@@ -236,9 +233,7 @@ impl KubernetesSource {
                     metadata_io
                         .spawn_io("rocketmq-sre.kubernetes-token-read", move || projected.read())
                         .await
-                        .map_err(|_| {
-                            ConnectorError::source("Kubernetes projected credential refresh was unavailable")
-                        })?
+                        .map_err(ConnectorError::source_error)?
                 })
                 .await
             }
@@ -252,15 +247,13 @@ fn build_client(config: &KubernetesSourceConfig) -> Result<Client, ConnectorErro
         .timeout(config.request_timeout)
         .user_agent(concat!("rocketmq-sre-connector/", env!("CARGO_PKG_VERSION")));
     if !config.ca_pem.is_empty() {
-        let certificates = reqwest::Certificate::from_pem_bundle(&config.ca_pem)
-            .map_err(|_| ConnectorError::configuration("Kubernetes CA bundle is invalid"))?;
+        let certificates =
+            reqwest::Certificate::from_pem_bundle(&config.ca_pem).map_err(ConnectorError::configuration_source)?;
         for certificate in certificates {
             builder = builder.add_root_certificate(certificate);
         }
     }
-    builder
-        .build()
-        .map_err(|_| ConnectorError::configuration("Kubernetes HTTP client cannot be built"))
+    builder.build().map_err(ConnectorError::configuration_source)
 }
 
 fn project_items(

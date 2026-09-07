@@ -16,7 +16,6 @@
 
 mod confidence;
 mod engine;
-mod error;
 pub mod packs;
 mod registry;
 mod types;
@@ -25,14 +24,13 @@ pub use confidence::ConfidenceInputs;
 pub use confidence::calculate_confidence;
 pub use engine::DiagnosticContext;
 pub use engine::DiagnosticEngine;
-pub use error::DiagnosticError;
 pub use packs::full_pack_ids;
 pub use packs::full_registry;
 pub use packs::wave_a_registry;
 pub use packs::wave_b_registry;
 pub use packs::wave_c_registry;
 pub use registry::DiagnosticPackRegistry;
-pub use registry::DiagnosticRegistryError;
+pub use registry::DiagnosticRegistryRejection;
 pub use types::ConfidenceBand;
 pub use types::ConfidenceScore;
 pub use types::DIAGNOSTIC_OUTPUT_SCHEMA_FAMILY;

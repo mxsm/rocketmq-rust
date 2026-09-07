@@ -66,7 +66,7 @@ use super::model::UpdateFleetInspectionRequest;
 use super::model::UpsertFleetAssetRequest;
 use super::model::bounded_limit;
 use super::repository::FleetRepository;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::DataSourceAvailability;
 use crate::MCP_BUSINESS_SCHEMA;
 use crate::MCP_PROTOCOL_VERSION;
@@ -100,7 +100,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &FleetOnboardingRequest,
-    ) -> Result<FleetOnboardingView, ControlPlaneError> {
+    ) -> Result<FleetOnboardingView, ControlPlaneRequestFailure> {
         self.onboarding_assessment(auth, request, false).await
     }
 
@@ -108,7 +108,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &FleetOnboardingRequest,
-    ) -> Result<FleetOnboardingView, ControlPlaneError> {
+    ) -> Result<FleetOnboardingView, ControlPlaneRequestFailure> {
         self.onboarding_assessment(auth, request, true).await
     }
 
@@ -117,7 +117,7 @@ impl FleetService {
         auth: &AuthContext,
         request: &FleetOnboardingRequest,
         register: bool,
-    ) -> Result<FleetOnboardingView, ControlPlaneError> {
+    ) -> Result<FleetOnboardingView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         authorize_cluster(auth, request.cluster_id)?;
         validate_onboarding(request)?;
@@ -133,7 +133,7 @@ impl FleetService {
             return Err(scope_mismatch());
         }
         if cluster.state.is_terminal() {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "cluster_offboarded",
                 "offboarded clusters cannot re-enter Fleet onboarding",
             ));
@@ -167,7 +167,7 @@ impl FleetService {
                     .collect::<std::collections::BTreeSet<_>>();
                 signal_gaps.retain(|source| !queryable_sources.contains(source.as_str()));
             }
-            Err(ControlPlaneError::NotFound) => {
+            Err(error) if error.failure() == crate::ControlPlaneFailure::NotFound => {
                 incompatibilities.insert("capability_manifest_missing".to_owned());
             }
             Err(error) => return Err(error),
@@ -235,7 +235,7 @@ impl FleetService {
         auth: &AuthContext,
         cluster_id: ClusterId,
         request: &FleetOffboardRequest,
-    ) -> Result<ClusterRegistration, ControlPlaneError> {
+    ) -> Result<ClusterRegistration, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         authorize_cluster(auth, cluster_id)?;
         validate_bounded(&request.reason, "offboarding reason", 2_048)?;
@@ -257,7 +257,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &EvaluateFleetQuotaRequest,
-    ) -> Result<FleetQuotaDecisionView, ControlPlaneError> {
+    ) -> Result<FleetQuotaDecisionView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         if request.amount == 0 || request.amount > MAX_DATABASE_I64 {
             return Err(invalid_request("quota amount must fit the supported storage range"));
@@ -284,7 +284,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         query: &FleetQuotaDecisionQuery,
-    ) -> Result<FleetQuotaDecisionPage, ControlPlaneError> {
+    ) -> Result<FleetQuotaDecisionPage, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         if let Some(cluster_id) = query.cluster_id {
             authorize_cluster(auth, cluster_id)?;
@@ -297,7 +297,7 @@ impl FleetService {
         })
     }
 
-    pub(crate) async fn overview(&self, auth: &AuthContext) -> Result<FleetOverview, ControlPlaneError> {
+    pub(crate) async fn overview(&self, auth: &AuthContext) -> Result<FleetOverview, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         let allowed = allowed_clusters(auth);
         let (fleet, tenant, regions) = self.repository.tenant_scope(auth.tenant_id, &allowed).await?;
@@ -326,7 +326,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         query: &FleetScopeQuery,
-    ) -> Result<ClusterRegistrationPage, ControlPlaneError> {
+    ) -> Result<ClusterRegistrationPage, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         validate_filter(query.owner.as_deref(), "owner")?;
         validate_filter(query.component_version.as_deref(), "component version")?;
@@ -349,7 +349,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &CreateQuotaPolicyRequest,
-    ) -> Result<QuotaPolicyView, ControlPlaneError> {
+    ) -> Result<QuotaPolicyView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_owner(&request.owner)?;
         validate_quota_limits(request)?;
@@ -380,7 +380,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         cluster_id: Option<ClusterId>,
-    ) -> Result<QuotaPolicyView, ControlPlaneError> {
+    ) -> Result<QuotaPolicyView, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         if let Some(cluster_id) = cluster_id {
             authorize_cluster(auth, cluster_id)?;
@@ -397,7 +397,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &RegisterRegionalEndpointRequest,
-    ) -> Result<RegionalEndpoint, ControlPlaneError> {
+    ) -> Result<RegionalEndpoint, ControlPlaneRequestFailure> {
         require_endpoint_role(auth)?;
         validate_endpoint(&request.endpoint)?;
         if request.endpoint.tenant_id != auth.tenant_id {
@@ -429,7 +429,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         query: &RegionalEndpointQuery,
-    ) -> Result<RegionalEndpointPage, ControlPlaneError> {
+    ) -> Result<RegionalEndpointPage, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         if let Some(cluster_id) = query.cluster_id {
             authorize_cluster(auth, cluster_id)?;
@@ -449,7 +449,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &RegionalRouteRequest,
-    ) -> Result<RegionalRouteDecision, ControlPlaneError> {
+    ) -> Result<RegionalRouteDecision, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         authorize_cluster(auth, request.cluster_id)?;
         validate_digest(&request.required_schema_digest, "required schema digest")?;
@@ -545,7 +545,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &UpsertFleetAssetRequest,
-    ) -> Result<FleetAssetIndex, ControlPlaneError> {
+    ) -> Result<FleetAssetIndex, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         authorize_cluster(auth, request.asset.cluster_id)?;
         validate_asset(&request.asset)?;
@@ -566,7 +566,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         query: &FleetScopeQuery,
-    ) -> Result<FleetAssetPage, ControlPlaneError> {
+    ) -> Result<FleetAssetPage, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         let (items, total, health_distribution, worst_health) = self
             .repository
@@ -587,7 +587,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &EvaluateComplianceRequest,
-    ) -> Result<ComplianceEvaluationView, ControlPlaneError> {
+    ) -> Result<ComplianceEvaluationView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         authorize_cluster(auth, request.cluster_id)?;
         validate_compliance(request)?;
@@ -623,7 +623,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         query: &ComplianceFindingQuery,
-    ) -> Result<ComplianceFindingPage, ControlPlaneError> {
+    ) -> Result<ComplianceFindingPage, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         if let Some(cluster_id) = query.cluster_id {
             authorize_cluster(auth, cluster_id)?;
@@ -645,7 +645,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &CreateFleetInspectionRequest,
-    ) -> Result<FleetInspectionRun, ControlPlaneError> {
+    ) -> Result<FleetInspectionRun, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_inspection(request)?;
         for cluster_id in &request.cluster_ids {
@@ -668,7 +668,7 @@ impl FleetService {
             )
             .await?;
         if !decision.allowed {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "quota_exhausted",
                 "Fleet inspection quota is exhausted",
             ));
@@ -684,7 +684,7 @@ impl FleetService {
         auth: &AuthContext,
         id: FleetInspectionRunId,
         request: &UpdateFleetInspectionRequest,
-    ) -> Result<FleetInspectionRun, ControlPlaneError> {
+    ) -> Result<FleetInspectionRun, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         if request.completed_clusters.saturating_add(request.failed_clusters) > MAX_INSPECTION_CLUSTERS_U32 {
             return Err(invalid_request("inspection result exceeds the bounded cluster count"));
@@ -696,7 +696,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         limit: u16,
-    ) -> Result<FleetInspectionPage, ControlPlaneError> {
+    ) -> Result<FleetInspectionPage, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         let (items, truncated) = self.repository.inspections(auth.tenant_id, limit).await?;
         Ok(FleetInspectionPage {
@@ -713,7 +713,7 @@ impl FleetService {
         work_kind: FleetQuotaWorkKind,
         resource: FleetQuotaResource,
         amount: u64,
-    ) -> Result<FleetQuotaDecisionRecord, ControlPlaneError> {
+    ) -> Result<FleetQuotaDecisionRecord, ControlPlaneRequestFailure> {
         let (policy, usage) = self.repository.quota_policy(tenant_id, cluster_id).await?;
         let decision = FleetQuotaEvaluator::evaluate(
             &policy,
@@ -743,7 +743,7 @@ impl FleetService {
     }
 }
 
-fn validate_onboarding(request: &FleetOnboardingRequest) -> Result<(), ControlPlaneError> {
+fn validate_onboarding(request: &FleetOnboardingRequest) -> Result<(), ControlPlaneRequestFailure> {
     validate_owner(&request.owner)?;
     if request.residency_tags.len() > 64
         || request.oauth_scopes.len() > 32
@@ -818,7 +818,7 @@ fn quota_reason(reason: QuotaDecisionReason) -> &'static str {
     }
 }
 
-fn require_read_role(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_read_role(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
@@ -827,25 +827,25 @@ fn require_read_role(auth: &AuthContext) -> Result<(), ControlPlaneError> {
     }) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "Fleet read access requires a diagnose or operator role",
         ))
     }
 }
 
-fn require_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains("operator") {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "Fleet mutation requires the operator role",
         ))
     }
 }
 
-fn require_endpoint_role(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_endpoint_role(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth
         .roles
         .iter()
@@ -853,18 +853,18 @@ fn require_endpoint_role(auth: &AuthContext) -> Result<(), ControlPlaneError> {
     {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "regional endpoint registration requires a service or operator role",
         ))
     }
 }
 
-fn authorize_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+fn authorize_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneRequestFailure> {
     if auth.clusters.contains(&cluster_id) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "cluster is outside the authenticated Fleet scope",
         ))
@@ -875,7 +875,7 @@ fn allowed_clusters(auth: &AuthContext) -> Vec<ClusterId> {
     auth.clusters.iter().copied().collect()
 }
 
-fn validate_endpoint(endpoint: &RegionalEndpoint) -> Result<(), ControlPlaneError> {
+fn validate_endpoint(endpoint: &RegionalEndpoint) -> Result<(), ControlPlaneRequestFailure> {
     validate_bounded(&endpoint.id, "endpoint id", 128)?;
     validate_version(&endpoint.component_version, "component version")?;
     validate_version(&endpoint.protocol_version, "protocol version")?;
@@ -893,7 +893,7 @@ fn validate_endpoint(endpoint: &RegionalEndpoint) -> Result<(), ControlPlaneErro
     Ok(())
 }
 
-fn validate_asset(asset: &FleetAssetIndex) -> Result<(), ControlPlaneError> {
+fn validate_asset(asset: &FleetAssetIndex) -> Result<(), ControlPlaneRequestFailure> {
     validate_bounded(&asset.owner, "asset owner", 128)?;
     validate_bounded(&asset.component, "asset component", 128)?;
     validate_version(&asset.component_version, "asset component version")?;
@@ -914,7 +914,7 @@ fn validate_asset(asset: &FleetAssetIndex) -> Result<(), ControlPlaneError> {
     Ok(())
 }
 
-fn validate_compliance(request: &EvaluateComplianceRequest) -> Result<(), ControlPlaneError> {
+fn validate_compliance(request: &EvaluateComplianceRequest) -> Result<(), ControlPlaneRequestFailure> {
     validate_bounded(&request.category, "compliance category", 128)?;
     validate_digest(&request.expected_digest, "expected digest")?;
     validate_digest(&request.live_digest, "live digest")?;
@@ -928,7 +928,7 @@ fn validate_compliance(request: &EvaluateComplianceRequest) -> Result<(), Contro
     Ok(())
 }
 
-fn validate_inspection(request: &CreateFleetInspectionRequest) -> Result<(), ControlPlaneError> {
+fn validate_inspection(request: &CreateFleetInspectionRequest) -> Result<(), ControlPlaneRequestFailure> {
     if request.cluster_ids.is_empty() || request.cluster_ids.len() > MAX_INSPECTION_CLUSTERS {
         return Err(invalid_request(
             "Fleet inspection must target between 1 and 100 clusters",
@@ -966,7 +966,7 @@ fn validate_inspection(request: &CreateFleetInspectionRequest) -> Result<(), Con
     Ok(())
 }
 
-fn validate_quota_limits(request: &CreateQuotaPolicyRequest) -> Result<(), ControlPlaneError> {
+fn validate_quota_limits(request: &CreateQuotaPolicyRequest) -> Result<(), ControlPlaneRequestFailure> {
     let limits = &request.limits;
     if limits.queries_per_minute > MAX_DATABASE_I32
         || limits.model_tokens_per_hour > MAX_DATABASE_I64
@@ -981,18 +981,18 @@ fn validate_quota_limits(request: &CreateQuotaPolicyRequest) -> Result<(), Contr
     Ok(())
 }
 
-fn validate_owner(value: &str) -> Result<(), ControlPlaneError> {
+fn validate_owner(value: &str) -> Result<(), ControlPlaneRequestFailure> {
     validate_bounded(value, "owner", 128)
 }
 
-fn validate_version(value: &str, field: &str) -> Result<(), ControlPlaneError> {
+fn validate_version(value: &str, field: &str) -> Result<(), ControlPlaneRequestFailure> {
     validate_bounded(value, field, 128)?;
     semver::Version::parse(value)
         .map(|_| ())
         .map_err(|_| invalid_request(&format!("{field} must be semantic")))
 }
 
-fn validate_digest(value: &str, field: &str) -> Result<(), ControlPlaneError> {
+fn validate_digest(value: &str, field: &str) -> Result<(), ControlPlaneRequestFailure> {
     if is_sha256_digest(value) {
         Ok(())
     } else {
@@ -1000,14 +1000,14 @@ fn validate_digest(value: &str, field: &str) -> Result<(), ControlPlaneError> {
     }
 }
 
-fn validate_filter(value: Option<&str>, field: &str) -> Result<(), ControlPlaneError> {
+fn validate_filter(value: Option<&str>, field: &str) -> Result<(), ControlPlaneRequestFailure> {
     if let Some(value) = value {
         validate_bounded(value, field, 128)?;
     }
     Ok(())
 }
 
-fn validate_bounded(value: &str, field: &str, max: usize) -> Result<(), ControlPlaneError> {
+fn validate_bounded(value: &str, field: &str, max: usize) -> Result<(), ControlPlaneRequestFailure> {
     let value = value.trim();
     if value.is_empty() || value.len() > max || value.chars().any(char::is_control) {
         Err(invalid_request(&format!("{field} is invalid")))
@@ -1016,8 +1016,8 @@ fn validate_bounded(value: &str, field: &str, max: usize) -> Result<(), ControlP
     }
 }
 
-fn scope_mismatch() -> ControlPlaneError {
-    ControlPlaneError::forbidden(
+fn scope_mismatch() -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::forbidden(
         "fleet_scope_mismatch",
         "Fleet, tenant, region, and cluster scope do not match",
     )
@@ -1033,6 +1033,6 @@ fn denied_route(reason: &str, observed_at: chrono::DateTime<Utc>) -> RegionalRou
     }
 }
 
-fn invalid_request(message: &str) -> ControlPlaneError {
-    ControlPlaneError::validation("invalid_request", message)
+fn invalid_request(message: &str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::validation("invalid_request", message)
 }

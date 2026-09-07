@@ -37,7 +37,7 @@ use super::support::reject_sensitive;
 use super::support::require_operator;
 use super::support::transition_release;
 use super::support::validate_bounded_text;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::release_management::model::QueuedIntegrationDelivery;
 use crate::release_management::model::RecordReleaseObservationRequest;
@@ -54,7 +54,7 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         release_id: ReleaseId,
         request: &ReleaseExecutionRequest,
-    ) -> Result<ReleaseExecutionView, ControlPlaneError> {
+    ) -> Result<ReleaseExecutionView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_execution_input(request)?;
         let current = self.load_release(auth, release_id).await?;
@@ -64,13 +64,14 @@ impl ReleaseManagementService {
                 .await;
         }
         if current.status != ReleaseStatus::Ready {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "release_state_invalid",
                 "release canary may start only after readiness passes",
             ));
         }
-        ReleaseValidator::require_ready(&current, self.now())
-            .map_err(|error| ControlPlaneError::conflict_code("release_readiness_invalid", error.to_string()))?;
+        ReleaseValidator::require_ready(&current, self.now()).map_err(|_| {
+            ControlPlaneRequestFailure::conflict_code("release_readiness_invalid", "operation rejected")
+        })?;
         let observations = self.repository.release_observations(auth.tenant_id, current.id).await?;
         require_healthy_phase(
             &observations,
@@ -124,13 +125,14 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         release_id: ReleaseId,
         request: RecordReleaseObservationRequest,
-    ) -> Result<ReleaseDetail, ControlPlaneError> {
+    ) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.load_release(auth, release_id).await?;
         validate_observation_phase(current.status, request.phase)?;
         let observation = request.into_observation(self.now());
-        ReleaseValidator::validate_observation(&observation)
-            .map_err(|error| ControlPlaneError::validation("release_observation_invalid", error.to_string()))?;
+        ReleaseValidator::validate_observation(&observation).map_err(|_| {
+            ControlPlaneRequestFailure::validation("release_observation_invalid", "release observation rejected")
+        })?;
         let observation_audit = observation_audit(auth, &current, &observation);
         let mut updated = None;
         let mut state_event = None;
@@ -140,11 +142,12 @@ impl ReleaseManagementService {
             let next = match current.status {
                 ReleaseStatus::Ready => ReleaseStatus::Failed,
                 ReleaseStatus::CanaryRunning | ReleaseStatus::Verifying => {
-                    ReleaseStateMachine::observe(current.status, &observation)
-                        .map_err(|error| ControlPlaneError::conflict_code("release_state_invalid", error.to_string()))?
+                    ReleaseStateMachine::observe(current.status, &observation).map_err(|_| {
+                        ControlPlaneRequestFailure::conflict_code("release_state_invalid", "operation rejected")
+                    })?
                 }
                 _ => {
-                    return Err(ControlPlaneError::conflict_code(
+                    return Err(ControlPlaneRequestFailure::conflict_code(
                         "release_state_invalid",
                         "regression cannot be applied in the current release state",
                     ));
@@ -193,7 +196,7 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         release_id: ReleaseId,
         request: &ReleaseTransitionRequest,
-    ) -> Result<ReleaseDetail, ControlPlaneError> {
+    ) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.load_release(auth, release_id).await?;
         let transition = transition_release(
@@ -222,11 +225,11 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         release_id: ReleaseId,
         request: &ReleaseTransitionRequest,
-    ) -> Result<ReleaseDetail, ControlPlaneError> {
+    ) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.load_release(auth, release_id).await?;
         if current.regression_detected {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "release_regression_unresolved",
                 "a regressed release must roll back or enter manual takeover",
             ));
@@ -256,11 +259,11 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
-    ) -> Result<ReleaseDetail, ControlPlaneError> {
+    ) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.load_release(auth, release_id).await?;
         if current.status != ReleaseStatus::CanaryRunning {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "release_state_invalid",
                 "verification may begin only while the canary is running",
             ));
@@ -294,7 +297,7 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
-    ) -> Result<ReleaseDetail, ControlPlaneError> {
+    ) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.load_release(auth, release_id).await?;
         if current.status == ReleaseStatus::Completed {
@@ -302,7 +305,7 @@ impl ReleaseManagementService {
             return self.release(auth, release_id).await;
         }
         if current.status != ReleaseStatus::Verifying || current.regression_detected {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "release_state_invalid",
                 "only a healthy verifying release may complete",
             ));
@@ -337,7 +340,7 @@ impl ReleaseManagementService {
         current: &ReleaseWorkflow,
         transition: &ReleaseTransition,
         outbound: &[QueuedIntegrationDelivery],
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         self.repository
             .update_release_workflow(
                 &transition.workflow,
@@ -356,16 +359,19 @@ impl ReleaseManagementService {
         workflow: &ReleaseWorkflow,
         request: &ReleaseExecutionRequest,
         plan_id: ActionPlanId,
-    ) -> Result<ReleaseExecutionView, ControlPlaneError> {
+    ) -> Result<ReleaseExecutionView, ControlPlaneRequestFailure> {
         let execution_id = workflow.active_execution_id.ok_or_else(|| {
-            ControlPlaneError::conflict_code("release_execution_missing", "release state has no active execution")
+            ControlPlaneRequestFailure::conflict_code(
+                "release_execution_missing",
+                "release state has no active execution",
+            )
         })?;
         let execution = self.supervised.execution(auth, execution_id).await?;
         if execution.execution.plan.id != plan_id
             || execution.execution.idempotency_key != request.idempotency_key
             || execution.execution.requested_by != auth.subject
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "idempotency_conflict",
                 "release execution is bound to a different request",
             ));
@@ -381,16 +387,16 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         workflow: &ReleaseWorkflow,
-    ) -> Result<ExecutionSubmissionView, ControlPlaneError> {
+    ) -> Result<ExecutionSubmissionView, ControlPlaneRequestFailure> {
         let execution_id = workflow.active_execution_id.ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "release_execution_missing",
                 "release has no active supervised execution",
             )
         })?;
         let execution = self.supervised.execution(auth, execution_id).await?;
         if !matches!(execution.state, ExecutionState::Succeeded | ExecutionState::RolledBack) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "release_execution_incomplete",
                 "active supervised execution has not reached a successful terminal state",
             ));
@@ -402,7 +408,7 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         workflow: &ReleaseWorkflow,
-    ) -> Result<ReleaseReport, ControlPlaneError> {
+    ) -> Result<ReleaseReport, ControlPlaneRequestFailure> {
         if let Some(report) = self.repository.release_report(workflow.tenant_id, workflow.id).await? {
             return Ok(report);
         }
@@ -411,7 +417,7 @@ impl ReleaseManagementService {
             .release_observations(workflow.tenant_id, workflow.id)
             .await?;
         let report = ReleaseValidator::build_report(workflow, &observations, self.now())
-            .map_err(|error| ControlPlaneError::conflict_code("release_report_not_ready", error.to_string()))?;
+            .map_err(|_| ControlPlaneRequestFailure::conflict_code("release_report_not_ready", "operation rejected"))?;
         let audit = audit_event(
             auth,
             workflow.cluster_id,
@@ -457,9 +463,9 @@ pub(super) fn observation_audit(
     )
 }
 
-pub(super) fn validate_execution_input(request: &ReleaseExecutionRequest) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_execution_input(request: &ReleaseExecutionRequest) -> Result<(), ControlPlaneRequestFailure> {
     if !is_sha256_digest(&request.precondition_hash) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_precondition_hash",
             "release execution precondition must be a SHA-256 digest",
         ));
@@ -472,19 +478,22 @@ fn require_healthy_phase(
     observations: &[ReleaseObservation],
     phase: ReleaseObservationPhase,
     message: &'static str,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if !observations.iter().any(|observation| {
         observation.phase == phase
             && !observation.regression_detected
             && observation.slo_healthy
             && observation.synthetic_probe_healthy
     }) {
-        return Err(ControlPlaneError::conflict_code("release_observation_missing", message));
+        return Err(ControlPlaneRequestFailure::conflict_code(
+            "release_observation_missing",
+            message,
+        ));
     }
     Ok(())
 }
 
-fn require_report_observations(observations: &[ReleaseObservation]) -> Result<(), ControlPlaneError> {
+fn require_report_observations(observations: &[ReleaseObservation]) -> Result<(), ControlPlaneRequestFailure> {
     for (phase, message) in [
         (
             ReleaseObservationPhase::Before,
@@ -502,7 +511,7 @@ fn require_report_observations(observations: &[ReleaseObservation]) -> Result<()
         require_healthy_phase(observations, phase, message)?;
     }
     if observations.iter().any(|observation| observation.regression_detected) {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "release_regression_unresolved",
             "release observations contain an unresolved regression",
         ));

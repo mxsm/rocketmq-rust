@@ -26,9 +26,8 @@ use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
 
 use super::ReadContext;
+use crate::ConnectorAdmissionRejection;
 use crate::ConnectorConfig;
-use crate::ConnectorError;
-use crate::ConnectorErrorCode;
 
 pub(crate) struct ReadPolicy {
     tenant_id: TenantId,
@@ -85,29 +84,17 @@ impl ReadPolicy {
         }
     }
 
-    pub(crate) fn authorize(&self, context: &ReadContext<'_>) -> Result<(), ConnectorError> {
+    pub(crate) fn authorize(&self, context: &ReadContext<'_>) -> Result<(), ConnectorAdmissionRejection> {
         if context.tenant_id != self.tenant_id {
-            return Err(scoped_error(
-                context,
-                ConnectorErrorCode::TenantMismatch,
-                "read context tenant differs from the connector boundary",
-            ));
+            return Err(ConnectorAdmissionRejection::TenantMismatch);
         }
         if self.cluster_ids.get(context.external_cluster) != Some(&context.cluster_id)
             || !self.cluster_allowlist.contains(context.external_cluster)
         {
-            return Err(scoped_error(
-                context,
-                ConnectorErrorCode::ClusterNotAllowed,
-                "read context cluster differs from the connector boundary",
-            ));
+            return Err(ConnectorAdmissionRejection::ClusterNotAllowed);
         }
         if context.subject.trim().is_empty() || context.subject.len() > 256 {
-            return Err(scoped_error(
-                context,
-                ConnectorErrorCode::UnauthorizedScope,
-                "read context subject is missing or invalid",
-            ));
+            return Err(ConnectorAdmissionRejection::UnauthorizedScope);
         }
         if context.time_range_start > context.time_range_end
             || context
@@ -116,45 +103,27 @@ impl ReadPolicy {
                 .to_std()
                 .map_or(true, |duration| duration > self.max_time_range)
         {
-            return Err(scoped_error(
-                context,
-                ConnectorErrorCode::InvalidEvidenceQuery,
-                "read context time range exceeds the configured bound",
-            ));
+            return Err(ConnectorAdmissionRejection::InvalidEvidenceQuery);
         }
         let now = Utc::now();
-        let remaining = context.deadline.signed_duration_since(now).to_std().map_err(|_| {
-            scoped_error(
-                context,
-                ConnectorErrorCode::DeadlineExceeded,
-                "read context deadline elapsed",
-            )
-        })?;
+        let remaining = context
+            .deadline
+            .signed_duration_since(now)
+            .to_std()
+            .map_err(|_| ConnectorAdmissionRejection::DeadlineExceeded)?;
         if remaining.is_zero() {
-            return Err(scoped_error(
-                context,
-                ConnectorErrorCode::DeadlineExceeded,
-                "read context deadline elapsed",
-            ));
+            return Err(ConnectorAdmissionRejection::DeadlineExceeded);
         }
         if remaining > self.max_deadline {
-            return Err(scoped_error(
-                context,
-                ConnectorErrorCode::InvalidEvidenceQuery,
-                "read context deadline exceeds the configured bound",
-            ));
+            return Err(ConnectorAdmissionRejection::InvalidEvidenceQuery);
         }
         if context.cancel.is_cancelled() {
-            return Err(scoped_error(
-                context,
-                ConnectorErrorCode::QueryCancelled,
-                "read context was cancelled before admission",
-            ));
+            return Err(ConnectorAdmissionRejection::QueryCancelled);
         }
         Ok(())
     }
 
-    pub(crate) async fn enter(&self, context: &ReadContext<'_>) -> Result<SemaphorePermit<'_>, ConnectorError> {
+    pub(crate) async fn enter(&self) -> Result<SemaphorePermit<'_>, ConnectorAdmissionRejection> {
         let now = Instant::now();
         {
             let mut recent = self.recent.lock().await;
@@ -165,54 +134,16 @@ impl ReadPolicy {
                 recent.pop_front();
             }
             if recent.len() >= self.max_per_minute {
-                return Err(scoped_error(
-                    context,
-                    ConnectorErrorCode::RateLimited,
-                    "read gateway rate budget is exhausted",
-                ));
+                return Err(ConnectorAdmissionRejection::RateLimited);
             }
             recent.push_back(now);
         }
-        self.concurrency.try_acquire().map_err(|_| {
-            scoped_error(
-                context,
-                ConnectorErrorCode::RateLimited,
-                "read gateway concurrency budget is exhausted",
-            )
-        })
-    }
-
-    pub(crate) fn validate_completion(&self, context: &ReadContext<'_>) -> Result<(), ConnectorError> {
-        if context.cancel.is_cancelled() {
-            return Err(scoped_error(
-                context,
-                ConnectorErrorCode::QueryCancelled,
-                "read context was cancelled before completion",
-            ));
-        }
-        if Utc::now() >= context.deadline {
-            return Err(scoped_error(
-                context,
-                ConnectorErrorCode::DeadlineExceeded,
-                "read context deadline elapsed before completion",
-            ));
-        }
-        Ok(())
+        self.concurrency
+            .try_acquire()
+            .map_err(|_| ConnectorAdmissionRejection::RateLimited)
     }
 
     pub(crate) fn pseudonymization_key(&self) -> &[u8] {
         &self.pseudonymization_key
     }
-}
-
-fn scoped_error(context: &ReadContext<'_>, code: ConnectorErrorCode, detail: &'static str) -> ConnectorError {
-    ConnectorError::new(
-        code,
-        matches!(
-            code,
-            ConnectorErrorCode::DeadlineExceeded | ConnectorErrorCode::RateLimited
-        ),
-        detail,
-    )
-    .with_correlation_id(context.correlation_id)
 }

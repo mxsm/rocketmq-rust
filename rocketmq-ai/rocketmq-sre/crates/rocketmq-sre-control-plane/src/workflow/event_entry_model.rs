@@ -32,7 +32,7 @@ use uuid::Uuid;
 
 use super::InspectionCreateRequest;
 use super::InvestigationCreateRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::alerting::IntegrationEventRequest;
 
 pub(super) const EVENT_ENTRY_SCHEMA: &str = "rocketmq-sre.event-entry.v1";
@@ -140,14 +140,14 @@ impl EventEntrySourceKind {
         }
     }
 
-    pub(super) fn parse(value: &str) -> Result<Self, ControlPlaneError> {
+    pub(super) fn parse(value: &str) -> Result<Self, ControlPlaneRequestFailure> {
         match value {
             "alert" => Ok(Self::Alert),
             "manual_issue" => Ok(Self::ManualIssue),
             "scheduled_inspection" => Ok(Self::ScheduledInspection),
             "change_event" => Ok(Self::ChangeEvent),
             "external_integration" => Ok(Self::ExternalIntegration),
-            _ => Err(ControlPlaneError::validation(
+            _ => Err(ControlPlaneRequestFailure::validation(
                 "source_unavailable",
                 "stored event entry source kind is unsupported",
             )),
@@ -172,12 +172,12 @@ impl EventEntryTargetKind {
         }
     }
 
-    pub(super) fn parse(value: &str) -> Result<Self, ControlPlaneError> {
+    pub(super) fn parse(value: &str) -> Result<Self, ControlPlaneRequestFailure> {
         match value {
             "investigation" => Ok(Self::Investigation),
             "incident" => Ok(Self::Incident),
             "inspection_run" => Ok(Self::InspectionRun),
-            _ => Err(ControlPlaneError::validation(
+            _ => Err(ControlPlaneRequestFailure::validation(
                 "source_unavailable",
                 "stored event entry target kind is unsupported",
             )),
@@ -199,9 +199,9 @@ pub(crate) struct UnifiedEventEntryResult {
 }
 
 impl UnifiedEventEntryRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         if self.schema_version != EVENT_ENTRY_SCHEMA {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "unsupported_schema_major",
                 "event entry schema must be rocketmq-sre.event-entry.v1",
             ));
@@ -298,10 +298,9 @@ impl UnifiedEventEntryRequest {
         self.occurred_at.unwrap_or_else(Utc::now)
     }
 
-    pub(super) fn request_hash(&self) -> Result<String, ControlPlaneError> {
-        let canonical = serde_jcs::to_vec(self).map_err(|_| {
-            ControlPlaneError::validation("invalid_request", "event entry request cannot be canonicalized")
-        })?;
+    pub(super) fn request_hash(&self) -> Result<String, ControlPlaneRequestFailure> {
+        let canonical = serde_jcs::to_vec(self)
+            .map_err(|source| ControlPlaneRequestFailure::operational_validation_source("invalid_request", source))?;
         Ok(format!(
             "sha256:{}",
             rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(canonical))
@@ -345,13 +344,13 @@ impl UnifiedEventEntryRequest {
     }
 }
 
-fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneError> {
+fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneRequestFailure> {
     let valid = (1..=256).contains(&value.len())
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/' | b'#'));
     if !valid {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_idempotency_key",
             "event entry idempotency key must contain 1 to 256 allowlisted ASCII characters",
         ));

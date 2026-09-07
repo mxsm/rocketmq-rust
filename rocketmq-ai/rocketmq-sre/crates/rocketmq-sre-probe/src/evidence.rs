@@ -25,18 +25,16 @@ use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_contracts::TimeRange;
 use rocketmq_sre_contracts::current_evidence_schema;
 use serde_json::json;
-use thiserror::Error;
 
 use crate::ProbePlan;
 use crate::scenario::ProbeRunResult;
 
-/// Probe Evidence conversion failure.
-#[derive(Debug, Error)]
-pub enum ProbeEvidenceError {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ProbeEvidenceFailure {
     #[error("probe result time range is invalid")]
-    InvalidTimeRange,
+    InvalidTimeRange(#[source] rocketmq_sre_contracts::SreContractError),
     #[error("probe result could not be sealed as canonical Evidence")]
-    Capture,
+    Capture(#[source] rocketmq_sre_contracts::SreContractError),
 }
 
 /// Converts a completed probe into canonical metadata-only Evidence.
@@ -44,18 +42,14 @@ pub enum ProbeEvidenceError {
 /// The serialized content contains counts, timing, trace identity, status, and
 /// cleanup state. Synthetic message bytes are intentionally absent.
 ///
-/// # Errors
-///
-/// Returns an error when result timestamps are invalid or canonical sealing
-/// fails.
-pub fn capture_probe_evidence(
+fn capture_probe_evidence_inner(
     tenant_id: TenantId,
     correlation_id: CorrelationId,
     plan: &ProbePlan,
     result: &ProbeRunResult,
-) -> Result<EvidenceSnapshot, ProbeEvidenceError> {
+) -> Result<EvidenceSnapshot, ProbeEvidenceFailure> {
     let time_range =
-        TimeRange::new(result.started_at, result.finished_at).map_err(|_| ProbeEvidenceError::InvalidTimeRange)?;
+        TimeRange::new(result.started_at, result.finished_at).map_err(ProbeEvidenceFailure::InvalidTimeRange)?;
     let query = EvidenceQuery {
         query_id: QueryId::new(),
         correlation_id,
@@ -82,15 +76,31 @@ pub fn capture_probe_evidence(
         result.finished_at,
         EvidenceContent::Inline(content),
     )
-    .map_err(|_| ProbeEvidenceError::Capture)?;
+    .map_err(ProbeEvidenceFailure::Capture)?;
     evidence.sensitivity = Sensitivity::Internal;
     evidence.exposure = EvidenceExposure::Synthetic;
     evidence.partial = result.cleanup.partial;
     Ok(evidence)
 }
 
+/// Converts a completed probe into canonical metadata-only Evidence.
+///
+/// The public boundary preserves the driver facade and does not expose
+/// serialization, evidence sealing, or local timing internals.
+pub fn capture_probe_evidence(
+    tenant_id: TenantId,
+    correlation_id: CorrelationId,
+    plan: &ProbePlan,
+    result: &ProbeRunResult,
+) -> Result<EvidenceSnapshot, crate::scenario::ProbeDriverError> {
+    capture_probe_evidence_inner(tenant_id, correlation_id, plan, result)
+        .map_err(crate::scenario::ProbeDriverError::evidence)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use chrono::TimeZone;
     use chrono::Utc;
     use rocketmq_sre_contracts::ClusterId;
@@ -139,5 +149,45 @@ mod tests {
         assert!(!content.contains_key("body"));
         assert!(!content.contains_key("payload"));
         assert_eq!(content["acknowledged_messages"], 1);
+    }
+
+    #[test]
+    fn evidence_failure_retains_contract_source_behind_redacted_driver_facade() {
+        let plan = ProbeConfig {
+            cluster_id: ClusterId::new(),
+            max_messages: 1,
+            max_messages_per_second: 1,
+            max_payload_bytes: 1,
+            max_duration_seconds: 1,
+        }
+        .plan(Uuid::nil())
+        .expect("plan");
+        let result = ProbeRunResult {
+            probe_id: "probe".to_owned(),
+            scenario: ProbeScenario::SendConsumeAck,
+            status: ProbeRunStatus::Failed,
+            started_at: Utc.timestamp_opt(2, 0).single().unwrap(),
+            finished_at: Utc.timestamp_opt(1, 0).single().unwrap(),
+            trace_id: "trace".to_owned(),
+            stages: Vec::new(),
+            sent_messages: 0,
+            received_messages: 0,
+            acknowledged_messages: 0,
+            error_code: Some("private-error".to_owned()),
+            cleanup: ProbeCleanupResult::default(),
+        };
+
+        let error = capture_probe_evidence(TenantId::new(), CorrelationId::new(), &plan, &result)
+            .expect_err("invalid time range");
+        let evidence = error.source().expect("evidence leaf");
+        assert!(evidence.is::<ProbeEvidenceFailure>());
+        assert!(
+            evidence
+                .source()
+                .is_some_and(|source| source.is::<rocketmq_sre_contracts::SreContractError>())
+        );
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains("private-error"));
+        }
     }
 }

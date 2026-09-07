@@ -49,7 +49,7 @@ use super::model::CreatePlanRequest;
 use super::model::CreatePlanResponse;
 use super::model::SubmitExecutionRequest;
 use super::service::SupervisedExecutionService;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::workflow::WorkflowEventBus;
@@ -828,11 +828,9 @@ pub(super) fn auth(tenant_id: TenantId, cluster_id: ClusterId, subject: &str, ro
     }
 }
 
-pub(super) fn error_code(error: &ControlPlaneError) -> &'static str {
+pub(super) fn error_code(error: &ControlPlaneRequestFailure) -> &'static str {
     match error {
-        ControlPlaneError::Validation { code, .. }
-        | ControlPlaneError::Forbidden { code, .. }
-        | ControlPlaneError::Conflict { code, .. } => code,
-        _ => "unexpected",
+        ControlPlaneRequestFailure::Rejected(rejection) => rejection.code(),
+        ControlPlaneRequestFailure::Operational(error) => error.code(),
     }
 }

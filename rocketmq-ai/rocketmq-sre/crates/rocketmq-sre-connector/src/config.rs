@@ -27,6 +27,7 @@ use rocketmq_sre_contracts::TenantId;
 use url::Url;
 
 use crate::ConnectorError;
+use crate::ConnectorFailure;
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8091";
 const DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 15;
@@ -57,9 +58,7 @@ impl SecretValue {
 
     fn from_env(reference: &str) -> Result<Self, ConnectorError> {
         validate_env_reference(reference)?;
-        let value = env::var(reference).map_err(|_| {
-            ConnectorError::configuration(format!("secret environment reference `{reference}` is not set"))
-        })?;
+        let value = env::var(reference).map_err(ConnectorError::configuration_source)?;
         if value.trim().is_empty() {
             return Err(ConnectorError::configuration(format!(
                 "secret environment reference `{reference}` is empty"
@@ -235,13 +234,9 @@ impl ProjectedTokenFile {
             .ok_or_else(|| {
                 ConnectorError::configuration("Kubernetes projected token path must have a dedicated mount directory")
             })?;
-        let mount_root = std::fs::canonicalize(parent).map_err(|_| {
-            ConnectorError::configuration("Kubernetes projected token mount directory cannot be resolved")
-        })?;
+        let mount_root = std::fs::canonicalize(parent).map_err(ConnectorError::configuration_source)?;
         let value = Self { path, mount_root };
-        value
-            .read()
-            .map_err(|_| ConnectorError::configuration("Kubernetes projected token file is invalid"))?;
+        value.read().map_err(ConnectorError::configuration_source)?;
         Ok(value)
     }
 
@@ -250,21 +245,21 @@ impl ProjectedTokenFile {
         // controlled `..data` symlink. Resolve it for this read, but retain the
         // configured path so the next request observes a new generation.
         let resolved = std::fs::canonicalize(&self.path)
-            .map_err(|_| ConnectorError::source("Kubernetes projected credential cannot be resolved"))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
         if !resolved.starts_with(&self.mount_root) || resolved == self.mount_root {
             return Err(ConnectorError::source(
                 "Kubernetes projected credential escaped its configured mount",
             ));
         }
         let metadata = std::fs::metadata(&resolved)
-            .map_err(|_| ConnectorError::source("Kubernetes projected credential cannot be inspected"))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
         if !metadata.is_file() || metadata.len() > MAX_SECRET_FILE_BYTES {
             return Err(ConnectorError::source(
                 "Kubernetes projected credential must be a bounded regular file",
             ));
         }
         let value = std::fs::read_to_string(&resolved)
-            .map_err(|_| ConnectorError::source("Kubernetes projected credential cannot be read"))?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
         let value = value.trim().to_owned();
         if value.is_empty() || u64::try_from(value.len()).map_or(true, |length| length > MAX_SECRET_FILE_BYTES) {
             return Err(ConnectorError::source(
@@ -394,7 +389,7 @@ impl ConnectorConfig {
             "ROCKETMQ_SRE_CONNECTOR_BIND_ADDR",
             DEFAULT_BIND_ADDR
                 .parse::<SocketAddr>()
-                .map_err(|_| ConnectorError::configuration("default connector bind address is invalid"))?,
+                .map_err(ConnectorError::configuration_source)?,
         )?;
         let mcp_url = required_url("ROCKETMQ_SRE_MCP_URL")?;
         if !matches!(mcp_url.scheme(), "http" | "https") {
@@ -404,9 +399,7 @@ impl ConnectorConfig {
         }
         let mcp_ca_path = env::var_os("ROCKETMQ_SRE_MCP_CA_PATH").map(PathBuf::from);
         let mcp_ca_pem = match &mcp_ca_path {
-            Some(path) => std::fs::read(path).map_err(|error| {
-                ConnectorError::configuration(format!("MCP CA file `{}` cannot be read: {error}", path.display()))
-            })?,
+            Some(path) => std::fs::read(path).map_err(ConnectorError::configuration_source)?,
             None => Vec::new(),
         };
 
@@ -425,7 +418,7 @@ impl ConnectorConfig {
         let tenant_id = required("ROCKETMQ_SRE_TENANT_ID")
             .or_else(|_| required("ROCKETMQ_SRE_TENANT"))?
             .parse()
-            .map_err(|_| ConnectorError::configuration("ROCKETMQ_SRE_TENANT_ID must be a UUID"))?;
+            .map_err(ConnectorError::configuration_source)?;
         let cluster_allowlist = parse_non_empty_set(
             &required("ROCKETMQ_SRE_CLUSTER_ALLOWLIST").or_else(|_| required("ROCKETMQ_SRE_CLUSTER"))?,
         )?;
@@ -534,8 +527,7 @@ fn parse_runtime_diagnostics_endpoints(
                 "runtime diagnostics endpoint has an unsupported component",
             ));
         }
-        let url = Url::parse(raw_url.trim())
-            .map_err(|_| ConnectorError::configuration("runtime diagnostics endpoint must be an absolute URL"))?;
+        let url = Url::parse(raw_url.trim()).map_err(ConnectorError::configuration_source)?;
         validate_runtime_diagnostics_url(&url, allow_insecure_http)?;
         if endpoints.insert(component.to_owned(), url).is_some() {
             return Err(ConnectorError::configuration(
@@ -634,8 +626,7 @@ fn load_control_plane(
             "control-plane reporting currently requires exactly one allowed cluster",
         ));
     }
-    let base_url = Url::parse(&value)
-        .map_err(|_| ConnectorError::configuration("ROCKETMQ_SRE_CONTROL_PLANE_URL must be an absolute URL"))?;
+    let base_url = Url::parse(&value).map_err(ConnectorError::configuration_source)?;
     if !matches!(base_url.scheme(), "http" | "https") {
         return Err(ConnectorError::configuration(
             "ROCKETMQ_SRE_CONTROL_PLANE_URL must use HTTP or HTTPS",
@@ -879,15 +870,13 @@ fn read_optional_pem(name: &str) -> Result<Vec<u8>, ConnectorError> {
     let Some(path) = env::var_os(name).map(PathBuf::from) else {
         return Ok(Vec::new());
     };
-    std::fs::read(&path)
-        .map_err(|_| ConnectorError::configuration(format!("PEM path configured by `{name}` cannot be read")))
+    std::fs::read(&path).map_err(ConnectorError::configuration_source)
 }
 
 fn load_cluster_ids(cluster_allowlist: &BTreeSet<String>) -> Result<BTreeMap<String, ClusterId>, ConnectorError> {
     if let Some(mapping) = optional_non_empty("ROCKETMQ_SRE_CLUSTER_ID_MAP") {
-        let wire = serde_json::from_str::<BTreeMap<String, String>>(&mapping).map_err(|_| {
-            ConnectorError::configuration("ROCKETMQ_SRE_CLUSTER_ID_MAP must be a JSON object of cluster names to UUIDs")
-        })?;
+        let wire =
+            serde_json::from_str::<BTreeMap<String, String>>(&mapping).map_err(ConnectorError::configuration_source)?;
         if wire.keys().collect::<BTreeSet<_>>() != cluster_allowlist.iter().collect::<BTreeSet<_>>() {
             return Err(ConnectorError::configuration(
                 "ROCKETMQ_SRE_CLUSTER_ID_MAP keys must exactly match the cluster allowlist",
@@ -899,7 +888,7 @@ fn load_cluster_ids(cluster_allowlist: &BTreeSet<String>) -> Result<BTreeMap<Str
                 value
                     .parse()
                     .map(|id| (cluster, id))
-                    .map_err(|_| ConnectorError::configuration("ROCKETMQ_SRE_CLUSTER_ID_MAP values must be UUIDs"))
+                    .map_err(ConnectorError::configuration_source)
             })
             .collect();
     }
@@ -914,7 +903,7 @@ fn load_cluster_ids(cluster_allowlist: &BTreeSet<String>) -> Result<BTreeMap<Str
         .ok_or_else(|| ConnectorError::configuration("cluster allowlist is empty"))?;
     let cluster_id = required("ROCKETMQ_SRE_CLUSTER_ID")?
         .parse()
-        .map_err(|_| ConnectorError::configuration("ROCKETMQ_SRE_CLUSTER_ID must be a UUID"))?;
+        .map_err(ConnectorError::configuration_source)?;
     Ok(BTreeMap::from([(cluster, cluster_id)]))
 }
 
@@ -927,8 +916,7 @@ fn required(name: &str) -> Result<String, ConnectorError> {
 
 fn required_url(name: &str) -> Result<Url, ConnectorError> {
     let value = required(name)?;
-    Url::parse(&value)
-        .map_err(|_| ConnectorError::configuration(format!("environment variable `{name}` must be an absolute URL")))
+    Url::parse(&value).map_err(ConnectorError::configuration_source)
 }
 
 fn optional_non_empty(name: &str) -> Option<String> {
@@ -939,8 +927,7 @@ fn optional_http_url(name: &str) -> Result<Option<Url>, ConnectorError> {
     let Some(value) = optional_non_empty(name) else {
         return Ok(None);
     };
-    let url = Url::parse(&value)
-        .map_err(|_| ConnectorError::configuration(format!("environment variable `{name}` must be an absolute URL")))?;
+    let url = Url::parse(&value).map_err(ConnectorError::configuration_source)?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(ConnectorError::configuration(format!(
             "environment variable `{name}` must use HTTP or HTTPS"
@@ -957,11 +944,10 @@ fn optional_http_url(name: &str) -> Result<Option<Url>, ConnectorError> {
 fn parse_env<T>(name: &str, default: T) -> Result<T, ConnectorError>
 where
     T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
 {
     match env::var(name) {
-        Ok(value) => value
-            .parse()
-            .map_err(|_| ConnectorError::configuration(format!("environment variable `{name}` has an invalid value"))),
+        Ok(value) => value.parse().map_err(ConnectorError::configuration_source),
         Err(_) => Ok(default),
     }
 }

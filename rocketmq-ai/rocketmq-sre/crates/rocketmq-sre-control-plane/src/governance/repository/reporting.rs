@@ -30,7 +30,7 @@ use super::support::admission_from_row;
 use super::support::event_from_row;
 use super::support::impact_from_row;
 use super::support::impact_kind_name;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::governance::model::GOVERNANCE_API_SCHEMA_VERSION;
 use crate::governance::model::GovernanceAuditExport;
 use crate::governance::model::GovernanceAuditQuery;
@@ -44,7 +44,7 @@ impl GovernanceRepository {
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT EXISTS (
                 SELECT 1
@@ -64,7 +64,7 @@ impl GovernanceRepository {
     pub(in crate::governance) async fn record_impact(
         &self,
         impact: &GovernanceImpact,
-    ) -> Result<GovernanceImpact, ControlPlaneError> {
+    ) -> Result<GovernanceImpact, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "INSERT INTO governance_impacts (
                 version_id, tenant_id, cluster_id, impact_kind,
@@ -88,7 +88,7 @@ impl GovernanceRepository {
         .bind(impact.observed_at)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         impact_from_row(&row)
     }
 
@@ -97,7 +97,7 @@ impl GovernanceRepository {
         tenant_id: TenantId,
         version_id: GovernanceVersionId,
         query: &GovernanceImpactQuery,
-    ) -> Result<(Vec<GovernanceImpact>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<GovernanceImpact>, bool), ControlPlaneRequestFailure> {
         let limit = bounded_limit(query.limit);
         let kind = query.kind.map(impact_kind_name);
         let rows = sqlx::query(
@@ -128,7 +128,7 @@ impl GovernanceRepository {
     pub(in crate::governance) async fn record_admission(
         &self,
         admission: &GovernanceAdmission,
-    ) -> Result<GovernanceAdmission, ControlPlaneError> {
+    ) -> Result<GovernanceAdmission, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "INSERT INTO governance_admissions (
                 id, tenant_id, cluster_id, access_path, required_version_ids,
@@ -160,7 +160,7 @@ impl GovernanceRepository {
         &self,
         tenant_id: TenantId,
         query: &GovernanceAuditQuery,
-    ) -> Result<GovernanceAuditExport, ControlPlaneError> {
+    ) -> Result<GovernanceAuditExport, ControlPlaneRequestFailure> {
         let limit = bounded_export_limit(query.limit);
         let rows = sqlx::query(
             "SELECT *
@@ -199,7 +199,7 @@ impl GovernanceRepository {
         &self,
         tenant_id: TenantId,
         now: DateTime<Utc>,
-    ) -> Result<GovernanceComplianceReport, ControlPlaneError> {
+    ) -> Result<GovernanceComplianceReport, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT lifecycle_state, COUNT(*) AS count
              FROM governance_versions
@@ -212,7 +212,10 @@ impl GovernanceRepository {
         let mut state_counts = BTreeMap::new();
         for row in rows {
             let count = u64::try_from(row.try_get::<i64, _>("count")?).map_err(|_| {
-                ControlPlaneError::validation("invalid_persisted_governance_state", "governance count is negative")
+                ControlPlaneRequestFailure::validation(
+                    "invalid_persisted_governance_state",
+                    "governance count is negative",
+                )
             })?;
             state_counts.insert(row.try_get("lifecycle_state")?, count);
         }
@@ -259,8 +262,8 @@ impl GovernanceRepository {
     }
 }
 
-fn count(row: &sqlx::postgres::PgRow, column: &str) -> Result<u64, ControlPlaneError> {
+fn count(row: &sqlx::postgres::PgRow, column: &str) -> Result<u64, ControlPlaneRequestFailure> {
     u64::try_from(row.try_get::<i64, _>(column)?).map_err(|_| {
-        ControlPlaneError::validation("invalid_persisted_governance_state", "governance count is negative")
+        ControlPlaneRequestFailure::validation("invalid_persisted_governance_state", "governance count is negative")
     })
 }

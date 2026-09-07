@@ -17,7 +17,7 @@ use super::*;
 pub(super) async fn insert_policy(
     transaction: &mut Transaction<'_, Postgres>,
     decision: &PolicyDecision,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO policy_decisions (
             id, tenant_id, cluster_id, plan_id, plan_hash, policy_version,
@@ -49,7 +49,7 @@ pub(super) async fn insert_policy(
 pub(super) async fn insert_audit(
     transaction: &mut Transaction<'_, Postgres>,
     event: &AuditEvent,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO audit_events (
             event_id, tenant_id, cluster_id, correlation_id, event_kind,
@@ -79,7 +79,9 @@ pub(super) async fn insert_audit(
     Ok(())
 }
 
-pub(super) fn quarantine_from_row(row: &sqlx::postgres::PgRow) -> Result<ResourceQuarantine, ControlPlaneError> {
+pub(super) fn quarantine_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<ResourceQuarantine, ControlPlaneRequestFailure> {
     Ok(ResourceQuarantine {
         id: ResourceQuarantineId::from_uuid(row.try_get("id")?),
         tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -108,40 +110,42 @@ pub(super) fn quarantine_from_row(row: &sqlx::postgres::PgRow) -> Result<Resourc
     })
 }
 
-pub(super) fn json_value(value: &impl Serialize) -> Result<Value, ControlPlaneError> {
+pub(super) fn json_value(value: &impl Serialize) -> Result<Value, ControlPlaneRequestFailure> {
     serde_json::to_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("snapshot encoding failed: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-pub(super) fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, ControlPlaneError> {
+pub(super) fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, ControlPlaneRequestFailure> {
     serde_json::from_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("snapshot decoding failed: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-pub(super) fn enum_name(value: &impl Serialize) -> Result<String, ControlPlaneError> {
+pub(super) fn enum_name(value: &impl Serialize) -> Result<String, ControlPlaneRequestFailure> {
     serde_json::to_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("enum encoding failed: {error}")))?
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))?
         .as_str()
         .map(ToOwned::to_owned)
-        .ok_or_else(|| ControlPlaneError::configuration("enum did not encode as a string"))
+        .ok_or_else(|| ControlPlaneRequestFailure::configuration("enum did not encode as a string"))
 }
 
-pub(super) fn risk_name(risk: ActionRisk) -> Result<&'static str, ControlPlaneError> {
+pub(super) fn risk_name(risk: ActionRisk) -> Result<&'static str, ControlPlaneRequestFailure> {
     match risk {
         ActionRisk::R1 => Ok("r1"),
         ActionRisk::R2 => Ok("r2"),
-        ActionRisk::Read | ActionRisk::Plan | ActionRisk::R3 => Err(ControlPlaneError::Validation {
-            code: "action_not_executable",
-            detail: "only R1 and R2 plans may be persisted".to_owned(),
-        }),
+        ActionRisk::Read | ActionRisk::Plan | ActionRisk::R3 => Err(ControlPlaneRequestFailure::validation(
+            "action_not_executable",
+            "only R1 and R2 plans may be persisted",
+        )),
     }
 }
 
-pub(super) fn parse_risk(value: &str) -> Result<ActionRisk, ControlPlaneError> {
+pub(super) fn parse_risk(value: &str) -> Result<ActionRisk, ControlPlaneRequestFailure> {
     match value {
         "r1" => Ok(ActionRisk::R1),
         "r2" => Ok(ActionRisk::R2),
-        _ => Err(ControlPlaneError::configuration("stored plan risk is unsupported")),
+        _ => Err(ControlPlaneRequestFailure::configuration(
+            "stored plan risk is unsupported",
+        )),
     }
 }
 
@@ -158,7 +162,7 @@ pub(super) const fn plan_status_name(status: PlanStatus) -> &'static str {
     }
 }
 
-pub(super) fn parse_plan_status(value: &str) -> Result<PlanStatus, ControlPlaneError> {
+pub(super) fn parse_plan_status(value: &str) -> Result<PlanStatus, ControlPlaneRequestFailure> {
     match value {
         "draft" => Ok(PlanStatus::Draft),
         "needs_critic" => Ok(PlanStatus::NeedsCritic),
@@ -168,11 +172,13 @@ pub(super) fn parse_plan_status(value: &str) -> Result<PlanStatus, ControlPlaneE
         "rejected" => Ok(PlanStatus::Rejected),
         "expired" => Ok(PlanStatus::Expired),
         "superseded" => Ok(PlanStatus::Superseded),
-        _ => Err(ControlPlaneError::configuration("stored plan status is unsupported")),
+        _ => Err(ControlPlaneRequestFailure::configuration(
+            "stored plan status is unsupported",
+        )),
     }
 }
 
-pub(super) fn parse_execution_state(value: &str) -> Result<ExecutionState, ControlPlaneError> {
+pub(super) fn parse_execution_state(value: &str) -> Result<ExecutionState, ControlPlaneRequestFailure> {
     match value {
         "pending" => Ok(ExecutionState::Pending),
         "prechecking" => Ok(ExecutionState::Prechecking),
@@ -185,7 +191,7 @@ pub(super) fn parse_execution_state(value: &str) -> Result<ExecutionState, Contr
         "succeeded" => Ok(ExecutionState::Succeeded),
         "rolled_back" => Ok(ExecutionState::RolledBack),
         "escalated" => Ok(ExecutionState::Escalated),
-        _ => Err(ControlPlaneError::configuration(
+        _ => Err(ControlPlaneRequestFailure::configuration(
             "stored execution state is unsupported",
         )),
     }

@@ -16,20 +16,49 @@ use std::io;
 use std::io::Write;
 use std::process::ExitCode;
 
-use rocketmq_sre_cli::CliError;
+use rocketmq_sre_cli::CliFailure;
 use rocketmq_sre_cli::Command;
 use rocketmq_sre_cli::USAGE;
 use rocketmq_sre_cli::execute;
 use rocketmq_sre_cli::parse_process_args;
 use rocketmq_sre_cli::render;
-use thiserror::Error;
+enum MainFailure {
+    Cli(CliFailure),
+    Output(io::Error),
+}
 
-#[derive(Debug, Error)]
-enum MainError {
-    #[error(transparent)]
-    Cli(#[from] CliError),
-    #[error("failed to write CLI output")]
-    Output(#[source] io::Error),
+impl std::fmt::Display for MainFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.public_message())
+    }
+}
+
+impl std::fmt::Debug for MainFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("MainFailure")
+    }
+}
+
+impl MainFailure {
+    fn public_message(&self) -> &'static str {
+        match self {
+            Self::Cli(failure) => failure.public_message(),
+            Self::Output(source) => {
+                let _kind = source.kind();
+                "failed to write CLI output"
+            }
+        }
+    }
+
+    const fn is_usage(&self) -> bool {
+        matches!(self, Self::Cli(failure) if failure.is_usage())
+    }
+}
+
+impl From<CliFailure> for MainFailure {
+    fn from(failure: CliFailure) -> Self {
+        Self::Cli(failure)
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -38,8 +67,8 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let mut stderr = io::stderr().lock();
-            let _ = writeln!(stderr, "rocketmq-sre: {error}");
-            if matches!(error, MainError::Cli(CliError::Usage(_))) {
+            let _ = writeln!(stderr, "rocketmq-sre: {}", error.public_message());
+            if error.is_usage() {
                 let _ = writeln!(stderr, "\n{USAGE}");
                 ExitCode::from(2)
             } else {
@@ -49,14 +78,14 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run() -> Result<(), MainError> {
+async fn run() -> Result<(), MainFailure> {
     let invocation = parse_process_args(std::env::args_os().skip(1))?;
     if invocation.command == Command::Help {
-        return write_stdout(USAGE).map_err(MainError::Output);
+        return write_stdout(USAGE).map_err(MainFailure::Output);
     }
     let value = execute(&invocation).await?;
     let output = render(&invocation, &value)?;
-    write_stdout(&output).map_err(MainError::Output)
+    write_stdout(&output).map_err(MainFailure::Output)
 }
 
 fn write_stdout(value: &str) -> io::Result<()> {

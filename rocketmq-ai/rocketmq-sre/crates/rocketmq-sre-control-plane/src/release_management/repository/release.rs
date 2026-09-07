@@ -38,6 +38,7 @@ use super::support::observation_phase_name;
 use super::support::parse_release_status;
 use super::support::release_status_name;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 impl PostgresRepository {
@@ -47,7 +48,7 @@ impl PostgresRepository {
         event: &ReleaseEventRecord,
         audit: &AuditEvent,
         outbound: &[QueuedIntegrationDelivery],
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO release_workflows (
@@ -103,7 +104,7 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         id: ReleaseId,
-    ) -> Result<ReleaseWorkflow, ControlPlaneError> {
+    ) -> Result<ReleaseWorkflow, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT *
              FROM release_workflows
@@ -113,8 +114,8 @@ impl PostgresRepository {
         .bind(id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
-        release_workflow_from_row(&row)
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
+        Ok(release_workflow_from_row(&row)?)
     }
 
     pub(in crate::release_management) async fn release_workflows(
@@ -123,7 +124,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         status: Option<ReleaseStatus>,
         limit: i64,
-    ) -> Result<Vec<ReleaseWorkflow>, ControlPlaneError> {
+    ) -> Result<Vec<ReleaseWorkflow>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT *
              FROM release_workflows
@@ -138,7 +139,9 @@ impl PostgresRepository {
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(release_workflow_from_row).collect()
+        rows.iter()
+            .map(|row| release_workflow_from_row(row).map_err(Into::into))
+            .collect()
     }
 
     pub(in crate::release_management) async fn update_release_workflow(
@@ -149,11 +152,11 @@ impl PostgresRepository {
         event: &ReleaseEventRecord,
         audit: &AuditEvent,
         outbound: &[QueuedIntegrationDelivery],
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let updated = update_release_row(&mut transaction, workflow, expected_status, expected_updated_at).await?;
         if updated != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "release_state_changed",
                 "release workflow was changed by another operator",
             ));
@@ -174,7 +177,7 @@ impl PostgresRepository {
         event: Option<&ReleaseEventRecord>,
         audits: &[AuditEvent],
         outbound: &[QueuedIntegrationDelivery],
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO release_observations (
@@ -192,7 +195,7 @@ impl PostgresRepository {
         if let Some(updated) = updated {
             let affected = update_release_row(&mut transaction, updated, current.status, current.updated_at).await?;
             if affected != 1 {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "release_state_changed",
                     "release workflow changed while the observation was being recorded",
                 ));
@@ -213,7 +216,7 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         release_id: ReleaseId,
-    ) -> Result<Vec<ReleaseObservation>, ControlPlaneError> {
+    ) -> Result<Vec<ReleaseObservation>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT observation_snapshot
              FROM release_observations observation
@@ -226,7 +229,12 @@ impl PostgresRepository {
         .fetch_all(&self.pool)
         .await?;
         rows.iter()
-            .map(|row| from_json(row.try_get("observation_snapshot")?))
+            .map(|row| {
+                let snapshot = row
+                    .try_get("observation_snapshot")
+                    .map_err(ControlPlaneRequestFailure::from)?;
+                from_json(snapshot).map_err(Into::into)
+            })
             .collect()
     }
 
@@ -234,7 +242,7 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         release_id: ReleaseId,
-    ) -> Result<Option<ReleaseReport>, ControlPlaneError> {
+    ) -> Result<Option<ReleaseReport>, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT report.report_snapshot
              FROM release_reports report
@@ -245,14 +253,14 @@ impl PostgresRepository {
         .bind(release_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?;
-        row.map(|row| from_json(row.try_get("report_snapshot")?)).transpose()
+        Ok(row.map(|row| from_json(row.try_get("report_snapshot")?)).transpose()?)
     }
 
     pub(in crate::release_management) async fn insert_release_report(
         &self,
         report: &ReleaseReport,
         audit: &AuditEvent,
-    ) -> Result<ReleaseReport, ControlPlaneError> {
+    ) -> Result<ReleaseReport, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO release_reports (
@@ -287,11 +295,12 @@ impl PostgresRepository {
         if inserted {
             Ok(report.clone())
         } else {
-            self.release_report(report.tenant_id, report.release_id)
+            Ok(self
+                .release_report(report.tenant_id, report.release_id)
                 .await?
                 .ok_or_else(|| {
                     ControlPlaneError::configuration("release report conflict did not resolve to a persisted report")
-                })
+                })?)
         }
     }
 }
@@ -356,22 +365,16 @@ fn release_workflow_from_row(row: &PgRow) -> Result<ReleaseWorkflow, ControlPlan
     Ok(workflow)
 }
 
-fn map_release_insert_error(error: sqlx::Error) -> ControlPlaneError {
+fn map_release_insert_error(error: sqlx::Error) -> ControlPlaneRequestFailure {
     if let sqlx::Error::Database(database) = &error
         && database.is_unique_violation()
     {
-        return ControlPlaneError::conflict_code(
-            "release_exists",
-            "release change identifier or release reference already exists in this cluster",
-        );
+        return ControlPlaneError::conflict_source("release_exists", error).into();
     }
     if let sqlx::Error::Database(database) = &error
         && database.code().as_deref() == Some("P0001")
     {
-        return ControlPlaneError::conflict_code(
-            "release_scope_mismatch",
-            "release plan, rollback, execution, or incident scope does not match",
-        );
+        return ControlPlaneError::conflict_source("release_scope_mismatch", error).into();
     }
-    ControlPlaneError::Database(error)
+    ControlPlaneError::database(error).into()
 }

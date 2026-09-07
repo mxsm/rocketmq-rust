@@ -21,24 +21,67 @@ use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::wait_for_signal_result;
+use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use serde::Serialize;
 
+use crate::ConnectorAdmissionOutcome;
+use crate::ConnectorAdmissionRejection;
 use crate::ConnectorCapabilitiesView;
 use crate::ConnectorConfig;
 use crate::ConnectorEngine;
 use crate::ConnectorError;
+use crate::ConnectorFailure;
 use crate::EvidenceQueryRequest;
 use crate::McpGateway;
 use crate::RmcpGateway;
 use crate::channel::ControlPlaneChannel;
 
 const MAX_INTERNAL_REQUEST_BYTES: usize = 64 * 1024;
+
+/// Private HTTP projection that keeps expected admission refusal out of the
+/// connector operational error channel.
+enum ConnectorApiFailure {
+    Rejected {
+        rejection: ConnectorAdmissionRejection,
+        correlation_id: CorrelationId,
+    },
+    Operational(ConnectorError),
+}
+
+impl From<ConnectorAdmissionRejection> for ConnectorApiFailure {
+    fn from(rejection: ConnectorAdmissionRejection) -> Self {
+        Self::Rejected {
+            rejection,
+            correlation_id: CorrelationId::default(),
+        }
+    }
+}
+
+impl From<ConnectorError> for ConnectorApiFailure {
+    fn from(error: ConnectorError) -> Self {
+        Self::Operational(error)
+    }
+}
+
+impl IntoResponse for ConnectorApiFailure {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Rejected {
+                rejection,
+                correlation_id,
+            } => (rejection.failure().status(), Json(rejection.view(correlation_id))).into_response(),
+            Self::Operational(error) => error.into_response(),
+        }
+    }
+}
 
 /// Builds the production connector API.
 pub(crate) fn build_router(engine: Arc<ConnectorEngine<RmcpGateway>>) -> Router {
@@ -81,12 +124,22 @@ pub async fn run(config: ConnectorConfig, service_context: ChildServiceContext) 
         .initialize_sources(service_context.component("evidence-sources"))
         .await;
 
-    if let Err(error) = engine.reconcile().await {
-        tracing::warn!(
-            code = error.code.as_str(),
-            retryable = error.retryable,
-            "initial MCP compatibility handshake did not complete"
-        );
+    match engine.reconcile().await {
+        Ok(ConnectorAdmissionOutcome::Accepted(())) => {}
+        Ok(ConnectorAdmissionOutcome::Rejected(rejection)) => {
+            tracing::warn!(
+                code = rejection.failure().as_str(),
+                retryable = rejection.retryable(),
+                "initial MCP compatibility handshake was rejected"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                code = error.failure().as_str(),
+                retryable = error.retryable(),
+                "initial MCP compatibility handshake did not complete"
+            );
+        }
     }
 
     if let Some(channel) = ControlPlaneChannel::new(engine.clone(), config.clone())? {
@@ -99,11 +152,7 @@ pub async fn run(config: ConnectorConfig, service_context: ChildServiceContext) 
                     channel.run(channel_context).await;
                 }
             })
-            .map_err(|error| {
-                ConnectorError::source(format!(
-                    "control-plane channel could not be owned by TaskGroup: {error}"
-                ))
-            })?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
     }
 
     let reconciler = engine.clone();
@@ -116,25 +165,33 @@ pub async fn run(config: ConnectorConfig, service_context: ChildServiceContext) 
         .schedule_fixed_delay(schedule, move || {
             let reconciler = reconciler.clone();
             async move {
-                if let Err(error) = reconciler.reconcile().await {
-                    tracing::warn!(
-                        code = error.code.as_str(),
-                        retryable = error.retryable,
-                        "periodic MCP compatibility handshake failed"
-                    );
+                match reconciler.reconcile().await {
+                    Ok(ConnectorAdmissionOutcome::Accepted(())) => {}
+                    Ok(ConnectorAdmissionOutcome::Rejected(rejection)) => {
+                        tracing::warn!(
+                            code = rejection.failure().as_str(),
+                            retryable = rejection.retryable(),
+                            "periodic MCP compatibility handshake was rejected"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            code = error.failure().as_str(),
+                            retryable = error.retryable(),
+                            "periodic MCP compatibility handshake failed"
+                        );
+                    }
                 }
             }
         })
-        .map_err(|error| {
-            ConnectorError::source(format!("handshake reconciler could not be owned by TaskGroup: {error}"))
-        })?;
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
-        .map_err(|error| ConnectorError::source(format!("connector HTTP listener cannot bind: {error}")))?;
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
     let local_addr = listener
         .local_addr()
-        .map_err(|error| ConnectorError::source(format!("connector HTTP listener address is unavailable: {error}")))?;
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
     tracing::info!(
         bind_addr = %local_addr,
         scope = service_context.name(),
@@ -154,7 +211,7 @@ pub async fn run(config: ConnectorConfig, service_context: ChildServiceContext) 
         .await;
     service_context.task_group().cancel();
     engine.close().await;
-    server_result.map_err(|error| ConnectorError::source(format!("connector HTTP server failed: {error}")))
+    server_result.map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))
 }
 
 #[derive(Serialize)]
@@ -183,7 +240,7 @@ where
 async fn capabilities<G>(
     State(engine): State<Arc<ConnectorEngine<G>>>,
     headers: HeaderMap,
-) -> Result<Json<ConnectorCapabilitiesView>, ConnectorError>
+) -> Result<Json<ConnectorCapabilitiesView>, ConnectorApiFailure>
 where
     G: McpGateway,
 {
@@ -195,19 +252,21 @@ async fn evidence_query<G>(
     State(engine): State<Arc<ConnectorEngine<G>>>,
     headers: HeaderMap,
     request: Result<Json<EvidenceQueryRequest>, JsonRejection>,
-) -> Result<Json<EvidenceSnapshot>, ConnectorError>
+) -> Result<Json<EvidenceSnapshot>, ConnectorApiFailure>
 where
     G: McpGateway,
 {
     engine.authorize(bearer_header(&headers))?;
-    let Json(request) = request.map_err(|_| {
-        ConnectorError::new(
-            crate::ConnectorErrorCode::InvalidEvidenceQuery,
-            false,
-            "internal evidence query body is not valid JSON",
-        )
-    })?;
-    engine.evidence(request, "internal-api").await.map(Json)
+    let Json(request) = request
+        .map_err(|source| ConnectorError::from_source(crate::ConnectorFailure::InvalidEvidenceQuery, false, source))?;
+    let correlation_id = request.query.correlation_id;
+    match engine.evidence(request, "internal-api").await? {
+        ConnectorAdmissionOutcome::Accepted(snapshot) => Ok(Json(snapshot)),
+        ConnectorAdmissionOutcome::Rejected(rejection) => Err(ConnectorApiFailure::Rejected {
+            rejection,
+            correlation_id,
+        }),
+    }
 }
 
 fn bearer_header(headers: &HeaderMap) -> Option<&str> {
@@ -326,6 +385,16 @@ mod tests {
         Arc::new(ConnectorEngine::new(Arc::new(config), Arc::new(FakeGateway)).expect("test engine"))
     }
 
+    #[test]
+    fn operational_errors_are_never_downgraded_to_admission_rejections() {
+        let failure = ConnectorApiFailure::from(ConnectorError::from_source(
+            ConnectorFailure::DeadlineExceeded,
+            true,
+            std::io::Error::other("private transport timeout"),
+        ));
+        assert!(matches!(failure, ConnectorApiFailure::Operational(_)));
+    }
+
     #[tokio::test]
     async fn health_is_public_but_internal_capabilities_require_bearer() {
         let engine = test_engine();
@@ -343,7 +412,10 @@ mod tests {
             .await
             .expect("readiness response");
         assert_eq!(not_ready.status(), StatusCode::SERVICE_UNAVAILABLE);
-        engine.reconcile().await.expect("mock handshake");
+        assert_eq!(
+            engine.reconcile().await.expect("mock handshake"),
+            ConnectorAdmissionOutcome::Accepted(())
+        );
         let ready = app
             .clone()
             .oneshot(Request::builder().uri("/readyz").body(Body::empty()).expect("request"))

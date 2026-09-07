@@ -33,7 +33,7 @@ use rocketmq_sre_core::diagnostics::DiagnosticStatus;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::ShadowEvalError;
+use super::ShadowEvalFailure;
 
 #[derive(Debug, Deserialize)]
 struct RawFixture {
@@ -74,29 +74,29 @@ pub struct DiagnosticReplayFixture {
 ///
 /// Returns a bounded fixture error when the file, JSON, timestamp, or
 /// canonical Evidence hash is invalid.
-pub fn load_diagnostic_fixture(
+pub(super) fn load_diagnostic_fixture(
     path: &Path,
     tenant_id: TenantId,
     cluster_id: ClusterId,
-) -> Result<DiagnosticReplayFixture, ShadowEvalError> {
-    let raw = fs::read_to_string(path).map_err(|source| ShadowEvalError::Io {
-        path: path.to_path_buf(),
+) -> Result<DiagnosticReplayFixture, ShadowEvalFailure> {
+    let raw = fs::read_to_string(path).map_err(|source| ShadowEvalFailure::Io {
+        _path: path.to_path_buf(),
         source,
     })?;
-    let raw = serde_json::from_str::<RawFixture>(&raw).map_err(|error| ShadowEvalError::InvalidFixture {
-        path: path.to_path_buf(),
-        detail: error.to_string(),
+    let raw = serde_json::from_str::<RawFixture>(&raw).map_err(|source| ShadowEvalFailure::FixtureDecode {
+        _path: path.to_path_buf(),
+        source,
     })?;
-    let expected_status = parse_status(&raw.expected_status).ok_or_else(|| ShadowEvalError::InvalidFixture {
-        path: path.to_path_buf(),
-        detail: format!("unsupported expected status `{}`", raw.expected_status),
+    let expected_status = parse_status(&raw.expected_status).ok_or_else(|| ShadowEvalFailure::InvalidFixture {
+        _path: path.to_path_buf(),
+        _detail: format!("unsupported expected status `{}`", raw.expected_status),
     })?;
     let observed_at =
         Utc.with_ymd_and_hms(2026, 7, 27, 0, 0, 0)
             .single()
-            .ok_or_else(|| ShadowEvalError::InvalidFixture {
-                path: path.to_path_buf(),
-                detail: "fixture timestamp is invalid".to_owned(),
+            .ok_or_else(|| ShadowEvalFailure::InvalidFixture {
+                _path: path.to_path_buf(),
+                _detail: "fixture timestamp is invalid".to_owned(),
             })?;
 
     let evidence = raw
@@ -110,12 +110,7 @@ pub fn load_diagnostic_fixture(
                 cluster_id,
                 source: item.source,
                 resource: item.resource,
-                time_range: TimeRange::new(observed_at, observed_at).map_err(|error| {
-                    ShadowEvalError::InvalidFixture {
-                        path: path.to_path_buf(),
-                        detail: error.to_string(),
-                    }
-                })?,
+                time_range: TimeRange::new(observed_at, observed_at).map_err(ShadowEvalFailure::Diagnostic)?,
             };
             let mut snapshot = EvidenceSnapshot::capture(
                 query,
@@ -123,16 +118,13 @@ pub fn load_diagnostic_fixture(
                 observed_at,
                 EvidenceContent::Inline(item.content),
             )
-            .map_err(|error| ShadowEvalError::InvalidFixture {
-                path: path.to_path_buf(),
-                detail: error.to_string(),
-            })?;
+            .map_err(ShadowEvalFailure::Diagnostic)?;
             snapshot.evidence_id = item.evidence_id;
             snapshot.partial = item.partial;
             snapshot.coverage = item.coverage;
             Ok(snapshot)
         })
-        .collect::<Result<Vec<_>, ShadowEvalError>>()?;
+        .collect::<Result<Vec<_>, ShadowEvalFailure>>()?;
 
     Ok(DiagnosticReplayFixture {
         pack: raw.pack,

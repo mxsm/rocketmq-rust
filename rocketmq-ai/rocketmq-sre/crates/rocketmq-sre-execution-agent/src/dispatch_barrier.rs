@@ -65,7 +65,7 @@ impl DispatchBarrier {
             .pool
             .acquire()
             .await
-            .map_err(|_| ExecutionAgentError::DispatchBarrierUnavailable)?;
+            .map_err(ExecutionAgentError::dispatch_barrier)?;
         let statement = match mode {
             BarrierMode::Shared => "SELECT pg_advisory_lock_shared(hashtextextended($1, 731))",
             BarrierMode::Exclusive => "SELECT pg_advisory_lock(hashtextextended($1, 731))",
@@ -74,7 +74,7 @@ impl DispatchBarrier {
             .bind(cluster_id.to_string())
             .execute(&mut *connection)
             .await
-            .map_err(|_| ExecutionAgentError::DispatchBarrierUnavailable)?;
+            .map_err(ExecutionAgentError::dispatch_barrier)?;
         Ok(DispatchBarrierGuard {
             connection: Some(connection),
             cluster_id,
@@ -113,9 +113,13 @@ impl DispatchBarrierGuard {
             .await;
         match unlocked {
             Ok(true) => Ok(()),
-            Ok(false) | Err(_) => {
+            Ok(false) => {
                 connection.close_on_drop();
                 Err(ExecutionAgentError::DispatchBarrierUnavailable)
+            }
+            Err(error) => {
+                connection.close_on_drop();
+                Err(ExecutionAgentError::dispatch_barrier(error))
             }
         }
     }

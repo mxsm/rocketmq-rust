@@ -26,7 +26,7 @@ use super::service::audit_event;
 use super::service::next_timestamp;
 use super::service::schedule_event;
 use super::service::scheduler_auth;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::supervised_execution::SubmitExecutionRequest;
 
 const SCHEDULER_BATCH_SIZE: i64 = 64;
@@ -55,7 +55,7 @@ impl ChangeManagementService {
         }
     }
 
-    async fn tick_schedule(&self, schedule: ChangeSchedule) -> Result<(), ControlPlaneError> {
+    async fn tick_schedule(&self, schedule: ChangeSchedule) -> Result<(), ControlPlaneRequestFailure> {
         match schedule.status {
             ChangeScheduleStatus::Scheduled | ChangeScheduleStatus::Running => {
                 if schedule.scheduled_end <= self.now() {
@@ -77,7 +77,7 @@ impl ChangeManagementService {
         }
     }
 
-    async fn dispatch_next_step(&self, mut schedule: ChangeSchedule) -> Result<(), ControlPlaneError> {
+    async fn dispatch_next_step(&self, mut schedule: ChangeSchedule) -> Result<(), ControlPlaneRequestFailure> {
         let definition = self.definition_for_schedule(&schedule).await?;
         let expected_status = schedule.status;
         let expected_updated_at = schedule.updated_at;
@@ -118,7 +118,7 @@ impl ChangeManagementService {
                     .iter()
                     .find(|binding| binding.step_id == step.id)
                     .ok_or_else(|| {
-                        ControlPlaneError::conflict_code(
+                        ControlPlaneRequestFailure::conflict_code(
                             "approved_plan_binding_required",
                             "scheduled action has no immutable approved plan binding",
                         )
@@ -157,9 +157,9 @@ impl ChangeManagementService {
         }
     }
 
-    async fn observe_active_execution(&self, mut schedule: ChangeSchedule) -> Result<(), ControlPlaneError> {
+    async fn observe_active_execution(&self, mut schedule: ChangeSchedule) -> Result<(), ControlPlaneRequestFailure> {
         let execution_id = schedule.active_execution_id.ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "invalid_schedule_projection",
                 "running schedule has no active execution",
             )
@@ -176,7 +176,7 @@ impl ChangeManagementService {
                     .iter()
                     .find(|step| step.sequence == schedule.next_step_sequence)
                     .ok_or_else(|| {
-                        ControlPlaneError::conflict_code(
+                        ControlPlaneRequestFailure::conflict_code(
                             "invalid_schedule_projection",
                             "active execution does not match a runbook step",
                         )
@@ -225,7 +225,7 @@ impl ChangeManagementService {
         }
     }
 
-    async fn advance_safe_stopping(&self, mut schedule: ChangeSchedule) -> Result<(), ControlPlaneError> {
+    async fn advance_safe_stopping(&self, mut schedule: ChangeSchedule) -> Result<(), ControlPlaneRequestFailure> {
         if let Some(execution_id) = schedule.active_execution_id {
             let auth = scheduler_auth(schedule.tenant_id, schedule.cluster_id);
             let execution = self.supervised_execution.execution(&auth, execution_id).await?;
@@ -251,7 +251,7 @@ impl ChangeManagementService {
         .await
     }
 
-    async fn reject_expired_schedule(&self, mut schedule: ChangeSchedule) -> Result<(), ControlPlaneError> {
+    async fn reject_expired_schedule(&self, mut schedule: ChangeSchedule) -> Result<(), ControlPlaneRequestFailure> {
         let expected_status = schedule.status;
         let expected_updated_at = schedule.updated_at;
         schedule.status = ChangeScheduleStatus::Rejected;
@@ -267,7 +267,10 @@ impl ChangeManagementService {
         .await
     }
 
-    async fn definition_for_schedule(&self, schedule: &ChangeSchedule) -> Result<RunbookDefinition, ControlPlaneError> {
+    async fn definition_for_schedule(
+        &self,
+        schedule: &ChangeSchedule,
+    ) -> Result<RunbookDefinition, ControlPlaneRequestFailure> {
         self.repository
             .runbook_definition(
                 schedule.tenant_id,
@@ -285,7 +288,7 @@ impl ChangeManagementService {
         expected_updated_at: chrono::DateTime<Utc>,
         reason_code: &'static str,
         details: serde_json::Value,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let auth = scheduler_auth(schedule.tenant_id, schedule.cluster_id);
         let event = schedule_event(&schedule, Some(expected_status), reason_code, &auth.subject, details);
         let audit = audit_event(

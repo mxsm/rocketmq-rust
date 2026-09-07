@@ -21,6 +21,7 @@ use rocketmq_sre_contracts::ReconcileEffectState;
 use serde_json::json;
 
 use super::*;
+use crate::ExecutionAgentRequestFailure;
 use crate::drivers::test_support;
 
 struct FakeCredentialRotationClient {
@@ -53,7 +54,7 @@ impl CredentialRotationClient for FakeCredentialRotationClient {
         Box::pin(async move {
             let mut state = self.state.lock().expect("state lock");
             if state.active_version != request.active_version || state.retiring_version.is_some() {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(ExecutionAgentRequestFailure::DriverFailed);
             }
             *self.observed_reference.lock().expect("reference lock") = Some(request.candidate_secret_ref.clone());
             state.retiring_version = Some(state.active_version.clone());
@@ -68,7 +69,10 @@ impl CredentialRotationClient for FakeCredentialRotationClient {
     fn restore_previous_credential<'a>(&'a self, request: &'a CredentialOverlapRestore) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             let mut state = self.state.lock().expect("state lock");
-            state.active_version = state.retiring_version.take().ok_or(ExecutionAgentError::DriverFailed)?;
+            state.active_version = state
+                .retiring_version
+                .take()
+                .ok_or(ExecutionAgentRequestFailure::DriverFailed)?;
             state.candidate_probe_healthy = false;
             state.overlap_deadline = None;
             state.last_operation_id = Some(request.operation_id.clone());
@@ -158,10 +162,14 @@ async fn raw_values_unsafe_references_and_acl_fields_fail_closed() {
 
     let mut value = parameters();
     value["secret_value"] = json!("never-accepted");
-    assert!(matches!(
-        handler.read_state(&read_request(value)).await,
-        Err(ExecutionAgentError::InvalidRequest)
-    ));
+    assert_eq!(
+        handler
+            .read_state(&read_request(value))
+            .await
+            .expect_err("inline credential material must be rejected")
+            .stable_code(),
+        "invalid_agent_request"
+    );
 }
 
 fn parameters() -> serde_json::Value {

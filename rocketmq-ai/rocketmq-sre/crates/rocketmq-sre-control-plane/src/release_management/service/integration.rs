@@ -29,7 +29,7 @@ use super::support::require_approver;
 use super::support::require_cluster;
 use super::support::require_operator;
 use super::support::validate_bounded_text;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::release_management::descriptors::descriptor_for;
 use crate::release_management::descriptors::resolve_descriptor;
@@ -74,7 +74,7 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         request: &RegisterIntegrationTargetRequest,
         correlation_id: CorrelationId,
-    ) -> Result<IntegrationTargetView, ControlPlaneError> {
+    ) -> Result<IntegrationTargetView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         require_cluster(auth, request.cluster_id)?;
         validate_bounded_text("integration target name", &request.name, 128)?;
@@ -82,7 +82,7 @@ impl ReleaseManagementService {
         reject_sensitive(&request.name)?;
         reject_sensitive(&request.endpoint)?;
         if !request.enabled {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "integration_target_disabled",
                 "new integration targets must be enabled and may be disabled after registration",
             ));
@@ -93,7 +93,7 @@ impl ReleaseManagementService {
             request.adapter_kind,
         )
         .ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "integration_descriptor_mismatch",
                 "integration descriptor identity, version, or adapter kind is unsupported",
             )
@@ -118,8 +118,13 @@ impl ReleaseManagementService {
             },
             notification_target_id: request.notification_target_id,
         };
-        IntegrationValidator::validate_target(&view.target, &descriptor)
-            .map_err(|error| ControlPlaneError::validation("integration_target_invalid", error.to_string()))?;
+        IntegrationValidator::validate_target(&view.target, &descriptor).map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "integration_target_invalid",
+                error,
+            )
+        })?;
         let audit = audit_event(
             auth,
             request.cluster_id,
@@ -146,10 +151,10 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         target_id: IntegrationTargetId,
-    ) -> Result<IntegrationTargetView, ControlPlaneError> {
+    ) -> Result<IntegrationTargetView, ControlPlaneRequestFailure> {
         let target = self.repository.integration_target(auth.tenant_id, target_id).await?;
         let cluster_id = target.target.cluster_id.ok_or_else(|| {
-            ControlPlaneError::forbidden(
+            ControlPlaneRequestFailure::forbidden(
                 "integration_scope_mismatch",
                 "integration target does not have a cluster scope",
             )
@@ -162,7 +167,7 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         query: &IntegrationTargetListQuery,
-    ) -> Result<IntegrationTargetPage, ControlPlaneError> {
+    ) -> Result<IntegrationTargetPage, ControlPlaneRequestFailure> {
         require_cluster(auth, query.cluster_id)?;
         let limit = bounded_page_size(query.limit);
         let mut items = self
@@ -190,7 +195,7 @@ impl ReleaseManagementService {
         target_id: IntegrationTargetId,
         request: &SetIntegrationTargetStateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<IntegrationTargetView, ControlPlaneError> {
+    ) -> Result<IntegrationTargetView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.integration_target(auth, target_id).await?;
         if current.target.enabled == request.enabled {
@@ -203,17 +208,25 @@ impl ReleaseManagementService {
                 current.target.adapter_kind,
             )
             .ok_or_else(|| {
-                ControlPlaneError::conflict_code(
+                ControlPlaneRequestFailure::conflict_code(
                     "integration_descriptor_mismatch",
                     "integration target references an unsupported descriptor version",
                 )
             })?;
             let mut enabled = current.target.clone();
             enabled.enabled = true;
-            IntegrationValidator::validate_target(&enabled, &descriptor)
-                .map_err(|error| ControlPlaneError::validation("integration_target_invalid", error.to_string()))?;
+            IntegrationValidator::validate_target(&enabled, &descriptor).map_err(|error| {
+                ControlPlaneRequestFailure::contract(
+                    crate::ControlPlaneFailure::Validation,
+                    "integration_target_invalid",
+                    error,
+                )
+            })?;
         }
-        let cluster_id = current.target.cluster_id.ok_or(ControlPlaneError::NotFound)?;
+        let cluster_id = current
+            .target
+            .cluster_id
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         let now = self.now();
         let audit = audit_event(
             auth,
@@ -245,22 +258,28 @@ impl ReleaseManagementService {
         target_id: IntegrationTargetId,
         request: &RotateIntegrationSecretRequest,
         correlation_id: CorrelationId,
-    ) -> Result<IntegrationTargetView, ControlPlaneError> {
+    ) -> Result<IntegrationTargetView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.integration_target(auth, target_id).await?;
         if !valid_secret_reference(&request.secret_reference) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "integration_secret_reference_invalid",
                 "integration secret reference is invalid",
             ));
         }
-        if !self.secrets.available(&request.secret_reference) {
-            return Err(ControlPlaneError::conflict_code(
-                "integration_secret_unavailable",
-                "rotated integration secret is unavailable",
-            ));
+        if let Err(failure) = self.secrets.resolve(&request.secret_reference) {
+            return Err(match failure {
+                ControlPlaneRequestFailure::Rejected(_rejection) => ControlPlaneRequestFailure::conflict_code(
+                    "integration_secret_unavailable",
+                    "rotated integration secret is unavailable",
+                ),
+                ControlPlaneRequestFailure::Operational(error) => error.into(),
+            });
         }
-        let cluster_id = current.target.cluster_id.ok_or(ControlPlaneError::NotFound)?;
+        let cluster_id = current
+            .target
+            .cluster_id
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         let now = self.now();
         let audit = audit_event(
             auth,
@@ -285,12 +304,12 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         query: &IntegrationDeliveryListQuery,
-    ) -> Result<IntegrationDeliveryPage, ControlPlaneError> {
+    ) -> Result<IntegrationDeliveryPage, ControlPlaneRequestFailure> {
         require_cluster(auth, query.cluster_id)?;
         if let Some(target_id) = query.target_id {
             let target = self.integration_target(auth, target_id).await?;
             if target.target.cluster_id != Some(query.cluster_id) {
-                return Err(ControlPlaneError::forbidden(
+                return Err(ControlPlaneRequestFailure::forbidden(
                     "integration_scope_mismatch",
                     "integration target does not match the requested cluster",
                 ));
@@ -316,7 +335,7 @@ impl ReleaseManagementService {
         delivery_id: IntegrationDeliveryId,
         request: &ReplayIntegrationDeliveryRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ReplayIntegrationDeliveryView, ControlPlaneError> {
+    ) -> Result<ReplayIntegrationDeliveryView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_bounded_text("integration replay reason", &request.reason, 1_024)?;
         reject_sensitive(&request.reason)?;
@@ -327,7 +346,7 @@ impl ReleaseManagementService {
         require_cluster(auth, delivery.cluster_id)?;
         let target = self.integration_target(auth, delivery.target_id).await?;
         if !target.target.enabled {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "integration_target_disabled",
                 "disabled integration target cannot replay deliveries",
             ));
@@ -359,11 +378,11 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         request: &ExternalApprovalRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ExternalApprovalView, ControlPlaneError> {
+    ) -> Result<ExternalApprovalView, ControlPlaneRequestFailure> {
         require_approver(auth)?;
         let input = &request.input;
         if input.subject != auth.subject || !input.roles.is_subset(&auth.roles) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "external_approval_identity_mismatch",
                 "external approval subject and roles must match the authenticated identity",
             ));
@@ -383,28 +402,37 @@ impl ReleaseManagementService {
             target.target.adapter_kind,
         )
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "integration_descriptor_mismatch",
                 "integration target references an unsupported descriptor version",
             )
         })?;
         let plan = self.supervised.plan(auth, input.plan_id).await?;
         if target.target.cluster_id != Some(plan.plan.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "integration_scope_mismatch",
                 "integration target and action plan belong to different clusters",
             ));
         }
         let now = self.now();
         IntegrationValidator::validate_external_approval(input, &target.target, &descriptor, &plan.plan.plan_hash, now)
-            .map_err(|error| ControlPlaneError::validation("external_approval_invalid", error.to_string()))?;
-        let precondition_hash = plan
-            .plan
-            .compute_precondition_hash()
-            .map_err(|error| ControlPlaneError::validation("invalid_precondition_hash", error.to_string()))?;
+            .map_err(|error| {
+                ControlPlaneRequestFailure::contract(
+                    crate::ControlPlaneFailure::Validation,
+                    "external_approval_invalid",
+                    error,
+                )
+            })?;
+        let precondition_hash = plan.plan.compute_precondition_hash().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_precondition_hash",
+                error,
+            )
+        })?;
         let validity_seconds =
             u64::try_from(input.expires_at.signed_duration_since(now).num_seconds()).map_err(|_| {
-                ControlPlaneError::validation("invalid_approval_window", "external approval expiry is invalid")
+                ControlPlaneRequestFailure::validation("invalid_approval_window", "external approval expiry is invalid")
             })?;
         let decision_request = ApprovalDecisionRequest {
             plan_hash: input.plan_hash.clone(),
@@ -428,24 +456,18 @@ impl ReleaseManagementService {
                 approval: response.approval,
                 plan_status: response.plan.status,
             }),
-            Err(ControlPlaneError::Conflict {
-                code: "external_approval_duplicate",
-                ..
-            }) => {
-                let existing = self
+            Err(failure @ ControlPlaneRequestFailure::Rejected(_)) => {
+                let Some(existing) = self
                     .repository
                     .external_approval_result(auth.tenant_id, input.target_id, &input.external_event_id)
                     .await?
-                    .ok_or_else(|| {
-                        ControlPlaneError::conflict_code(
-                            "external_approval_duplicate",
-                            "external approval event was already applied",
-                        )
-                    })?;
+                else {
+                    return Err(failure);
+                };
                 validate_duplicate_approval(input, &existing)?;
                 Ok(existing)
             }
-            Err(error) => Err(error),
+            Err(ControlPlaneRequestFailure::Operational(error)) => Err(ControlPlaneRequestFailure::Operational(error)),
         }
     }
 }
@@ -453,13 +475,13 @@ impl ReleaseManagementService {
 fn validate_duplicate_approval(
     input: &rocketmq_sre_contracts::ExternalApprovalInput,
     existing: &ExternalApprovalView,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if existing.approval.plan_id != input.plan_id
         || existing.approval.plan_hash != input.plan_hash
         || existing.approval.approver_subject != input.subject
         || existing.approval.decision != input.decision
     {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "external_approval_event_mismatch",
             "external approval event identity was reused with different content",
         ));

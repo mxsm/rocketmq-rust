@@ -23,7 +23,7 @@ impl SupervisedExecutionService {
         id: ActionPlanId,
         request: &ApprovalDecisionRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ApprovalDecisionResponse, ControlPlaneError> {
+    ) -> Result<ApprovalDecisionResponse, ControlPlaneRequestFailure> {
         self.decide(auth, id, request, ApprovalDecision::Approved, correlation_id, None)
             .await
     }
@@ -34,7 +34,7 @@ impl SupervisedExecutionService {
         id: ActionPlanId,
         request: &ApprovalDecisionRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ApprovalDecisionResponse, ControlPlaneError> {
+    ) -> Result<ApprovalDecisionResponse, ControlPlaneRequestFailure> {
         self.decide(auth, id, request, ApprovalDecision::Rejected, correlation_id, None)
             .await
     }
@@ -46,7 +46,7 @@ impl SupervisedExecutionService {
         request: &ApprovalDecisionRequest,
         source: &ExternalApprovalSource,
         correlation_id: CorrelationId,
-    ) -> Result<ApprovalDecisionResponse, ControlPlaneError> {
+    ) -> Result<ApprovalDecisionResponse, ControlPlaneRequestFailure> {
         self.decide(auth, id, request, source.input.decision, correlation_id, Some(source))
             .await
     }
@@ -59,27 +59,27 @@ impl SupervisedExecutionService {
         decision: ApprovalDecision,
         correlation_id: CorrelationId,
         external_source: Option<&ExternalApprovalSource>,
-    ) -> Result<ApprovalDecisionResponse, ControlPlaneError> {
+    ) -> Result<ApprovalDecisionResponse, ControlPlaneRequestFailure> {
         self.policy.require_approver(auth)?;
         validate_reason(&request.reason)?;
         let projection = self.repository.supervised_plan(auth, id).await?;
         let persisted_risk = projection.risk;
         let plan = projection.plan;
         if auth.subject == plan.created_by {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "self_approval_forbidden",
                 "a plan creator cannot approve or reject the same plan",
             ));
         }
         if request.plan_hash != plan.plan_hash {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_hash_mismatch",
                 "approval does not bind the current immutable plan hash",
             ));
         }
         let now = self.now();
         if plan.expires_at <= now {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_expired",
                 "plan expired before the approval decision",
             ));
@@ -87,26 +87,26 @@ impl SupervisedExecutionService {
         let approved_precondition_hash = if decision == ApprovalDecision::Approved {
             let live = self.live_plan_state(auth, &plan, now).await?;
             if aggregate_risk(&live.risks)? != persisted_risk {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "plan_risk_mismatch",
                     "persisted plan risk no longer matches its action descriptors",
                 ));
             }
             if request.precondition_hash != live.precondition_hash || plan.evidence_hash != live.evidence_hash {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "precondition_changed",
                     "live evidence no longer matches the reviewed plan",
                 ));
             }
             ensure_live_ready(live.facts)?;
             if persisted_risk == ActionRisk::R2 && self.repository.valid_critic_review(auth, &plan).await?.is_none() {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "critic_required",
                     "R2 plan requires a valid heterogeneous Critic review before approval",
                 ));
             }
             if plan.status != PlanStatus::ReadyForApproval {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "plan_state_changed",
                     "plan is not ready for approval",
                 ));
@@ -121,7 +121,7 @@ impl SupervisedExecutionService {
             .unwrap_or(self.policy.approval_ttl_seconds())
             .min(self.policy.approval_ttl_seconds());
         if validity == 0 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_approval_window",
                 "approval validity must be greater than zero",
             ));
@@ -171,7 +171,7 @@ impl SupervisedExecutionService {
                 ],
             ),
             _ => {
-                return Err(ControlPlaneError::configuration(
+                return Err(ControlPlaneRequestFailure::configuration(
                     "approval precondition was inconsistent with the requested decision",
                 ));
             }
@@ -183,7 +183,7 @@ impl SupervisedExecutionService {
                 || source.input.subject != auth.subject
                 || source.input.decision != decision
             {
-                return Err(ControlPlaneError::forbidden(
+                return Err(ControlPlaneRequestFailure::forbidden(
                     "external_approval_identity_mismatch",
                     "external approval identity, decision, plan, or hash does not match",
                 ));
@@ -233,7 +233,7 @@ impl SupervisedExecutionService {
         auth: &AuthContext,
         request: &SubmitExecutionRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ExecutionSubmissionView, ControlPlaneError> {
+    ) -> Result<ExecutionSubmissionView, ControlPlaneRequestFailure> {
         self.policy.require_operator(auth)?;
         validate_idempotency_key(&request.idempotency_key)?;
         if let Some(existing) = self
@@ -245,7 +245,7 @@ impl SupervisedExecutionService {
                 || existing.request.plan.plan_hash != request.plan_hash
                 || existing.request.requested_by != auth.subject
             {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "idempotency_conflict",
                     "idempotency key is bound to a different execution",
                 ));
@@ -273,13 +273,13 @@ impl SupervisedExecutionService {
         let persisted_risk = projection.risk;
         let plan = projection.plan;
         if plan.status != PlanStatus::Approved {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "approval_required",
                 "plan must have a current human approval before execution",
             ));
         }
         if request.plan_hash != plan.plan_hash {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_hash_mismatch",
                 "execution request does not bind the approved plan hash",
             ));
@@ -287,7 +287,7 @@ impl SupervisedExecutionService {
         let now = self.now();
         let live = self.live_plan_state(auth, &plan, now).await?;
         if aggregate_risk(&live.risks)? != persisted_risk {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_risk_mismatch",
                 "persisted plan risk no longer matches its action descriptors",
             ));
@@ -295,7 +295,7 @@ impl SupervisedExecutionService {
         self.ensure_governed_execution(&plan, now).await?;
         ensure_live_ready(live.facts)?;
         if request.precondition_hash != live.precondition_hash || plan.evidence_hash != live.evidence_hash {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "precondition_changed",
                 "live state changed after approval",
             ));
@@ -306,20 +306,23 @@ impl SupervisedExecutionService {
             .current_approval_grant(auth, &plan, now)
             .await?
             .ok_or_else(|| {
-                ControlPlaneError::conflict_code("approval_expired", "no current service-issued approval grant exists")
+                ControlPlaneRequestFailure::conflict_code(
+                    "approval_expired",
+                    "no current service-issued approval grant exists",
+                )
             })?;
         self.signer.verify_approval(&grant)?;
         if grant.precondition_hash != live.precondition_hash
             || grant.audience != self.policy.executor_audience()
             || grant.expires_at <= now
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "approval_invalidated",
                 "approval no longer binds the current plan and live state",
             ));
         }
         if !live.execution_supported {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "action_not_ready",
                 "one or more typed action handlers are not enabled",
             ));
@@ -348,7 +351,13 @@ impl SupervisedExecutionService {
         self.signer.verify_execution(&execution)?;
         execution
             .validate_at(now, self.policy.executor_audience())
-            .map_err(|error| ControlPlaneError::validation("invalid_execution_request", error.to_string()))?;
+            .map_err(|error| {
+                ControlPlaneRequestFailure::contract(
+                    crate::ControlPlaneFailure::Validation,
+                    "invalid_execution_request",
+                    error,
+                )
+            })?;
         let (resource_key, action_id) = execution_projection_keys(&plan);
         let audit = audit_event(
             auth,
@@ -380,7 +389,7 @@ impl SupervisedExecutionService {
         self.publish_audits(std::slice::from_ref(&audit));
         let receipt = match self.executor.submit(&stored.request).await {
             Ok(receipt) => receipt,
-            Err(error) if definitive_executor_rejection(&error) => {
+            Err(error) if error.is_definitive_rejection() => {
                 let rejected_at = self.now();
                 let rejection_audit = audit_event(
                     auth,
@@ -403,8 +412,8 @@ impl SupervisedExecutionService {
                     .persist_execution_dispatch_rejection(id, rejected_at, &rejection_audit)
                     .await
                 {
-                    Ok(()) => self.publish_audits(std::slice::from_ref(&rejection_audit)),
-                    Err(persistence_error) if execution_advanced_during_dispatch(&persistence_error) => {
+                    Ok(true) => self.publish_audits(std::slice::from_ref(&rejection_audit)),
+                    Ok(false) => {
                         // The Executor may have durably advanced the shared
                         // execution before its HTTP response became an error.
                         // Preserve that newer state and return the original
@@ -412,9 +421,9 @@ impl SupervisedExecutionService {
                     }
                     Err(persistence_error) => return Err(persistence_error),
                 }
-                return Err(error);
+                return Err(error.into_request_failure());
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into_request_failure()),
         };
         Ok(ExecutionSubmissionView {
             execution: stored.request,
@@ -427,7 +436,7 @@ impl SupervisedExecutionService {
         &self,
         plan: &ActionPlan,
         now: chrono::DateTime<Utc>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut requirements = Vec::with_capacity(plan.steps.len() + 1);
         requirements.push(GovernanceRequirement {
             kind: GovernanceObjectKind::PolicyBundle,
@@ -448,7 +457,7 @@ impl SupervisedExecutionService {
         &self,
         auth: &AuthContext,
         id: ExecutionId,
-    ) -> Result<ExecutionSubmissionView, ControlPlaneError> {
+    ) -> Result<ExecutionSubmissionView, ControlPlaneRequestFailure> {
         let stored = self.repository.supervised_execution(auth, id).await?;
         Ok(ExecutionSubmissionView {
             execution: stored.request,
@@ -461,7 +470,7 @@ impl SupervisedExecutionService {
         &self,
         auth: &AuthContext,
         correlation_id: CorrelationId,
-    ) -> Result<AuditPage, ControlPlaneError> {
+    ) -> Result<AuditPage, ControlPlaneRequestFailure> {
         let mut items = self
             .repository
             .audit_timeline(auth, correlation_id, MAX_AUDIT_EVENTS)
@@ -480,11 +489,11 @@ impl SupervisedExecutionService {
         &self,
         auth: &AuthContext,
         query: &QuarantineListQuery,
-    ) -> Result<QuarantinePage, ControlPlaneError> {
+    ) -> Result<QuarantinePage, ControlPlaneRequestFailure> {
         require_cluster(auth, query.cluster_id)?;
         let limit = query.limit.unwrap_or(50);
         if !(1..=MAX_QUARANTINES).contains(&limit) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "quarantine limit must be between 1 and 200",
             ));
@@ -513,18 +522,18 @@ impl SupervisedExecutionService {
         id: ResourceQuarantineId,
         request: &ClearQuarantineRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ResourceQuarantine, ControlPlaneError> {
+    ) -> Result<ResourceQuarantine, ControlPlaneRequestFailure> {
         self.policy.require_approver(auth)?;
         validate_reason(&request.reason)?;
         if request.evidence_ids.is_empty() || request.evidence_ids.len() > 16 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "verification_evidence_required",
                 "quarantine clear requires between one and sixteen Evidence IDs",
             ));
         }
         let quarantine = self.repository.quarantine(auth, id).await?;
         if !quarantine.is_active() {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "quarantine_state_changed",
                 "resource quarantine is already cleared",
             ));
@@ -533,7 +542,7 @@ impl SupervisedExecutionService {
         for evidence_id in &request.evidence_ids {
             let evidence = self.repository.evidence(auth, *evidence_id).await?;
             if evidence.cluster_id != quarantine.cluster_id || !self.evidence_is_current(&evidence, now)? {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "verification_evidence_invalid",
                     "quarantine clear evidence is stale or outside the target cluster",
                 ));
@@ -580,40 +589,23 @@ impl SupervisedExecutionService {
     }
 }
 
-fn definitive_executor_rejection(error: &ControlPlaneError) -> bool {
-    matches!(
-        error,
-        ControlPlaneError::Forbidden {
-            code: "executor_rejected",
-            ..
-        }
-    )
-}
-
-fn execution_advanced_during_dispatch(error: &ControlPlaneError) -> bool {
-    matches!(
-        error,
-        ControlPlaneError::Conflict {
-            code: "execution_state_changed",
-            ..
-        }
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::execution_advanced_during_dispatch;
-    use crate::ControlPlaneError;
+    use crate::ControlPlaneRequestFailure;
+    use crate::supervised_execution::executor_client::ExecutorDispatchFailure;
 
     #[test]
-    fn only_a_durable_execution_state_race_preserves_the_executor_error() {
-        assert!(execution_advanced_during_dispatch(&ControlPlaneError::conflict_code(
-            "execution_state_changed",
-            "execution advanced"
-        )));
-        assert!(!execution_advanced_during_dispatch(&ControlPlaneError::conflict_code(
-            "database_write_failed",
-            "persistence failed"
-        )));
+    fn definitive_executor_rejections_remain_distinct_from_other_failures() {
+        let rejection = ExecutorDispatchFailure::Rejected(ControlPlaneRequestFailure::forbidden(
+            "executor_rejected",
+            "request rejected",
+        ));
+        let unavailable = ExecutorDispatchFailure::Other(ControlPlaneRequestFailure::conflict_code(
+            "executor_unavailable",
+            "executor unavailable",
+        ));
+
+        assert!(rejection.is_definitive_rejection());
+        assert!(!unavailable.is_definitive_rejection());
     }
 }

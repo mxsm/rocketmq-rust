@@ -55,7 +55,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::alerting::AlertIngestionOutcome;
 use crate::alerting::AlertmanagerWebhook;
 use crate::alerting::IncidentNoteRequest;
@@ -225,7 +225,7 @@ async fn get_connector_status(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<Value>, ControlPlaneError> {
+) -> Result<Json<Value>, ControlPlaneRequestFailure> {
     let cluster_id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     let status = state.connector_channel.status(auth.tenant_id, cluster_id).await?;
@@ -240,7 +240,7 @@ async fn ingest_inventory(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<IngestInventoryRequest>,
-) -> Result<Json<(InventorySnapshot, TopologyDiff)>, ControlPlaneError> {
+) -> Result<Json<(InventorySnapshot, TopologyDiff)>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.assets.ingest(&auth, &request).await.map(Json)
 }
@@ -249,7 +249,7 @@ async fn get_inventory_snapshot(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<InventorySnapshot>, ControlPlaneError> {
+) -> Result<Json<InventorySnapshot>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .assets
@@ -262,7 +262,7 @@ async fn get_latest_inventory(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<Option<InventorySnapshot>>, ControlPlaneError> {
+) -> Result<Json<Option<InventorySnapshot>>, ControlPlaneRequestFailure> {
     let cluster_id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     state.assets.latest(&auth, cluster_id).await.map(Json)
@@ -272,7 +272,7 @@ async fn list_assets(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<AssetListQuery>,
-) -> Result<Json<AssetPage>, ControlPlaneError> {
+) -> Result<Json<AssetPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.assets.assets(&auth, &query).await.map(Json)
 }
@@ -286,7 +286,7 @@ async fn get_latest_topology(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<TopologyQuery>,
-) -> Result<Json<Option<InventorySnapshot>>, ControlPlaneError> {
+) -> Result<Json<Option<InventorySnapshot>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.assets.latest(&auth, query.cluster_id).await.map(Json)
 }
@@ -295,7 +295,7 @@ async fn get_latest_topology_diff(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<TopologyQuery>,
-) -> Result<Json<Option<TopologyDiff>>, ControlPlaneError> {
+) -> Result<Json<Option<TopologyDiff>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.assets.latest_diff(&auth, query.cluster_id).await.map(Json)
 }
@@ -311,7 +311,7 @@ async fn get_dashboard_link(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<DashboardLinkQuery>,
-) -> Result<Json<Option<DashboardDeepLink>>, ControlPlaneError> {
+) -> Result<Json<Option<DashboardDeepLink>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     let key = AssetKey::new(query.kind, query.external_key)?;
     state.assets.dashboard_link(&auth, query.cluster_id, &key).map(Json)
@@ -321,7 +321,7 @@ async fn create_conversation(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<ConversationCreateRequest>,
-) -> Result<Json<ConversationView>, ControlPlaneError> {
+) -> Result<Json<ConversationView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .workflow
@@ -334,7 +334,7 @@ async fn list_conversations(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<WorkflowListQuery>,
-) -> Result<Json<WorkflowPage<ConversationView>>, ControlPlaneError> {
+) -> Result<Json<WorkflowPage<ConversationView>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.workflow.list_conversations(&auth, &query).await.map(Json)
 }
@@ -343,7 +343,7 @@ async fn get_conversation(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<ConversationView>, ControlPlaneError> {
+) -> Result<Json<ConversationView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .workflow
@@ -357,7 +357,7 @@ async fn submit_conversation_turn(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<ConversationTurnRequest>,
-) -> Result<Json<ConversationTurnView>, ControlPlaneError> {
+) -> Result<Json<ConversationTurnView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.workflow.ensure_operator(&auth)?;
     state
@@ -372,7 +372,7 @@ async fn stream_conversation_turn(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<ConversationTurnRequest>,
-) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ControlPlaneError> {
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.workflow.ensure_operator(&auth)?;
     let receiver = state
@@ -395,7 +395,7 @@ async fn list_conversation_turns(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<ConversationTurnPage>, ControlPlaneError> {
+) -> Result<Json<ConversationTurnPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .conversation_queries
@@ -408,7 +408,7 @@ async fn cancel_conversation_query(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<ConversationCancelResult>, ControlPlaneError> {
+) -> Result<Json<ConversationCancelResult>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .conversation_queries
@@ -421,7 +421,7 @@ async fn import_knowledge(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<ImportKnowledgeRequest>,
-) -> Result<Json<KnowledgeImportResult>, ControlPlaneError> {
+) -> Result<Json<KnowledgeImportResult>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.knowledge.import(&auth, request).await.map(Json)
 }
@@ -430,7 +430,7 @@ async fn search_knowledge(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<KnowledgeSearchQuery>,
-) -> Result<Json<KnowledgeSearchPage>, ControlPlaneError> {
+) -> Result<Json<KnowledgeSearchPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.knowledge.search(&auth, &query).await.map(Json)
 }
@@ -439,7 +439,7 @@ async fn list_knowledge(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<KnowledgeListQuery>,
-) -> Result<Json<KnowledgePage>, ControlPlaneError> {
+) -> Result<Json<KnowledgePage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.knowledge.list(&auth, &query).await.map(Json)
 }
@@ -448,7 +448,7 @@ async fn get_knowledge(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<KnowledgeItem>, ControlPlaneError> {
+) -> Result<Json<KnowledgeItem>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.knowledge.item(&auth, parse_knowledge_id(&id)?).await.map(Json)
 }
@@ -458,7 +458,7 @@ async fn review_knowledge(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<KnowledgeReviewRequest>,
-) -> Result<Json<KnowledgeItem>, ControlPlaneError> {
+) -> Result<Json<KnowledgeItem>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .knowledge
@@ -472,7 +472,7 @@ async fn feedback_knowledge(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<KnowledgeFeedbackRequest>,
-) -> Result<Json<KnowledgeItem>, ControlPlaneError> {
+) -> Result<Json<KnowledgeItem>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .knowledge
@@ -485,7 +485,7 @@ async fn persist_evidence(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<PersistEvidenceRequest>,
-) -> Result<Json<EvidenceSnapshot>, ControlPlaneError> {
+) -> Result<Json<EvidenceSnapshot>, ControlPlaneRequestFailure> {
     let auth = state
         .auth
         .authorize(&headers, Some(request.evidence.cluster_id))
@@ -497,7 +497,7 @@ async fn list_evidence(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<EvidenceListQuery>,
-) -> Result<Json<EvidencePage>, ControlPlaneError> {
+) -> Result<Json<EvidencePage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.evidence.list(&auth, &query).await.map(Json)
 }
@@ -506,7 +506,7 @@ async fn get_evidence(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<EvidenceSnapshot>, ControlPlaneError> {
+) -> Result<Json<EvidenceSnapshot>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.evidence.get(&auth, parse_evidence_id(&id)?).await.map(Json)
 }
@@ -515,7 +515,7 @@ async fn get_evidence_content(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Response, ControlPlaneError> {
+) -> Result<Response, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     let content = state.evidence.content(&auth, parse_evidence_id(&id)?).await?;
     Ok(([(header::CONTENT_TYPE, "application/json")], Body::from(content)).into_response())
@@ -555,7 +555,7 @@ async fn get_message_journey(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<MessageJourneyQuery>,
-) -> Result<Json<MessageJourney>, ControlPlaneError> {
+) -> Result<Json<MessageJourney>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     let fingerprint = message_fingerprint(auth.tenant_id, query.cluster_id, &query.query)?;
     let evidence = state
@@ -612,7 +612,7 @@ fn message_fingerprint(
     tenant_id: rocketmq_sre_contracts::TenantId,
     cluster_id: rocketmq_sre_contracts::ClusterId,
     query: &str,
-) -> Result<String, ControlPlaneError> {
+) -> Result<String, ControlPlaneRequestFailure> {
     let query = query.trim();
     if query.is_empty()
         || query.len() > 512
@@ -620,7 +620,7 @@ fn message_fingerprint(
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.'))
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "message or trace identifier must be a bounded opaque identifier, not message content",
         ));
@@ -678,7 +678,7 @@ async fn create_investigation(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<InvestigationCreateRequest>,
-) -> Result<Json<InvestigationView>, ControlPlaneError> {
+) -> Result<Json<InvestigationView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .workflow
@@ -691,7 +691,7 @@ async fn list_investigations(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<WorkflowListQuery>,
-) -> Result<Json<WorkflowPage<InvestigationView>>, ControlPlaneError> {
+) -> Result<Json<WorkflowPage<InvestigationView>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.workflow.list_investigations(&auth, &query).await.map(Json)
 }
@@ -700,7 +700,7 @@ async fn get_investigation(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<InvestigationView>, ControlPlaneError> {
+) -> Result<Json<InvestigationView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .workflow
@@ -714,7 +714,7 @@ async fn promote_investigation(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<PromoteInvestigationRequest>,
-) -> Result<Json<IncidentView>, ControlPlaneError> {
+) -> Result<Json<IncidentView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .workflow
@@ -727,7 +727,7 @@ async fn create_incident(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<IncidentCreateRequest>,
-) -> Result<Json<IncidentView>, ControlPlaneError> {
+) -> Result<Json<IncidentView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .workflow
@@ -740,7 +740,7 @@ async fn list_incidents(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<WorkflowListQuery>,
-) -> Result<Json<WorkflowPage<IncidentView>>, ControlPlaneError> {
+) -> Result<Json<WorkflowPage<IncidentView>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.workflow.list_incidents(&auth, &query).await.map(Json)
 }
@@ -749,7 +749,7 @@ async fn get_incident(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<IncidentView>, ControlPlaneError> {
+) -> Result<Json<IncidentView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.workflow.incident(&auth, parse_incident_id(&id)?).await.map(Json)
 }
@@ -758,7 +758,7 @@ async fn ingest_alertmanager(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<AlertmanagerWebhook>,
-) -> Result<Json<Vec<AlertIngestionOutcome>>, ControlPlaneError> {
+) -> Result<Json<Vec<AlertIngestionOutcome>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .alerting
@@ -771,7 +771,7 @@ async fn ingest_integration_event(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<IntegrationEventRequest>,
-) -> Result<Json<AlertIngestionOutcome>, ControlPlaneError> {
+) -> Result<Json<AlertIngestionOutcome>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .alerting
@@ -784,7 +784,7 @@ async fn ingest_unified_event_entry(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<UnifiedEventEntryRequest>,
-) -> Result<Json<UnifiedEventEntryResult>, ControlPlaneError> {
+) -> Result<Json<UnifiedEventEntryResult>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     UnifiedEventEntryService::new(state.repository.clone(), state.workflow.clone(), state.alerting.clone())
         .ingest(&auth, &request, correlation_id(&headers))
@@ -796,7 +796,7 @@ async fn get_incident_timeline(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<Vec<rocketmq_sre_contracts::TimelineEvent>>, ControlPlaneError> {
+) -> Result<Json<Vec<rocketmq_sre_contracts::TimelineEvent>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.alerting.timeline(&auth, parse_incident_id(&id)?).await.map(Json)
 }
@@ -805,7 +805,7 @@ async fn get_incident_topology(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<IncidentTopologyView>, ControlPlaneError> {
+) -> Result<Json<IncidentTopologyView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.alerting.topology(&auth, parse_incident_id(&id)?).await.map(Json)
 }
@@ -815,7 +815,7 @@ async fn add_incident_note(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<IncidentNoteRequest>,
-) -> Result<Json<rocketmq_sre_contracts::TimelineEvent>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::TimelineEvent>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .alerting
@@ -828,7 +828,7 @@ async fn get_cluster_slo(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<rocketmq_sre_contracts::ClusterHealthReport>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::ClusterHealthReport>, ControlPlaneRequestFailure> {
     let cluster_id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     state.slo.cluster_report(&auth, cluster_id).await.map(Json)
@@ -838,7 +838,7 @@ async fn get_cluster_health(
     state: State<AppState>,
     path: Path<String>,
     headers: HeaderMap,
-) -> Result<Json<rocketmq_sre_contracts::ClusterHealthReport>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::ClusterHealthReport>, ControlPlaneRequestFailure> {
     get_cluster_slo(state, path, headers).await
 }
 
@@ -851,7 +851,7 @@ async fn get_fleet_health(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<FleetHealthQuery>,
-) -> Result<Json<rocketmq_sre_contracts::FleetHealthReport>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::FleetHealthReport>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.slo.fleet_report(&auth, query.region.as_deref()).await.map(Json)
 }
@@ -860,7 +860,7 @@ async fn get_cluster_forecasts(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<rocketmq_sre_contracts::ClusterForecastReport>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::ClusterForecastReport>, ControlPlaneRequestFailure> {
     let cluster_id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     state.forecast.cluster_report(&auth, cluster_id).await.map(Json)
@@ -876,7 +876,7 @@ async fn get_upgrade_readiness(
     Path(id): Path<String>,
     headers: HeaderMap,
     Query(query): Query<UpgradeReadinessQuery>,
-) -> Result<Json<rocketmq_sre_contracts::UpgradeReadinessReport>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::UpgradeReadinessReport>, ControlPlaneRequestFailure> {
     let cluster_id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     state
@@ -908,7 +908,7 @@ async fn get_dr_readiness(
     Path(id): Path<String>,
     headers: HeaderMap,
     Query(query): Query<DrReadinessQuery>,
-) -> Result<Json<rocketmq_sre_contracts::DrReadinessReport>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::DrReadinessReport>, ControlPlaneRequestFailure> {
     let cluster_id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     state
@@ -928,7 +928,7 @@ async fn run_what_if_simulation(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<WhatIfSimulationRequest>,
-) -> Result<Json<rocketmq_sre_contracts::WhatIfSimulation>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::WhatIfSimulation>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.forecast.run_simulation(&auth, request).await.map(Json)
 }
@@ -937,7 +937,7 @@ async fn test_notification_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<NotificationTestRequest>,
-) -> Result<Json<NotificationTestResponse>, ControlPlaneError> {
+) -> Result<Json<NotificationTestResponse>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.alerting.test_notification(&auth, &request).await.map(Json)
 }
@@ -946,7 +946,7 @@ async fn diagnose_incident(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<DiagnosisResponse>, ControlPlaneError> {
+) -> Result<Json<DiagnosisResponse>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     let orchestrator = OrchestratorService::new(
         state.workflow.clone(),
@@ -965,7 +965,7 @@ async fn create_inspection(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<InspectionCreateRequest>,
-) -> Result<Json<InspectionView>, ControlPlaneError> {
+) -> Result<Json<InspectionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     let inspections = InspectionService::new(state.repository.clone(), state.workflow.clone(), state.evidence.clone())?;
     inspections
@@ -978,7 +978,7 @@ async fn list_inspections(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<WorkflowListQuery>,
-) -> Result<Json<WorkflowPage<InspectionView>>, ControlPlaneError> {
+) -> Result<Json<WorkflowPage<InspectionView>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.workflow.list_inspections(&auth, &query).await.map(Json)
 }
@@ -987,7 +987,7 @@ async fn get_inspection(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<InspectionView>, ControlPlaneError> {
+) -> Result<Json<InspectionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .workflow
@@ -1000,7 +1000,7 @@ async fn run_inspection(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<InspectionView>, ControlPlaneError> {
+) -> Result<Json<InspectionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     let inspections = InspectionService::new(state.repository.clone(), state.workflow.clone(), state.evidence.clone())?;
     inspections
@@ -1024,7 +1024,7 @@ async fn get_inspection_report(
     Path(id): Path<String>,
     headers: HeaderMap,
     Query(query): Query<InspectionReportQuery>,
-) -> Result<Json<InspectionReport>, ControlPlaneError> {
+) -> Result<Json<InspectionReport>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     let inspections = InspectionService::new(state.repository.clone(), state.workflow.clone(), state.evidence.clone())?;
     inspections
@@ -1038,7 +1038,7 @@ async fn disposition_recommendation(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<RecommendationDispositionRequest>,
-) -> Result<Json<rocketmq_sre_contracts::Recommendation>, ControlPlaneError> {
+) -> Result<Json<rocketmq_sre_contracts::Recommendation>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .workflow
@@ -1051,7 +1051,7 @@ async fn list_recommendations(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<WorkflowListQuery>,
-) -> Result<Json<WorkflowPage<rocketmq_sre_contracts::Recommendation>>, ControlPlaneError> {
+) -> Result<Json<WorkflowPage<rocketmq_sre_contracts::Recommendation>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.workflow.list_recommendations(&auth, &query).await.map(Json)
 }
@@ -1059,7 +1059,7 @@ async fn list_recommendations(
 async fn event_stream(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ControlPlaneError> {
+) -> Result<Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     let tenant_id = auth.tenant_id;
     let clusters = auth.clusters;
@@ -1076,7 +1076,7 @@ async fn event_stream(
 async fn model_capabilities(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<ModelCapabilitiesStatus>, ControlPlaneError> {
+) -> Result<Json<ModelCapabilitiesStatus>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.model_gateway.capabilities_status(&auth).await.map(Json)
 }
@@ -1084,7 +1084,7 @@ async fn model_capabilities(
 async fn model_status(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<ModelCapabilitiesStatus>, ControlPlaneError> {
+) -> Result<Json<ModelCapabilitiesStatus>, ControlPlaneRequestFailure> {
     model_capabilities(State(state), headers).await
 }
 
@@ -1092,7 +1092,7 @@ async fn model_invocations(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ModelInvocationListQuery>,
-) -> Result<Json<ModelInvocationPage>, ControlPlaneError> {
+) -> Result<Json<ModelInvocationPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.model_gateway.invocations(&auth, &query).await.map(Json)
 }
@@ -1100,7 +1100,7 @@ async fn model_invocations(
 async fn model_profile_lifecycles(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<ModelProfileLifecyclePage>, ControlPlaneError> {
+) -> Result<Json<ModelProfileLifecyclePage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.model_gateway.profile_lifecycles(&auth).await.map(Json)
 }
@@ -1109,7 +1109,7 @@ async fn model_profile_lifecycle(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<ModelProfileLifecycleView>, ControlPlaneError> {
+) -> Result<Json<ModelProfileLifecycleView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .model_gateway
@@ -1123,7 +1123,7 @@ async fn transition_model_profile_lifecycle(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ModelProfileLifecycleTransitionRequest>,
-) -> Result<Json<ModelProfileLifecycleView>, ControlPlaneError> {
+) -> Result<Json<ModelProfileLifecycleView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .model_gateway
@@ -1137,7 +1137,7 @@ async fn rollback_model_profile(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ModelProfileRollbackRequest>,
-) -> Result<Json<ModelProfileLifecycleView>, ControlPlaneError> {
+) -> Result<Json<ModelProfileLifecycleView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .model_gateway
@@ -1150,7 +1150,7 @@ async fn run_model_profile_smoke(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<ProviderSmokeResultView>, ControlPlaneError> {
+) -> Result<Json<ProviderSmokeResultView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .model_gateway
@@ -1159,7 +1159,7 @@ async fn run_model_profile_smoke(
         .map(Json)
 }
 
-async fn openapi(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ControlPlaneError> {
+async fn openapi(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ControlPlaneRequestFailure> {
     let _auth = state.auth.authorize(&headers, None).await?;
     Ok(Json(crate::openapi::document()))
 }
@@ -1169,64 +1169,64 @@ fn correlation_id(headers: &HeaderMap) -> CorrelationId {
         .id()
 }
 
-fn parse_conversation_id(value: &str) -> Result<ConversationId, ControlPlaneError> {
+fn parse_conversation_id(value: &str) -> Result<ConversationId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "conversation identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "conversation id is invalid"))
 }
 
-fn parse_cluster_id(value: &str) -> Result<rocketmq_sre_contracts::ClusterId, ControlPlaneError> {
+fn parse_cluster_id(value: &str) -> Result<rocketmq_sre_contracts::ClusterId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("cluster_not_allowed", "cluster identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("cluster_not_allowed", "cluster id is invalid"))
 }
 
-fn parse_model_profile_id(value: &str) -> Result<ModelProfileId, ControlPlaneError> {
+fn parse_model_profile_id(value: &str) -> Result<ModelProfileId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "model profile identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "model profile id is invalid"))
 }
 
-fn parse_uuid(value: &str, name: &str) -> Result<Uuid, ControlPlaneError> {
+fn parse_uuid(value: &str, name: &str) -> Result<Uuid, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", format!("{name} identifier must be a UUID")))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", format!("{name} is invalid")))
 }
 
-fn parse_investigation_id(value: &str) -> Result<InvestigationId, ControlPlaneError> {
+fn parse_investigation_id(value: &str) -> Result<InvestigationId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "investigation identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "investigation id is invalid"))
 }
 
-fn parse_incident_id(value: &str) -> Result<IncidentId, ControlPlaneError> {
+fn parse_incident_id(value: &str) -> Result<IncidentId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "incident identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "incident id is invalid"))
 }
 
-fn parse_evidence_id(value: &str) -> Result<EvidenceId, ControlPlaneError> {
+fn parse_evidence_id(value: &str) -> Result<EvidenceId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "evidence identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "evidence id is invalid"))
 }
 
-fn parse_knowledge_id(value: &str) -> Result<KnowledgeItemId, ControlPlaneError> {
+fn parse_knowledge_id(value: &str) -> Result<KnowledgeItemId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "knowledge identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "knowledge item id is invalid"))
 }
 
-fn parse_inspection_id(value: &str) -> Result<InspectionRunId, ControlPlaneError> {
+fn parse_inspection_id(value: &str) -> Result<InspectionRunId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "inspection identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "inspection run id is invalid"))
 }
 
-fn parse_recommendation_id(value: &str) -> Result<RecommendationId, ControlPlaneError> {
+fn parse_recommendation_id(value: &str) -> Result<RecommendationId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "recommendation identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "recommendation id is invalid"))
 }
 
 #[cfg(test)]

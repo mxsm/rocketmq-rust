@@ -80,6 +80,7 @@ use super::model::ShadowOutcomePage;
 use super::model::ShadowOutcomeRecord;
 use super::model::ShadowOutcomeView;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::SupervisedRepository;
 use crate::auth::AuthContext;
@@ -121,9 +122,8 @@ impl AutonomyService {
     ) -> Result<Self, ControlPlaneError> {
         let mut descriptors = BTreeMap::new();
         for yaml in EMBEDDED_ACTION_DESCRIPTOR_YAMLS {
-            let descriptor: ActionDescriptor = serde_yaml::from_str(yaml).map_err(|error| {
-                ControlPlaneError::configuration(format!("autonomy action descriptor is invalid: {error}"))
-            })?;
+            let descriptor: ActionDescriptor =
+                serde_yaml::from_str(yaml).map_err(ControlPlaneError::configuration_source)?;
             let action = ExecutionAction::from_id(&descriptor.id).ok_or_else(|| {
                 ControlPlaneError::configuration("autonomy descriptor is outside the closed execution catalog")
             })?;
@@ -146,14 +146,19 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &CreateAutonomyPolicyRequest,
-    ) -> Result<AutonomyScopeView, ControlPlaneError> {
+    ) -> Result<AutonomyScopeView, ControlPlaneRequestFailure> {
         require_human_operator(auth)?;
         require_cluster(auth, request.cluster_id)?;
         let descriptor = self.descriptor(request.action, &request.action_version)?;
-        let digest = canonical_sha256(descriptor)
-            .map_err(|error| ControlPlaneError::validation("invalid_descriptor_digest", error.to_string()))?;
+        let digest = canonical_sha256(descriptor).map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_descriptor_digest",
+                error,
+            )
+        })?;
         if request.descriptor_digest != digest || request.owner != descriptor.owner {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "descriptor_digest_mismatch",
                 "autonomy policy must bind the current descriptor digest and owner",
             ));
@@ -182,8 +187,13 @@ impl AutonomyService {
             stable_window_seconds: request.stable_window_seconds,
             created_at: (self.clock)(),
         };
-        AutonomyPolicy::validate(&definition, descriptor)
-            .map_err(|error| ControlPlaneError::validation("invalid_autonomy_policy", error.to_string()))?;
+        AutonomyPolicy::validate(&definition, descriptor).map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_autonomy_policy",
+                error,
+            )
+        })?;
         let (definition, _) = self.repository.store_autonomy_policy(definition, &auth.subject).await?;
         self.repository
             .autonomy_scope_at(
@@ -200,7 +210,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         query: &AutonomyScopeQuery,
-    ) -> Result<AutonomyScopeView, ControlPlaneError> {
+    ) -> Result<AutonomyScopeView, ControlPlaneRequestFailure> {
         require_cluster(auth, query.cluster_id)?;
         self.repository
             .autonomy_scope_at(
@@ -218,7 +228,7 @@ impl AutonomyService {
         auth: &AuthContext,
         cluster_id: rocketmq_sre_contracts::ClusterId,
         limit: u16,
-    ) -> Result<AutonomyScopePage, ControlPlaneError> {
+    ) -> Result<AutonomyScopePage, ControlPlaneRequestFailure> {
         require_cluster(auth, cluster_id)?;
         let limit = limit.clamp(1, MAX_SCOPE_PAGE);
         let mut items = self
@@ -239,7 +249,7 @@ impl AutonomyService {
         auth: &AuthContext,
         scope: &AutonomyScopeQuery,
         request: &AutonomyTransitionRequest,
-    ) -> Result<AutonomyScopeView, ControlPlaneError> {
+    ) -> Result<AutonomyScopeView, ControlPlaneRequestFailure> {
         require_human_operator(auth)?;
         let owner_approval_ref = transition_owner_approval_ref(request)?;
         let current = self.scope(auth, scope).await?;
@@ -263,7 +273,7 @@ impl AutonomyService {
             qualification,
             (self.clock)(),
         )
-        .map_err(|error| ControlPlaneError::conflict_code("invalid_autonomy_transition", error.to_string()))?;
+        .map_err(|_| ControlPlaneRequestFailure::conflict_code("invalid_autonomy_transition", "operation rejected"))?;
         self.repository
             .update_autonomy_lifecycle(
                 &current.lifecycle,
@@ -281,7 +291,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &CreateShadowCohortRequest,
-    ) -> Result<AutonomyQualificationCohort, ControlPlaneError> {
+    ) -> Result<AutonomyQualificationCohort, ControlPlaneRequestFailure> {
         require_automation_service_or_operator(auth)?;
         let scope = self
             .scope(
@@ -294,7 +304,7 @@ impl AutonomyService {
             )
             .await?;
         if !matches!(scope.lifecycle.mode, AutonomyMode::Shadow | AutonomyMode::Supervised) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "invalid_autonomy_state",
                 "Shadow cohort creation requires Shadow or Supervised mode",
             ));
@@ -308,7 +318,13 @@ impl AutonomyService {
             },
             (self.clock)(),
         )
-        .map_err(|error| ControlPlaneError::validation("invalid_model_identity", error.to_string()))?;
+        .map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_model_identity",
+                error,
+            )
+        })?;
         self.repository.store_autonomy_cohort(scope.policy.id, &cohort).await
     }
 
@@ -316,7 +332,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &PrepareAutonomousCohortRequest,
-    ) -> Result<AutonomyQualificationCohort, ControlPlaneError> {
+    ) -> Result<AutonomyQualificationCohort, ControlPlaneRequestFailure> {
         require_automation_service_or_operator(auth)?;
         let scope = self
             .scope(
@@ -332,7 +348,7 @@ impl AutonomyService {
             scope.lifecycle.mode,
             AutonomyMode::Supervised | AutonomyMode::Autonomous
         ) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "invalid_autonomy_state",
                 "Autonomous cohort creation requires Supervised or Autonomous mode",
             ));
@@ -368,7 +384,13 @@ impl AutonomyService {
             },
             (self.clock)(),
         )
-        .map_err(|error| ControlPlaneError::validation("invalid_model_identity", error.to_string()))?;
+        .map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_model_identity",
+                error,
+            )
+        })?;
         self.repository.store_autonomy_cohort(scope.policy.id, &cohort).await
     }
 
@@ -376,7 +398,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &RecordQualificationSampleRequest,
-    ) -> Result<AutonomyQualificationSample, ControlPlaneError> {
+    ) -> Result<AutonomyQualificationSample, ControlPlaneRequestFailure> {
         require_automation_service_or_operator(auth)?;
         let scope = self
             .scope(
@@ -394,7 +416,7 @@ impl AutonomyService {
         validate_plan_scope(&plan, &scope, request.plan_hash.as_str())?;
         if request.kind == AutonomySampleKind::SupervisedSuccess {
             let execution_id = request.execution_id.ok_or_else(|| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "execution_missing",
                     "Supervised qualification requires one exact persisted execution",
                 )
@@ -441,12 +463,20 @@ impl AutonomyService {
                 "critic_not_ready",
             );
             if let (Some(primary), Some(critic)) = (&primary_identity, &critic_identity) {
-                let primary_hash = primary
-                    .identity_hash()
-                    .map_err(|error| ControlPlaneError::validation("invalid_model_identity", error.to_string()))?;
-                let critic_hash = critic
-                    .identity_hash()
-                    .map_err(|error| ControlPlaneError::validation("invalid_model_identity", error.to_string()))?;
+                let primary_hash = primary.identity_hash().map_err(|error| {
+                    ControlPlaneRequestFailure::contract(
+                        crate::ControlPlaneFailure::Validation,
+                        "invalid_model_identity",
+                        error,
+                    )
+                })?;
+                let critic_hash = critic.identity_hash().map_err(|error| {
+                    ControlPlaneRequestFailure::contract(
+                        crate::ControlPlaneFailure::Validation,
+                        "invalid_model_identity",
+                        error,
+                    )
+                })?;
                 add_reason(
                     &mut reason_codes,
                     primary.model_family.eq_ignore_ascii_case(&critic.model_family),
@@ -540,7 +570,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &RecordShadowOutcomeRequest,
-    ) -> Result<ShadowOutcomeView, ControlPlaneError> {
+    ) -> Result<ShadowOutcomeView, ControlPlaneRequestFailure> {
         require_automation_service_or_operator(auth)?;
         let scope = self
             .scope(
@@ -553,7 +583,7 @@ impl AutonomyService {
             )
             .await?;
         if scope.lifecycle.mode != AutonomyMode::Shadow {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "invalid_autonomy_state",
                 "Shadow runner records candidates only while the exact scope is in Shadow mode",
             ));
@@ -567,14 +597,12 @@ impl AutonomyService {
             || plan.diagnosis_revision != request.diagnosis_revision_id
             || !request.expected_effect.is_object()
             || serde_json::to_vec(&request.expected_effect)
-                .map_err(|_| {
-                    ControlPlaneError::validation("invalid_expected_effect", "Shadow expected effect is not valid JSON")
-                })?
+                .map_err(|source| ControlPlaneError::validation_source("invalid_expected_effect", source))?
                 .len()
                 > 64 * 1024
             || request.evidence_ids.len() > 64
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_shadow_outcome",
                 "Shadow outcome plan, expected effect, or Evidence bounds are invalid",
             ));
@@ -676,7 +704,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         query: &ShadowOutcomeListQuery,
-    ) -> Result<ShadowOutcomePage, ControlPlaneError> {
+    ) -> Result<ShadowOutcomePage, ControlPlaneRequestFailure> {
         require_cluster(auth, query.cluster_id)?;
         let limit = query.limit.clamp(1, MAX_SCOPE_PAGE);
         let mut items = self
@@ -702,7 +730,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &RecordAutonomyOutcomeRequest,
-    ) -> Result<AutonomyOutcome, ControlPlaneError> {
+    ) -> Result<AutonomyOutcome, ControlPlaneRequestFailure> {
         require_role(auth, "executor_service")?;
         let scope = self
             .scope(
@@ -717,7 +745,7 @@ impl AutonomyService {
         let plan = self.repository.action_plan(request.plan_id).await?.plan;
         validate_plan_scope(&plan, &scope, &request.plan_hash)?;
         if plan.incident_id != request.incident_id {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "autonomy_plan_binding_invalid",
                 "autonomy outcome incident does not match the immutable plan",
             ));
@@ -730,7 +758,7 @@ impl AutonomyService {
                 || cohort.action_version != request.action_version
                 || cohort.level != AutonomyQualificationLevel::Autonomous
             {
-                return Err(ControlPlaneError::forbidden(
+                return Err(ControlPlaneRequestFailure::forbidden(
                     "autonomy_cohort_mismatch",
                     "autonomy outcome cohort does not match the execution scope",
                 ));
@@ -765,7 +793,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &SetAutonomyFreezeRequest,
-    ) -> Result<super::model::AutonomyFreezeView, ControlPlaneError> {
+    ) -> Result<super::model::AutonomyFreezeView, ControlPlaneRequestFailure> {
         require_human_operator(auth)?;
         if let Some(cluster_id) = request.cluster_id {
             require_cluster(auth, cluster_id)?;
@@ -776,7 +804,7 @@ impl AutonomyService {
             || request.reason.chars().count() > 512
             || request.expires_at.is_some_and(|expires| expires <= request.starts_at)
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_autonomy_freeze",
                 "freeze scope, reason, or validity window is invalid",
             ));
@@ -801,11 +829,11 @@ impl AutonomyService {
         auth: &AuthContext,
         cluster_id: rocketmq_sre_contracts::ClusterId,
         reason: &str,
-    ) -> Result<super::model::AutonomyFreezeView, ControlPlaneError> {
+    ) -> Result<super::model::AutonomyFreezeView, ControlPlaneRequestFailure> {
         require_role(auth, "automation_service")?;
         require_cluster(auth, cluster_id)?;
         if reason.trim().is_empty() || reason.chars().count() > 512 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_preventive_freeze",
                 "preventive freeze reason must be bounded plain text",
             ));
@@ -829,12 +857,12 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &SetAutonomyKillSwitchRequest,
-    ) -> Result<super::model::AutonomyKillSwitchView, ControlPlaneError> {
+    ) -> Result<super::model::AutonomyKillSwitchView, ControlPlaneRequestFailure> {
         require_human_operator(auth)?;
         require_cluster(auth, request.cluster_id)?;
         self.descriptor(request.action, &request.action_version)?;
         if request.reason.trim().is_empty() || request.reason.chars().count() > 512 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_kill_switch",
                 "kill-switch reason must be bounded plain text",
             ));
@@ -856,13 +884,17 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &DynamicSafetyEvaluationRequest,
-    ) -> Result<DynamicSafetyDecision, ControlPlaneError> {
+    ) -> Result<DynamicSafetyDecision, ControlPlaneRequestFailure> {
         require_role(auth, "executor_service")?;
-        request
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_dynamic_safety_request", error.to_string()))?;
+        request.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_dynamic_safety_request",
+                error,
+            )
+        })?;
         if request.tenant_id != auth.tenant_id {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "tenant_mismatch",
                 "dynamic safety request belongs to another tenant",
             ));
@@ -924,15 +956,19 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &VerifyDynamicSafetyDecisionRequest,
-    ) -> Result<DynamicSafetyVerification, ControlPlaneError> {
+    ) -> Result<DynamicSafetyVerification, ControlPlaneRequestFailure> {
         require_role(auth, "execution_agent")?;
         let now = (self.clock)();
-        request
-            .validate_at(now)
-            .map_err(|error| ControlPlaneError::validation("invalid_dynamic_safety_decision", error.to_string()))?;
+        request.validate_at(now).map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_dynamic_safety_decision",
+                error,
+            )
+        })?;
         require_cluster(auth, request.decision.cluster_id)?;
         if request.tenant_id != auth.tenant_id {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "tenant_mismatch",
                 "dynamic safety decision belongs to another tenant",
             ));
@@ -972,7 +1008,7 @@ impl AutonomyService {
             || current.freeze_revision != request.decision.freeze_revision
             || current.kill_switch_revision != request.decision.kill_switch_revision
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "dynamic_safety_stale",
                 "dynamic safety decision no longer matches authoritative live state",
             ));
@@ -994,7 +1030,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &IssueAutonomyGrantRequest,
-    ) -> Result<AutonomyGrant, ControlPlaneError> {
+    ) -> Result<AutonomyGrant, ControlPlaneRequestFailure> {
         require_role(auth, "executor_service")?;
         let descriptor = self.descriptor(request.action, &request.action_version)?;
         let cohort_request = PrepareAutonomousCohortRequest {
@@ -1073,14 +1109,14 @@ impl AutonomyService {
                 .chain(final_decision.reason_codes)
                 .collect::<Vec<_>>()
                 .join(",");
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "autonomy_not_eligible",
                 format!("autonomy grant denied: {reasons}"),
             ));
         }
         let plan = self.repository.action_plan(request.plan_id).await?.plan;
         if plan.incident_id != request.incident_id {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "autonomy_plan_binding_invalid",
                 "autonomy incident does not match the immutable plan",
             ));
@@ -1118,7 +1154,7 @@ impl AutonomyService {
         &self,
         auth: &AuthContext,
         request: &PrepareAutonomousExecutionRequest,
-    ) -> Result<ExecutionRequest, ControlPlaneError> {
+    ) -> Result<ExecutionRequest, ControlPlaneRequestFailure> {
         require_role(auth, "executor_service")?;
         validate_idempotency_key(&request.idempotency_key)?;
         let grant = self.issue_grant(auth, &request.grant).await?;
@@ -1147,9 +1183,13 @@ impl AutonomyService {
         };
         self.signer.sign_execution(&mut execution)?;
         self.signer.verify_execution(&execution)?;
-        execution
-            .validate_at(issued_at, EXECUTOR_AUDIENCE)
-            .map_err(|error| ControlPlaneError::validation("invalid_execution_request", error.to_string()))?;
+        execution.validate_at(issued_at, EXECUTOR_AUDIENCE).map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_execution_request",
+                error,
+            )
+        })?;
         Ok(execution)
     }
 
@@ -1173,14 +1213,14 @@ impl AutonomyService {
         critic_profile: &str,
         critic_family: &str,
         critic_revision: &str,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let plan = self.repository.action_plan(plan_id).await?.plan;
         validate_plan_scope(&plan, scope, plan_hash)?;
         if plan.diagnosis_revision != diagnosis_revision_id
             || plan.primary_model_invocation_id != primary_invocation_id
             || !matches!(plan.status, PlanStatus::ReadyForApproval | PlanStatus::Approved)
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "autonomy_plan_binding_invalid",
                 "autonomy plan lifecycle or diagnosis binding is invalid",
             ));
@@ -1205,7 +1245,7 @@ impl AutonomyService {
             )
             .await?;
         if !valid || primary_family.trim().eq_ignore_ascii_case(critic_family.trim()) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "critic_binding_invalid",
                 "Critic review and actual heterogeneous model identities are not authoritative",
             ));
@@ -1242,7 +1282,7 @@ impl AutonomyService {
         plan_id: rocketmq_sre_contracts::ActionPlanId,
         plan_hash: &str,
         now: chrono::DateTime<Utc>,
-    ) -> Result<CurrentDynamicSafety, ControlPlaneError> {
+    ) -> Result<CurrentDynamicSafety, ControlPlaneRequestFailure> {
         let live = self.live_safety(auth, scope).await;
         let evidence_fresh = self
             .repository
@@ -1282,12 +1322,12 @@ impl AutonomyService {
         &self,
         action: ExecutionAction,
         action_version: &str,
-    ) -> Result<&ActionDescriptor, ControlPlaneError> {
+    ) -> Result<&ActionDescriptor, ControlPlaneRequestFailure> {
         let descriptor = self.descriptors.get(&action).ok_or_else(|| {
-            ControlPlaneError::validation("unknown_action", "action is outside the closed autonomy catalog")
+            ControlPlaneRequestFailure::validation("unknown_action", "action is outside the closed autonomy catalog")
         })?;
         if descriptor.version != action_version || descriptor.risk != ActionRisk::R1 || descriptor.plan_only {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "r1_action_required",
                 "bounded autonomy accepts only an exact, non-plan-only R1 descriptor",
             ));
@@ -1316,9 +1356,10 @@ fn validate_plan_scope(
     plan: &rocketmq_sre_contracts::ActionPlan,
     scope: &AutonomyScopeView,
     expected_hash: &str,
-) -> Result<(), ControlPlaneError> {
-    plan.verify_plan_hash()
-        .map_err(|error| ControlPlaneError::validation("invalid_plan_hash", error.to_string()))?;
+) -> Result<(), ControlPlaneRequestFailure> {
+    plan.verify_plan_hash().map_err(|error| {
+        ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_plan_hash", error)
+    })?;
     if plan.tenant_id != scope.policy.tenant_id
         || plan.cluster_id != scope.policy.cluster_id
         || plan.plan_hash != expected_hash
@@ -1329,7 +1370,7 @@ fn validate_plan_scope(
             .iter()
             .any(|step| step.action != scope.policy.action || step.descriptor_version != scope.policy.action_version)
     {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "autonomy_plan_binding_invalid",
             "immutable plan is not bound to the current autonomy action scope",
         ));
@@ -1341,7 +1382,7 @@ fn validate_current_cohort(
     scope: &AutonomyScopeView,
     cohort: &AutonomyQualificationCohort,
     kind: AutonomySampleKind,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let level_matches = matches!(
         (cohort.level, kind),
         (AutonomyQualificationLevel::Shadow, AutonomySampleKind::ShadowOutcome)
@@ -1360,7 +1401,7 @@ fn validate_current_cohort(
         || cohort.diagnostic_pack_id != scope.policy.diagnostic_pack_id
         || cohort.diagnostic_pack_version != scope.policy.diagnostic_pack_version
     {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "stale_autonomy_cohort",
             "qualification sample does not belong to the current exact cohort",
         ));
@@ -1386,14 +1427,14 @@ fn actual_identity(
     })
 }
 
-fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneError> {
+fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneRequestFailure> {
     let length = value.chars().count();
     if !(16..=200).contains(&length)
         || value
             .chars()
             .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':' | '.')))
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_idempotency_key",
             "idempotency key must contain 16 to 200 allowlisted ASCII characters",
         ));
@@ -1401,7 +1442,7 @@ fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneError> {
     Ok(())
 }
 
-fn validate_reason_codes(reason_codes: &[String]) -> Result<(), ControlPlaneError> {
+fn validate_reason_codes(reason_codes: &[String]) -> Result<(), ControlPlaneRequestFailure> {
     let unique = reason_codes.iter().collect::<BTreeSet<_>>();
     if reason_codes.len() > MAX_REASON_CODES
         || unique.len() != reason_codes.len()
@@ -1409,7 +1450,7 @@ fn validate_reason_codes(reason_codes: &[String]) -> Result<(), ControlPlaneErro
             reason.trim().is_empty() || reason.chars().count() > 128 || reason.chars().any(char::is_control)
         })
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_reason_codes",
             "qualification reason codes must be unique bounded plain text",
         ));
@@ -1417,7 +1458,7 @@ fn validate_reason_codes(reason_codes: &[String]) -> Result<(), ControlPlaneErro
     Ok(())
 }
 
-fn validate_outcome_request(request: &RecordAutonomyOutcomeRequest) -> Result<(), ControlPlaneError> {
+fn validate_outcome_request(request: &RecordAutonomyOutcomeRequest) -> Result<(), ControlPlaneRequestFailure> {
     validate_reason_codes(&request.reason_codes)?;
     let pre_intent_failure = matches!(
         request.failure,
@@ -1445,7 +1486,7 @@ fn validate_outcome_request(request: &RecordAutonomyOutcomeRequest) -> Result<()
         }
     };
     if !valid_class || request.reconciled_at < request.occurred_at || !is_sha256_digest(&request.plan_hash) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_autonomy_outcome",
             "autonomy outcome class, intent, failure, or reconciliation invariants are invalid",
         ));
@@ -1453,37 +1494,40 @@ fn validate_outcome_request(request: &RecordAutonomyOutcomeRequest) -> Result<()
     Ok(())
 }
 
-fn require_human_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_human_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     require_role(auth, "operator")
 }
 
-fn require_automation_service_or_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_automation_service_or_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains("executor_service") || auth.roles.contains("operator") {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "autonomy_authority_required",
             "autonomy qualification requires an operator or automation service identity",
         ))
     }
 }
 
-fn require_role(auth: &AuthContext, role: &'static str) -> Result<(), ControlPlaneError> {
+fn require_role(auth: &AuthContext, role: &'static str) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains(role) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "autonomy_authority_required",
             format!("autonomy operation requires `{role}` authority"),
         ))
     }
 }
 
-fn require_cluster(auth: &AuthContext, cluster_id: rocketmq_sre_contracts::ClusterId) -> Result<(), ControlPlaneError> {
+fn require_cluster(
+    auth: &AuthContext,
+    cluster_id: rocketmq_sre_contracts::ClusterId,
+) -> Result<(), ControlPlaneRequestFailure> {
     if auth.clusters.contains(&cluster_id) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "autonomy cluster is outside the authenticated scope",
         ))
@@ -1500,19 +1544,21 @@ const fn transition_reason(mode: AutonomyMode) -> &'static str {
     }
 }
 
-fn transition_owner_approval_ref(request: &AutonomyTransitionRequest) -> Result<Option<&str>, ControlPlaneError> {
+fn transition_owner_approval_ref(
+    request: &AutonomyTransitionRequest,
+) -> Result<Option<&str>, ControlPlaneRequestFailure> {
     match (request.target_mode, request.owner_approval_ref.as_deref()) {
-        (AutonomyMode::Autonomous, None) => Err(ControlPlaneError::validation(
+        (AutonomyMode::Autonomous, None) => Err(ControlPlaneRequestFailure::validation(
             "owner_approval_ref_required",
             "Autonomous promotion requires an opaque action-owner approval reference",
         )),
         (AutonomyMode::Autonomous, Some(_)) => request.validated_owner_approval_ref().map(Some).ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "invalid_owner_approval_ref",
                 "owner approval reference must use the bounded approval:// format",
             )
         }),
-        (_, Some(_)) => Err(ControlPlaneError::validation(
+        (_, Some(_)) => Err(ControlPlaneRequestFailure::validation(
             "owner_approval_ref_not_applicable",
             "owner approval reference is accepted only for Autonomous promotion",
         )),

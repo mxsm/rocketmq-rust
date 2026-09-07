@@ -45,7 +45,7 @@ use super::channel_schema;
 use super::validate_channel_schema;
 use super::validate_poll_request;
 use super::validate_response;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::observability::ConnectorHealthSample;
 use crate::observability::DependencyStatus;
@@ -69,7 +69,7 @@ impl ConnectorChannelService<PostgresConnectorChannelStore> {
     pub(crate) fn postgres(
         repository: PostgresRepository,
         internal_token: impl Into<Arc<str>>,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         Self::new(PostgresConnectorChannelStore::new(repository), internal_token)
     }
 }
@@ -78,10 +78,10 @@ impl<S> ConnectorChannelService<S>
 where
     S: ConnectorChannelStore,
 {
-    pub(crate) fn new(store: S, internal_token: impl Into<Arc<str>>) -> Result<Self, ControlPlaneError> {
+    pub(crate) fn new(store: S, internal_token: impl Into<Arc<str>>) -> Result<Self, ControlPlaneRequestFailure> {
         let internal_token = internal_token.into();
         if internal_token.is_empty() {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "connector channel internal token must not be empty",
             ));
         }
@@ -102,15 +102,15 @@ where
         self
     }
 
-    pub(crate) fn authenticate(&self, headers: &HeaderMap) -> Result<ConnectorPrincipal, ControlPlaneError> {
+    pub(crate) fn authenticate(&self, headers: &HeaderMap) -> Result<ConnectorPrincipal, ControlPlaneRequestFailure> {
         let supplied = required_header(headers, axum::http::header::AUTHORIZATION.as_str())?
             .strip_prefix("Bearer ")
             .filter(|value| !value.is_empty())
-            .ok_or(ControlPlaneError::Unauthorized)?;
+            .ok_or(ControlPlaneRequestFailure::unauthorized())?;
         let token_matches = supplied.len() == self.internal_token.len()
             && bool::from(supplied.as_bytes().ct_eq(self.internal_token.as_bytes()));
         if !token_matches {
-            return Err(ControlPlaneError::Unauthorized);
+            return Err(ControlPlaneRequestFailure::unauthorized());
         }
         let subject = bounded_identity_header(headers, "x-rocketmq-connector-subject", 512)?;
         let issuer = bounded_identity_header(headers, "x-rocketmq-connector-issuer", 1024)?;
@@ -121,10 +121,10 @@ where
         &self,
         principal: &ConnectorPrincipal,
         request: &ConnectorRegister,
-    ) -> Result<RegisterAcknowledgement, ControlPlaneError> {
+    ) -> Result<RegisterAcknowledgement, ControlPlaneRequestFailure> {
         validate_channel_schema(&request.schema)?;
         if request.subject != principal.subject {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "unauthorized_scope",
                 "connector body subject does not match the authenticated identity",
             ));
@@ -142,7 +142,7 @@ where
         &self,
         principal: &ConnectorPrincipal,
         request: &ConnectorHeartbeat,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         validate_channel_schema(&request.schema)?;
         validate_capability(&request.capability)?;
         self.store.heartbeat(principal, request).await?;
@@ -154,7 +154,7 @@ where
         principal: &ConnectorPrincipal,
         path_session_id: ConnectorSessionId,
         request: &PollRequest,
-    ) -> Result<PollResponse, ControlPlaneError> {
+    ) -> Result<PollResponse, ControlPlaneRequestFailure> {
         validate_poll_request(path_session_id, request)?;
         let scope = self.store.session_scope(principal, path_session_id).await?;
         let mut signal = self.command_signal.subscribe();
@@ -181,7 +181,7 @@ where
         principal: &ConnectorPrincipal,
         path_session_id: ConnectorSessionId,
         response: &ConnectorResponseEnvelope,
-    ) -> Result<ResponseDisposition, ControlPlaneError> {
+    ) -> Result<ResponseDisposition, ControlPlaneRequestFailure> {
         let scope = self.store.session_scope(principal, path_session_id).await?;
         validate_response(path_session_id, &scope, response)?;
         let disposition = self.store.append_response(&scope, response).await?;
@@ -199,10 +199,10 @@ where
         &self,
         principal: &ConnectorPrincipal,
         session_id: ConnectorSessionId,
-    ) -> Result<super::SessionScope, ControlPlaneError> {
+    ) -> Result<super::SessionScope, ControlPlaneRequestFailure> {
         let scope = self.store.session_scope(principal, session_id).await?;
         if scope.last_heartbeat_at < self.stale_before() {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "unauthorized_scope",
                 "stale connector sessions cannot upload cluster inventory",
             ));
@@ -216,7 +216,7 @@ where
         cluster_id: ClusterId,
         query: EvidenceQuery,
         deadline: chrono::DateTime<Utc>,
-    ) -> Result<ConnectorCommand, ControlPlaneError> {
+    ) -> Result<ConnectorCommand, ControlPlaneRequestFailure> {
         validate_query(tenant_id, cluster_id, &query, deadline)?;
         let command = self
             .store
@@ -231,7 +231,7 @@ where
         tenant_id: TenantId,
         cluster_id: ClusterId,
         correlation_id: CorrelationId,
-    ) -> Result<ConnectorCommand, ControlPlaneError> {
+    ) -> Result<ConnectorCommand, ControlPlaneRequestFailure> {
         let command = self.store.enqueue_cancel(tenant_id, cluster_id, correlation_id).await?;
         self.signal_command();
         Ok(command)
@@ -243,13 +243,13 @@ where
         cluster_id: ClusterId,
         query: EvidenceQuery,
         deadline: chrono::DateTime<Utc>,
-    ) -> Result<ConnectorResponseEnvelope, ControlPlaneError> {
+    ) -> Result<ConnectorResponseEnvelope, ControlPlaneRequestFailure> {
         let mut response_signal = self.response_signal.subscribe();
         let command = self.enqueue_query(tenant_id, cluster_id, query, deadline).await?;
         let session_id = match &command {
             ConnectorCommand::Query { envelope } => envelope.session_id,
             ConnectorCommand::Cancel { .. } => {
-                return Err(ControlPlaneError::configuration(
+                return Err(ControlPlaneRequestFailure::configuration(
                     "connector query was persisted as an invalid command kind",
                 ));
             }
@@ -279,7 +279,7 @@ where
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
-    ) -> Result<Option<ConnectorChannelStatus>, ControlPlaneError> {
+    ) -> Result<Option<ConnectorChannelStatus>, ControlPlaneRequestFailure> {
         let Some(scope) = self.store.latest_session(tenant_id, cluster_id).await? else {
             return Ok(None);
         };
@@ -297,9 +297,12 @@ where
         }))
     }
 
-    pub(crate) async fn health_samples(&self, limit: usize) -> Result<Vec<ConnectorHealthSample>, ControlPlaneError> {
+    pub(crate) async fn health_samples(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ConnectorHealthSample>, ControlPlaneRequestFailure> {
         if limit == 0 || limit > MAX_HEALTH_SAMPLES {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "output_too_large",
                 "connector health sample limit must be between 1 and 256",
             ));
@@ -361,15 +364,15 @@ fn deadline_response(
     }
 }
 
-fn validate_capability(capability: &ConnectorCapabilityState) -> Result<(), ControlPlaneError> {
+fn validate_capability(capability: &ConnectorCapabilityState) -> Result<(), ControlPlaneRequestFailure> {
     capability.validate_read_only().map_err(|_| {
-        ControlPlaneError::forbidden(
+        ControlPlaneRequestFailure::forbidden(
             "capability_mismatch",
             "connector channel rejects mutation-capable identities",
         )
     })?;
     if capability.sources.len() > MAX_SOURCES {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "output_too_large",
             "connector advertises more than 64 evidence sources",
         ));
@@ -380,7 +383,7 @@ fn validate_capability(capability: &ConnectorCapabilityState) -> Result<(), Cont
             || source.source.len() > MAX_SOURCE_NAME_BYTES
             || !names.insert(source.source.as_str())
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "capability_mismatch",
                 "connector source names must be unique, non-empty, and bounded",
             ));
@@ -390,7 +393,7 @@ fn validate_capability(capability: &ConnectorCapabilityState) -> Result<(), Cont
             || source.max_bytes == 0
             || source.max_time_range_seconds == 0
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "capability_mismatch",
                 "connector source bounds and schema major must be positive",
             ));
@@ -404,15 +407,15 @@ fn validate_query(
     cluster_id: ClusterId,
     query: &EvidenceQuery,
     deadline: chrono::DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if query.tenant_id != tenant_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "evidence query crosses the requested tenant boundary",
         ));
     }
     if query.cluster_id != cluster_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "evidence query crosses the requested cluster boundary",
         ));
@@ -423,13 +426,13 @@ fn validate_query(
         || query.resource.len() > MAX_RESOURCE_BYTES
         || query.time_range.start > query.time_range.end
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "capability_mismatch",
             "evidence query source, resource, or time range is invalid",
         ));
     }
     if deadline <= Utc::now() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "capability_mismatch",
             "connector query deadline has elapsed",
         ));
@@ -437,18 +440,22 @@ fn validate_query(
     Ok(())
 }
 
-fn required_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, ControlPlaneError> {
+fn required_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, ControlPlaneRequestFailure> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
-        .ok_or(ControlPlaneError::Unauthorized)
+        .ok_or(ControlPlaneRequestFailure::unauthorized())
 }
 
-fn bounded_identity_header(headers: &HeaderMap, name: &str, max_bytes: usize) -> Result<String, ControlPlaneError> {
+fn bounded_identity_header(
+    headers: &HeaderMap,
+    name: &str,
+    max_bytes: usize,
+) -> Result<String, ControlPlaneRequestFailure> {
     let value = required_header(headers, name)?;
     if value.len() > max_bytes || value.chars().any(char::is_control) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "connector identity header is invalid",
         ));
@@ -492,11 +499,11 @@ mod tests {
             &self,
             principal: &ConnectorPrincipal,
             request: &ConnectorRegister,
-        ) -> Result<RegistrationResult, ControlPlaneError> {
+        ) -> Result<RegistrationResult, ControlPlaneRequestFailure> {
             let mut state = self.state.lock().await;
             if let Some(existing) = state.sessions.get(&request.session_id) {
                 if existing.tenant_id != request.tenant_id {
-                    return Err(ControlPlaneError::forbidden(
+                    return Err(ControlPlaneRequestFailure::forbidden(
                         "tenant_mismatch",
                         "test session tenant mismatch",
                     ));
@@ -505,10 +512,10 @@ mod tests {
                     || existing.subject != principal.subject
                     || existing.issuer != principal.issuer
                 {
-                    return Err(ControlPlaneError::Forbidden {
-                        code: "unauthorized_scope",
-                        detail: "test session scope mismatch".to_owned(),
-                    });
+                    return Err(ControlPlaneRequestFailure::forbidden(
+                        "unauthorized_scope",
+                        "test session scope mismatch",
+                    ));
                 }
             }
             let scope = SessionScope {
@@ -550,12 +557,12 @@ mod tests {
             &self,
             principal: &ConnectorPrincipal,
             request: &ConnectorHeartbeat,
-        ) -> Result<SessionScope, ControlPlaneError> {
+        ) -> Result<SessionScope, ControlPlaneRequestFailure> {
             let mut state = self.state.lock().await;
             let scope = state
                 .sessions
                 .get_mut(&request.session_id)
-                .ok_or(ControlPlaneError::NotFound)?;
+                .ok_or(ControlPlaneRequestFailure::not_found())?;
             enforce_memory_scope(scope, request.tenant_id, request.cluster_id, principal)?;
             scope.last_heartbeat_at = Utc::now();
             let updated = scope.clone();
@@ -569,9 +576,12 @@ mod tests {
             &self,
             principal: &ConnectorPrincipal,
             session_id: ConnectorSessionId,
-        ) -> Result<SessionScope, ControlPlaneError> {
+        ) -> Result<SessionScope, ControlPlaneRequestFailure> {
             let state = self.state.lock().await;
-            let scope = state.sessions.get(&session_id).ok_or(ControlPlaneError::NotFound)?;
+            let scope = state
+                .sessions
+                .get(&session_id)
+                .ok_or(ControlPlaneRequestFailure::not_found())?;
             enforce_memory_scope(scope, scope.tenant_id, scope.cluster_id, principal)?;
             Ok(scope.clone())
         }
@@ -581,7 +591,7 @@ mod tests {
             scope: &SessionScope,
             after_sequence: u64,
             max_commands: usize,
-        ) -> Result<Vec<ConnectorCommand>, ControlPlaneError> {
+        ) -> Result<Vec<ConnectorCommand>, ControlPlaneRequestFailure> {
             let state = self.state.lock().await;
             Ok(state
                 .commands
@@ -601,7 +611,7 @@ mod tests {
             query: EvidenceQuery,
             deadline: DateTime<Utc>,
             stale_before: DateTime<Utc>,
-        ) -> Result<ConnectorCommand, ControlPlaneError> {
+        ) -> Result<ConnectorCommand, ControlPlaneRequestFailure> {
             let mut state = self.state.lock().await;
             let scope = state
                 .sessions
@@ -621,7 +631,7 @@ mod tests {
                         })
                 })
                 .cloned()
-                .ok_or_else(|| ControlPlaneError::conflict("no test connector"))?;
+                .ok_or_else(|| ControlPlaneRequestFailure::conflict_code("capability_mismatch", "no test connector"))?;
             let commands = state.commands.entry(scope.session_id).or_default();
             let sequence = commands.len() as u64 + 1;
             let command = ConnectorCommand::Query {
@@ -643,14 +653,14 @@ mod tests {
             tenant_id: TenantId,
             cluster_id: ClusterId,
             correlation_id: CorrelationId,
-        ) -> Result<ConnectorCommand, ControlPlaneError> {
+        ) -> Result<ConnectorCommand, ControlPlaneRequestFailure> {
             let mut state = self.state.lock().await;
             let scope = state
                 .sessions
                 .values()
                 .find(|scope| scope.tenant_id == tenant_id && scope.cluster_id == cluster_id)
                 .cloned()
-                .ok_or_else(|| ControlPlaneError::conflict("no test connector"))?;
+                .ok_or_else(|| ControlPlaneRequestFailure::conflict_code("capability_mismatch", "no test connector"))?;
             let commands = state.commands.entry(scope.session_id).or_default();
             let sequence = commands.len() as u64 + 1;
             let command = ConnectorCommand::Cancel {
@@ -667,20 +677,28 @@ mod tests {
             &self,
             scope: &SessionScope,
             response: &ConnectorResponseEnvelope,
-        ) -> Result<ResponseDisposition, ControlPlaneError> {
+        ) -> Result<ResponseDisposition, ControlPlaneRequestFailure> {
             let mut state = self.state.lock().await;
             let expected = state
                 .commands
                 .get(&scope.session_id)
                 .and_then(|commands| commands.iter().find(|command| command.sequence() == response.sequence))
-                .ok_or_else(|| ControlPlaneError::conflict("test command missing"))?;
+                .ok_or_else(|| {
+                    ControlPlaneRequestFailure::conflict_code("capability_mismatch", "test command missing")
+                })?;
             if expected.correlation_id() != response.correlation_id {
-                return Err(ControlPlaneError::conflict("test correlation mismatch"));
+                return Err(ControlPlaneRequestFailure::conflict_code(
+                    "capability_mismatch",
+                    "test correlation mismatch",
+                ));
             }
             let key = (scope.session_id, response.sequence);
             if let Some(existing) = state.responses.get(&key) {
                 if existing.correlation_id != response.correlation_id {
-                    return Err(ControlPlaneError::conflict("test duplicate correlation mismatch"));
+                    return Err(ControlPlaneRequestFailure::conflict_code(
+                        "capability_mismatch",
+                        "test duplicate correlation mismatch",
+                    ));
                 }
                 return Ok(ResponseDisposition::Duplicate);
             }
@@ -692,7 +710,7 @@ mod tests {
             &self,
             session_id: ConnectorSessionId,
             sequence: u64,
-        ) -> Result<Option<ConnectorResponseEnvelope>, ControlPlaneError> {
+        ) -> Result<Option<ConnectorResponseEnvelope>, ControlPlaneRequestFailure> {
             Ok(self.state.lock().await.responses.get(&(session_id, sequence)).cloned())
         }
 
@@ -700,7 +718,7 @@ mod tests {
             &self,
             tenant_id: TenantId,
             cluster_id: ClusterId,
-        ) -> Result<Option<SessionScope>, ControlPlaneError> {
+        ) -> Result<Option<SessionScope>, ControlPlaneRequestFailure> {
             Ok(self
                 .state
                 .lock()
@@ -711,7 +729,7 @@ mod tests {
                 .cloned())
         }
 
-        async fn latest_sessions(&self, limit: usize) -> Result<Vec<SessionScope>, ControlPlaneError> {
+        async fn latest_sessions(&self, limit: usize) -> Result<Vec<SessionScope>, ControlPlaneRequestFailure> {
             Ok(self.state.lock().await.sessions.values().take(limit).cloned().collect())
         }
     }
@@ -721,12 +739,15 @@ mod tests {
         tenant_id: TenantId,
         cluster_id: ClusterId,
         principal: &ConnectorPrincipal,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         if scope.tenant_id != tenant_id {
-            return Err(ControlPlaneError::forbidden("tenant_mismatch", "test tenant mismatch"));
+            return Err(ControlPlaneRequestFailure::forbidden(
+                "tenant_mismatch",
+                "test tenant mismatch",
+            ));
         }
         if scope.cluster_id != cluster_id || scope.subject != principal.subject || scope.issuer != principal.issuer {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "unauthorized_scope",
                 "test scope mismatch",
             ));

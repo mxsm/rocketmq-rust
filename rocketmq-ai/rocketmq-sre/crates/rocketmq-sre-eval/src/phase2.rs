@@ -15,9 +15,9 @@
 //! Phase 2 dataset runner and aggregate quality report.
 
 use crate::replay::LoadedReplayDataset;
-use crate::replay::ReplayError;
+use crate::replay::ReplayFailure;
 use crate::replay::ReplayFixtureResult;
-use crate::replay::replay_fixture;
+use crate::replay::replay_fixture_inner;
 
 /// Aggregate result with a fixed manifest denominator.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,11 +35,18 @@ pub struct Phase2ReplayReport {
 
 /// Replays every declared fixture twice and aggregates deterministic quality.
 ///
-/// # Errors
-///
-/// Returns an error when a fixture cannot be replayed or the same saved input
-/// produces different deterministic outputs.
-pub fn run_phase2_dataset(dataset: &LoadedReplayDataset) -> Result<Phase2ReplayReport, ReplayError> {
+/// Returns an opaque error when replay infrastructure fails. Deterministic
+/// replay rejections are returned as a closed [`crate::EvalOutcome`].
+pub fn run_phase2_dataset(
+    dataset: &LoadedReplayDataset,
+) -> Result<crate::EvalOutcome<Phase2ReplayReport>, crate::EvalError> {
+    match run_phase2_dataset_inner(dataset) {
+        Ok(report) => Ok(crate::EvalOutcome::Completed(report)),
+        Err(failure) => failure.into_boundary(),
+    }
+}
+
+fn run_phase2_dataset_inner(dataset: &LoadedReplayDataset) -> Result<Phase2ReplayReport, ReplayFailure> {
     let mut fixture_results = Vec::with_capacity(dataset.manifest.fixtures.len());
     let mut evaluable_fixtures = 0;
     let mut top3_hits = 0;
@@ -52,15 +59,11 @@ pub fn run_phase2_dataset(dataset: &LoadedReplayDataset) -> Result<Phase2ReplayR
     for entry in &dataset.manifest.fixtures {
         let fixture = dataset
             .fixture(&entry.fixture_id)
-            .ok_or_else(|| ReplayError::UnknownFixture(entry.fixture_id.clone()))?;
-        let result = replay_fixture(fixture)?;
-        let repeated = replay_fixture(fixture)?;
+            .ok_or(ReplayFailure::UnknownFixture)?;
+        let result = replay_fixture_inner(fixture)?;
+        let repeated = replay_fixture_inner(fixture)?;
         if result != repeated {
-            return Err(ReplayError::Diagnostic {
-                fixture_id: fixture.id.clone(),
-                pack: "determinism".to_owned(),
-                reason: "identical saved input produced a different result".to_owned(),
-            });
+            return Err(ReplayFailure::NonDeterministic);
         }
 
         if entry.evaluable {

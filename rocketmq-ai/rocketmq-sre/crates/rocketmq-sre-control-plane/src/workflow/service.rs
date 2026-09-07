@@ -45,7 +45,7 @@ use super::WorkflowEventBus;
 use super::WorkflowListQuery;
 use super::WorkflowPage;
 use super::WorkflowStreamEvent;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -74,7 +74,7 @@ impl WorkflowService {
         auth: &AuthContext,
         request: &ConversationCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ConversationView, ControlPlaneError> {
+    ) -> Result<ConversationView, ControlPlaneRequestFailure> {
         request.validate()?;
         authorize_cluster(auth, request.cluster_id)?;
         let view = self
@@ -101,7 +101,7 @@ impl WorkflowService {
         &self,
         auth: &AuthContext,
         id: ConversationId,
-    ) -> Result<ConversationView, ControlPlaneError> {
+    ) -> Result<ConversationView, ControlPlaneRequestFailure> {
         self.repository.conversation(auth, id).await
     }
 
@@ -109,7 +109,7 @@ impl WorkflowService {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<ConversationView>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<ConversationView>, ControlPlaneRequestFailure> {
         validate_list_scope(auth, query)?;
         self.repository.list_conversations(auth, query).await
     }
@@ -119,7 +119,7 @@ impl WorkflowService {
         auth: &AuthContext,
         request: &InvestigationCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<InvestigationView, ControlPlaneError> {
+    ) -> Result<InvestigationView, ControlPlaneRequestFailure> {
         request.validate()?;
         authorize_cluster(auth, request.cluster_id)?;
         let view = self
@@ -143,7 +143,7 @@ impl WorkflowService {
         &self,
         auth: &AuthContext,
         id: InvestigationId,
-    ) -> Result<InvestigationView, ControlPlaneError> {
+    ) -> Result<InvestigationView, ControlPlaneRequestFailure> {
         self.repository.investigation(auth, id).await
     }
 
@@ -151,7 +151,7 @@ impl WorkflowService {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<InvestigationView>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<InvestigationView>, ControlPlaneRequestFailure> {
         validate_list_scope(auth, query)?;
         self.repository.list_investigations(auth, query).await
     }
@@ -162,7 +162,7 @@ impl WorkflowService {
         id: InvestigationId,
         request: &PromoteInvestigationRequest,
         correlation_id: CorrelationId,
-    ) -> Result<IncidentView, ControlPlaneError> {
+    ) -> Result<IncidentView, ControlPlaneRequestFailure> {
         request.validate()?;
         authorize_operator(auth)?;
         let view = self
@@ -187,7 +187,7 @@ impl WorkflowService {
         auth: &AuthContext,
         request: &IncidentCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<IncidentView, ControlPlaneError> {
+    ) -> Result<IncidentView, ControlPlaneRequestFailure> {
         request.validate()?;
         authorize_cluster(auth, request.cluster_id)?;
         let view = self.repository.create_incident(auth, request, correlation_id).await?;
@@ -204,7 +204,11 @@ impl WorkflowService {
         Ok(view)
     }
 
-    pub(crate) async fn incident(&self, auth: &AuthContext, id: IncidentId) -> Result<IncidentView, ControlPlaneError> {
+    pub(crate) async fn incident(
+        &self,
+        auth: &AuthContext,
+        id: IncidentId,
+    ) -> Result<IncidentView, ControlPlaneRequestFailure> {
         self.repository.incident(auth, id).await
     }
 
@@ -212,12 +216,12 @@ impl WorkflowService {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<IncidentView>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<IncidentView>, ControlPlaneRequestFailure> {
         validate_list_scope(auth, query)?;
         self.repository.list_incidents(auth, query).await
     }
 
-    pub(crate) fn ensure_operator(&self, auth: &AuthContext) -> Result<(), ControlPlaneError> {
+    pub(crate) fn ensure_operator(&self, auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
         authorize_operator(auth)
     }
 
@@ -228,7 +232,7 @@ impl WorkflowService {
         source_revision_id: DiagnosisRevisionId,
         request: &ConfirmDiagnosisExecutionRequest,
         correlation_id: CorrelationId,
-    ) -> Result<DiagnosisExecutionConfirmation, ControlPlaneError> {
+    ) -> Result<DiagnosisExecutionConfirmation, ControlPlaneRequestFailure> {
         authorize_operator(auth)?;
         request.validate()?;
         let confirmation = self
@@ -259,7 +263,7 @@ impl WorkflowService {
         next: IncidentStatus,
         reason: &str,
         correlation_id: CorrelationId,
-    ) -> Result<IncidentView, ControlPlaneError> {
+    ) -> Result<IncidentView, ControlPlaneRequestFailure> {
         authorize_operator(auth)?;
         let view = self
             .repository
@@ -294,7 +298,7 @@ impl WorkflowService {
         primary_model_invocation_id: Option<ModelInvocationId>,
         diagnosis_mode: &'static str,
         correlation_id: CorrelationId,
-    ) -> Result<DiagnosisRevision, ControlPlaneError> {
+    ) -> Result<DiagnosisRevision, ControlPlaneRequestFailure> {
         authorize_operator(auth)?;
         let revision = self
             .repository
@@ -337,7 +341,7 @@ impl WorkflowService {
         auth: &AuthContext,
         request: &InspectionCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<InspectionView, ControlPlaneError> {
+    ) -> Result<InspectionView, ControlPlaneRequestFailure> {
         request.validate()?;
         authorize_cluster(auth, request.cluster_id)?;
         let view = self.repository.create_inspection(auth, request, correlation_id).await?;
@@ -358,7 +362,7 @@ impl WorkflowService {
         &self,
         auth: &AuthContext,
         id: InspectionRunId,
-    ) -> Result<InspectionView, ControlPlaneError> {
+    ) -> Result<InspectionView, ControlPlaneRequestFailure> {
         self.repository.inspection(auth, id).await
     }
 
@@ -366,7 +370,7 @@ impl WorkflowService {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<InspectionView>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<InspectionView>, ControlPlaneRequestFailure> {
         validate_list_scope(auth, query)?;
         self.repository.list_inspections(auth, query).await
     }
@@ -377,7 +381,7 @@ impl WorkflowService {
         id: RecommendationId,
         request: &RecommendationDispositionRequest,
         correlation_id: CorrelationId,
-    ) -> Result<Recommendation, ControlPlaneError> {
+    ) -> Result<Recommendation, ControlPlaneRequestFailure> {
         request.validate()?;
         authorize_operator(auth)?;
         let recommendation = self
@@ -401,13 +405,13 @@ impl WorkflowService {
         &self,
         auth: &AuthContext,
         query: &WorkflowListQuery,
-    ) -> Result<WorkflowPage<Recommendation>, ControlPlaneError> {
+    ) -> Result<WorkflowPage<Recommendation>, ControlPlaneRequestFailure> {
         validate_list_scope(auth, query)?;
         self.repository.list_recommendations(auth, query).await
     }
 }
 
-fn validate_list_scope(auth: &AuthContext, query: &WorkflowListQuery) -> Result<(), ControlPlaneError> {
+fn validate_list_scope(auth: &AuthContext, query: &WorkflowListQuery) -> Result<(), ControlPlaneRequestFailure> {
     authorize_cluster(auth, query.cluster_id)?;
     query.bounded_limit()?;
     query.cursor_uuid()?;
@@ -417,9 +421,9 @@ fn validate_list_scope(auth: &AuthContext, query: &WorkflowListQuery) -> Result<
 fn authorize_cluster(
     auth: &AuthContext,
     cluster_id: rocketmq_sre_contracts::ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "requested cluster is outside the authenticated scope",
         ));
@@ -427,14 +431,14 @@ fn authorize_cluster(
     Ok(())
 }
 
-fn authorize_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn authorize_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
             "diagnose" | "operator" | "sre-admin" | "rocketmq:diagnose" | "rocketmq:sre"
         )
     }) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "operator role is required for workflow promotion or disposition",
         ));
@@ -467,12 +471,7 @@ mod tests {
         };
 
         let error = validate_list_scope(&auth, &query).expect_err("cross-cluster query must fail closed");
-        assert!(matches!(
-            error,
-            ControlPlaneError::Forbidden {
-                code: "cluster_not_allowed",
-                ..
-            }
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::Forbidden);
+        assert_eq!(error.code(), "cluster_not_allowed");
     }
 }

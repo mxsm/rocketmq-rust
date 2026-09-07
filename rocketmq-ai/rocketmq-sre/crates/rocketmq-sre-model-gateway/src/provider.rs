@@ -18,7 +18,8 @@ use std::time::UNIX_EPOCH;
 use rocketmq_sre_contracts::CorrelationId;
 
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::ir::CanonicalEmbeddingRequest;
 use crate::ir::CanonicalEmbeddingResponse;
 use crate::ir::CanonicalModelRequest;
@@ -59,17 +60,14 @@ impl InvocationContext {
     /// # Errors
     ///
     /// Returns cancellation or timeout if the invocation must not start.
-    pub fn ensure_active(&self) -> Result<(), ProviderError> {
+    pub fn ensure_active(&self) -> Result<(), ProviderStatusOutcome> {
         if self.cancellation.is_cancelled() {
-            return Err(ProviderError::new(
-                ProviderErrorCode::Cancelled,
-                "model invocation was cancelled",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::Cancelled));
         }
         if let Some(deadline) = self.deadline_unix_ms
             && current_unix_ms() >= deadline
         {
-            return Err(ProviderError::timeout("model invocation deadline has expired"));
+            return Err(ProviderError::timeout("model invocation deadline has expired").into());
         }
         Ok(())
     }
@@ -90,25 +88,28 @@ pub trait ChatModelProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns a stable redacted [`ProviderError`].
+    /// Expected provider refusals are returned as a closed
+    /// [`ProviderStatusOutcome::Rejected`]. Operational failures remain stable,
+    /// redacted [`ProviderError`] values.
     fn invoke(
         &self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<CanonicalModelResponse, ProviderError>;
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome>;
 
     /// Starts a bounded canonical stream.
     ///
     /// # Errors
     ///
-    /// Returns capability-unsupported by default or a stable provider error.
+    /// Returns a closed capability rejection by default. Operational failures
+    /// remain stable provider errors.
     fn invoke_stream(
         &self,
         _context: &InvocationContext,
         _request: &CanonicalModelRequest,
-    ) -> Result<BoundedModelStream, ProviderError> {
-        Err(ProviderError::capability_unsupported(
-            "provider does not implement streaming",
+    ) -> Result<BoundedModelStream, ProviderStatusOutcome> {
+        Err(ProviderStatusOutcome::rejected(
+            ProviderRejection::CapabilityUnsupported,
         ))
     }
 }
@@ -122,12 +123,13 @@ pub trait EmbeddingProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns a stable redacted [`ProviderError`].
+    /// Expected provider refusals are returned as a closed status outcome;
+    /// operational failures remain stable, redacted [`ProviderError`] values.
     fn embed(
         &self,
         context: &InvocationContext,
         request: &CanonicalEmbeddingRequest,
-    ) -> Result<CanonicalEmbeddingResponse, ProviderError>;
+    ) -> Result<CanonicalEmbeddingResponse, ProviderStatusOutcome>;
 }
 
 /// Provider-neutral reranking boundary.
@@ -139,12 +141,13 @@ pub trait RerankProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns a stable redacted [`ProviderError`].
+    /// Expected provider refusals are returned as a closed status outcome;
+    /// operational failures remain stable, redacted [`ProviderError`] values.
     fn rerank(
         &self,
         context: &InvocationContext,
         request: &CanonicalRerankRequest,
-    ) -> Result<CanonicalRerankResponse, ProviderError>;
+    ) -> Result<CanonicalRerankResponse, ProviderStatusOutcome>;
 }
 
 fn current_unix_ms() -> u64 {

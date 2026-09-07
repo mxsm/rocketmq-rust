@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::error::Error;
 use std::sync::Arc;
 
 use chrono::DateTime;
@@ -89,7 +90,6 @@ use super::policy::PolicyFacts;
 use super::policy::RESOURCE_QUARANTINED;
 use super::policy::RULES_ONLY_NOT_EXECUTABLE;
 use super::signing::GrantSigner;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::governance::GovernanceAdmissionGuard;
@@ -97,6 +97,7 @@ use crate::governance::GovernanceRequirement;
 use crate::models::ModelGatewayService;
 use crate::workflow::WorkflowService;
 use crate::workflow::WorkflowStreamEvent;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 mod critic;
 mod support;
@@ -142,7 +143,7 @@ impl SupervisedExecutionService {
         signing_key: impl AsRef<[u8]>,
         model_gateway: ModelGatewayService,
         executor: ExecutorSubmissionClient,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         Self::new_with_clock_inner(
             repository,
             workflow,
@@ -159,7 +160,7 @@ impl SupervisedExecutionService {
         workflow: WorkflowService,
         signing_key: impl AsRef<[u8]>,
         clock: Clock,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         let model_gateway = ModelGatewayService::disabled(repository.clone());
         Self::new_with_clock_inner(
             repository,
@@ -178,7 +179,7 @@ impl SupervisedExecutionService {
         signing_key: impl AsRef<[u8]>,
         model_gateway: ModelGatewayService,
         clock: Clock,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         Self::new_with_clock_inner(
             repository,
             workflow,
@@ -196,7 +197,7 @@ impl SupervisedExecutionService {
         model_gateway: ModelGatewayService,
         executor: ExecutorSubmissionClient,
         clock: Clock,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         let governance = GovernanceAdmissionGuard::new(repository.clone(), signing_key.as_ref())?;
         Ok(Self {
             repository,
@@ -221,7 +222,7 @@ impl SupervisedExecutionService {
         incident_id: rocketmq_sre_contracts::IncidentId,
         request: &PrepareExecutionPreconditionRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ExecutionPreconditionEvidenceView, ControlPlaneError> {
+    ) -> Result<ExecutionPreconditionEvidenceView, ControlPlaneRequestFailure> {
         self.policy.require_operator(auth)?;
         require_cluster(auth, request.cluster_id)?;
         if request.action_id.trim().is_empty()
@@ -230,7 +231,7 @@ impl SupervisedExecutionService {
             || request.resource.chars().count() > 512
             || request.resource.chars().any(char::is_control)
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_execution_precondition",
                 "action, descriptor version, and bounded resource are required",
             ));
@@ -244,19 +245,19 @@ impl SupervisedExecutionService {
             || context.partial
             || context.primary_model_invocation_id.is_none()
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "diagnosis_not_execution_ready",
                 "a confirmed, complete, model-assisted diagnosis is required before a live precondition read",
             ));
         }
         let CatalogResolution::Supervised(action, descriptor) = self.catalog.resolve(&request.action_id)? else {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "action_not_executable",
                 "manual-only actions cannot request an Execution Agent precondition",
             ));
         };
         if descriptor.version != request.descriptor_version || !descriptor.execution_supported {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "action_version_mismatch",
                 "precondition request does not match an enabled exact action descriptor",
             ));
@@ -280,26 +281,26 @@ impl SupervisedExecutionService {
             .observed_at
             .with_nanosecond((result.observed_at.nanosecond() / 1_000) * 1_000)
             .ok_or_else(|| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "invalid_execution_precondition",
                     "Execution Agent timestamp is outside the supported range",
                 )
             })?;
         result.observed_at = observed_at;
-        let content = serde_json::to_value(&result).map_err(|_| {
-            ControlPlaneError::validation(
+        let content = serde_json::to_value(&result).map_err(|source| {
+            ControlPlaneRequestFailure::from(ControlPlaneError::validation_source(
                 "invalid_execution_precondition",
-                "Execution Agent result cannot be represented as Evidence",
-            )
+                source,
+            ))
         })?;
         let content_digest = format!(
             "sha256:{}",
-            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(serde_json::to_vec(&content).map_err(|_| {
-                ControlPlaneError::validation(
+            rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(serde_json::to_vec(&content).map_err(
+                |source| ControlPlaneRequestFailure::from(ControlPlaneError::validation_source(
                     "invalid_execution_precondition",
-                    "Execution Agent Evidence cannot be encoded",
-                )
-            })?,))
+                    source
+                ))
+            )?,))
         );
         let mut evidence = EvidenceSnapshot::capture(
             EvidenceQuery {
@@ -310,7 +311,7 @@ impl SupervisedExecutionService {
                 source: "execution-agent".to_owned(),
                 resource: request.resource.clone(),
                 time_range: TimeRange::new(observed_at, observed_at).map_err(|_| {
-                    ControlPlaneError::validation(
+                    ControlPlaneRequestFailure::validation(
                         "invalid_execution_precondition",
                         "Execution Agent timestamp cannot form an Evidence range",
                     )
@@ -320,11 +321,19 @@ impl SupervisedExecutionService {
             observed_at,
             EvidenceContent::Inline(content),
         )
-        .map_err(|_| {
-            ControlPlaneError::validation(
-                "invalid_execution_precondition",
-                "Execution Agent result cannot be sealed as Evidence",
-            )
+        .map_err(|source| {
+            if source.source().is_some() {
+                ControlPlaneRequestFailure::from(ControlPlaneError::contract(
+                    crate::ControlPlaneFailure::Validation,
+                    "invalid_execution_precondition",
+                    source,
+                ))
+            } else {
+                ControlPlaneRequestFailure::validation(
+                    "invalid_execution_precondition",
+                    "Execution Agent evidence is invalid",
+                )
+            }
         })?;
         evidence.freshness_seconds = 0;
         evidence.sensitivity = Sensitivity::Internal;
@@ -348,7 +357,7 @@ impl SupervisedExecutionService {
         auth: &AuthContext,
         request: &CreatePlanRequest,
         correlation_id: CorrelationId,
-    ) -> Result<CreatePlanResponse, ControlPlaneError> {
+    ) -> Result<CreatePlanResponse, ControlPlaneRequestFailure> {
         self.policy.require_operator(auth)?;
         require_cluster(auth, request.cluster_id)?;
         validate_candidate_steps(&request.steps)?;
@@ -366,7 +375,7 @@ impl SupervisedExecutionService {
             || context.incident_id != request.incident_id
             || context.diagnosis_revision_id != request.diagnosis_revision_id
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "tenant_mismatch",
                 "diagnosis does not match the authenticated plan scope",
             ));
@@ -403,19 +412,19 @@ impl SupervisedExecutionService {
             });
         }
         if context.status != "confirmed" {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "diagnosis_not_confirmed",
                 "only a confirmed diagnosis can create an action plan",
             ));
         }
         let primary_model_invocation_id = context.primary_model_invocation_id.ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 RULES_ONLY_NOT_EXECUTABLE,
                 "execution-eligible diagnosis has no primary model invocation",
             )
         })?;
         if context.partial {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "diagnosis_partial",
                 "a partial diagnosis cannot create an action plan",
             ));
@@ -435,13 +444,13 @@ impl SupervisedExecutionService {
         let mut steps = Vec::with_capacity(request.steps.len());
         for (index, candidate) in request.steps.iter().enumerate() {
             let CatalogResolution::Supervised(action, descriptor) = self.catalog.resolve(&candidate.action_id)? else {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "mixed_manual_and_execution_plan",
                     "manual-only and executable actions cannot share one plan",
                 ));
             };
             if descriptor.version != candidate.descriptor_version {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "action_version_mismatch",
                     "candidate descriptor version is not the active exact version",
                 ));
@@ -451,7 +460,7 @@ impl SupervisedExecutionService {
             steps.push(PlanStep {
                 id: PlanStepId::new(),
                 sequence: u16::try_from(index + 1)
-                    .map_err(|_| ControlPlaneError::validation("invalid_plan", "plan step sequence exceeds u16"))?,
+                    .map_err(|_| ControlPlaneRequestFailure::validation("invalid_plan", "plan has too many steps"))?,
                 action,
                 descriptor_version: descriptor.version.clone(),
                 resource: candidate.resource.clone(),
@@ -484,14 +493,15 @@ impl SupervisedExecutionService {
             evidence_hash,
             steps,
         };
-        let mut plan = ActionPlan::seal(draft)
-            .map_err(|error| ControlPlaneError::validation("invalid_plan", error.to_string()))?;
+        let mut plan = ActionPlan::seal(draft).map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_plan", error)
+        })?;
         let live = self.live_plan_state(auth, &plan, now).await?;
         let precondition_hash = live.precondition_hash.clone();
         let decision = self.policy.evaluate(auth, &plan, &risks, live.facts, now)?;
         plan = if decision.effect == PolicyEffect::RequireApproval {
             plan.submit_for_review(now, risk == ActionRisk::R2)
-                .map_err(|error| ControlPlaneError::conflict_code("plan_state_changed", error.to_string()))?
+                .map_err(|_| ControlPlaneRequestFailure::conflict_code("plan_state_changed", "operation rejected"))?
         } else {
             plan.status = PlanStatus::Rejected;
             plan
@@ -509,16 +519,23 @@ impl SupervisedExecutionService {
         })
     }
 
-    pub(crate) async fn plan(&self, auth: &AuthContext, id: ActionPlanId) -> Result<ActionPlanView, ControlPlaneError> {
+    pub(crate) async fn plan(
+        &self,
+        auth: &AuthContext,
+        id: ActionPlanId,
+    ) -> Result<ActionPlanView, ControlPlaneRequestFailure> {
         let projection = self.repository.supervised_plan(auth, id).await?;
         let latest_critic_review = self.repository.latest_critic_review(auth, &projection.plan).await?;
         let critic_state = critic_gate_state(projection.risk, latest_critic_review.as_ref());
         let latest_policy_decision = self.repository.latest_policy_decision(auth, &projection.plan).await?;
         let latest_approval = self.repository.latest_approval(auth, &projection.plan).await?;
-        let precondition_hash = projection
-            .plan
-            .compute_precondition_hash()
-            .map_err(|error| ControlPlaneError::validation("invalid_precondition_hash", error.to_string()))?;
+        let precondition_hash = projection.plan.compute_precondition_hash().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_precondition_hash",
+                error,
+            )
+        })?;
         Ok(ActionPlanView {
             plan: projection.plan,
             precondition_hash,
@@ -530,19 +547,23 @@ impl SupervisedExecutionService {
         })
     }
 
-    async fn ensure_current_policy(&self, auth: &AuthContext, plan: &ActionPlan) -> Result<(), ControlPlaneError> {
+    async fn ensure_current_policy(
+        &self,
+        auth: &AuthContext,
+        plan: &ActionPlan,
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let decision = self
             .repository
             .latest_policy_decision(auth, plan)
             .await?
             .ok_or_else(|| {
-                ControlPlaneError::conflict_code("policy_missing", "plan has no persisted policy decision")
+                ControlPlaneRequestFailure::conflict_code("policy_missing", "plan has no persisted policy decision")
             })?;
         if decision.plan_hash != plan.plan_hash
             || decision.policy_version != self.policy.version()
             || decision.effect != PolicyEffect::RequireApproval
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "policy_decision_invalidated",
                 "current policy does not permit the plan to proceed to human approval",
             ));
@@ -556,13 +577,13 @@ impl SupervisedExecutionService {
         incident_id: rocketmq_sre_contracts::IncidentId,
         diagnosis_evidence: &[EvidenceId],
         steps: &[CandidatePlanStep],
-    ) -> Result<BTreeMap<EvidenceId, EvidenceSnapshot>, ControlPlaneError> {
+    ) -> Result<BTreeMap<EvidenceId, EvidenceSnapshot>, ControlPlaneRequestFailure> {
         let allowed = diagnosis_evidence.iter().copied().collect::<BTreeSet<_>>();
         if steps
             .iter()
             .any(|step| !step.evidence_ids.iter().any(|id| allowed.contains(id)))
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_evidence_binding",
                 "every plan step must retain Evidence from the confirmed diagnosis",
             ));
@@ -572,7 +593,7 @@ impl SupervisedExecutionService {
             .flat_map(|step| step.evidence_ids.iter().copied())
             .collect::<BTreeSet<_>>();
         if requested.is_empty() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_evidence_binding",
                 "every plan step must bind persisted Evidence",
             ));
@@ -587,16 +608,24 @@ impl SupervisedExecutionService {
                         .evidence_linked_to_incident(auth, incident_id, id)
                         .await?)
             {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "invalid_evidence_binding",
                     "additional plan Evidence must be a live Execution Agent precondition linked to the incident",
                 ));
             }
-            snapshot.verify_content_hash().map_err(|_| {
-                ControlPlaneError::conflict_code(
-                    "invalid_content_hash",
-                    "stored Evidence content hash verification failed",
-                )
+            snapshot.verify_content_hash().map_err(|source| {
+                if source.source().is_some() {
+                    ControlPlaneRequestFailure::from(ControlPlaneError::contract(
+                        crate::ControlPlaneFailure::Conflict,
+                        "invalid_content_hash",
+                        source,
+                    ))
+                } else {
+                    ControlPlaneRequestFailure::conflict_code(
+                        "invalid_content_hash",
+                        "evidence content hash is invalid",
+                    )
+                }
             })?;
             evidence.insert(id, snapshot);
         }
@@ -608,9 +637,18 @@ impl SupervisedExecutionService {
         auth: &AuthContext,
         plan: &ActionPlan,
         now: DateTime<Utc>,
-    ) -> Result<LivePlanState, ControlPlaneError> {
-        plan.verify_plan_hash()
-            .map_err(|error| ControlPlaneError::conflict_code("plan_hash_mismatch", error.to_string()))?;
+    ) -> Result<LivePlanState, ControlPlaneRequestFailure> {
+        plan.verify_plan_hash().map_err(|source| {
+            if source.source().is_some() {
+                ControlPlaneRequestFailure::from(ControlPlaneError::contract(
+                    crate::ControlPlaneFailure::Conflict,
+                    "plan_hash_mismatch",
+                    source,
+                ))
+            } else {
+                ControlPlaneRequestFailure::conflict_code("plan_hash_mismatch", "plan hash is invalid")
+            }
+        })?;
         let candidates = plan
             .steps
             .iter()
@@ -635,16 +673,24 @@ impl SupervisedExecutionService {
                     .latest_cluster_source_evidence(auth, bound.cluster_id, &bound.source, &bound.resource)
                     .await?
                     .ok_or_else(|| {
-                        ControlPlaneError::conflict_code(
+                        ControlPlaneRequestFailure::conflict_code(
                             "source_unavailable",
                             "no current Evidence exists for the plan resource",
                         )
                     })?;
-                snapshot.verify_content_hash().map_err(|_| {
-                    ControlPlaneError::conflict_code(
-                        "invalid_content_hash",
-                        "stored Evidence content hash verification failed",
-                    )
+                snapshot.verify_content_hash().map_err(|source| {
+                    if source.source().is_some() {
+                        ControlPlaneRequestFailure::from(ControlPlaneError::contract(
+                            crate::ControlPlaneFailure::Conflict,
+                            "invalid_content_hash",
+                            source,
+                        ))
+                    } else {
+                        ControlPlaneRequestFailure::conflict_code(
+                            "invalid_content_hash",
+                            "evidence content hash is invalid",
+                        )
+                    }
                 })?;
                 entry.insert(snapshot);
             }
@@ -661,7 +707,7 @@ impl SupervisedExecutionService {
                 || descriptor.verification != step.verification
                 || descriptor.compensation != step.compensation
             {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "action_descriptor_changed",
                     "plan no longer matches the exact action descriptor",
                 ));
@@ -681,7 +727,7 @@ impl SupervisedExecutionService {
             if step.precondition_hash
                 != action_precondition_hash(step.action, &step.resource, &step.evidence_ids, &evidence)?
             {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "precondition_changed",
                     "step precondition no longer matches its Evidence set",
                 ));
@@ -694,9 +740,13 @@ impl SupervisedExecutionService {
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .all(std::convert::identity);
-        let precondition_hash = plan
-            .compute_precondition_hash()
-            .map_err(|error| ControlPlaneError::validation("invalid_precondition_hash", error.to_string()))?;
+        let precondition_hash = plan.compute_precondition_hash().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_precondition_hash",
+                error,
+            )
+        })?;
         Ok(LivePlanState {
             evidence_hash: evidence_hash(&evidence)?,
             precondition_hash,
@@ -714,7 +764,11 @@ impl SupervisedExecutionService {
         })
     }
 
-    fn evidence_is_current(&self, snapshot: &EvidenceSnapshot, now: DateTime<Utc>) -> Result<bool, ControlPlaneError> {
+    fn evidence_is_current(
+        &self,
+        snapshot: &EvidenceSnapshot,
+        now: DateTime<Utc>,
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         if snapshot.observed_at > now || snapshot.partial || snapshot.coverage != CoverageStatus::Available {
             return Ok(false);
         }

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error;
+
 use chrono::Utc;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::CoverageStatus;
@@ -35,9 +37,9 @@ use uuid::Uuid;
 
 use super::EvidenceListQuery;
 use super::EvidencePage;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const EVIDENCE_RETENTION_DAYS: i64 = 30;
 
@@ -47,9 +49,9 @@ impl PostgresRepository {
         auth: &AuthContext,
         cluster_id: ClusterId,
         trace_fingerprint: &str,
-    ) -> Result<Vec<EvidenceSnapshot>, ControlPlaneError> {
+    ) -> Result<Vec<EvidenceSnapshot>, ControlPlaneRequestFailure> {
         if !auth.clusters.contains(&cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "message journey cluster is outside the authenticated scope",
             ));
@@ -79,7 +81,7 @@ impl PostgresRepository {
         investigation_id: Option<InvestigationId>,
         incident_id: Option<IncidentId>,
         content_digest: &str,
-    ) -> Result<EvidenceSnapshot, ControlPlaneError> {
+    ) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {
         enforce_evidence_scope(auth, snapshot)?;
         let query_hash = query_hash(snapshot);
         let mut transaction = self.pool.begin().await?;
@@ -137,14 +139,17 @@ impl PostgresRepository {
             .bind(snapshot.observed_at)
             .bind(collected_at)
             .bind(i64::try_from(snapshot.freshness_seconds).map_err(|_| {
-                ControlPlaneError::validation("invalid_request", "evidence freshness exceeds the supported range")
+                ControlPlaneRequestFailure::validation(
+                    "invalid_request",
+                    "evidence freshness exceeds the supported range",
+                )
             })?)
             .bind(coverage_name(snapshot.coverage))
             .bind(sensitivity_name(snapshot.sensitivity))
             .bind(exposure_name(snapshot.exposure))
             .bind(snapshot.partial)
-            .bind(serde_json::to_value(&snapshot.warnings).map_err(|_| {
-                ControlPlaneError::validation("invalid_request", "evidence warnings cannot be serialized")
+            .bind(serde_json::to_value(&snapshot.warnings).map_err(|source| {
+                ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_request", source))
             })?)
             .bind(inline_content)
             .bind(reference.map(|value| value.uri.as_str()))
@@ -153,7 +158,7 @@ impl PostgresRepository {
                     .map(|value| i64::try_from(value.size_bytes))
                     .transpose()
                     .map_err(|_| {
-                        ControlPlaneError::validation(
+                        ControlPlaneRequestFailure::validation(
                             "output_too_large",
                             "evidence content size exceeds the supported range",
                         )
@@ -193,9 +198,9 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         source: &str,
         resource: &str,
-    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneError> {
+    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneRequestFailure> {
         if !auth.clusters.contains(&cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "evidence cluster is outside the authenticated scope",
             ));
@@ -221,7 +226,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: EvidenceId,
-    ) -> Result<EvidenceSnapshot, ControlPlaneError> {
+    ) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {
         let row = sqlx::query(evidence_query(
             "
              WHERE e.id = $1 AND e.tenant_id = $2
@@ -231,7 +236,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let snapshot = evidence_from_row(&row)?;
         enforce_evidence_scope(auth, &snapshot)?;
         Ok(snapshot)
@@ -241,7 +246,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: EvidenceId,
-    ) -> Result<String, ControlPlaneError> {
+    ) -> Result<String, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT cluster_id, content_digest
              FROM evidence_snapshots
@@ -252,24 +257,25 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let cluster = rocketmq_sre_contracts::ClusterId::from_uuid(row.try_get("cluster_id")?);
         if !auth.clusters.contains(&cluster) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "evidence cluster is outside the authenticated scope",
             ));
         }
-        row.try_get("content_digest").map_err(ControlPlaneError::from)
+        row.try_get("content_digest")
+            .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::from(source)))
     }
 
     pub(crate) async fn list_evidence(
         &self,
         auth: &AuthContext,
         query: &EvidenceListQuery,
-    ) -> Result<EvidencePage, ControlPlaneError> {
+    ) -> Result<EvidencePage, ControlPlaneRequestFailure> {
         if !auth.clusters.contains(&query.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "evidence cluster is outside the authenticated scope",
             ));
@@ -281,7 +287,7 @@ impl PostgresRepository {
             .map(|value| {
                 value
                     .parse::<Uuid>()
-                    .map_err(|_| ControlPlaneError::validation("invalid_request", "evidence cursor must be a UUID"))
+                    .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "cursor is invalid"))
             })
             .transpose()?;
         let rows = sqlx::query(evidence_query(
@@ -329,7 +335,7 @@ fn evidence_expires_at(collected_at: chrono::DateTime<Utc>) -> chrono::DateTime<
     collected_at + chrono::Duration::days(EVIDENCE_RETENTION_DAYS)
 }
 
-fn evidence_from_row(row: &PgRow) -> Result<EvidenceSnapshot, ControlPlaneError> {
+fn evidence_from_row(row: &PgRow) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {
     let family: String = row.try_get("schema_family")?;
     let major =
         u16::try_from(row.try_get::<i32, _>("schema_major")?).map_err(|_| invalid_stored_evidence("schema major"))?;
@@ -349,8 +355,9 @@ fn evidence_from_row(row: &PgRow) -> Result<EvidenceSnapshot, ControlPlaneError>
         }),
         _ => return Err(invalid_stored_evidence("content storage")),
     };
-    let warnings: Vec<String> =
-        serde_json::from_value(row.try_get("warnings")?).map_err(|_| invalid_stored_evidence("warnings"))?;
+    let warnings: Vec<String> = serde_json::from_value(row.try_get("warnings")?).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("source_unavailable", source))
+    })?;
     let snapshot = EvidenceSnapshot {
         schema: SchemaVersion::new(family, major, minor),
         evidence_id: EvidenceId::from_uuid(row.try_get("id")?),
@@ -373,21 +380,29 @@ fn evidence_from_row(row: &PgRow) -> Result<EvidenceSnapshot, ControlPlaneError>
         content,
         content_hash: row.try_get("content_hash")?,
     };
-    snapshot
-        .verify_content_hash()
-        .map_err(|_| invalid_stored_evidence("content hash"))?;
+    snapshot.verify_content_hash().map_err(|source| {
+        if source.source().is_some() {
+            ControlPlaneRequestFailure::from(ControlPlaneError::contract(
+                crate::ControlPlaneFailure::Validation,
+                "source_unavailable",
+                source,
+            ))
+        } else {
+            ControlPlaneRequestFailure::validation("source_unavailable", "stored evidence hash is invalid")
+        }
+    })?;
     Ok(snapshot)
 }
 
-fn enforce_evidence_scope(auth: &AuthContext, snapshot: &EvidenceSnapshot) -> Result<(), ControlPlaneError> {
+fn enforce_evidence_scope(auth: &AuthContext, snapshot: &EvidenceSnapshot) -> Result<(), ControlPlaneRequestFailure> {
     if snapshot.tenant_id != auth.tenant_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "evidence tenant differs from the authenticated tenant",
         ));
     }
     if !auth.clusters.contains(&snapshot.cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "evidence cluster is outside the authenticated scope",
         ));
@@ -419,7 +434,7 @@ fn coverage_name(value: CoverageStatus) -> &'static str {
     }
 }
 
-fn parse_coverage(value: &str) -> Result<CoverageStatus, ControlPlaneError> {
+fn parse_coverage(value: &str) -> Result<CoverageStatus, ControlPlaneRequestFailure> {
     match value {
         "available" => Ok(CoverageStatus::Available),
         "partial" => Ok(CoverageStatus::Partial),
@@ -438,7 +453,7 @@ fn sensitivity_name(value: Sensitivity) -> &'static str {
     }
 }
 
-fn parse_sensitivity(value: &str) -> Result<Sensitivity, ControlPlaneError> {
+fn parse_sensitivity(value: &str) -> Result<Sensitivity, ControlPlaneRequestFailure> {
     match value {
         "public" => Ok(Sensitivity::Public),
         "internal" => Ok(Sensitivity::Internal),
@@ -467,7 +482,7 @@ const fn exposure_name(exposure: EvidenceExposure) -> &'static str {
     }
 }
 
-fn parse_exposure(value: &str) -> Result<EvidenceExposure, ControlPlaneError> {
+fn parse_exposure(value: &str) -> Result<EvidenceExposure, ControlPlaneRequestFailure> {
     match value {
         "unknown" => Ok(EvidenceExposure::Unknown),
         "mcp_tool" => Ok(EvidenceExposure::McpTool),
@@ -487,8 +502,8 @@ fn parse_exposure(value: &str) -> Result<EvidenceExposure, ControlPlaneError> {
     }
 }
 
-fn invalid_stored_evidence(field: &str) -> ControlPlaneError {
-    ControlPlaneError::validation("source_unavailable", format!("stored evidence {field} is invalid"))
+fn invalid_stored_evidence(field: &str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::validation("source_unavailable", format!("stored evidence {field} is invalid"))
 }
 
 const EVIDENCE_COLUMNS: &str = "SELECT e.id, e.query_id, e.correlation_id, e.tenant_id, e.cluster_id,

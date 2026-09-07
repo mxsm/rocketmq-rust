@@ -28,6 +28,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 use crate::auth::AuthContext;
 
@@ -184,16 +185,14 @@ pub(crate) async fn matrix(
     state: &AppState,
     auth: &AuthContext,
     query: CoverageQuery,
-) -> Result<Value, ControlPlaneError> {
+) -> Result<Value, ControlPlaneRequestFailure> {
     let cluster_ids = selected_clusters(auth, query.cluster_id.as_deref())?;
     let source_states = latest_source_states(state, auth, &cluster_ids).await?;
     let states = source_states
         .iter()
         .map(|state| (state.source.as_str(), state))
         .collect::<BTreeMap<_, _>>();
-    let registry = full_registry().map_err(|error| {
-        ControlPlaneError::configuration(format!("built-in diagnostic pack registry is invalid: {error}"))
-    })?;
+    let registry = full_registry().map_err(|_| ControlPlaneError::configuration("diagnostic registry rejected"))?;
     let packs = PACK_ORDER
         .iter()
         .map(|id| {
@@ -258,16 +257,19 @@ pub(crate) async fn matrix(
         source_capabilities: source_states.into_iter().map(SourceCapabilityView::from).collect(),
         pack_coverage,
     })
-    .map_err(|error| ControlPlaneError::configuration(format!("coverage response cannot be encoded: {error}")))
+    .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn selected_clusters(auth: &AuthContext, requested: Option<&str>) -> Result<Vec<ClusterId>, ControlPlaneError> {
+fn selected_clusters(
+    auth: &AuthContext,
+    requested: Option<&str>,
+) -> Result<Vec<ClusterId>, ControlPlaneRequestFailure> {
     if let Some(requested) = requested {
         let cluster_id = requested.parse::<ClusterId>().map_err(|_| {
-            ControlPlaneError::validation("cluster_not_allowed", "coverage cluster identifier must be a UUID")
+            ControlPlaneRequestFailure::validation("cluster_not_allowed", "coverage cluster identifier must be a UUID")
         })?;
         if !auth.clusters.contains(&cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "coverage cluster is outside the authenticated scope",
             ));
@@ -282,7 +284,7 @@ async fn latest_source_states(
     state: &AppState,
     auth: &AuthContext,
     cluster_ids: &[ClusterId],
-) -> Result<Vec<SourceState>, ControlPlaneError> {
+) -> Result<Vec<SourceState>, ControlPlaneRequestFailure> {
     if cluster_ids.is_empty() {
         return Ok(Vec::new());
     }

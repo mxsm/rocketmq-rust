@@ -174,11 +174,9 @@ impl ConnectorCapabilityState {
     /// # Errors
     ///
     /// Returns a contract error when a connector advertises mutation support.
-    pub fn validate_read_only(&self) -> Result<(), crate::ContractError> {
+    pub fn validate_read_only(&self) -> Result<(), crate::SreContractError> {
         if self.mutation_supported {
-            return Err(crate::ContractError::InvalidDescriptor {
-                reason: "connector capability must keep mutation_supported=false".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }
@@ -194,9 +192,9 @@ impl RequiredSignalsEvidenceV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::ContractError::InvalidDescriptor`] when the schema,
+    /// Returns [`crate::SreContractError`] when the schema,
     /// component, identifiers, or status payloads are inconsistent.
-    pub fn validate(&self) -> Result<(), crate::ContractError> {
+    pub fn validate(&self) -> Result<(), crate::SreContractError> {
         if self.schema_version != REQUIRED_SIGNALS_EVIDENCE_SCHEMA_VERSION {
             return Err(invalid_required_signals("unsupported Required Signals evidence schema"));
         }
@@ -244,10 +242,8 @@ impl RequiredSignalsEvidenceV1 {
     }
 }
 
-fn invalid_required_signals(reason: &str) -> crate::ContractError {
-    crate::ContractError::InvalidDescriptor {
-        reason: reason.to_owned(),
-    }
+fn invalid_required_signals(_reason: &str) -> crate::SreContractError {
+    crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor)
 }
 
 #[cfg(test)]

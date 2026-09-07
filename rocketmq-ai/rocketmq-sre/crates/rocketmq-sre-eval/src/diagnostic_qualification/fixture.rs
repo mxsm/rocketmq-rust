@@ -34,7 +34,7 @@ use rocketmq_sre_core::diagnostics::full_registry;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::model::DiagnosticQualificationError;
+use super::model::DiagnosticQualificationFailure;
 use super::model::DiagnosticQualificationManifest;
 use super::model::QUALIFICATION_PACK_COUNT;
 use super::model::QUALIFICATION_SCENARIO_COUNT;
@@ -181,19 +181,19 @@ pub(super) struct MaterializedPackScenario {
 
 /// Builds the canonical manifest directly from the compiled registry and the
 /// checked-in fixture assets.
-pub fn generated_manifest() -> Result<DiagnosticQualificationManifest, DiagnosticQualificationError> {
+pub(super) fn generated_manifest() -> Result<DiagnosticQualificationManifest, DiagnosticQualificationFailure> {
     let fixtures = raw_fixtures()?;
     let expected = expected_by_pack(&fixtures)?;
-    let registry = full_registry().map_err(|error| {
-        DiagnosticQualificationError::InvalidManifest(format!("built-in diagnostic registry is invalid: {error}"))
+    let registry = full_registry().map_err(|_| {
+        DiagnosticQualificationFailure::InvalidManifest("built-in diagnostic registry is invalid".to_owned())
     })?;
     let mut packs = Vec::new();
     for id in full_pack_ids() {
         let pack = registry.resolve(&id).ok_or_else(|| {
-            DiagnosticQualificationError::InvalidManifest(format!("registered pack `{id}` cannot be resolved"))
+            DiagnosticQualificationFailure::InvalidManifest(format!("registered pack `{id}` cannot be resolved"))
         })?;
         let scenarios = expected.get(&id).cloned().ok_or_else(|| {
-            DiagnosticQualificationError::InvalidManifest(format!("pack `{id}` has no qualification scenarios"))
+            DiagnosticQualificationFailure::InvalidManifest(format!("pack `{id}` has no qualification scenarios"))
         })?;
         packs.push(QualifiedDiagnosticPack {
             inspection_template: inspection_template_for(&id)?.to_owned(),
@@ -238,15 +238,17 @@ pub fn generated_manifest() -> Result<DiagnosticQualificationManifest, Diagnosti
 }
 
 /// Loads the committed qualification manifest and rejects generator drift.
-pub fn load_committed_manifest(path: &Path) -> Result<DiagnosticQualificationManifest, DiagnosticQualificationError> {
-    let raw = fs::read_to_string(path).map_err(|source| DiagnosticQualificationError::Io {
-        path: path.to_path_buf(),
+pub(super) fn load_committed_manifest(
+    path: &Path,
+) -> Result<DiagnosticQualificationManifest, DiagnosticQualificationFailure> {
+    let raw = fs::read_to_string(path).map_err(|source| DiagnosticQualificationFailure::Io {
+        _path: path.to_path_buf(),
         source,
     })?;
     let manifest: DiagnosticQualificationManifest = serde_json::from_str(&raw)?;
     validate_manifest(&manifest)?;
     if manifest != generated_manifest()? {
-        return Err(DiagnosticQualificationError::InvalidManifest(
+        return Err(DiagnosticQualificationFailure::InvalidManifest(
             "committed manifest differs from the compiled registry or fixture assets".to_owned(),
         ));
     }
@@ -254,12 +256,12 @@ pub fn load_committed_manifest(path: &Path) -> Result<DiagnosticQualificationMan
 }
 
 /// Writes the stable generated manifest for deliberate artifact updates.
-pub fn write_generated_manifest(path: &Path) -> Result<(), DiagnosticQualificationError> {
+pub(super) fn write_generated_manifest(path: &Path) -> Result<(), DiagnosticQualificationFailure> {
     let manifest = generated_manifest()?;
     let mut encoded = serde_json::to_vec_pretty(&manifest)?;
     encoded.push(b'\n');
-    fs::write(path, encoded).map_err(|source| DiagnosticQualificationError::Io {
-        path: path.to_path_buf(),
+    fs::write(path, encoded).map_err(|source| DiagnosticQualificationFailure::Io {
+        _path: path.to_path_buf(),
         source,
     })
 }
@@ -270,12 +272,12 @@ pub(super) fn materialize_pack_scenario(
     tenant_id: TenantId,
     cluster_id: ClusterId,
     observed_at: DateTime<Utc>,
-) -> Result<MaterializedPackScenario, DiagnosticQualificationError> {
+) -> Result<MaterializedPackScenario, DiagnosticQualificationFailure> {
     let fixture = raw_fixtures()?
         .into_iter()
         .find(|fixture| fixture.pack == pack_id && fixture.scenario == scenario)
         .ok_or_else(|| {
-            DiagnosticQualificationError::InvalidFixture(format!(
+            DiagnosticQualificationFailure::InvalidFixture(format!(
                 "pack `{pack_id}` has no `{}` qualification fixture",
                 scenario.as_str()
             ))
@@ -292,7 +294,7 @@ pub(super) fn materialize_pack_scenario(
             source: item.source,
             resource: item.resource,
             time_range: TimeRange::new(observed_at, observed_at)
-                .map_err(|error| DiagnosticQualificationError::InvalidFixture(error.to_string()))?,
+                .map_err(DiagnosticQualificationFailure::FixtureContract)?,
         };
         let mut snapshot = EvidenceSnapshot::capture(
             query,
@@ -300,18 +302,18 @@ pub(super) fn materialize_pack_scenario(
             observed_at,
             EvidenceContent::Inline(item.content),
         )
-        .map_err(|error| DiagnosticQualificationError::InvalidFixture(error.to_string()))?;
+        .map_err(DiagnosticQualificationFailure::FixtureContract)?;
         snapshot.coverage = item.coverage;
         snapshot.partial = item.partial;
         snapshot.content_hash = snapshot
             .compute_content_hash()
-            .map_err(|error| DiagnosticQualificationError::InvalidFixture(error.to_string()))?;
+            .map_err(DiagnosticQualificationFailure::FixtureContract)?;
         evidence.push(snapshot);
     }
     Ok(MaterializedPackScenario { expected, evidence })
 }
 
-fn inspection_template_for(pack_id: &str) -> Result<&'static str, DiagnosticQualificationError> {
+fn inspection_template_for(pack_id: &str) -> Result<&'static str, DiagnosticQualificationFailure> {
     match pack_id {
         "cluster-topology.v1"
         | "deployment-drift.v1"
@@ -344,26 +346,27 @@ fn inspection_template_for(pack_id: &str) -> Result<&'static str, DiagnosticQual
         | "proxy-connectivity.v1"
         | "auth-failure.v1" => Ok("telemetry"),
         "producer-connectivity.v1" | "message-path.v1" => Ok("producer_consumer"),
-        _ => Err(DiagnosticQualificationError::InvalidManifest(format!(
+        _ => Err(DiagnosticQualificationFailure::InvalidManifest(format!(
             "pack `{pack_id}` has no inspection template"
         ))),
     }
 }
 
-fn raw_fixtures() -> Result<Vec<RawFixture>, DiagnosticQualificationError> {
+fn raw_fixtures() -> Result<Vec<RawFixture>, DiagnosticQualificationFailure> {
     let mut fixtures = WAVE_A_FIXTURES
         .iter()
         .map(|(path, raw)| {
-            serde_json::from_str(raw)
-                .map_err(|error| DiagnosticQualificationError::InvalidFixture(format!("`{path}` is invalid: {error}")))
+            let _ = path;
+            serde_json::from_str(raw).map_err(DiagnosticQualificationFailure::FixtureDecode)
         })
         .collect::<Result<Vec<_>, _>>()?;
     for (path, raw) in [
         (WAVE_B_CATALOG_PATH, WAVE_B_CATALOG),
         (WAVE_C_CATALOG_PATH, WAVE_C_CATALOG),
     ] {
-        let catalog: RawFixtureCatalog = serde_json::from_str(raw)
-            .map_err(|error| DiagnosticQualificationError::InvalidFixture(format!("`{path}` is invalid: {error}")))?;
+        let _ = path;
+        let catalog: RawFixtureCatalog =
+            serde_json::from_str(raw).map_err(DiagnosticQualificationFailure::FixtureDecode)?;
         fixtures.extend(catalog.fixtures);
     }
     for fixture in &fixtures {
@@ -376,12 +379,12 @@ fn raw_fixtures() -> Result<Vec<RawFixture>, DiagnosticQualificationError> {
 
 fn expected_by_pack(
     fixtures: &[RawFixture],
-) -> Result<BTreeMap<String, Vec<QualificationExpectation>>, DiagnosticQualificationError> {
+) -> Result<BTreeMap<String, Vec<QualificationExpectation>>, DiagnosticQualificationFailure> {
     let known = full_pack_ids().into_iter().collect::<BTreeSet<_>>();
     let mut result = BTreeMap::<String, Vec<QualificationExpectation>>::new();
     for fixture in fixtures {
         if !known.contains(&fixture.pack) {
-            return Err(DiagnosticQualificationError::InvalidFixture(format!(
+            return Err(DiagnosticQualificationFailure::InvalidFixture(format!(
                 "fixture references unknown pack `{}`",
                 fixture.pack
             )));
@@ -396,13 +399,13 @@ fn expected_by_pack(
         let actual = scenarios.iter().map(|item| item.scenario).collect::<BTreeSet<_>>();
         if actual != QualificationScenario::ALL.into_iter().collect() || scenarios.len() != QUALIFICATION_SCENARIO_COUNT
         {
-            return Err(DiagnosticQualificationError::InvalidFixture(format!(
+            return Err(DiagnosticQualificationFailure::InvalidFixture(format!(
                 "pack `{pack}` must define exactly normal, fault, and missing scenarios"
             )));
         }
     }
     if result.len() != QUALIFICATION_PACK_COUNT || result.keys().cloned().collect::<BTreeSet<_>>() != known {
-        return Err(DiagnosticQualificationError::InvalidFixture(
+        return Err(DiagnosticQualificationFailure::InvalidFixture(
             "fixture catalog does not cover all 32 built-in packs".to_owned(),
         ));
     }
@@ -421,14 +424,14 @@ fn expectation(fixture: &RawFixture) -> QualificationExpectation {
     }
 }
 
-fn validate_manifest(manifest: &DiagnosticQualificationManifest) -> Result<(), DiagnosticQualificationError> {
+fn validate_manifest(manifest: &DiagnosticQualificationManifest) -> Result<(), DiagnosticQualificationFailure> {
     if manifest.schema_version != QUALIFICATION_SCHEMA
         || manifest.operating_mode != "rules_only"
         || manifest.model_provider_network_calls
         || manifest.target_mutation_calls != 0
         || manifest.execution_eligible
     {
-        return Err(DiagnosticQualificationError::InvalidManifest(
+        return Err(DiagnosticQualificationFailure::InvalidManifest(
             "qualification must be rules-only, mutation-zero, and execution-ineligible".to_owned(),
         ));
     }
@@ -437,7 +440,7 @@ fn validate_manifest(manifest: &DiagnosticQualificationManifest) -> Result<(), D
         || manifest.pack_scenario_count != QUALIFICATION_PACK_COUNT * QUALIFICATION_SCENARIO_COUNT
         || manifest.packs.len() != QUALIFICATION_PACK_COUNT
     {
-        return Err(DiagnosticQualificationError::InvalidManifest(
+        return Err(DiagnosticQualificationFailure::InvalidManifest(
             "qualification cardinality must be 32 packs by 3 scenarios".to_owned(),
         ));
     }
@@ -448,19 +451,19 @@ fn validate_manifest(manifest: &DiagnosticQualificationManifest) -> Result<(), D
         .map(|pack| pack.id.clone())
         .collect::<BTreeSet<_>>();
     if known != actual {
-        return Err(DiagnosticQualificationError::InvalidManifest(
+        return Err(DiagnosticQualificationFailure::InvalidManifest(
             "qualification pack IDs differ from the compiled registry".to_owned(),
         ));
     }
     for pack in &manifest.packs {
         if !manifest.inspection_templates.contains(&pack.inspection_template) {
-            return Err(DiagnosticQualificationError::InvalidManifest(format!(
+            return Err(DiagnosticQualificationFailure::InvalidManifest(format!(
                 "pack `{}` references unknown inspection template `{}`",
                 pack.id, pack.inspection_template
             )));
         }
         if pack.required_evidence.is_empty() {
-            return Err(DiagnosticQualificationError::InvalidManifest(format!(
+            return Err(DiagnosticQualificationFailure::InvalidManifest(format!(
                 "pack `{}` has no required Evidence contract",
                 pack.id
             )));
@@ -469,7 +472,7 @@ fn validate_manifest(manifest: &DiagnosticQualificationManifest) -> Result<(), D
         if scenarios != QualificationScenario::ALL.into_iter().collect()
             || pack.scenarios.len() != QUALIFICATION_SCENARIO_COUNT
         {
-            return Err(DiagnosticQualificationError::InvalidManifest(format!(
+            return Err(DiagnosticQualificationFailure::InvalidManifest(format!(
                 "pack `{}` does not define exactly three scenarios",
                 pack.id
             )));
@@ -478,16 +481,16 @@ fn validate_manifest(manifest: &DiagnosticQualificationManifest) -> Result<(), D
     Ok(())
 }
 
-fn validate_evidence_fixture(evidence: &RawEvidence) -> Result<(), DiagnosticQualificationError> {
+fn validate_evidence_fixture(evidence: &RawEvidence) -> Result<(), DiagnosticQualificationFailure> {
     let encoded = serde_json::to_vec(&evidence.content)?;
     if encoded.len() > MAX_FIXTURE_CONTENT_BYTES {
-        return Err(DiagnosticQualificationError::InvalidFixture(format!(
+        return Err(DiagnosticQualificationFailure::InvalidFixture(format!(
             "fixture `{}` exceeds the {MAX_FIXTURE_CONTENT_BYTES}-byte bound",
             evidence.resource
         )));
     }
     validate_safe_value(&evidence.content).map_err(|field| {
-        DiagnosticQualificationError::InvalidFixture(format!(
+        DiagnosticQualificationFailure::InvalidFixture(format!(
             "fixture `{}` contains forbidden sensitive field or value `{field}`",
             evidence.resource
         ))

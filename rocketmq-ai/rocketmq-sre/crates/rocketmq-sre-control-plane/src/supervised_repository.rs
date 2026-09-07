@@ -34,6 +34,7 @@ use serde_json::Value;
 use sqlx::Row;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 /// Immutable plan snapshot plus its separately mutable lifecycle projection.
@@ -50,25 +51,26 @@ pub struct StoredActionPlan {
     reason = "the control plane intentionally exposes a native async repository contract"
 )]
 pub trait SupervisedRepository: Clone + Send + Sync + 'static {
-    async fn store_action_plan(&self, plan: &ActionPlan, risk: ActionRisk) -> Result<bool, ControlPlaneError>;
-    async fn action_plan(&self, id: ActionPlanId) -> Result<StoredActionPlan, ControlPlaneError>;
+    async fn store_action_plan(&self, plan: &ActionPlan, risk: ActionRisk) -> Result<bool, ControlPlaneRequestFailure>;
+    async fn action_plan(&self, id: ActionPlanId) -> Result<StoredActionPlan, ControlPlaneRequestFailure>;
     async fn compare_and_set_plan_status(
         &self,
         id: ActionPlanId,
         expected: PlanStatus,
         next: PlanStatus,
         submitted_at: Option<DateTime<Utc>>,
-    ) -> Result<bool, ControlPlaneError>;
-    async fn append_policy_decision(&self, decision: &PolicyDecision) -> Result<(), ControlPlaneError>;
-    async fn append_approval(&self, approval: &ApprovalRecord) -> Result<(), ControlPlaneError>;
-    async fn append_critic_review(&self, review: &CriticReview) -> Result<String, ControlPlaneError>;
-    async fn append_audit_event(&self, event: &AuditEvent) -> Result<(), ControlPlaneError>;
+    ) -> Result<bool, ControlPlaneRequestFailure>;
+    async fn append_policy_decision(&self, decision: &PolicyDecision) -> Result<(), ControlPlaneRequestFailure>;
+    async fn append_approval(&self, approval: &ApprovalRecord) -> Result<(), ControlPlaneRequestFailure>;
+    async fn append_critic_review(&self, review: &CriticReview) -> Result<String, ControlPlaneRequestFailure>;
+    async fn append_audit_event(&self, event: &AuditEvent) -> Result<(), ControlPlaneRequestFailure>;
 }
 
 impl SupervisedRepository for PostgresRepository {
-    async fn store_action_plan(&self, plan: &ActionPlan, risk: ActionRisk) -> Result<bool, ControlPlaneError> {
-        plan.verify_plan_hash()
-            .map_err(|error| ControlPlaneError::validation("invalid_plan_hash", error.to_string()))?;
+    async fn store_action_plan(&self, plan: &ActionPlan, risk: ActionRisk) -> Result<bool, ControlPlaneRequestFailure> {
+        plan.verify_plan_hash().map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_plan_hash", error)
+        })?;
         let risk = action_risk_name(risk)?;
         let snapshot = json_value(plan)?;
         let result = sqlx::query(
@@ -92,7 +94,7 @@ impl SupervisedRepository for PostgresRepository {
         .bind(plan.diagnosis_revision.as_uuid())
         .bind(plan.primary_model_invocation_id.as_uuid())
         .bind(i32::try_from(plan.version).map_err(|_| {
-            ControlPlaneError::validation("invalid_plan_version", "plan version exceeds PostgreSQL INTEGER")
+            ControlPlaneRequestFailure::validation("invalid_plan_version", "plan version exceeds PostgreSQL INTEGER")
         })?)
         .bind(&plan.plan_hash)
         .bind(&plan.evidence_hash)
@@ -113,14 +115,15 @@ impl SupervisedRepository for PostgresRepository {
             .fetch_one(&self.pool)
             .await?;
         if existing_hash != plan.plan_hash {
-            return Err(ControlPlaneError::conflict(
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "conflict",
                 "action plan identifier already exists with a different immutable hash",
             ));
         }
         Ok(false)
     }
 
-    async fn action_plan(&self, id: ActionPlanId) -> Result<StoredActionPlan, ControlPlaneError> {
+    async fn action_plan(&self, id: ActionPlanId) -> Result<StoredActionPlan, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT request_snapshot, status, submitted_at
              FROM action_plans
@@ -129,7 +132,7 @@ impl SupervisedRepository for PostgresRepository {
         .bind(id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let status = parse_plan_status(row.try_get("status")?)?;
         let submitted_at = row.try_get("submitted_at")?;
         let mut plan: ActionPlan = from_json(row.try_get("request_snapshot")?)?;
@@ -148,7 +151,7 @@ impl SupervisedRepository for PostgresRepository {
         expected: PlanStatus,
         next: PlanStatus,
         submitted_at: Option<DateTime<Utc>>,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let result = sqlx::query(
             "UPDATE action_plans
              SET status = $3,
@@ -164,7 +167,7 @@ impl SupervisedRepository for PostgresRepository {
         Ok(result.rows_affected() == 1)
     }
 
-    async fn append_policy_decision(&self, decision: &PolicyDecision) -> Result<(), ControlPlaneError> {
+    async fn append_policy_decision(&self, decision: &PolicyDecision) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO policy_decisions (
                 id, tenant_id, cluster_id, plan_id, plan_hash, policy_version,
@@ -193,7 +196,7 @@ impl SupervisedRepository for PostgresRepository {
         Ok(())
     }
 
-    async fn append_approval(&self, approval: &ApprovalRecord) -> Result<(), ControlPlaneError> {
+    async fn append_approval(&self, approval: &ApprovalRecord) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO approvals (
                 id, tenant_id, cluster_id, plan_id, plan_hash,
@@ -223,9 +226,10 @@ impl SupervisedRepository for PostgresRepository {
         Ok(())
     }
 
-    async fn append_critic_review(&self, review: &CriticReview) -> Result<String, ControlPlaneError> {
-        let review_hash = canonical_sha256(review)
-            .map_err(|error| ControlPlaneError::validation("invalid_critic_review", error.to_string()))?;
+    async fn append_critic_review(&self, review: &CriticReview) -> Result<String, ControlPlaneRequestFailure> {
+        let review_hash = canonical_sha256(review).map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_critic_review", error)
+        })?;
         sqlx::query(
             "INSERT INTO critic_reviews (
                 id, plan_id, plan_hash, diagnosis_revision_id, primary_invocation_id,
@@ -263,7 +267,7 @@ impl SupervisedRepository for PostgresRepository {
         Ok(review_hash)
     }
 
-    async fn append_audit_event(&self, event: &AuditEvent) -> Result<(), ControlPlaneError> {
+    async fn append_audit_event(&self, event: &AuditEvent) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO audit_events (
                 event_id, tenant_id, cluster_id, correlation_id, event_kind,
@@ -294,22 +298,22 @@ impl SupervisedRepository for PostgresRepository {
     }
 }
 
-fn json_value(value: &impl Serialize) -> Result<Value, ControlPlaneError> {
+fn json_value(value: &impl Serialize) -> Result<Value, ControlPlaneRequestFailure> {
     serde_json::to_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("snapshot encoding failed: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, ControlPlaneError> {
+fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, ControlPlaneRequestFailure> {
     serde_json::from_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("snapshot decoding failed: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn enum_name(value: &impl Serialize) -> Result<String, ControlPlaneError> {
+fn enum_name(value: &impl Serialize) -> Result<String, ControlPlaneRequestFailure> {
     serde_json::to_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("enum encoding failed: {error}")))?
+        .map_err(ControlPlaneError::configuration_source)?
         .as_str()
         .map(ToOwned::to_owned)
-        .ok_or_else(|| ControlPlaneError::configuration("enum did not encode as a string"))
+        .ok_or_else(|| ControlPlaneRequestFailure::configuration("enum did not encode as a string"))
 }
 
 const fn plan_status_name(status: PlanStatus) -> &'static str {
@@ -325,7 +329,7 @@ const fn plan_status_name(status: PlanStatus) -> &'static str {
     }
 }
 
-fn parse_plan_status(value: &str) -> Result<PlanStatus, ControlPlaneError> {
+fn parse_plan_status(value: &str) -> Result<PlanStatus, ControlPlaneRequestFailure> {
     match value {
         "draft" => Ok(PlanStatus::Draft),
         "needs_critic" => Ok(PlanStatus::NeedsCritic),
@@ -335,17 +339,17 @@ fn parse_plan_status(value: &str) -> Result<PlanStatus, ControlPlaneError> {
         "rejected" => Ok(PlanStatus::Rejected),
         "expired" => Ok(PlanStatus::Expired),
         "superseded" => Ok(PlanStatus::Superseded),
-        _ => Err(ControlPlaneError::configuration(
+        _ => Err(ControlPlaneRequestFailure::configuration(
             "stored action plan has an unsupported status",
         )),
     }
 }
 
-fn action_risk_name(risk: ActionRisk) -> Result<&'static str, ControlPlaneError> {
+fn action_risk_name(risk: ActionRisk) -> Result<&'static str, ControlPlaneRequestFailure> {
     match risk {
         ActionRisk::R1 => Ok("r1"),
         ActionRisk::R2 => Ok("r2"),
-        ActionRisk::Read | ActionRisk::Plan | ActionRisk::R3 => Err(ControlPlaneError::validation(
+        ActionRisk::Read | ActionRisk::Plan | ActionRisk::R3 => Err(ControlPlaneRequestFailure::validation(
             "action_not_executable",
             "only R1 and R2 action plans may enter supervised persistence",
         )),

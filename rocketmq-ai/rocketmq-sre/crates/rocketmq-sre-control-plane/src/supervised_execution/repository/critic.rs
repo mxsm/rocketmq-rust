@@ -25,7 +25,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         plan: &ActionPlan,
-    ) -> Result<Option<CriticReview>, ControlPlaneError> {
+    ) -> Result<Option<CriticReview>, ControlPlaneRequestFailure> {
         let snapshot: Option<Value> = sqlx::query_scalar(
             "SELECT review.review_snapshot
              FROM critic_reviews review
@@ -54,7 +54,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         plan: &ActionPlan,
-    ) -> Result<Option<CriticReview>, ControlPlaneError> {
+    ) -> Result<Option<CriticReview>, ControlPlaneRequestFailure> {
         let review = self.latest_critic_review(auth, plan).await?;
         let Some(review) = review else {
             return Ok(None);
@@ -73,9 +73,9 @@ impl PostgresRepository {
             return Ok(None);
         };
         let primary = rocketmq_sre_model_gateway::normalize_model_family(&review.primary_model_family)
-            .map_err(|_| ControlPlaneError::configuration("stored primary model family is invalid"))?;
+            .map_err(crate::models::provider_configuration_failure)?;
         let critic = rocketmq_sre_model_gateway::normalize_model_family(critic_family)
-            .map_err(|_| ControlPlaneError::configuration("stored Critic model family is invalid"))?;
+            .map_err(crate::models::provider_configuration_failure)?;
         Ok((primary != critic).then_some(review))
     }
 
@@ -85,9 +85,10 @@ impl PostgresRepository {
         review: &CriticReview,
         audit: &AuditEvent,
         advance_to_approval: bool,
-    ) -> Result<(ActionPlan, String), ControlPlaneError> {
-        let review_hash = canonical_sha256(review)
-            .map_err(|error| ControlPlaneError::validation("invalid_critic_review", error.to_string()))?;
+    ) -> Result<(ActionPlan, String), ControlPlaneRequestFailure> {
+        let review_hash = canonical_sha256(review).map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_critic_review", error)
+        })?;
         let mut transaction = self.pool.begin().await?;
         let locked_status: Option<String> = sqlx::query_scalar(
             "SELECT status
@@ -111,7 +112,7 @@ impl PostgresRepository {
         .fetch_optional(&mut *transaction)
         .await?;
         if locked_status.as_deref() != Some("needs_critic") {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_state_changed",
                 "R2 plan is no longer awaiting a Critic review",
             ));
@@ -169,7 +170,7 @@ impl PostgresRepository {
             .execute(&mut *transaction)
             .await?;
             if changed.rows_affected() != 1 {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "plan_state_changed",
                     "R2 plan changed while the Critic review was committed",
                 ));

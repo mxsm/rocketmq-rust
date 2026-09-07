@@ -25,6 +25,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::MCP_BUSINESS_SCHEMA;
 use crate::MCP_PROTOCOL_VERSION;
 
@@ -62,7 +63,7 @@ impl Display for OnboardingState {
 }
 
 impl FromStr for OnboardingState {
-    type Err = ControlPlaneError;
+    type Err = ControlPlaneRequestFailure;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
@@ -72,9 +73,7 @@ impl FromStr for OnboardingState {
             "read_only_degraded" => Ok(Self::ReadOnlyDegraded),
             "rejected" => Ok(Self::Rejected),
             "offboarded" => Ok(Self::Offboarded),
-            _ => Err(ControlPlaneError::configuration(
-                "database contains an unknown onboarding state",
-            )),
+            _ => Err(ControlPlaneError::configuration("database contains an unknown onboarding state").into()),
         }
     }
 }
@@ -98,7 +97,7 @@ pub struct OnboardClusterRequest {
 }
 
 impl OnboardClusterRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         for (name, value) in [
             ("tenant_id", &self.tenant_id),
             ("external_cluster_key", &self.external_cluster_key),
@@ -110,7 +109,7 @@ impl OnboardClusterRequest {
             ("actor_subject", &self.actor_subject),
         ] {
             if value.trim().is_empty() {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "capability_mismatch",
                     format!("{name} must not be empty"),
                 ));
@@ -197,19 +196,19 @@ pub struct HandshakeCapability {
 }
 
 impl HandshakeCapability {
-    pub(crate) fn tool_surface_digest(&self) -> Result<&str, ControlPlaneError> {
+    pub(crate) fn tool_surface_digest(&self) -> Result<&str, ControlPlaneRequestFailure> {
         let digest = self
             .manifest
             .get("tool_surface_digest")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "schema_digest_mismatch",
                     "capability manifest must include a tool surface digest",
                 )
             })?;
         if !is_sha256_digest(digest) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "schema_digest_mismatch",
                 "capability manifest tool surface digest is malformed",
             ));
@@ -237,15 +236,15 @@ fn default_compatible() -> bool {
 }
 
 impl HandshakeRequest {
-    pub(crate) fn validate(&self) -> Result<HandshakeDecision, ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<HandshakeDecision, ControlPlaneRequestFailure> {
         if self.connector_subject.trim().is_empty() || self.connector_issuer.trim().is_empty() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "unauthorized_scope",
                 "connector subject and issuer must not be empty",
             ));
         }
         if self.capability.digest.trim().is_empty() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "schema_digest_mismatch",
                 "capability digest must not be empty",
             ));
@@ -396,12 +395,7 @@ mod tests {
 
         let error = request.validate().expect_err("malformed digest must fail closed");
 
-        assert!(matches!(
-            error,
-            ControlPlaneError::Validation {
-                code: "schema_digest_mismatch",
-                ..
-            }
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::Validation);
+        assert_eq!(error.code(), "schema_digest_mismatch");
     }
 }

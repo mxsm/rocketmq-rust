@@ -20,14 +20,14 @@ use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::ConnectorQueryEnvelope;
 use rocketmq_sre_contracts::ConnectorResponseEnvelope;
 use rocketmq_sre_contracts::ConnectorSessionId;
-use rocketmq_sre_contracts::ContractError;
 use rocketmq_sre_contracts::CorrelationId;
 use rocketmq_sre_contracts::SchemaVersion;
+use rocketmq_sre_contracts::SreContractError;
 use rocketmq_sre_contracts::TenantId;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 pub(crate) const CHANNEL_SCHEMA_FAMILY: &str = "rocketmq-sre.connector-channel";
 pub(crate) const CHANNEL_SCHEMA_MAJOR: u16 = 1;
@@ -141,7 +141,7 @@ pub(crate) fn channel_schema() -> SchemaVersion {
     SchemaVersion::new(CHANNEL_SCHEMA_FAMILY, CHANNEL_SCHEMA_MAJOR, 0)
 }
 
-pub(crate) fn validate_channel_schema(schema: &SchemaVersion) -> Result<(), ControlPlaneError> {
+pub(crate) fn validate_channel_schema(schema: &SchemaVersion) -> Result<(), ControlPlaneRequestFailure> {
     schema
         .ensure_compatible(
             CHANNEL_SCHEMA_FAMILY,
@@ -154,22 +154,22 @@ pub(crate) fn validate_channel_schema(schema: &SchemaVersion) -> Result<(), Cont
 pub(crate) fn validate_poll_request(
     path_session_id: ConnectorSessionId,
     request: &PollRequest,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     validate_channel_schema(&request.schema)?;
     if request.session_id != path_session_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "capability_mismatch",
             "connector session does not match the requested channel",
         ));
     }
     if request.max_commands == 0 || request.max_commands > MAX_COMMANDS_PER_POLL {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "output_too_large",
             "max_commands must be between 1 and 64",
         ));
     }
     if request.wait_millis > MAX_POLL_WAIT_MILLIS {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "capability_mismatch",
             "wait_millis must not exceed 30000",
         ));
@@ -181,16 +181,16 @@ pub(crate) fn validate_response(
     path_session_id: ConnectorSessionId,
     scope: &SessionScope,
     response: &ConnectorResponseEnvelope,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     validate_channel_schema(&response.schema)?;
     if response.session_id != path_session_id || response.session_id != scope.session_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "capability_mismatch",
             "connector response session does not match the authenticated channel",
         ));
     }
     if response.evidence.is_some() == response.error_code.is_some() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "capability_mismatch",
             "connector response must contain exactly one of evidence or error_code",
         ));
@@ -200,32 +200,32 @@ pub(crate) fn validate_response(
         .as_ref()
         .is_some_and(|code| code.is_empty() || code.len() > 128 || !is_stable_code(code))
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "capability_mismatch",
             "connector error_code must be a bounded snake_case identifier",
         ));
     }
     if let Some(evidence) = &response.evidence {
         if evidence.tenant_id != scope.tenant_id {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "tenant_mismatch",
                 "connector evidence crosses the registered tenant boundary",
             ));
         }
         if evidence.cluster_id != scope.cluster_id {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "connector evidence crosses the registered cluster boundary",
             ));
         }
-        evidence.verify_content_hash().map_err(|_| {
-            ControlPlaneError::validation("invalid_content_hash", "connector evidence content hash is invalid")
+        evidence.verify_content_hash().map_err(|source| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_content_hash", source)
         })?;
     }
     let bytes = serde_json::to_vec(response)
-        .map_err(|_| ControlPlaneError::validation("capability_mismatch", "connector response cannot be serialized"))?;
+        .map_err(|source| ControlPlaneRequestFailure::operational_validation_source("capability_mismatch", source))?;
     if bytes.len() > MAX_RESPONSE_BYTES {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "output_too_large",
             "connector response exceeds the 512 KiB channel bound",
         ));
@@ -233,20 +233,14 @@ pub(crate) fn validate_response(
     Ok(())
 }
 
-fn contract_compatibility_error(error: ContractError) -> ControlPlaneError {
-    match error {
-        ContractError::UnsupportedSchemaFamily { .. } | ContractError::UnsupportedSchemaMajor { .. } => {
-            ControlPlaneError::validation(
-                "unsupported_schema_major",
-                "connector channel schema family or major is unsupported",
-            )
-        }
-        ContractError::MissingRequiredFeature { .. } => ControlPlaneError::validation(
-            "missing_required_feature",
-            "connector channel requires an unsupported feature",
-        ),
-        _ => ControlPlaneError::validation("capability_mismatch", "connector channel schema is invalid"),
-    }
+fn contract_compatibility_error(error: SreContractError) -> ControlPlaneRequestFailure {
+    let code = match error.code() {
+        rocketmq_sre_contracts::PublicErrorCode::UnsupportedSchemaFamily
+        | rocketmq_sre_contracts::PublicErrorCode::UnsupportedSchemaMajor => "unsupported_schema_major",
+        rocketmq_sre_contracts::PublicErrorCode::MissingRequiredFeature => "missing_required_feature",
+        _ => "capability_mismatch",
+    };
+    ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, code, error)
 }
 
 fn is_stable_code(code: &str) -> bool {

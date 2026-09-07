@@ -78,9 +78,11 @@ use self::required_signals::RequiredSignalsSource;
 use self::runtime_diagnostics::RuntimeDiagnosticsSource;
 use self::tempo::TempoSource;
 use self::topology::TopologySource;
+use crate::ConnectorAdmissionOutcome;
+use crate::ConnectorAdmissionRejection;
 use crate::ConnectorConfig;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::EvidenceOperation;
 use crate::mcp::McpGateway;
 use crate::read_gateway::ConnectorReadGateway;
@@ -153,7 +155,7 @@ where
             .pool_max_idle_per_host(config.source_limits.max_concurrency)
             .user_agent(concat!("rocketmq-sre-connector/", env!("CARGO_PKG_VERSION")))
             .build()
-            .map_err(|_| ConnectorError::configuration("evidence source HTTP client cannot be built"))?;
+            .map_err(ConnectorError::configuration_source)?;
         let read_gateway = ConnectorReadGateway::new(&config, gateway);
         let alertmanager = AlertmanagerSource::new(
             http.clone(),
@@ -207,9 +209,9 @@ where
     pub(crate) async fn initialize(&self, context: ChildServiceContext) {
         self.kubernetes.initialize(context.metadata_io().clone());
         if let Err(error) = self.read_gateway.initialize(context).await {
-            self.record_failure("admin-query", error.code).await;
+            self.record_failure("admin-query", error.failure()).await;
             tracing::warn!(
-                code = error.code.as_str(),
+                code = error.failure().as_str(),
                 "read-only Admin evidence source is degraded"
             );
         }
@@ -247,8 +249,10 @@ where
         operation: Option<&EvidenceOperation>,
         deadline: DateTime<Utc>,
         cancel: &CancelSignal,
-    ) -> Result<EvidenceSnapshot, ConnectorError> {
-        self.validate_bounds(&query, deadline)?;
+    ) -> Result<ConnectorAdmissionOutcome<EvidenceSnapshot>, ConnectorError> {
+        if let Err(rejection) = self.validate_bounds(&query, deadline) {
+            return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+        }
         let context = ReadContext {
             tenant_id: query.tenant_id,
             cluster_id: query.cluster_id,
@@ -260,10 +264,21 @@ where
             deadline,
             cancel,
         };
-        let source = normalize_source(&query.source)?;
-        let session = self.read_gateway.admit(&context, gateway_audit_target(source)).await?;
+        let source = match normalize_source(&query.source) {
+            Ok(source) => source,
+            Err(rejection) => return Ok(ConnectorAdmissionOutcome::Rejected(rejection)),
+        };
+        let session = match self.read_gateway.admit(&context, gateway_audit_target(source)).await {
+            ConnectorAdmissionOutcome::Accepted(session) => session,
+            ConnectorAdmissionOutcome::Rejected(rejection) => {
+                return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+            }
+        };
         let cache_key = cache_key(&query, external_cluster)?;
         if let Some(output) = self.cached(&cache_key).await {
+            if let Err(rejection) = validate_query_completion(&context) {
+                return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+            }
             pseudonymize_evidence_resource(&mut query.resource, self.config.pseudonymization_key());
             return capture(query, output);
         }
@@ -277,12 +292,12 @@ where
                 self.record_success(source, output.freshness_seconds).await;
                 output
             }
-            Err(error) if error.code == ConnectorErrorCode::SourceUnavailable => {
-                self.record_failure(source, error.code).await;
+            Err(error) if error.failure() == ConnectorFailure::SourceUnavailable => {
+                self.record_failure(source, error.failure()).await;
                 SourceOutput::missing(source)
             }
             Err(error) => {
-                self.record_failure(source, error.code).await;
+                self.record_failure(source, error.failure()).await;
                 return Err(error.with_correlation_id(query.correlation_id));
             }
         };
@@ -313,7 +328,9 @@ where
             partial = output.partial,
             "bounded evidence source query completed"
         );
-        validate_query_completion(&context)?;
+        if let Err(rejection) = validate_query_completion(&context) {
+            return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+        }
         self.insert_cache(cache_key, output.clone()).await;
         pseudonymize_evidence_resource(&mut query.resource, self.config.pseudonymization_key());
         capture(query, output)
@@ -326,7 +343,7 @@ where
         subject: &str,
         deadline: DateTime<Utc>,
         cancel: &CancelSignal,
-    ) -> Result<InventoryUpload, ConnectorError> {
+    ) -> Result<ConnectorAdmissionOutcome<InventoryUpload>, ConnectorError> {
         let observed_at = Utc::now();
         let context = ReadContext {
             tenant_id: self.config.tenant_id,
@@ -339,11 +356,17 @@ where
             deadline,
             cancel,
         };
-        let session = self
+        let session = match self
             .read_gateway
             .admit(&context, Some(ReadAuditTarget::new(ReadAdapterKind::Mcp, "inventory")))
-            .await?;
-        inventory::collect(
+            .await
+        {
+            ConnectorAdmissionOutcome::Accepted(session) => session,
+            ConnectorAdmissionOutcome::Rejected(rejection) => {
+                return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+            }
+        };
+        let inventory = inventory::collect(
             &self.read_gateway,
             &self.kubernetes,
             cluster_id,
@@ -352,7 +375,11 @@ where
             self.config.pseudonymization_key(),
             &session,
         )
-        .await
+        .await?;
+        if let Err(rejection) = validate_query_completion(&context) {
+            return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+        }
+        Ok(ConnectorAdmissionOutcome::Accepted(inventory))
     }
 
     #[allow(
@@ -432,8 +459,8 @@ where
                 source,
                 projection = ?projection,
                 stage = "source_query",
-                code = error.code.as_str(),
-                retryable = error.retryable,
+                code = error.failure().as_str(),
+                retryable = error.retryable(),
                 "canonical read-only evidence query stage failed"
             );
         })?;
@@ -443,8 +470,8 @@ where
                 source,
                 projection = ?projection,
                 stage = "projection",
-                code = error.code.as_str(),
-                retryable = error.retryable,
+                code = error.failure().as_str(),
+                retryable = error.retryable(),
                 "canonical read-only evidence query stage failed"
             );
         })?;
@@ -517,7 +544,7 @@ where
                 if let Ok(operation) = mcp_operation(&query.resource) {
                     match self.read_gateway.mcp_query(session, &operation).await {
                         Ok(output) => return Ok(output),
-                        Err(error) if error.code == ConnectorErrorCode::SourceUnavailable => {}
+                        Err(error) if error.failure() == ConnectorFailure::SourceUnavailable => {}
                         Err(error) => return Err(error),
                     }
                 }
@@ -636,27 +663,23 @@ where
             }
             "topology" => TopologySource::query(&self.read_gateway, session, &query.resource).await,
             _ => Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
+                ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "unknown evidence source",
             )),
         }
     }
 
-    fn validate_bounds(&self, query: &EvidenceQuery, deadline: DateTime<Utc>) -> Result<(), ConnectorError> {
+    fn validate_bounds(
+        &self,
+        query: &EvidenceQuery,
+        deadline: DateTime<Utc>,
+    ) -> Result<(), ConnectorAdmissionRejection> {
         if query.time_range.start > query.time_range.end {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
-                false,
-                "evidence time range starts after it ends",
-            ));
+            return Err(ConnectorAdmissionRejection::InvalidEvidenceQuery);
         }
         if max_duration(query.time_range.start, query.time_range.end) > self.config.source_limits.max_time_range {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
-                false,
-                "evidence time range exceeds the configured source bound",
-            ));
+            return Err(ConnectorAdmissionRejection::InvalidEvidenceQuery);
         }
         if deadline <= Utc::now()
             || deadline
@@ -664,11 +687,7 @@ where
                 .to_std()
                 .is_ok_and(|duration| duration > self.config.source_limits.max_deadline)
         {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::DeadlineExceeded,
-                true,
-                "evidence deadline is elapsed or exceeds the configured bound",
-            ));
+            return Err(ConnectorAdmissionRejection::DeadlineExceeded);
         }
         Ok(())
     }
@@ -710,7 +729,7 @@ where
         );
     }
 
-    async fn record_failure(&self, source: &'static str, _code: ConnectorErrorCode) {
+    async fn record_failure(&self, source: &'static str, _code: ConnectorFailure) {
         let mut state = self.state.lock().await;
         let existing = state.get(source).cloned().unwrap_or_else(|| initial_state(false));
         state.insert(
@@ -728,22 +747,12 @@ where
     }
 }
 
-fn validate_query_completion(context: &ReadContext<'_>) -> Result<(), ConnectorError> {
+fn validate_query_completion(context: &ReadContext<'_>) -> Result<(), ConnectorAdmissionRejection> {
     if context.cancel.is_cancelled() {
-        return Err(ConnectorError::new(
-            ConnectorErrorCode::QueryCancelled,
-            false,
-            "evidence query was cancelled before cache publication",
-        )
-        .with_correlation_id(context.correlation_id));
+        return Err(ConnectorAdmissionRejection::QueryCancelled);
     }
     if Utc::now() >= context.deadline {
-        return Err(ConnectorError::new(
-            ConnectorErrorCode::DeadlineExceeded,
-            true,
-            "evidence deadline elapsed before cache publication",
-        )
-        .with_correlation_id(context.correlation_id));
+        return Err(ConnectorAdmissionRejection::DeadlineExceeded);
     }
     Ok(())
 }
@@ -769,7 +778,7 @@ fn consumer_lag_sample(content: &Value, observed_at: Instant) -> Result<Consumer
 
 fn consumer_lag_history_schema_mismatch() -> ConnectorError {
     ConnectorError::capability(
-        ConnectorErrorCode::CapabilityMismatch,
+        ConnectorFailure::CapabilityMismatch,
         "consumer lag projection cannot supply a bounded rate-history sample",
     )
 }
@@ -847,7 +856,7 @@ fn initial_state(configured: bool) -> SourceRuntimeState {
     }
 }
 
-fn normalize_source(source: &str) -> Result<&'static str, ConnectorError> {
+fn normalize_source(source: &str) -> Result<&'static str, ConnectorAdmissionRejection> {
     match source {
         "rocketmq-mcp" | "mcp" | "rocketmq_mcp" => Ok("rocketmq-mcp"),
         "admin-query" | "admin_query" | "rocketmq-admin-read" => Ok("admin-query"),
@@ -859,11 +868,7 @@ fn normalize_source(source: &str) -> Result<&'static str, ConnectorError> {
         "runtime" | "runtime-diagnostics" => Ok("runtime"),
         "required-signals" | "required_signals" | "component-signals" => Ok("required-signals"),
         "topology" => Ok("topology"),
-        _ => Err(ConnectorError::new(
-            ConnectorErrorCode::InvalidEvidenceQuery,
-            false,
-            "evidence source is not registered",
-        )),
+        _ => Err(ConnectorAdmissionRejection::InvalidEvidenceQuery),
     }
 }
 
@@ -934,7 +939,7 @@ fn mcp_operation(resource: &str) -> Result<EvidenceOperation, ConnectorError> {
         });
     }
     Err(ConnectorError::new(
-        ConnectorErrorCode::InvalidEvidenceQuery,
+        ConnectorFailure::InvalidEvidenceQuery,
         false,
         "resource is not represented by a read-only MCP operation",
     ))
@@ -959,8 +964,7 @@ fn cache_key(query: &EvidenceQuery, external_cluster: &str) -> Result<String, Co
         start: query.time_range.start,
         end: query.time_range.end,
     };
-    let canonical = serde_jcs::to_vec(&material)
-        .map_err(|_| ConnectorError::source("evidence query cache key cannot be canonicalized"))?;
+    let canonical = serde_jcs::to_vec(&material).map_err(ConnectorError::source_error)?;
     Ok(format!(
         "sha256:{}",
         rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(canonical))
@@ -980,29 +984,38 @@ fn pseudonymize_evidence_resource(resource: &mut String, pseudonym_key: &[u8]) {
     };
 }
 
-fn capture(query: EvidenceQuery, output: SourceOutput) -> Result<EvidenceSnapshot, ConnectorError> {
+fn capture(
+    query: EvidenceQuery,
+    output: SourceOutput,
+) -> Result<ConnectorAdmissionOutcome<EvidenceSnapshot>, ConnectorError> {
     let correlation_id = query.correlation_id;
-    let mut snapshot = EvidenceSnapshot::capture(
+    let snapshot = EvidenceSnapshot::capture(
         query,
         current_evidence_schema(),
         output.observed_at,
         EvidenceContent::Inline(output.content),
-    )
-    .map_err(|_| {
-        ConnectorError::new(
-            ConnectorErrorCode::InvalidEvidenceQuery,
-            false,
-            "canonical evidence capture failed",
-        )
-        .with_correlation_id(correlation_id)
-    })?;
+    );
+    let mut snapshot = match snapshot {
+        Ok(snapshot) => snapshot,
+        Err(source) if std::error::Error::source(&source).is_none() => {
+            return Ok(ConnectorAdmissionOutcome::Rejected(
+                ConnectorAdmissionRejection::InvalidEvidenceQuery,
+            ));
+        }
+        Err(source) => {
+            return Err(
+                ConnectorError::from_source(ConnectorFailure::InvalidEvidenceQuery, false, source)
+                    .with_correlation_id(correlation_id),
+            );
+        }
+    };
     snapshot.freshness_seconds = output.freshness_seconds;
     snapshot.partial = output.partial;
     snapshot.warnings = output.warnings;
     snapshot.sensitivity = output.sensitivity;
     snapshot.coverage = output.coverage;
     snapshot.exposure = output.exposure;
-    Ok(snapshot)
+    Ok(ConnectorAdmissionOutcome::Accepted(snapshot))
 }
 
 fn exposure_for_source(source: &str) -> EvidenceExposure {
@@ -1227,17 +1240,32 @@ mod tests {
         let manager = SourceManager::new(config, Arc::new(NoQueryGateway)).expect("manager");
         let at = Utc.with_ymd_and_hms(2026, 7, 27, 8, 0, 0).single().expect("time");
         let resource = "message-metadata/id-hash-a";
-        let snapshot = manager
+        let query = EvidenceQuery {
+            query_id: QueryId::new(),
+            correlation_id: CorrelationId::new(),
+            tenant_id,
+            cluster_id,
+            source: "admin-query".to_owned(),
+            resource: resource.to_owned(),
+            time_range: TimeRange::new(at, at).expect("range"),
+        };
+        assert!(matches!(
+            manager
+                .query(
+                    query.clone(),
+                    "local",
+                    "",
+                    None,
+                    Utc::now() + chrono::Duration::seconds(2),
+                    &CancelSignal::default(),
+                )
+                .await
+                .expect("admission outcome"),
+            ConnectorAdmissionOutcome::Rejected(ConnectorAdmissionRejection::UnauthorizedScope)
+        ));
+        let outcome = manager
             .query(
-                EvidenceQuery {
-                    query_id: QueryId::new(),
-                    correlation_id: CorrelationId::new(),
-                    tenant_id,
-                    cluster_id,
-                    source: "admin-query".to_owned(),
-                    resource: resource.to_owned(),
-                    time_range: TimeRange::new(at, at).expect("range"),
-                },
+                query,
                 "local",
                 "test-subject",
                 None,
@@ -1246,6 +1274,9 @@ mod tests {
             )
             .await
             .expect("fail-closed evidence");
+        let ConnectorAdmissionOutcome::Accepted(snapshot) = outcome else {
+            panic!("valid query must be admitted");
+        };
 
         assert!(snapshot.resource.starts_with("message-metadata/sha256:"));
         assert!(!snapshot.resource.contains("id-hash-a"));

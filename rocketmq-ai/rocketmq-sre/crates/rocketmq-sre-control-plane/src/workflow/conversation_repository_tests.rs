@@ -28,7 +28,6 @@ use super::ConversationCreateRequest;
 use super::ConversationTurnRequest;
 use super::conversation_repository::ConversationCompletion;
 use super::conversation_repository::InvestigationDiagnosisDraft;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -87,13 +86,8 @@ async fn postgres_conversation_turns_are_scoped_terminal_and_single_flight() {
         .begin_conversation_turn(&auth, &conversation, &request, Some(&intent), CorrelationId::new())
         .await
         .expect_err("second collecting turn must fail closed");
-    assert!(matches!(
-        duplicate,
-        ControlPlaneError::Conflict {
-            code: "conversation_query_in_progress",
-            ..
-        }
-    ));
+    assert_eq!(duplicate.failure(), crate::ControlPlaneFailure::Conflict);
+    assert_eq!(duplicate.code(), "conversation_query_in_progress");
 
     let non_terminal = repository
         .complete_conversation_turn(

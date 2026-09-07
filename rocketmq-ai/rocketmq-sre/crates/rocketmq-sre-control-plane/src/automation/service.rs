@@ -30,7 +30,7 @@ use super::model::AutomationRunListQuery;
 use super::model::AutomationRunPage;
 use super::model::CompleteAutomationRunRequest;
 use super::model::RecordAutomationFeedbackRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::connector_channel::PostgresConnectorChannelService;
@@ -51,7 +51,7 @@ impl AutomationService {
         connector_channel: PostgresConnectorChannelService,
         evidence: EvidenceService,
         postmortems: PostmortemService,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         let dispatcher = AutomationDispatcher::new(repository.clone(), connector_channel, evidence, postmortems)?;
         Ok(Self {
             repository,
@@ -71,13 +71,17 @@ impl AutomationService {
         &self,
         auth: &AuthContext,
         request: &NoSideEffectAutomationRequest,
-    ) -> Result<NoSideEffectAutomationRun, ControlPlaneError> {
+    ) -> Result<NoSideEffectAutomationRun, ControlPlaneRequestFailure> {
         require_automation_or_operator(auth)?;
-        request
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_automation_request", error.to_string()))?;
+        request.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_automation_request",
+                error,
+            )
+        })?;
         if request.tenant_id != auth.tenant_id || request.requested_by != auth.subject {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "automation_identity_mismatch",
                 "automation request tenant and requester must match the authenticated identity",
             ));
@@ -85,7 +89,7 @@ impl AutomationService {
         if let Some(cluster_id) = request.cluster_id
             && !auth.clusters.contains(&cluster_id)
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "automation request is outside the authenticated cluster scope",
             ));
@@ -99,13 +103,13 @@ impl AutomationService {
                 | NoSideEffectAutomationKind::Notification
         );
         if deterministic_only && request.budget.max_model_calls != 0 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "model_budget_not_allowed",
                 "this automation kind is deterministic and cannot allocate model calls",
             ));
         }
         if request.kind == NoSideEffectAutomationKind::PostmortemDraft && request.budget.max_model_calls == 0 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "model_budget_required",
                 "postmortem draft automation requires a bounded model call budget",
             ));
@@ -165,7 +169,7 @@ impl AutomationService {
         auth: &AuthContext,
         run_id: AutomationRunId,
         request: &CompleteAutomationRunRequest,
-    ) -> Result<NoSideEffectAutomationRun, ControlPlaneError> {
+    ) -> Result<NoSideEffectAutomationRun, ControlPlaneRequestFailure> {
         require_automation_service(auth)?;
         self.repository
             .complete_no_side_effect_run(auth.tenant_id, run_id, request)
@@ -176,12 +180,12 @@ impl AutomationService {
         &self,
         auth: &AuthContext,
         query: &AutomationRunListQuery,
-    ) -> Result<AutomationRunPage, ControlPlaneError> {
+    ) -> Result<AutomationRunPage, ControlPlaneRequestFailure> {
         require_automation_reader(auth)?;
         if let Some(cluster_id) = query.cluster_id
             && !auth.clusters.contains(&cluster_id)
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "automation query is outside the authenticated cluster scope",
             ));
@@ -204,12 +208,12 @@ impl AutomationService {
         &self,
         auth: &AuthContext,
         request: &RecordAutomationFeedbackRequest,
-    ) -> Result<AutomationOperatorFeedback, ControlPlaneError> {
+    ) -> Result<AutomationOperatorFeedback, ControlPlaneRequestFailure> {
         require_human_operator(auth)?;
         if let Some(cluster_id) = request.cluster_id
             && !auth.clusters.contains(&cluster_id)
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "automation feedback is outside the authenticated cluster scope",
             ));
@@ -231,7 +235,7 @@ impl AutomationService {
     }
 }
 
-pub(super) fn require_automation_reader(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_automation_reader(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
@@ -240,13 +244,13 @@ pub(super) fn require_automation_reader(auth: &AuthContext) -> Result<(), Contro
     }) {
         return Ok(());
     }
-    Err(ControlPlaneError::forbidden(
+    Err(ControlPlaneRequestFailure::forbidden(
         "automation_read_forbidden",
         "automation runs require an operator, automation service, or diagnose role",
     ))
 }
 
-pub(super) fn require_automation_or_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_automation_or_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth
         .roles
         .iter()
@@ -254,18 +258,18 @@ pub(super) fn require_automation_or_operator(auth: &AuthContext) -> Result<(), C
     {
         return Ok(());
     }
-    Err(ControlPlaneError::forbidden(
+    Err(ControlPlaneRequestFailure::forbidden(
         "automation_submit_forbidden",
         "automation submission requires an operator or automation service role",
     ))
 }
 
 #[cfg(test)]
-fn require_automation_service(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_automation_service(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains("automation_service") {
         return Ok(());
     }
-    Err(ControlPlaneError::forbidden(
+    Err(ControlPlaneRequestFailure::forbidden(
         "automation_completion_forbidden",
         "only the automation service can complete a bounded run",
     ))
@@ -274,14 +278,14 @@ fn require_automation_service(auth: &AuthContext) -> Result<(), ControlPlaneErro
 fn bounded_outcome(
     outcome: AutomationDispatchOutcome,
     maximum_bytes: u32,
-) -> Result<AutomationDispatchOutcome, ControlPlaneError> {
+) -> Result<AutomationDispatchOutcome, ControlPlaneRequestFailure> {
     let encoded = serde_json::to_vec(&(
         &outcome.result_code,
         &outcome.sanitized_summary,
         &outcome.artifacts,
         outcome.model_invocation_id,
     ))
-    .map_err(|_| ControlPlaneError::validation("invalid_automation_result", "automation outcome cannot be encoded"))?;
+    .map_err(|source| ControlPlaneRequestFailure::operational_validation_source("invalid_automation_result", source))?;
     if encoded.len() <= maximum_bytes as usize {
         return Ok(outcome);
     }
@@ -294,28 +298,15 @@ fn bounded_outcome(
     })
 }
 
-pub(super) const fn automation_failure_code(error: &ControlPlaneError) -> &'static str {
-    match error {
-        ControlPlaneError::Validation { code, .. }
-        | ControlPlaneError::Forbidden { code, .. }
-        | ControlPlaneError::Conflict { code, .. } => code,
-        ControlPlaneError::Unauthorized => "unauthorized_scope",
-        ControlPlaneError::NotFound
-        | ControlPlaneError::Configuration { .. }
-        | ControlPlaneError::Database(_)
-        | ControlPlaneError::IdentityProvider(_)
-        | ControlPlaneError::Executor(_)
-        | ControlPlaneError::ObjectStore
-        | ControlPlaneError::CapabilityDocument { .. }
-        | ControlPlaneError::Io(_) => "source_unavailable",
-    }
+pub(super) fn automation_failure_code(error: &ControlPlaneRequestFailure) -> &'static str {
+    error.code()
 }
 
-fn require_human_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_human_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains("operator") && !auth.roles.contains("model_service") {
         return Ok(());
     }
-    Err(ControlPlaneError::forbidden(
+    Err(ControlPlaneRequestFailure::forbidden(
         "automation_feedback_forbidden",
         "automation feedback requires a human operator role",
     ))

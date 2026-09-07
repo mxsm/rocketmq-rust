@@ -46,6 +46,7 @@ use super::PostmortemPatchRequest;
 use super::PostmortemPublishRequest;
 use super::PostmortemView;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::evidence::EvidenceListQuery;
@@ -82,7 +83,7 @@ impl PostmortemService {
         auth: &AuthContext,
         incident_id: IncidentId,
         request: &CreatePostmortemRequest,
-    ) -> Result<PostmortemView, ControlPlaneError> {
+    ) -> Result<PostmortemView, ControlPlaneRequestFailure> {
         self.create_with_model_call_limit(auth, incident_id, request, None)
             .await
     }
@@ -93,9 +94,9 @@ impl PostmortemService {
         incident_id: IncidentId,
         request: &CreatePostmortemRequest,
         max_model_calls: u8,
-    ) -> Result<PostmortemView, ControlPlaneError> {
+    ) -> Result<PostmortemView, ControlPlaneRequestFailure> {
         if max_model_calls == 0 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_budget",
                 "postmortem automation requires at least one permitted model call",
             ));
@@ -110,10 +111,10 @@ impl PostmortemService {
         incident_id: IncidentId,
         request: &CreatePostmortemRequest,
         max_model_calls: Option<u8>,
-    ) -> Result<PostmortemView, ControlPlaneError> {
+    ) -> Result<PostmortemView, ControlPlaneRequestFailure> {
         self.workflow.ensure_operator(auth)?;
         if request.operator_notes.len() > 32 || request.operator_notes.iter().any(|note| note.chars().count() > 1_024) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "postmortem accepts at most 32 operator notes of 1024 characters",
             ));
@@ -210,7 +211,11 @@ impl PostmortemService {
         self.view_from_draft(auth, draft).await
     }
 
-    pub(crate) async fn get(&self, auth: &AuthContext, id: PostmortemId) -> Result<PostmortemView, ControlPlaneError> {
+    pub(crate) async fn get(
+        &self,
+        auth: &AuthContext,
+        id: PostmortemId,
+    ) -> Result<PostmortemView, ControlPlaneRequestFailure> {
         let draft = self.repository.scoped_postmortem(auth, id).await?;
         self.view_from_draft(auth, draft).await
     }
@@ -220,11 +225,12 @@ impl PostmortemService {
         auth: &AuthContext,
         id: PostmortemId,
         request: &PostmortemPatchRequest,
-    ) -> Result<PostmortemView, ControlPlaneError> {
+    ) -> Result<PostmortemView, ControlPlaneRequestFailure> {
         self.workflow.ensure_operator(auth)?;
         let draft = self.repository.scoped_postmortem(auth, id).await?;
         if matches!(draft.status, PostmortemStatus::Published | PostmortemStatus::Archived) {
-            return Err(ControlPlaneError::conflict(
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "conflict",
                 "published or archived postmortems cannot be edited",
             ));
         }
@@ -237,10 +243,9 @@ impl PostmortemService {
         let allowed = evidence.iter().map(|item| item.evidence_id).collect::<BTreeSet<_>>();
         let content = merge_revision(current, request)?;
         validate_revision(&content, &allowed).map_err(validation_error)?;
-        let revision_number = draft
-            .current_revision
-            .checked_add(1)
-            .ok_or_else(|| ControlPlaneError::conflict("postmortem revision counter is exhausted"))?;
+        let revision_number = draft.current_revision.checked_add(1).ok_or_else(|| {
+            ControlPlaneRequestFailure::conflict_code("conflict", "postmortem revision counter is exhausted")
+        })?;
         let revision = revision_from_content(
             &draft,
             revision_number,
@@ -258,7 +263,7 @@ impl PostmortemService {
         auth: &AuthContext,
         id: PostmortemId,
         request: &PostmortemPublishRequest,
-    ) -> Result<PostmortemView, ControlPlaneError> {
+    ) -> Result<PostmortemView, ControlPlaneRequestFailure> {
         self.workflow.ensure_operator(auth)?;
         validate_publish_request(request)?;
         let draft = self.repository.scoped_postmortem(auth, id).await?;
@@ -266,7 +271,7 @@ impl PostmortemService {
             return self.view_from_draft(auth, draft).await;
         }
         if draft.status != PostmortemStatus::Confirmed || !request.human_confirmed {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "human_validation_required",
                 "postmortem publication requires a current human-confirmed revision",
             ));
@@ -276,7 +281,7 @@ impl PostmortemService {
             .last()
             .ok_or_else(|| ControlPlaneError::configuration("postmortem has no immutable content revision"))?;
         if !current.human_confirmed {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "human_validation_required",
                 "the current postmortem revision is not human confirmed",
             ));
@@ -326,7 +331,7 @@ impl PostmortemService {
         &self,
         auth: &AuthContext,
         query: &ActionItemListQuery,
-    ) -> Result<ActionItemPage, ControlPlaneError> {
+    ) -> Result<ActionItemPage, ControlPlaneRequestFailure> {
         let items = self.repository.list_action_items_scoped(auth, query).await?;
         Ok(ActionItemPage {
             items,
@@ -340,11 +345,12 @@ impl PostmortemService {
         auth: &AuthContext,
         id: ActionItemId,
         request: &ActionItemPatchRequest,
-    ) -> Result<ActionItem, ControlPlaneError> {
+    ) -> Result<ActionItem, ControlPlaneRequestFailure> {
         self.workflow.ensure_operator(auth)?;
         let current = self.repository.scoped_action_item(auth, id).await?;
         if current.execution_journal.is_some() {
-            return Err(ControlPlaneError::conflict(
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "conflict",
                 "Phase 2 action items cannot contain an execution journal",
             ));
         }
@@ -356,7 +362,7 @@ impl PostmortemService {
             .iter()
             .find(|evidence_id| !allowed.contains(evidence_id))
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "unknown_evidence_citation",
                 format!("Evidence citation {unknown} is outside the Incident scope"),
             ));
@@ -388,7 +394,7 @@ impl PostmortemService {
         &self,
         auth: &AuthContext,
         draft: PostmortemDraft,
-    ) -> Result<PostmortemView, ControlPlaneError> {
+    ) -> Result<PostmortemView, ControlPlaneRequestFailure> {
         let revisions = self.repository.scoped_revisions(auth, draft.id).await?;
         let action_items = self.repository.scoped_action_items(auth, draft.id).await?;
         let recurrences = self.repository.recurrences(auth, draft.id).await?;
@@ -410,7 +416,7 @@ impl PostmortemService {
         &self,
         auth: &AuthContext,
         incident: &crate::workflow::IncidentView,
-    ) -> Result<Vec<rocketmq_sre_contracts::EvidenceSnapshot>, ControlPlaneError> {
+    ) -> Result<Vec<rocketmq_sre_contracts::EvidenceSnapshot>, ControlPlaneRequestFailure> {
         let page = self
             .evidence
             .list(
@@ -431,14 +437,13 @@ impl PostmortemService {
 fn merge_revision(
     current: &PostmortemRevision,
     request: &PostmortemPatchRequest,
-) -> Result<PostmortemAssembly, ControlPlaneError> {
+) -> Result<PostmortemAssembly, ControlPlaneRequestFailure> {
     Ok(PostmortemAssembly {
         summary: request.summary.clone().unwrap_or_else(|| current.summary.clone()),
         impact: request.impact.clone().unwrap_or_else(|| current.impact.clone()),
         detection: request.detection.clone().unwrap_or_else(|| current.detection.clone()),
         timeline: request.timeline.clone().unwrap_or(
-            serde_json::from_value(current.timeline.clone())
-                .map_err(|_| ControlPlaneError::configuration("stored postmortem timeline is invalid"))?,
+            serde_json::from_value(current.timeline.clone()).map_err(ControlPlaneError::configuration_source)?,
         ),
         root_causes: request
             .root_causes
@@ -469,7 +474,7 @@ fn merge_revision(
     })
 }
 
-fn content_from_revision(revision: &PostmortemRevision) -> Result<PostmortemAssembly, ControlPlaneError> {
+fn content_from_revision(revision: &PostmortemRevision) -> Result<PostmortemAssembly, ControlPlaneRequestFailure> {
     merge_revision(
         revision,
         &PostmortemPatchRequest {
@@ -496,7 +501,7 @@ fn revision_from_content(
     actor: &str,
     human_confirmed: bool,
     at: chrono::DateTime<Utc>,
-) -> Result<PostmortemRevision, ControlPlaneError> {
+) -> Result<PostmortemRevision, ControlPlaneRequestFailure> {
     Ok(PostmortemRevision {
         id: PostmortemRevisionId::new(),
         postmortem_id: draft.id,
@@ -504,8 +509,7 @@ fn revision_from_content(
         summary: content.summary.clone(),
         impact: content.impact.clone(),
         detection: content.detection.clone(),
-        timeline: serde_json::to_value(&content.timeline)
-            .map_err(|_| ControlPlaneError::configuration("postmortem timeline cannot be encoded"))?,
+        timeline: serde_json::to_value(&content.timeline).map_err(ControlPlaneError::configuration_source)?,
         root_causes: content.root_causes.clone(),
         contributing_factors: content.contributing_factors.clone(),
         conclusions: content.conclusions.clone(),
@@ -520,26 +524,26 @@ fn revision_from_content(
     })
 }
 
-fn validate_publish_request(request: &PostmortemPublishRequest) -> Result<(), ControlPlaneError> {
+fn validate_publish_request(request: &PostmortemPublishRequest) -> Result<(), ControlPlaneRequestFailure> {
     for (field, value, max) in [
         ("owner", request.owner.as_str(), 200),
         ("component", request.component.as_str(), 200),
     ] {
         if value.trim().is_empty() || value.chars().count() > max {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 format!("{field} must contain between 1 and {max} characters"),
             ));
         }
     }
     VersionReq::parse(request.rocketmq_version_range.trim()).map_err(|_| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "invalid_request",
             "RocketMQ version range must be a semantic version requirement",
         )
     })?;
     if request.review_due_at <= Utc::now() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "knowledge review due date must be in the future",
         ));
@@ -547,8 +551,9 @@ fn validate_publish_request(request: &PostmortemPublishRequest) -> Result<(), Co
     Ok(())
 }
 
-fn validation_error(error: impl std::fmt::Display) -> ControlPlaneError {
-    ControlPlaneError::validation("invalid_postmortem", error.to_string())
+fn validation_error(error: impl std::fmt::Display) -> ControlPlaneRequestFailure {
+    let _ = error;
+    ControlPlaneRequestFailure::validation("invalid_postmortem", "postmortem rejected")
 }
 
 #[cfg(test)]

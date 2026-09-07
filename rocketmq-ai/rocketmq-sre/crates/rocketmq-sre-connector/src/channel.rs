@@ -33,10 +33,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
+use crate::ConnectorAdmissionOutcome;
 use crate::ConnectorConfig;
 use crate::ConnectorEngine;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::config::ControlPlaneConfig;
 use crate::mcp::McpGateway;
 use crate::sources::CancelSignal;
@@ -122,20 +123,18 @@ where
             builder = builder.http2_prior_knowledge();
         }
         if !config.ca_pem.is_empty() {
-            let certificates = reqwest::Certificate::from_pem_bundle(&config.ca_pem)
-                .map_err(|_| ConnectorError::configuration("control-plane CA bundle is invalid"))?;
+            let certificates =
+                reqwest::Certificate::from_pem_bundle(&config.ca_pem).map_err(ConnectorError::configuration_source)?;
             for certificate in certificates {
                 builder = builder.add_root_certificate(certificate);
             }
         }
         if !config.client_identity_pem.is_empty() {
             let identity = reqwest::Identity::from_pem(&config.client_identity_pem)
-                .map_err(|_| ConnectorError::configuration("control-plane client identity PEM is invalid"))?;
+                .map_err(ConnectorError::configuration_source)?;
             builder = builder.identity(identity);
         }
-        let client = builder
-            .build()
-            .map_err(|_| ConnectorError::configuration("control-plane HTTP/2 client cannot be built"))?;
+        let client = builder.build().map_err(ConnectorError::configuration_source)?;
         Ok(Some(Self {
             connector,
             connector_config,
@@ -161,8 +160,8 @@ where
                 Ok(()) => return,
                 Err(error) => {
                     tracing::warn!(
-                        code = error.code.as_str(),
-                        retryable = error.retryable,
+                        code = error.failure().as_str(),
+                        retryable = error.retryable(),
                         "control-plane reverse channel disconnected"
                     );
                 }
@@ -182,7 +181,7 @@ where
         let capability = self.connector.sources_capability().await;
         capability.validate_read_only().map_err(|_| {
             ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
+                ConnectorFailure::CapabilityMismatch,
                 "connector advertised a mutation capability",
             )
         })?;
@@ -200,7 +199,7 @@ where
         validate_schema(&acknowledgement.schema)?;
         if !acknowledgement.accepted {
             return Err(ConnectorError::new(
-                ConnectorErrorCode::UnauthorizedScope,
+                ConnectorFailure::UnauthorizedScope,
                 false,
                 "control plane rejected connector registration",
             ));
@@ -232,7 +231,7 @@ where
                         }
                         if sequence != after_sequence.saturating_add(1) {
                             return Err(ConnectorError::capability(
-                                ConnectorErrorCode::CapabilityMismatch,
+                                ConnectorFailure::CapabilityMismatch,
                                 "control-plane command sequence is not contiguous",
                             ));
                         }
@@ -276,7 +275,7 @@ where
         validate_schema(&response.schema)?;
         if response.commands.len() > MAX_COMMANDS_PER_POLL {
             return Err(ConnectorError::new(
-                ConnectorErrorCode::OutputTooLarge,
+                ConnectorFailure::OutputTooLarge,
                 false,
                 "control-plane command batch exceeds the negotiated bound",
             ));
@@ -299,7 +298,7 @@ where
                     let mut active = self.active.lock().await;
                     if active.contains_key(&envelope.correlation_id) {
                         return Err(ConnectorError::capability(
-                            ConnectorErrorCode::CapabilityMismatch,
+                            ConnectorFailure::CapabilityMismatch,
                             "duplicate in-flight correlation identifier",
                         ));
                     }
@@ -321,7 +320,7 @@ where
                         )
                         .await;
                     let response = match result {
-                        Ok(evidence) => ConnectorResponseEnvelope {
+                        Ok(ConnectorAdmissionOutcome::Accepted(evidence)) => ConnectorResponseEnvelope {
                             schema: channel_schema(),
                             session_id,
                             correlation_id,
@@ -330,19 +329,28 @@ where
                             error_code: None,
                             retryable: false,
                         },
+                        Ok(ConnectorAdmissionOutcome::Rejected(rejection)) => ConnectorResponseEnvelope {
+                            schema: channel_schema(),
+                            session_id,
+                            correlation_id,
+                            sequence,
+                            evidence: None,
+                            error_code: Some(rejection.failure().as_str().to_owned()),
+                            retryable: rejection.retryable(),
+                        },
                         Err(error) => ConnectorResponseEnvelope {
                             schema: channel_schema(),
                             session_id,
                             correlation_id,
                             sequence,
                             evidence: None,
-                            error_code: Some(error.code.as_str().to_owned()),
-                            retryable: error.retryable,
+                            error_code: Some(error.failure().as_str().to_owned()),
+                            retryable: error.retryable(),
                         },
                     };
                     if let Err(error) = channel.deliver_response(response).await {
                         tracing::warn!(
-                            code = error.code.as_str(),
+                            code = error.failure().as_str(),
                             sequence,
                             "connector could not deliver a bounded evidence response"
                         );
@@ -352,7 +360,7 @@ where
                 if spawn_result.is_err() {
                     self.active.lock().await.remove(&correlation_id);
                     return Err(ConnectorError::new(
-                        ConnectorErrorCode::ChannelUnavailable,
+                        ConnectorFailure::ChannelUnavailable,
                         true,
                         "query worker could not be owned by the connector TaskGroup",
                     ));
@@ -373,7 +381,7 @@ where
                     correlation_id,
                     sequence,
                     evidence: None,
-                    error_code: Some(ConnectorErrorCode::QueryCancelled.as_str().to_owned()),
+                    error_code: Some(ConnectorFailure::QueryCancelled.as_str().to_owned()),
                     retryable: false,
                 })
                 .await
@@ -395,16 +403,26 @@ where
     }
 
     async fn try_inventory_upload(&self, force: bool) {
-        if let Err(error) = self.upload_inventory(force).await {
-            tracing::warn!(
-                code = error.code.as_str(),
-                retryable = error.retryable,
-                "bounded read-only inventory upload is temporarily unavailable"
-            );
+        match self.upload_inventory(force).await {
+            Ok(ConnectorAdmissionOutcome::Accepted(())) => {}
+            Ok(ConnectorAdmissionOutcome::Rejected(rejection)) => {
+                tracing::warn!(
+                    code = rejection.failure().as_str(),
+                    retryable = rejection.retryable(),
+                    "bounded read-only inventory upload was rejected"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    code = error.failure().as_str(),
+                    retryable = error.retryable(),
+                    "bounded read-only inventory upload is temporarily unavailable"
+                );
+            }
         }
     }
 
-    async fn upload_inventory(&self, force: bool) -> Result<(), ConnectorError> {
+    async fn upload_inventory(&self, force: bool) -> Result<ConnectorAdmissionOutcome<()>, ConnectorError> {
         if !force
             && self
                 .last_inventory_upload
@@ -412,12 +430,18 @@ where
                 .await
                 .is_some_and(|last| last.elapsed() < INVENTORY_REFRESH_MIN)
         {
-            return Ok(());
+            return Ok(ConnectorAdmissionOutcome::Accepted(()));
         }
-        let inventory = self
+        let inventory = match self
             .connector
             .inventory(self.config.cluster_id, &self.config.connector_subject)
-            .await?;
+            .await?
+        {
+            ConnectorAdmissionOutcome::Accepted(inventory) => inventory,
+            ConnectorAdmissionOutcome::Rejected(rejection) => {
+                return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+            }
+        };
         let path = format!("/internal/v1/connectors/v1/{}/inventory", self.session_id);
         let response = self.send(&path, &inventory).await?;
         let cancel = CancelSignal::default();
@@ -426,7 +450,7 @@ where
                 .unwrap_or_else(|_| chrono::Duration::seconds(15));
         bounded_response(response, MAX_CHANNEL_RESPONSE_BYTES, deadline, &cancel).await?;
         *self.last_inventory_upload.lock().await = Some(Instant::now());
-        Ok(())
+        Ok(ConnectorAdmissionOutcome::Accepted(()))
     }
 
     async fn deliver_response(&self, response: ConnectorResponseEnvelope) -> Result<(), ConnectorError> {
@@ -434,7 +458,7 @@ where
             let mut pending = self.pending_responses.lock().await;
             if pending.len() >= MAX_PENDING_RESPONSES && !pending.contains_key(&response.sequence) {
                 return Err(ConnectorError::new(
-                    ConnectorErrorCode::ChannelUnavailable,
+                    ConnectorFailure::ChannelUnavailable,
                     true,
                     "connector pending response budget is exhausted",
                 ));
@@ -490,7 +514,7 @@ where
                 .unwrap_or_else(|_| chrono::Duration::seconds(15));
         let bytes = bounded_response(response, MAX_CHANNEL_RESPONSE_BYTES, deadline, &cancel).await?;
         serde_json::from_slice(&bytes)
-            .map_err(|_| ConnectorError::source("control-plane channel response is invalid JSON"))
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))
     }
 
     async fn post_empty<T>(&self, path: &str, body: &T) -> Result<(), ConnectorError>
@@ -514,7 +538,7 @@ where
             .config
             .base_url
             .join(path)
-            .map_err(|_| ConnectorError::configuration("control-plane channel URL cannot be constructed"))?;
+            .map_err(ConnectorError::configuration_source)?;
         let response = self
             .client
             .post(endpoint)
@@ -524,32 +548,26 @@ where
             .json(body)
             .send()
             .await
-            .map_err(|_| {
-                ConnectorError::new(
-                    ConnectorErrorCode::ChannelUnavailable,
-                    true,
-                    "control-plane channel request failed",
-                )
-            })?;
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::ChannelUnavailable, true, source))?;
         if response.version() != reqwest::Version::HTTP_2 {
             return Err(ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
+                ConnectorFailure::CapabilityMismatch,
                 "control-plane connector channel did not negotiate HTTP/2",
             ));
         }
         match response.status() {
             status if status.is_success() => Ok(response),
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => Err(ConnectorError::new(
-                ConnectorErrorCode::UnauthorizedScope,
+                ConnectorFailure::UnauthorizedScope,
                 false,
                 "control plane rejected connector channel authorization",
             )),
             reqwest::StatusCode::CONFLICT => Err(ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
+                ConnectorFailure::CapabilityMismatch,
                 "control plane rejected the connector channel contract",
             )),
             _ => Err(ConnectorError::new(
-                ConnectorErrorCode::ChannelUnavailable,
+                ConnectorFailure::ChannelUnavailable,
                 true,
                 "control-plane channel returned an unsuccessful status",
             )),
@@ -586,7 +604,7 @@ impl ChannelCommand {
 
 fn session_mismatch() -> ConnectorError {
     ConnectorError::capability(
-        ConnectorErrorCode::CapabilityMismatch,
+        ConnectorFailure::CapabilityMismatch,
         "control-plane command session does not match this connector",
     )
 }
@@ -602,20 +620,15 @@ fn validate_schema(schema: &SchemaVersion) -> Result<(), ConnectorError> {
             CHANNEL_SCHEMA_MAJOR,
             &BTreeSet::from(["cancel".to_owned(), "reverse_poll".to_owned()]),
         )
-        .map_err(|error| match error {
-            rocketmq_sre_contracts::ContractError::UnsupportedSchemaMajor { .. }
-            | rocketmq_sre_contracts::ContractError::UnsupportedSchemaFamily { .. } => ConnectorError::capability(
-                ConnectorErrorCode::UnsupportedSchemaMajor,
-                "control-plane channel schema is unsupported",
-            ),
-            rocketmq_sre_contracts::ContractError::MissingRequiredFeature { .. } => ConnectorError::capability(
-                ConnectorErrorCode::MissingRequiredFeature,
-                "control-plane channel requires an unsupported feature",
-            ),
-            _ => ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
-                "control-plane channel schema is invalid",
-            ),
+        .map_err(|source| match source.code() {
+            rocketmq_sre_contracts::PublicErrorCode::UnsupportedSchemaMajor
+            | rocketmq_sre_contracts::PublicErrorCode::UnsupportedSchemaFamily => {
+                ConnectorError::from_source(ConnectorFailure::UnsupportedSchemaMajor, false, source)
+            }
+            rocketmq_sre_contracts::PublicErrorCode::MissingRequiredFeature => {
+                ConnectorError::from_source(ConnectorFailure::MissingRequiredFeature, false, source)
+            }
+            _ => ConnectorError::from_source(ConnectorFailure::CapabilityMismatch, false, source),
         })
 }
 
@@ -662,8 +675,8 @@ mod tests {
             sequence: 1,
         };
         assert_eq!(
-            command.validate(session_id).expect_err("session mismatch").code,
-            ConnectorErrorCode::CapabilityMismatch
+            command.validate(session_id).expect_err("session mismatch").failure(),
+            ConnectorFailure::CapabilityMismatch
         );
     }
 
@@ -671,8 +684,8 @@ mod tests {
     fn unknown_required_channel_feature_is_rejected() {
         let schema = channel_schema().requiring(["future_feature"]);
         assert_eq!(
-            validate_schema(&schema).expect_err("unknown feature").code,
-            ConnectorErrorCode::MissingRequiredFeature
+            validate_schema(&schema).expect_err("unknown feature").failure(),
+            ConnectorFailure::MissingRequiredFeature
         );
     }
 }

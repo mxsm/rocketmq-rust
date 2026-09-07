@@ -30,7 +30,7 @@ use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::ExecutionState;
 use rocketmq_sre_contracts::PlanStatus;
 use rocketmq_sre_model_gateway::AsyncModelTransport;
-use rocketmq_sre_model_gateway::ProviderError;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::TransportFuture;
 use rocketmq_sre_model_gateway::TransportRequest;
 use rocketmq_sre_model_gateway::TransportResponse;
@@ -482,11 +482,11 @@ async fn ensure_kind_cluster(
 }
 
 pub(super) struct ScriptedTransport {
-    responses: Mutex<VecDeque<Result<TransportResponse, ProviderError>>>,
+    responses: Mutex<VecDeque<Result<TransportResponse, ProviderStatusOutcome>>>,
 }
 
 impl ScriptedTransport {
-    pub(super) fn new(responses: impl IntoIterator<Item = Result<TransportResponse, ProviderError>>) -> Self {
+    pub(super) fn new(responses: impl IntoIterator<Item = Result<TransportResponse, ProviderStatusOutcome>>) -> Self {
         Self {
             responses: Mutex::new(responses.into_iter().collect()),
         }

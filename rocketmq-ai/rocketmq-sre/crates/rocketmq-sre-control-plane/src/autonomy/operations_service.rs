@@ -35,6 +35,7 @@ use super::operations::OperationsAnalyticsReport;
 use super::operations::OptimizationCandidate;
 use super::operations::bounded_outcome_limit;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -88,13 +89,13 @@ impl AutonomyOperationsService {
         &self,
         auth: &AuthContext,
         query: &AutonomyOutcomeListQuery,
-    ) -> Result<AutonomyOutcomePage, ControlPlaneError> {
+    ) -> Result<AutonomyOutcomePage, ControlPlaneRequestFailure> {
         require_report_reader(auth)?;
         if let Some(cluster_id) = query.cluster_id {
             require_cluster(auth, cluster_id)?;
         }
         if query.from.zip(query.until).is_some_and(|(from, until)| until <= from) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_outcome_window",
                 "outcome query end must be later than its start",
             ));
@@ -119,7 +120,7 @@ impl AutonomyOperationsService {
         &self,
         auth: &AuthContext,
         query: &AutonomyOperationalReportQuery,
-    ) -> Result<AutonomyOperationalReport, ControlPlaneError> {
+    ) -> Result<AutonomyOperationalReport, ControlPlaneRequestFailure> {
         require_report_reader(auth)?;
         if let Some(cluster_id) = query.cluster_id {
             require_cluster(auth, cluster_id)?;
@@ -138,7 +139,7 @@ impl AutonomyOperationsService {
         &self,
         auth: &AuthContext,
         query: &OperationsAnalyticsQuery,
-    ) -> Result<OperationsAnalyticsReport, ControlPlaneError> {
+    ) -> Result<OperationsAnalyticsReport, ControlPlaneRequestFailure> {
         require_report_reader(auth)?;
         query.validate()?;
         if let Some(cluster_id) = query.cluster_id {
@@ -150,6 +151,7 @@ impl AutonomyOperationsService {
         self.repository
             .operations_analytics(auth.tenant_id, &clusters, query, window)
             .await
+            .map_err(Into::into)
     }
 
     /// Materializes the previous completed week and month. Repeated scans are
@@ -158,8 +160,11 @@ impl AutonomyOperationsService {
         let now = Utc::now();
         let periods = match previous_completed_windows(now) {
             Ok(periods) => periods,
-            Err(error) => {
-                tracing::warn!(error = %error, "autonomy report period calculation failed");
+            Err(_failure) => {
+                tracing::warn!(
+                    error_class = "invalid_report_period",
+                    "autonomy report period calculation failed"
+                );
                 return OperationalReportRunSummary {
                     failures: 1,
                     ..OperationalReportRunSummary::default()
@@ -196,12 +201,12 @@ impl AutonomyOperationsService {
                 match result {
                     Ok(true) => summary.inserted = summary.inserted.saturating_add(1),
                     Ok(false) => {}
-                    Err(error) => {
+                    Err(_failure) => {
                         summary.failures = summary.failures.saturating_add(1);
                         tracing::warn!(
                             tenant_id = %tenant_id,
                             period = window.period.as_str(),
-                            error = %error,
+                            error_class = "autonomy_report_generation_failed",
                             "autonomy operating report generation failed"
                         );
                     }
@@ -364,13 +369,16 @@ fn push_budget_alert(
     });
 }
 
-fn authorized_clusters(auth: &AuthContext, requested: Option<ClusterId>) -> Result<Vec<ClusterId>, ControlPlaneError> {
+fn authorized_clusters(
+    auth: &AuthContext,
+    requested: Option<ClusterId>,
+) -> Result<Vec<ClusterId>, ControlPlaneRequestFailure> {
     if let Some(cluster_id) = requested {
         require_cluster(auth, cluster_id)?;
         return Ok(vec![cluster_id]);
     }
     if auth.clusters.is_empty() {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "autonomy report requires at least one authorized cluster",
         ));
@@ -382,21 +390,22 @@ fn report_window(
     period: AutonomyReportPeriod,
     anchor: DateTime<Utc>,
     now: DateTime<Utc>,
-) -> Result<AutonomyReportWindow, ControlPlaneError> {
+) -> Result<AutonomyReportWindow, ControlPlaneRequestFailure> {
     let start_date = match period {
         AutonomyReportPeriod::Weekly => {
             anchor.date_naive() - Duration::days(i64::from(anchor.weekday().num_days_from_monday()))
         }
-        AutonomyReportPeriod::Monthly => NaiveDate::from_ymd_opt(anchor.year(), anchor.month(), 1)
-            .ok_or_else(|| ControlPlaneError::validation("invalid_report_period", "month boundary is invalid"))?,
+        AutonomyReportPeriod::Monthly => {
+            NaiveDate::from_ymd_opt(anchor.year(), anchor.month(), 1).ok_or_else(|| {
+                ControlPlaneRequestFailure::validation("invalid_report_period", "month boundary is invalid")
+            })?
+        }
     };
-    let start = Utc.from_utc_datetime(
-        &start_date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| ControlPlaneError::validation("invalid_report_period", "period boundary is invalid"))?,
-    );
+    let start = Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+        ControlPlaneRequestFailure::validation("invalid_report_period", "period boundary is invalid")
+    })?);
     if start > now {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "future_report_period",
             "autonomy reports cannot be generated for a future period",
         ));
@@ -412,7 +421,7 @@ fn report_window(
             let next = NaiveDate::from_ymd_opt(year, month, 1)
                 .and_then(|date| date.and_hms_opt(0, 0, 0))
                 .ok_or_else(|| {
-                    ControlPlaneError::validation("invalid_report_period", "next month boundary is invalid")
+                    ControlPlaneRequestFailure::validation("invalid_report_period", "next month boundary is invalid")
                 })?;
             Utc.from_utc_datetime(&next)
         }
@@ -425,7 +434,7 @@ fn report_window(
     })
 }
 
-fn previous_completed_windows(now: DateTime<Utc>) -> Result<[AutonomyReportWindow; 2], ControlPlaneError> {
+fn previous_completed_windows(now: DateTime<Utc>) -> Result<[AutonomyReportWindow; 2], ControlPlaneRequestFailure> {
     let current_week = report_window(AutonomyReportPeriod::Weekly, now, now)?;
     let previous_week_anchor = current_week.start - Duration::seconds(1);
     let previous_week = report_window(AutonomyReportPeriod::Weekly, previous_week_anchor, now)?;
@@ -441,10 +450,8 @@ fn budget_from_env(name: &'static str, default: u64) -> Result<u64, ControlPlane
     };
     let value = value
         .into_string()
-        .map_err(|_| ControlPlaneError::configuration(format!("{name} must be valid UTF-8")))?;
-    let budget = value
-        .parse::<u64>()
-        .map_err(|_| ControlPlaneError::configuration(format!("{name} must be a positive integer")))?;
+        .map_err(|value| ControlPlaneError::configuration_source(env::VarError::NotUnicode(value)))?;
+    let budget = value.parse::<u64>().map_err(ControlPlaneError::configuration_source)?;
     if budget == 0 {
         return Err(ControlPlaneError::configuration(format!(
             "{name} must be greater than zero"
@@ -453,22 +460,22 @@ fn budget_from_env(name: &'static str, default: u64) -> Result<u64, ControlPlane
     Ok(budget)
 }
 
-fn require_report_reader(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_report_reader(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains("operator") || auth.roles.contains("diagnose") || auth.roles.contains("rocketmq:diagnose") {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "autonomy_report_authority_required",
             "autonomy outcomes and reports require diagnose or operator authority",
         ))
     }
 }
 
-fn require_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+fn require_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneRequestFailure> {
     if auth.clusters.contains(&cluster_id) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "autonomy report cluster is outside the authenticated scope",
         ))

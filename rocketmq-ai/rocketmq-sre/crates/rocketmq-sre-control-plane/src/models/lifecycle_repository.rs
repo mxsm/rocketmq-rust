@@ -27,10 +27,14 @@ use super::lifecycle::ModelProfileLifecycleTransitionRequest;
 use super::lifecycle::ModelProfileLifecycleView;
 use super::lifecycle::ProviderSmokeResultView;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 impl PostgresRepository {
-    pub(super) async fn ensure_model_profile_lifecycles(&self, tenant_id: TenantId) -> Result<(), ControlPlaneError> {
+    pub(super) async fn ensure_model_profile_lifecycles(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let profile_ids = sqlx::query_scalar::<_, Uuid>(
             "SELECT profile.id
              FROM model_profiles profile
@@ -85,7 +89,7 @@ impl PostgresRepository {
     pub(super) async fn model_profile_lifecycles(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<ModelProfileLifecycleView>, ControlPlaneError> {
+    ) -> Result<Vec<ModelProfileLifecycleView>, ControlPlaneRequestFailure> {
         self.ensure_model_profile_lifecycles(tenant_id).await?;
         let rows = sqlx::query(lifecycle_projection_query(false))
             .bind(tenant_id.as_uuid())
@@ -98,14 +102,14 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         profile_id: ModelProfileId,
-    ) -> Result<ModelProfileLifecycleView, ControlPlaneError> {
+    ) -> Result<ModelProfileLifecycleView, ControlPlaneRequestFailure> {
         self.ensure_model_profile_lifecycles(tenant_id).await?;
         let row = sqlx::query(lifecycle_projection_query(true))
             .bind(tenant_id.as_uuid())
             .bind(profile_id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         lifecycle_from_row(&row)
     }
 
@@ -116,7 +120,7 @@ impl PostgresRepository {
         request: &ModelProfileLifecycleTransitionRequest,
         changed_by: &str,
         correlation_id: CorrelationId,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         self.ensure_model_profile_lifecycles(tenant_id).await?;
         let mut transaction = self.pool.begin().await?;
         let current = lock_lifecycle(&mut transaction, tenant_id, profile_id).await?;
@@ -126,13 +130,13 @@ impl PostgresRepository {
             return Ok(());
         }
         if !current.state.permits_operator_transition_to(request.target_state) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "invalid_model_lifecycle_transition",
                 "model profile lifecycle transition is not allowed",
             ));
         }
         if request.rollback_profile_id.is_some() && request.target_state != ModelProfileLifecycleState::Promoted {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_model_lifecycle_transition",
                 "rollback_profile_id is only accepted when promoting a profile",
             ));
@@ -142,7 +146,7 @@ impl PostgresRepository {
             ModelProfileLifecycleState::Certified | ModelProfileLifecycleState::Promoted
         ) && !latest_smoke_passed(&mut transaction, tenant_id, profile_id).await?
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "provider_smoke_required",
                 "a passing provider smoke result is required for certification or promotion",
             ));
@@ -161,7 +165,7 @@ impl PostgresRepository {
         }
 
         let next_revision = current.revision.checked_add(1).ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "model_lifecycle_revision_exhausted",
                 "model profile lifecycle revision cannot advance",
             )
@@ -205,19 +209,19 @@ impl PostgresRepository {
         reason_code: &str,
         changed_by: &str,
         correlation_id: CorrelationId,
-    ) -> Result<ModelProfileId, ControlPlaneError> {
+    ) -> Result<ModelProfileId, ControlPlaneRequestFailure> {
         self.ensure_model_profile_lifecycles(tenant_id).await?;
         let mut transaction = self.pool.begin().await?;
         let current = lock_lifecycle(&mut transaction, tenant_id, profile_id).await?;
         ensure_expected_revision(current.revision, expected_revision)?;
         if current.state != ModelProfileLifecycleState::Promoted {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "invalid_model_lifecycle_transition",
                 "only a promoted model profile can be rolled back",
             ));
         }
         let rollback_profile_id = current.rollback_profile_id.ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "model_rollback_target_missing",
                 "the promoted model profile has no rollback target",
             )
@@ -228,7 +232,7 @@ impl PostgresRepository {
             ModelProfileLifecycleState::Certified | ModelProfileLifecycleState::Promoted
         ) || !latest_smoke_passed(&mut transaction, tenant_id, rollback_profile_id).await?
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "model_rollback_target_unavailable",
                 "the rollback model profile is not certified by a current passing smoke result",
             ));
@@ -319,7 +323,7 @@ async fn lock_lifecycle(
     transaction: &mut Transaction<'_, Postgres>,
     tenant_id: TenantId,
     profile_id: ModelProfileId,
-) -> Result<LockedLifecycle, ControlPlaneError> {
+) -> Result<LockedLifecycle, ControlPlaneRequestFailure> {
     let row = sqlx::query(
         "SELECT state, revision, rollback_profile_id
          FROM model_profile_lifecycle
@@ -330,7 +334,7 @@ async fn lock_lifecycle(
     .bind(profile_id.as_uuid())
     .fetch_optional(&mut **transaction)
     .await?
-    .ok_or(ControlPlaneError::NotFound)?;
+    .ok_or(ControlPlaneRequestFailure::not_found())?;
     Ok(LockedLifecycle {
         state: parse_state(row.try_get("state")?)?,
         revision: positive_revision(row.try_get("revision")?)?,
@@ -347,9 +351,9 @@ async fn validate_and_prepare_rollback_target(
     rollback_profile_id: ModelProfileId,
     changed_by: &str,
     correlation_id: CorrelationId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if promoted_profile_id == rollback_profile_id {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_model_rollback_target",
             "a model profile cannot use itself as a rollback target",
         ));
@@ -360,7 +364,7 @@ async fn validate_and_prepare_rollback_target(
         ModelProfileLifecycleState::Certified | ModelProfileLifecycleState::Promoted
     ) || !latest_smoke_passed(transaction, tenant_id, rollback_profile_id).await?
     {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "model_rollback_target_unavailable",
             "rollback target must be certified or promoted with a passing smoke result",
         ));
@@ -401,7 +405,7 @@ async fn latest_smoke_passed(
     transaction: &mut Transaction<'_, Postgres>,
     tenant_id: TenantId,
     profile_id: ModelProfileId,
-) -> Result<bool, ControlPlaneError> {
+) -> Result<bool, ControlPlaneRequestFailure> {
     Ok(sqlx::query_scalar::<_, bool>(
         "SELECT connectivity_ok
                 AND structured_output_ok
@@ -433,7 +437,7 @@ async fn update_lifecycle(
     reason_code: &str,
     operator_confirmed: bool,
     changed_by: &str,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "UPDATE model_profile_lifecycle
          SET state = $1, revision = $2, rollback_profile_id = $3,
@@ -459,7 +463,7 @@ async fn update_profile_routing(
     tenant_id: TenantId,
     profile_id: ModelProfileId,
     state: ModelProfileLifecycleState,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let (enabled, health) = match state {
         ModelProfileLifecycleState::Draft => (true, "unknown"),
         ModelProfileLifecycleState::Certified | ModelProfileLifecycleState::Promoted => (true, "healthy"),
@@ -496,7 +500,7 @@ async fn append_lifecycle_event(
     operator_confirmed: bool,
     changed_by: &str,
     correlation_id: CorrelationId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO model_profile_lifecycle_events (
             id, tenant_id, profile_id, from_state, to_state, revision,
@@ -553,7 +557,7 @@ fn lifecycle_projection_query(filter_by_profile: bool) -> sqlx::AssertSqlSafe<St
     ))
 }
 
-fn lifecycle_from_row(row: &PgRow) -> Result<ModelProfileLifecycleView, ControlPlaneError> {
+fn lifecycle_from_row(row: &PgRow) -> Result<ModelProfileLifecycleView, ControlPlaneRequestFailure> {
     let profile_id = ModelProfileId::from_uuid(row.try_get("id")?);
     let state = parse_state(row.try_get("state")?)?;
     let latest_smoke = smoke_from_row(row, profile_id)?;
@@ -584,7 +588,7 @@ fn lifecycle_from_row(row: &PgRow) -> Result<ModelProfileLifecycleView, ControlP
 fn smoke_from_row(
     row: &PgRow,
     profile_id: ModelProfileId,
-) -> Result<Option<ProviderSmokeResultView>, ControlPlaneError> {
+) -> Result<Option<ProviderSmokeResultView>, ControlPlaneRequestFailure> {
     let Some(id) = row.try_get::<Option<Uuid>, _>("smoke_id")? else {
         return Ok(None);
     };
@@ -619,43 +623,43 @@ fn smoke_from_row(
     }))
 }
 
-fn ensure_expected_revision(actual: u64, expected: u64) -> Result<(), ControlPlaneError> {
+fn ensure_expected_revision(actual: u64, expected: u64) -> Result<(), ControlPlaneRequestFailure> {
     if actual == expected {
         Ok(())
     } else {
-        Err(ControlPlaneError::conflict_code(
+        Err(ControlPlaneRequestFailure::conflict_code(
             "model_lifecycle_revision_mismatch",
             "model profile lifecycle changed while the operation was being confirmed",
         ))
     }
 }
 
-fn parse_state(value: &str) -> Result<ModelProfileLifecycleState, ControlPlaneError> {
-    ModelProfileLifecycleState::parse(value).map_err(ControlPlaneError::configuration)
+fn parse_state(value: &str) -> Result<ModelProfileLifecycleState, ControlPlaneRequestFailure> {
+    Ok(ModelProfileLifecycleState::parse(value).map_err(ControlPlaneError::configuration)?)
 }
 
-fn positive_revision(value: i64) -> Result<u64, ControlPlaneError> {
-    u64::try_from(value).map_err(|_| ControlPlaneError::configuration("stored model lifecycle revision is invalid"))
+fn positive_revision(value: i64) -> Result<u64, ControlPlaneRequestFailure> {
+    Ok(u64::try_from(value).map_err(ControlPlaneError::configuration_source)?)
 }
 
-fn revision_i64(value: u64) -> Result<i64, ControlPlaneError> {
+fn revision_i64(value: u64) -> Result<i64, ControlPlaneRequestFailure> {
     i64::try_from(value).map_err(|_| {
-        ControlPlaneError::conflict_code(
+        ControlPlaneRequestFailure::conflict_code(
             "model_lifecycle_revision_exhausted",
             "model profile lifecycle revision exceeds PostgreSQL bounds",
         )
     })
 }
 
-fn next_revision(value: u64) -> Result<u64, ControlPlaneError> {
+fn next_revision(value: u64) -> Result<u64, ControlPlaneRequestFailure> {
     value.checked_add(1).ok_or_else(|| {
-        ControlPlaneError::conflict_code(
+        ControlPlaneRequestFailure::conflict_code(
             "model_lifecycle_revision_exhausted",
             "model profile lifecycle revision cannot advance",
         )
     })
 }
 
-fn non_negative_u64(value: i64) -> Result<u64, ControlPlaneError> {
-    u64::try_from(value).map_err(|_| ControlPlaneError::configuration("stored provider smoke latency is invalid"))
+fn non_negative_u64(value: i64) -> Result<u64, ControlPlaneRequestFailure> {
+    Ok(u64::try_from(value).map_err(ControlPlaneError::configuration_source)?)
 }

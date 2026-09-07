@@ -25,6 +25,7 @@ use uuid::Uuid;
 use super::lifecycle::ModelProfileLifecycleState;
 use super::lifecycle::ProviderSmokeResultView;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 const MAX_SMOKE_SNAPSHOT_BYTES: usize = 64 * 1024;
@@ -46,7 +47,7 @@ impl PersistProviderSmokeResult {
         self.connectivity_ok && self.structured_output_ok && self.tool_arguments_ok && self.evidence_citation_ok
     }
 
-    fn validate(&self) -> Result<(), ControlPlaneError> {
+    fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         if self.failure_codes.len() > MAX_FAILURE_CODES
             || self.failure_codes.iter().any(|code| {
                 code.is_empty()
@@ -56,15 +57,15 @@ impl PersistProviderSmokeResult {
                         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
             })
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_provider_smoke_result",
                 "provider smoke failure codes must be bounded safe identifiers",
             ));
         }
         let snapshot_bytes = serde_json::to_vec(&self.result_snapshot)
-            .map_err(|_| ControlPlaneError::validation("invalid_provider_smoke_result", "smoke snapshot is invalid"))?;
+            .map_err(|source| ControlPlaneRequestFailure::validation_source("invalid_provider_smoke_result", source))?;
         if snapshot_bytes.len() > MAX_SMOKE_SNAPSHOT_BYTES {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_provider_smoke_result",
                 "provider smoke snapshot exceeds the 64 KiB bound",
             ));
@@ -74,7 +75,7 @@ impl PersistProviderSmokeResult {
 }
 
 impl PostgresRepository {
-    pub(super) async fn model_profile_tenants(&self) -> Result<Vec<TenantId>, ControlPlaneError> {
+    pub(super) async fn model_profile_tenants(&self) -> Result<Vec<TenantId>, ControlPlaneRequestFailure> {
         let rows = sqlx::query_scalar::<_, Uuid>(
             "SELECT DISTINCT tenant_id
              FROM model_profiles
@@ -90,7 +91,7 @@ impl PostgresRepository {
         tenant_id: TenantId,
         due_before: DateTime<Utc>,
         limit: u32,
-    ) -> Result<Vec<ModelProfileId>, ControlPlaneError> {
+    ) -> Result<Vec<ModelProfileId>, ControlPlaneRequestFailure> {
         self.ensure_model_profile_lifecycles(tenant_id).await?;
         let rows = sqlx::query_scalar::<_, Uuid>(
             "SELECT profile.id
@@ -128,7 +129,7 @@ impl PostgresRepository {
         result: &PersistProviderSmokeResult,
         changed_by: &str,
         correlation_id: CorrelationId,
-    ) -> Result<ProviderSmokeResultView, ControlPlaneError> {
+    ) -> Result<ProviderSmokeResultView, ControlPlaneRequestFailure> {
         result.validate()?;
         self.ensure_model_profile_lifecycles(tenant_id).await?;
         let id = Uuid::new_v4();
@@ -145,7 +146,7 @@ impl PostgresRepository {
         .fetch_one(&mut *transaction)
         .await?;
         if !profile_exists {
-            return Err(ControlPlaneError::NotFound);
+            return Err(ControlPlaneRequestFailure::not_found());
         }
         sqlx::query(
             "INSERT INTO provider_smoke_results (
@@ -164,7 +165,10 @@ impl PostgresRepository {
         .bind(result.tool_arguments_ok)
         .bind(result.evidence_citation_ok)
         .bind(result.latency_ms.map(i64::try_from).transpose().map_err(|_| {
-            ControlPlaneError::validation("invalid_provider_smoke_result", "provider smoke latency exceeds bounds")
+            ControlPlaneRequestFailure::validation(
+                "invalid_provider_smoke_result",
+                "provider smoke latency exceeds bounds",
+            )
         })?)
         .bind(&result.result_snapshot)
         .bind(result.observed_at)
@@ -241,7 +245,7 @@ async fn auto_quarantine_lifecycle(
     profile_id: ModelProfileId,
     changed_by: &str,
     correlation_id: CorrelationId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let row = sqlx::query(
         "SELECT state, revision, rollback_profile_id
          FROM model_profile_lifecycle
@@ -252,7 +256,7 @@ async fn auto_quarantine_lifecycle(
     .bind(profile_id.as_uuid())
     .fetch_optional(&mut **transaction)
     .await?
-    .ok_or(ControlPlaneError::NotFound)?;
+    .ok_or(ControlPlaneRequestFailure::not_found())?;
     let state = ModelProfileLifecycleState::parse(row.try_get("state")?).map_err(ControlPlaneError::configuration)?;
     if matches!(
         state,
@@ -264,7 +268,7 @@ async fn auto_quarantine_lifecycle(
         .ok()
         .and_then(|revision| revision.checked_add(1))
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "model_lifecycle_revision_exhausted",
                 "model profile lifecycle revision cannot advance",
             )
@@ -278,7 +282,7 @@ async fn auto_quarantine_lifecycle(
          WHERE tenant_id = $3 AND profile_id = $4",
     )
     .bind(i64::try_from(revision).map_err(|_| {
-        ControlPlaneError::conflict_code(
+        ControlPlaneRequestFailure::conflict_code(
             "model_lifecycle_revision_exhausted",
             "model profile lifecycle revision exceeds PostgreSQL bounds",
         )
@@ -304,7 +308,7 @@ async fn auto_quarantine_lifecycle(
     .bind(profile_id.as_uuid())
     .bind(state.as_str())
     .bind(i64::try_from(revision).map_err(|_| {
-        ControlPlaneError::conflict_code(
+        ControlPlaneRequestFailure::conflict_code(
             "model_lifecycle_revision_exhausted",
             "model profile lifecycle revision exceeds PostgreSQL bounds",
         )

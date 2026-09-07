@@ -28,7 +28,7 @@ use rocketmq_sre_contracts::HealthDataQuality;
 use rocketmq_sre_contracts::HealthStatus;
 use rocketmq_sre_contracts::SliHealth;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 
 const MAX_CONDITIONS: usize = 32;
@@ -47,11 +47,11 @@ async fn observe(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<ExecutionSliQuery>,
-) -> Result<Json<ExecutionSliObservation>, ControlPlaneError> {
+) -> Result<Json<ExecutionSliObservation>, ControlPlaneRequestFailure> {
     validate_query(&request)?;
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     if !auth.roles.contains("executor_service") || auth.tenant_id != request.tenant_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "execution_verification_forbidden",
             "technical SLI verification requires the scoped Executor workload identity",
         ));
@@ -70,7 +70,7 @@ async fn observe(
     }))
 }
 
-fn validate_query(request: &ExecutionSliQuery) -> Result<(), ControlPlaneError> {
+fn validate_query(request: &ExecutionSliQuery) -> Result<(), ControlPlaneRequestFailure> {
     if request.schema_version != EXECUTION_VERIFICATION_SCHEMA_VERSION
         || request.conditions.is_empty()
         || request.conditions.len() > MAX_CONDITIONS
@@ -79,14 +79,14 @@ fn validate_query(request: &ExecutionSliQuery) -> Result<(), ControlPlaneError> 
             .iter()
             .any(|condition| condition.is_empty() || condition.len() > MAX_CONDITION_BYTES)
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_execution_verification",
             "technical SLI verification request is incompatible or outside bounded limits",
         ));
     }
     let unique = request.conditions.iter().collect::<BTreeSet<_>>();
     if unique.len() != request.conditions.len() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_execution_verification",
             "technical SLI verification conditions must be unique",
         ));
@@ -100,7 +100,10 @@ struct ConditionEvaluation {
     evidence_ids: Vec<EvidenceId>,
 }
 
-fn evaluate_conditions(requested: &[String], slis: &[SliHealth]) -> Result<ConditionEvaluation, ControlPlaneError> {
+fn evaluate_conditions(
+    requested: &[String],
+    slis: &[SliHealth],
+) -> Result<ConditionEvaluation, ControlPlaneRequestFailure> {
     let by_id = slis
         .iter()
         .map(|sli| (sli.id.as_str(), sli))
@@ -110,7 +113,7 @@ fn evaluate_conditions(requested: &[String], slis: &[SliHealth]) -> Result<Condi
     let mut evidence_ids = Vec::new();
     for condition in requested {
         let sli_id = sli_for_condition(condition).ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "unknown_verification_condition",
                 "technical SLI verification condition is not registered",
             )

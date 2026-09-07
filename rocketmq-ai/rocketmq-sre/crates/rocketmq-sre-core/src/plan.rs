@@ -12,49 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
-use std::fmt;
-
 use rocketmq_sre_contracts::ActionPlan;
 use rocketmq_sre_contracts::ActionPlanDraft;
-use rocketmq_sre_contracts::ContractError;
+use rocketmq_sre_contracts::SreContractError;
 
 use crate::ActionCatalog;
-use crate::ActionCatalogError;
 
 /// Stateless deterministic plan validator and sealer.
 pub struct PlanService<'a> {
     catalog: &'a ActionCatalog,
-}
-
-/// Plan construction error.
-#[derive(Debug)]
-pub enum PlanError {
-    Contract(ContractError),
-    Catalog(ActionCatalogError),
-}
-
-impl fmt::Display for PlanError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Contract(error) => error.fmt(formatter),
-            Self::Catalog(error) => error.fmt(formatter),
-        }
-    }
-}
-
-impl Error for PlanError {}
-
-impl From<ContractError> for PlanError {
-    fn from(value: ContractError) -> Self {
-        Self::Contract(value)
-    }
-}
-
-impl From<ActionCatalogError> for PlanError {
-    fn from(value: ActionCatalogError) -> Self {
-        Self::Catalog(value)
-    }
 }
 
 impl<'a> PlanService<'a> {
@@ -69,20 +35,18 @@ impl<'a> PlanService<'a> {
     /// # Errors
     ///
     /// Rejects rules-only diagnoses and unknown action/version pairs.
-    pub fn seal(&self, draft: ActionPlanDraft) -> Result<ActionPlan, PlanError> {
+    pub fn seal(&self, draft: ActionPlanDraft) -> Result<ActionPlan, SreContractError> {
         for step in &draft.steps {
             let descriptor = self.catalog.descriptor(step.action, &step.descriptor_version)?;
             if step.max_impact != descriptor.max_impact
                 || step.verification != descriptor.verification
                 || step.compensation != descriptor.compensation
             {
-                return Err(ActionCatalogError::InvalidDescriptor {
-                    action: step.action.id().to_owned(),
-                    reason: "plan step policy fields must match the exact descriptor version".to_owned(),
-                }
-                .into());
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+                ));
             }
         }
-        Ok(ActionPlan::seal(draft)?)
+        ActionPlan::seal(draft)
     }
 }

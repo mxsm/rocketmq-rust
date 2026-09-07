@@ -35,7 +35,6 @@ use super::ProxyRestartOneWrite;
 use super::ProxyRestartRestore;
 use super::ProxyRestartRestoreOutcome;
 use super::ProxyRestartState;
-use crate::ExecutionAgentError;
 
 // Keep the mutation deadline below the Agent, Executor, and Control Plane
 // request deadlines so an outer transport cannot cancel an in-flight restart.
@@ -119,7 +118,7 @@ where
                 parameters: &parameters,
                 live_state: &state,
             })
-            .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             let accepting_and_routed = state.drain.as_ref().is_some_and(|drain| {
                 drain.phase == ProxyDrainPhase::Accepting
                     && drain.admission_open
@@ -281,16 +280,16 @@ where
     }
 }
 
-fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
+fn require_action(action: ExecutionAction) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if action == ExecutionAction::ProxyRestartOne {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 
-fn parameters(value: &serde_json::Value) -> Result<ProxyRestartOneParameters, ExecutionAgentError> {
-    serde_json::from_value(value.clone()).map_err(|_| ExecutionAgentError::InvalidRequest)
+fn parameters(value: &serde_json::Value) -> Result<ProxyRestartOneParameters, crate::ExecutionAgentRequestFailure> {
+    serde_json::from_value(value.clone()).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)
 }
 
 fn validate_parameters(parameters: &ProxyRestartOneParameters) -> Vec<String> {
@@ -307,11 +306,11 @@ fn validate_parameters(parameters: &ProxyRestartOneParameters) -> Vec<String> {
     reasons
 }
 
-fn validate_for_mutation(parameters: &ProxyRestartOneParameters) -> Result<(), ExecutionAgentError> {
+fn validate_for_mutation(parameters: &ProxyRestartOneParameters) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if validate_parameters(parameters).is_empty() {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 

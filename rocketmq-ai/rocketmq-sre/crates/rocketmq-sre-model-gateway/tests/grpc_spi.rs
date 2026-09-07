@@ -39,8 +39,9 @@ use rocketmq_sre_model_gateway::ModelStreamEvent;
 use rocketmq_sre_model_gateway::PROVIDER_SPI_WIRE_VERSION;
 use rocketmq_sre_model_gateway::ProviderCapabilities;
 use rocketmq_sre_model_gateway::ProviderCapability;
-use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::ProviderFailure;
 use rocketmq_sre_model_gateway::ProviderHealth;
+use rocketmq_sre_model_gateway::ProviderRejection;
 use rocketmq_sre_model_gateway::bounded_provider_adapter_service;
 use rocketmq_sre_model_gateway::provider_spi_wire as wire;
 use tokio::net::TcpListener;
@@ -282,8 +283,8 @@ async fn process_external_spi_enforces_mtls_version_health_cancel_and_error_cont
         .invoke(&context, &request(correlation_id, "wire-error"))
         .await
         .expect_err("wire error");
-    assert_eq!(error.code, ProviderErrorCode::RateLimited);
-    assert!(!error.message.contains("credential"));
+    assert_eq!(error.failure(), ProviderFailure::RateLimited);
+    assert!(!error.message().contains("credential"));
 
     let bad_version = client_config(
         &tls,
@@ -292,12 +293,13 @@ async fn process_external_spi_enforces_mtls_version_health_cancel_and_error_cont
         "spiffe://rocketmq-sre/bad-version",
         ADAPTER_IDENTITY,
     );
+    let version_error = GrpcProviderSpiClient::connect(&endpoint, bad_version)
+        .await
+        .expect_err("version mismatch");
+    assert_eq!(version_error.failure(), ProviderFailure::UnsupportedWireVersion);
     assert_eq!(
-        GrpcProviderSpiClient::connect(&endpoint, bad_version)
-            .await
-            .expect_err("version mismatch")
-            .code,
-        ProviderErrorCode::UnsupportedWireVersion
+        version_error.rejection(),
+        Some(ProviderRejection::UnsupportedWireVersion)
     );
 
     let untrusted = client_config(
@@ -307,13 +309,11 @@ async fn process_external_spi_enforces_mtls_version_health_cancel_and_error_cont
         GATEWAY_IDENTITY,
         ADAPTER_IDENTITY,
     );
-    assert_eq!(
-        GrpcProviderSpiClient::connect(&endpoint, untrusted)
-            .await
-            .expect_err("untrusted client certificate")
-            .code,
-        ProviderErrorCode::MutualTlsFailed
-    );
+    let tls_error = GrpcProviderSpiClient::connect(&endpoint, untrusted)
+        .await
+        .expect_err("untrusted client certificate");
+    assert_eq!(tls_error.failure(), ProviderFailure::TransportFailed);
+    assert!(tls_error.operational_error().is_some());
 
     shutdown_tx.send(()).expect("shutdown signal");
     server_task.await.expect("server task").expect("server shutdown");

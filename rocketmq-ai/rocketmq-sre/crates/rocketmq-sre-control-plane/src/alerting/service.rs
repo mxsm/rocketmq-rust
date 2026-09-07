@@ -46,6 +46,7 @@ use super::model::NotificationTestResponse;
 use super::model::StoredAlert;
 use super::model::resource_kind_name;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::Phase2Repository;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
@@ -67,8 +68,7 @@ impl AlertingService {
     pub(crate) fn new(repository: PostgresRepository, workflow: WorkflowService) -> Result<Self, ControlPlaneError> {
         let public_base_url =
             std::env::var("ROCKETMQ_SRE_PUBLIC_URL").unwrap_or_else(|_| DEFAULT_PUBLIC_BASE_URL.to_owned());
-        let parsed = url::Url::parse(&public_base_url)
-            .map_err(|_| ControlPlaneError::configuration("ROCKETMQ_SRE_PUBLIC_URL is invalid"))?;
+        let parsed = url::Url::parse(&public_base_url).map_err(ControlPlaneError::configuration_source)?;
         if !matches!(parsed.scheme(), "http" | "https")
             || parsed.host_str().is_none()
             || !parsed.username().is_empty()
@@ -90,10 +90,10 @@ impl AlertingService {
         auth: &AuthContext,
         webhook: &AlertmanagerWebhook,
         correlation_id: CorrelationId,
-    ) -> Result<Vec<AlertIngestionOutcome>, ControlPlaneError> {
+    ) -> Result<Vec<AlertIngestionOutcome>, ControlPlaneRequestFailure> {
         webhook.validate()?;
         if !auth.clusters.contains(&webhook.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "Alertmanager cluster is outside the authenticated scope",
             ));
@@ -112,10 +112,10 @@ impl AlertingService {
         auth: &AuthContext,
         request: &IntegrationEventRequest,
         correlation_id: CorrelationId,
-    ) -> Result<AlertIngestionOutcome, ControlPlaneError> {
+    ) -> Result<AlertIngestionOutcome, ControlPlaneRequestFailure> {
         request.validate()?;
         if !auth.clusters.contains(&request.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "integration event cluster is outside the authenticated scope",
             ));
@@ -129,10 +129,10 @@ impl AlertingService {
         auth: &AuthContext,
         request: &IntegrationEventRequest,
         correlation_id: CorrelationId,
-    ) -> Result<AlertIngestionOutcome, ControlPlaneError> {
+    ) -> Result<AlertIngestionOutcome, ControlPlaneRequestFailure> {
         request.validate_unified_alert()?;
         if !auth.clusters.contains(&request.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "unified alert cluster is outside the authenticated scope",
             ));
@@ -145,7 +145,7 @@ impl AlertingService {
         &self,
         auth: &AuthContext,
         incident_id: rocketmq_sre_contracts::IncidentId,
-    ) -> Result<Vec<rocketmq_sre_contracts::TimelineEvent>, ControlPlaneError> {
+    ) -> Result<Vec<rocketmq_sre_contracts::TimelineEvent>, ControlPlaneRequestFailure> {
         self.repository.incident_timeline_for_alerting(auth, incident_id).await
     }
 
@@ -153,7 +153,7 @@ impl AlertingService {
         &self,
         auth: &AuthContext,
         incident_id: rocketmq_sre_contracts::IncidentId,
-    ) -> Result<IncidentTopologyView, ControlPlaneError> {
+    ) -> Result<IncidentTopologyView, ControlPlaneRequestFailure> {
         self.repository.incident_topology_for_alerting(auth, incident_id).await
     }
 
@@ -163,7 +163,7 @@ impl AlertingService {
         incident_id: rocketmq_sre_contracts::IncidentId,
         request: &IncidentNoteRequest,
         correlation_id: CorrelationId,
-    ) -> Result<rocketmq_sre_contracts::TimelineEvent, ControlPlaneError> {
+    ) -> Result<rocketmq_sre_contracts::TimelineEvent, ControlPlaneRequestFailure> {
         request.validate()?;
         let timeline = self
             .repository
@@ -186,7 +186,7 @@ impl AlertingService {
         &self,
         auth: &AuthContext,
         cluster_id: rocketmq_sre_contracts::ClusterId,
-    ) -> Result<ClusterIncidentHealth, ControlPlaneError> {
+    ) -> Result<ClusterIncidentHealth, ControlPlaneRequestFailure> {
         self.repository.cluster_incident_health(auth, cluster_id).await
     }
 
@@ -194,7 +194,7 @@ impl AlertingService {
         &self,
         auth: &AuthContext,
         request: &NotificationTestRequest,
-    ) -> Result<NotificationTestResponse, ControlPlaneError> {
+    ) -> Result<NotificationTestResponse, ControlPlaneRequestFailure> {
         let (delivery_id, queued, sanitized_summary, deep_link) = self
             .repository
             .enqueue_notification_test(
@@ -219,7 +219,7 @@ impl AlertingService {
         auth: &AuthContext,
         event: AlertEvent,
         correlation_id: CorrelationId,
-    ) -> Result<AlertIngestionOutcome, ControlPlaneError> {
+    ) -> Result<AlertIngestionOutcome, ControlPlaneRequestFailure> {
         let alert_id = self.repository.store_alert(&event).await?;
         let stored = StoredAlert {
             event,
@@ -276,12 +276,12 @@ fn normalize_alertmanager(
     webhook: &AlertmanagerWebhook,
     alert: &AlertmanagerAlert,
     received_at: chrono::DateTime<Utc>,
-) -> Result<AlertEvent, ControlPlaneError> {
+) -> Result<AlertEvent, ControlPlaneRequestFailure> {
     let mut labels = webhook.common_labels.clone();
     labels.extend(alert.labels.clone());
     let alert_name = labels
         .get("alertname")
-        .ok_or_else(|| ControlPlaneError::validation("invalid_alert_schema", "alertname is required"))?;
+        .ok_or_else(|| ControlPlaneRequestFailure::validation("invalid_alert_schema", "alertname is required"))?;
     let resource_kind = labels
         .get("rocketmq_resource_kind")
         .or_else(|| labels.get("resource_kind"))
@@ -359,7 +359,7 @@ fn normalize_alertmanager(
 fn normalize_integration_event(
     auth: &AuthContext,
     request: &IntegrationEventRequest,
-) -> Result<AlertEvent, ControlPlaneError> {
+) -> Result<AlertEvent, ControlPlaneRequestFailure> {
     let summary = if safe_summary(&request.summary) {
         request.summary.trim().to_owned()
     } else {
@@ -411,13 +411,13 @@ fn build_event(
     sequence: u64,
     occurred_at: chrono::DateTime<Utc>,
     received_at: chrono::DateTime<Utc>,
-) -> Result<AlertEvent, ControlPlaneError> {
+) -> Result<AlertEvent, ControlPlaneRequestFailure> {
     validate_identity("source event identifier", &source_event_id, 512)?;
     validate_identity("resource key", &resource_key, 512)?;
     validate_identity("symptom family", &symptom_family, 128)?;
     let window_epoch = bounded_window_start_epoch(occurred_at.timestamp(), DEFAULT_CORRELATION_WINDOW_SECONDS)
         .ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "invalid_alert_schema",
                 "alert timestamp cannot be represented in a correlation window",
             )
@@ -425,7 +425,7 @@ fn build_event(
     let window_start = Utc
         .timestamp_opt(window_epoch, 0)
         .single()
-        .ok_or_else(|| ControlPlaneError::validation("invalid_alert_schema", "alert timestamp is invalid"))?;
+        .ok_or_else(|| ControlPlaneRequestFailure::validation("invalid_alert_schema", "alert timestamp is invalid"))?;
     let material = CorrelationFingerprintMaterial::new(
         auth.tenant_id,
         cluster_id,
@@ -481,7 +481,7 @@ fn build_event(
     })
 }
 
-fn parse_resource_kind(value: &str) -> Result<ResourceKind, ControlPlaneError> {
+fn parse_resource_kind(value: &str) -> Result<ResourceKind, ControlPlaneRequestFailure> {
     match normalize_identifier(value).as_str() {
         "cluster" => Ok(ResourceKind::Cluster),
         "name_server" | "nameserver" => Ok(ResourceKind::NameServer),
@@ -499,7 +499,7 @@ fn parse_resource_kind(value: &str) -> Result<ResourceKind, ControlPlaneError> {
         "certificate" | "cert" => Ok(ResourceKind::Certificate),
         "runtime" => Ok(ResourceKind::Runtime),
         "telemetry" => Ok(ResourceKind::Telemetry),
-        _ => Err(ControlPlaneError::validation(
+        _ => Err(ControlPlaneRequestFailure::validation(
             "invalid_alert_schema",
             "unsupported alert resource kind",
         )),
@@ -532,24 +532,24 @@ fn inferred_resource_key(kind: ResourceKind, labels: &BTreeMap<String, String>) 
     labels.get(key)
 }
 
-fn parse_severity(value: Option<&str>) -> Result<AlertSeverity, ControlPlaneError> {
+fn parse_severity(value: Option<&str>) -> Result<AlertSeverity, ControlPlaneRequestFailure> {
     match value.map(normalize_identifier).as_deref() {
         None | Some("") | Some("warning") | Some("warn") => Ok(AlertSeverity::Warning),
         Some("info") | Some("information") => Ok(AlertSeverity::Info),
         Some("error") | Some("high") => Ok(AlertSeverity::Error),
         Some("critical") | Some("fatal") | Some("page") => Ok(AlertSeverity::Critical),
-        Some(_) => Err(ControlPlaneError::validation(
+        Some(_) => Err(ControlPlaneRequestFailure::validation(
             "invalid_alert_schema",
             "unsupported alert severity",
         )),
     }
 }
 
-fn parse_alert_status(value: &str) -> Result<AlertStatus, ControlPlaneError> {
+fn parse_alert_status(value: &str) -> Result<AlertStatus, ControlPlaneRequestFailure> {
     match value {
         "firing" => Ok(AlertStatus::Firing),
         "resolved" => Ok(AlertStatus::Resolved),
-        _ => Err(ControlPlaneError::validation(
+        _ => Err(ControlPlaneRequestFailure::validation(
             "invalid_alert_schema",
             "unsupported alert status",
         )),
@@ -603,10 +603,10 @@ fn normalize_display(value: &str) -> String {
         .collect()
 }
 
-fn validate_identity(name: &'static str, value: &str, max: usize) -> Result<(), ControlPlaneError> {
+fn validate_identity(name: &'static str, value: &str, max: usize) -> Result<(), ControlPlaneRequestFailure> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > max || value.chars().any(char::is_control) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_alert_schema",
             format!("{name} is empty, contains control characters, or exceeds {max} characters"),
         ));

@@ -49,9 +49,10 @@ use super::BrokerConfigPatchRestore;
 use super::BrokerConfigPatchState;
 use super::BrokerConfigPatchWrite;
 use super::DriverFuture;
-use crate::AgentStoreError;
 use crate::ExecutionAgentError;
 use crate::config::BrokerAdminDriverConfig;
+use crate::error::AgentStoreError;
+use crate::error::AgentStoreFailure;
 
 mod logger_level;
 
@@ -100,7 +101,7 @@ impl BrokerConfigJournal {
         plan_step_id: PlanStepId,
         before: &BrokerBeforeState,
         created_at: DateTime<Utc>,
-    ) -> Result<BrokerBeforeState, AgentStoreError> {
+    ) -> Result<BrokerBeforeState, AgentStoreFailure> {
         let before_snapshot = serde_json::to_value(&before.before).map_err(AgentStoreError::SnapshotEncoding)?;
         let forward_patch_snapshot =
             serde_json::to_value(&before.forward_patch).map_err(AgentStoreError::SnapshotEncoding)?;
@@ -128,7 +129,7 @@ impl BrokerConfigJournal {
         if persisted == *before {
             Ok(persisted)
         } else {
-            Err(AgentStoreError::IdempotencyConflict)
+            Err(AgentStoreFailure::idempotency_conflict())
         }
     }
 
@@ -136,7 +137,7 @@ impl BrokerConfigJournal {
         &self,
         execution_id: ExecutionId,
         plan_step_id: PlanStepId,
-    ) -> Result<BrokerBeforeState, AgentStoreError> {
+    ) -> Result<BrokerBeforeState, AgentStoreFailure> {
         let row = sqlx::query(
             "SELECT broker_addr, operation_id, expected_generation,
                     before_snapshot, forward_patch_snapshot
@@ -147,9 +148,9 @@ impl BrokerConfigJournal {
         .bind(plan_step_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(AgentStoreError::NotFound)?;
+        .ok_or(AgentStoreFailure::not_found())?;
         let expected_generation = u64::try_from(row.try_get::<i64, _>("expected_generation")?)
-            .map_err(|_| AgentStoreError::InvalidInput("stored Broker generation is invalid".to_owned()))?;
+            .map_err(|_| AgentStoreFailure::invalid_input("stored Broker generation is invalid".to_owned()))?;
         Ok(BrokerBeforeState {
             broker_addr: row.try_get("broker_addr")?,
             operation_id: row.try_get("operation_id")?,
@@ -171,7 +172,7 @@ impl BrokerConfigJournal {
         expected_generation: u64,
         outcome: BrokerConfigPatchApplyOutcome,
         recorded_at: DateTime<Utc>,
-    ) -> Result<(), AgentStoreError> {
+    ) -> Result<(), AgentStoreFailure> {
         let (outcome_code, observed_generation, result_snapshot) = match outcome {
             BrokerConfigPatchApplyOutcome::Applied {
                 previous_generation,
@@ -246,7 +247,7 @@ impl BrokerConfigJournal {
         if identical {
             Ok(())
         } else {
-            Err(AgentStoreError::IdempotencyConflict)
+            Err(AgentStoreFailure::idempotency_conflict())
         }
     }
 
@@ -254,7 +255,7 @@ impl BrokerConfigJournal {
         &self,
         broker_addr: &str,
         generation: u64,
-    ) -> Result<Option<String>, AgentStoreError> {
+    ) -> Result<Option<String>, AgentStoreFailure> {
         sqlx::query_scalar(
             "SELECT operation_id
              FROM execution_agent_broker_config_results
@@ -295,7 +296,7 @@ impl ProductionBrokerConfigPatchClient {
             },
             TelemetryHandle::noop(),
         )
-        .map_err(|_| ExecutionAgentError::Configuration)?;
+        .map_err(ExecutionAgentError::configuration_source)?;
         let timeout_millis = duration_millis(config.request_timeout)?;
         let mut read_builder = ReadAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(config.namesrv_addr.clone())
@@ -309,7 +310,7 @@ impl ProductionBrokerConfigPatchClient {
         let mut read_admin = read_builder
             .build_and_start()
             .await
-            .map_err(|_| ExecutionAgentError::Configuration)?;
+            .map_err(ExecutionAgentError::configuration_source)?;
 
         let mut mutation_builder = MutationAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(config.namesrv_addr.clone())
@@ -322,9 +323,9 @@ impl ProductionBrokerConfigPatchClient {
         }
         let mutation_admin = match mutation_builder.build_and_start().await {
             Ok(session) => session,
-            Err(_) => {
+            Err(error) => {
                 read_admin.shutdown().await;
-                return Err(ExecutionAgentError::Configuration);
+                return Err(ExecutionAgentError::configuration_source(error));
             }
         };
         Ok(Self {
@@ -340,15 +341,18 @@ impl ProductionBrokerConfigPatchClient {
         self.mutation_admin.lock().await.shutdown().await;
     }
 
-    async fn live_state(&self, broker_addr: &str) -> Result<BrokerConfigPatchState, ExecutionAgentError> {
-        let request =
-            QueryBrokerAllowlistedConfigRequest::try_new(broker_addr).map_err(|_| ExecutionAgentError::DriverFailed)?;
+    async fn live_state(
+        &self,
+        broker_addr: &str,
+    ) -> Result<BrokerConfigPatchState, crate::ExecutionAgentRequestFailure> {
+        let request = QueryBrokerAllowlistedConfigRequest::try_new(broker_addr)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         let config = {
             let mut admin = self.read_admin.lock().await;
             admin
                 .query_allowlisted_config(&request)
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?
         };
         let values = BrokerConfigPatch {
             send_message_thread_pool_nums: config.send_message_thread_pool_nums,
@@ -390,7 +394,7 @@ impl ProductionBrokerConfigPatchClient {
         broker_addr: &str,
         expected_generation: u64,
         patch: &BrokerConfigPatch,
-    ) -> Result<BrokerConfigPatchApplyOutcome, ExecutionAgentError> {
+    ) -> Result<BrokerConfigPatchApplyOutcome, crate::ExecutionAgentRequestFailure> {
         let request = PatchBrokerConfigRequest {
             broker_addr: broker_addr.to_owned(),
             expected_generation,
@@ -401,7 +405,7 @@ impl ProductionBrokerConfigPatchClient {
             admin
                 .patch_config_if_generation(&request)
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?
         };
         Ok(match outcome {
             PatchBrokerConfigOutcome::Applied {
@@ -467,7 +471,7 @@ impl BrokerConfigPatchClient for ProductionBrokerConfigPatchClient {
                 .await
                 .is_err()
             {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
             Ok(outcome)
         })
@@ -483,7 +487,7 @@ impl BrokerConfigPatchClient for ProductionBrokerConfigPatchClient {
                 .load_before(request.execution_id, request.plan_step_id)
                 .await?;
             if before.broker_addr != request.broker_addr {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let live = self.live_state(&request.broker_addr).await?;
             if !patch_matches(&before.forward_patch, &live.values) {
@@ -510,7 +514,7 @@ impl BrokerConfigPatchClient for ProductionBrokerConfigPatchClient {
                 .await
                 .is_err()
             {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
             Ok(outcome)
         })
@@ -520,7 +524,7 @@ impl BrokerConfigPatchClient for ProductionBrokerConfigPatchClient {
 fn select_before_values(
     live: &BrokerConfigPatch,
     requested: &BrokerConfigPatch,
-) -> Result<BrokerConfigPatch, ExecutionAgentError> {
+) -> Result<BrokerConfigPatch, crate::ExecutionAgentRequestFailure> {
     Ok(BrokerConfigPatch {
         send_message_thread_pool_nums: requested
             .send_message_thread_pool_nums
@@ -542,20 +546,22 @@ fn select_before_values(
 }
 
 trait RequiredOption<T> {
-    fn transpose_required(self) -> Result<Option<T>, ExecutionAgentError>;
+    fn transpose_required(self) -> Result<Option<T>, crate::ExecutionAgentRequestFailure>;
 }
 
 impl<T> RequiredOption<T> for Option<Option<T>> {
-    fn transpose_required(self) -> Result<Option<T>, ExecutionAgentError> {
+    fn transpose_required(self) -> Result<Option<T>, crate::ExecutionAgentRequestFailure> {
         match self {
             Some(Some(value)) => Ok(Some(value)),
-            Some(None) => Err(ExecutionAgentError::DriverFailed),
+            Some(None) => Err(crate::ExecutionAgentRequestFailure::DriverFailed),
             None => Ok(None),
         }
     }
 }
 
-fn broker_properties(patch: &BrokerConfigPatch) -> Result<BTreeMap<String, String>, ExecutionAgentError> {
+fn broker_properties(
+    patch: &BrokerConfigPatch,
+) -> Result<BTreeMap<String, String>, crate::ExecutionAgentRequestFailure> {
     let mut properties = BTreeMap::new();
     if let Some(value) = patch.send_message_thread_pool_nums {
         properties.insert("sendMessageThreadPoolNums".to_owned(), value.to_string());
@@ -570,7 +576,7 @@ fn broker_properties(patch: &BrokerConfigPatch) -> Result<BTreeMap<String, Strin
         properties.insert("maxClientEventCount".to_owned(), value.to_string());
     }
     if properties.is_empty() {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     } else {
         Ok(properties)
     }
@@ -591,13 +597,13 @@ fn patch_matches(patch: &BrokerConfigPatch, state: &BrokerConfigPatch) -> bool {
             .is_none_or(|value| state.max_client_event_count == Some(value))
 }
 
-fn generation_i64(generation: u64) -> Result<i64, AgentStoreError> {
+fn generation_i64(generation: u64) -> Result<i64, AgentStoreFailure> {
     i64::try_from(generation)
-        .map_err(|_| AgentStoreError::InvalidInput("Broker generation exceeds PostgreSQL BIGINT".to_owned()))
+        .map_err(|_| AgentStoreFailure::invalid_input("Broker generation exceeds PostgreSQL BIGINT".to_owned()))
 }
 
 fn duration_millis(duration: std::time::Duration) -> Result<u64, ExecutionAgentError> {
-    u64::try_from(duration.as_millis()).map_err(|_| ExecutionAgentError::Configuration)
+    u64::try_from(duration.as_millis()).map_err(ExecutionAgentError::configuration_source)
 }
 
 #[cfg(test)]

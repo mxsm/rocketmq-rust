@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::fmt;
 
-use rocketmq_sre_contracts::ContractError;
 use rocketmq_sre_contracts::Incident;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::IncidentTransition;
+use rocketmq_sre_contracts::SreContractError;
 
 /// In-memory aggregate coordinator used before the persistent repository lands.
 #[derive(Debug, Default)]
@@ -28,32 +27,24 @@ pub struct IncidentManager {
 }
 
 /// Failures exposed by the incident coordinator.
-#[derive(Debug)]
-pub enum IncidentManagerError {
+pub enum IncidentRejection {
     NotFound(IncidentId),
-    Contract(ContractError),
+    Contract(SreContractError),
 }
 
-impl fmt::Display for IncidentManagerError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotFound(id) => write!(formatter, "incident `{id}` does not exist"),
-            Self::Contract(error) => error.fmt(formatter),
-        }
+impl fmt::Display for IncidentRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SRE operation was rejected")
+    }
+}
+impl fmt::Debug for IncidentRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 
-impl Error for IncidentManagerError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::NotFound(_) => None,
-            Self::Contract(error) => Some(error),
-        }
-    }
-}
-
-impl From<ContractError> for IncidentManagerError {
-    fn from(error: ContractError) -> Self {
+impl From<SreContractError> for IncidentRejection {
+    fn from(error: SreContractError) -> Self {
         Self::Contract(error)
     }
 }
@@ -78,14 +69,14 @@ impl IncidentManager {
     ///
     /// # Errors
     ///
-    /// Returns [`IncidentManagerError::NotFound`] when the aggregate is
+    /// Returns [`IncidentRejection::NotFound`] when the aggregate is
     /// unknown, or a contract error when the transition is invalid.
     pub fn transition(
         &mut self,
         id: IncidentId,
         transition: IncidentTransition,
-    ) -> Result<&Incident, IncidentManagerError> {
-        let incident = self.incidents.get_mut(&id).ok_or(IncidentManagerError::NotFound(id))?;
+    ) -> Result<&Incident, IncidentRejection> {
+        let incident = self.incidents.get_mut(&id).ok_or(IncidentRejection::NotFound(id))?;
         incident.apply_transition(transition)?;
         Ok(incident)
     }

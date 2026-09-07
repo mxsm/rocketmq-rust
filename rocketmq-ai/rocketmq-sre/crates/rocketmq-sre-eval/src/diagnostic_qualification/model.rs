@@ -140,37 +140,195 @@ pub struct DiagnosticQualificationReport {
     pub results: Vec<QualifiedPackScenarioResult>,
 }
 
-/// Stable failure categories for manifest and live qualification.
+/// Private mixed completion channel. It deliberately does not implement
+/// [`std::error::Error`]; expected validation and assertion results are
+/// projected as [`crate::EvalRejection`] at the public boundary.
+pub(crate) enum DiagnosticQualificationFailure {
+    Io { _path: PathBuf, source: std::io::Error },
+    Json(serde_json::Error),
+    InvalidManifest(String),
+    InvalidFixture(String),
+    FixtureDecode(serde_json::Error),
+    FixtureContract(rocketmq_sre_contracts::SreContractError),
+    Http(reqwest::Error),
+    Database(sqlx::Error),
+    Assertion(String),
+    AssertionContract(rocketmq_sre_contracts::SreContractError),
+}
+
+impl std::fmt::Debug for DiagnosticQualificationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("DiagnosticQualificationFailure")
+    }
+}
+
 #[derive(Debug, Error)]
-pub enum DiagnosticQualificationError {
-    #[error("failed to access `{path}`: {source}")]
+pub(crate) enum DiagnosticQualificationSource {
+    #[error("diagnostic qualification source is unavailable")]
     Io {
-        path: PathBuf,
+        _path: PathBuf,
         #[source]
         source: std::io::Error,
     },
-    #[error("invalid qualification JSON: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("invalid diagnostic qualification manifest: {0}")]
-    InvalidManifest(String),
-    #[error("invalid diagnostic fixture: {0}")]
-    InvalidFixture(String),
-    #[error("live qualification HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("live qualification database query failed: {0}")]
-    Database(#[from] sqlx::Error),
-    #[error("diagnostic qualification assertion failed: {0}")]
-    Assertion(String),
+    #[error("diagnostic qualification JSON is invalid")]
+    Json(#[source] serde_json::Error),
+    #[error("diagnostic qualification fixture cannot be decoded")]
+    FixtureDecode(#[source] serde_json::Error),
+    #[error("diagnostic qualification HTTP request failed")]
+    Http(#[source] reqwest::Error),
+    #[error("diagnostic qualification database query failed")]
+    Database(#[source] sqlx::Error),
+    #[error("diagnostic qualification fixture contract operation failed")]
+    FixtureContract(#[source] rocketmq_sre_contracts::SreContractError),
+    #[error("diagnostic qualification assertion contract operation failed")]
+    AssertionContract(#[source] rocketmq_sre_contracts::SreContractError),
 }
 
-impl DiagnosticQualificationError {
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
+impl DiagnosticQualificationFailure {
+    pub(crate) fn into_boundary<T>(self) -> Result<crate::EvalOutcome<T>, crate::EvalError> {
         match self {
-            Self::Io { .. } | Self::Http(_) | Self::Database(_) => "source_unavailable",
-            Self::Json(_) | Self::InvalidManifest(_) => "invalid_qualification_manifest",
-            Self::InvalidFixture(_) => "invalid_evidence_fixture",
-            Self::Assertion(_) => "diagnostic_qualification_failed",
+            Self::InvalidManifest(detail) => {
+                let _ = detail;
+                Ok(crate::EvalOutcome::Rejected(
+                    crate::EvalRejection::InvalidQualificationManifest,
+                ))
+            }
+            Self::InvalidFixture(detail) => {
+                let _ = detail;
+                Ok(crate::EvalOutcome::Rejected(
+                    crate::EvalRejection::InvalidEvidenceFixture,
+                ))
+            }
+            Self::FixtureContract(source) => {
+                if std::error::Error::source(&source).is_some() {
+                    Err(crate::EvalError::diagnostic_qualification_source(
+                        DiagnosticQualificationSource::FixtureContract(source),
+                    ))
+                } else {
+                    Ok(crate::EvalOutcome::Rejected(
+                        crate::EvalRejection::InvalidEvidenceFixture,
+                    ))
+                }
+            }
+            Self::Assertion(detail) => {
+                let _ = detail;
+                Ok(crate::EvalOutcome::Rejected(
+                    crate::EvalRejection::QualificationAssertion,
+                ))
+            }
+            Self::AssertionContract(source) => {
+                if std::error::Error::source(&source).is_some() {
+                    Err(crate::EvalError::diagnostic_qualification_source(
+                        DiagnosticQualificationSource::AssertionContract(source),
+                    ))
+                } else {
+                    Ok(crate::EvalOutcome::Rejected(
+                        crate::EvalRejection::QualificationAssertion,
+                    ))
+                }
+            }
+            Self::Io { _path, source } => Err(crate::EvalError::diagnostic_qualification_source(
+                DiagnosticQualificationSource::Io { _path, source },
+            )),
+            Self::Json(source) => Err(crate::EvalError::diagnostic_qualification_source(
+                DiagnosticQualificationSource::Json(source),
+            )),
+            Self::FixtureDecode(source) => Err(crate::EvalError::diagnostic_qualification_source(
+                DiagnosticQualificationSource::FixtureDecode(source),
+            )),
+            Self::Http(source) => Err(crate::EvalError::diagnostic_qualification_source(
+                DiagnosticQualificationSource::Http(source),
+            )),
+            Self::Database(source) => Err(crate::EvalError::diagnostic_qualification_source(
+                DiagnosticQualificationSource::Database(source),
+            )),
         }
+    }
+}
+
+impl From<serde_json::Error> for DiagnosticQualificationFailure {
+    fn from(source: serde_json::Error) -> Self {
+        Self::Json(source)
+    }
+}
+
+impl From<reqwest::Error> for DiagnosticQualificationFailure {
+    fn from(source: reqwest::Error) -> Self {
+        Self::Http(source)
+    }
+}
+
+impl From<sqlx::Error> for DiagnosticQualificationFailure {
+    fn from(source: sqlx::Error) -> Self {
+        Self::Database(source)
+    }
+}
+
+impl DiagnosticQualificationSource {
+    pub(crate) const fn code(&self) -> &'static str {
+        match self {
+            Self::Io { .. }
+            | Self::Http(_)
+            | Self::Database(_)
+            | Self::FixtureContract(_)
+            | Self::AssertionContract(_) => "source_unavailable",
+            Self::Json(_) => "invalid_qualification_manifest",
+            Self::FixtureDecode(_) => "invalid_evidence_fixture",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use rocketmq_sre_contracts::PublicErrorCode;
+    use rocketmq_sre_contracts::SreContractError;
+
+    use super::*;
+
+    #[test]
+    fn fixture_contract_without_source_is_a_closed_rejection() {
+        let outcome =
+            DiagnosticQualificationFailure::FixtureContract(SreContractError::new(PublicErrorCode::InvalidDescriptor))
+                .into_boundary::<()>()
+                .expect("source-free contract failure must not be an operational error");
+
+        assert_eq!(
+            outcome,
+            crate::EvalOutcome::Rejected(crate::EvalRejection::InvalidEvidenceFixture)
+        );
+    }
+
+    #[test]
+    fn assertion_contract_with_source_preserves_the_typed_chain() {
+        let error = DiagnosticQualificationFailure::AssertionContract(SreContractError::with_source(
+            PublicErrorCode::SourceUnavailable,
+            std::io::Error::other("private assertion source"),
+        ))
+        .into_boundary::<()>()
+        .expect_err("source-bearing contract failure must remain operational");
+
+        let qualification = error.source().expect("qualification source");
+        assert!(qualification.is::<DiagnosticQualificationSource>());
+        let contract = qualification.source().expect("contract source");
+        assert!(contract.is::<SreContractError>());
+        assert!(contract.source().is_some_and(|source| source.is::<std::io::Error>()));
+    }
+
+    #[test]
+    fn fixture_contract_with_source_preserves_the_typed_chain() {
+        let error = DiagnosticQualificationFailure::FixtureContract(SreContractError::with_source(
+            PublicErrorCode::SourceUnavailable,
+            std::io::Error::other("private fixture source"),
+        ))
+        .into_boundary::<()>()
+        .expect_err("source-bearing fixture failure must remain operational");
+
+        let qualification = error.source().expect("qualification source");
+        assert!(qualification.is::<DiagnosticQualificationSource>());
+        let contract = qualification.source().expect("contract source");
+        assert!(contract.is::<SreContractError>());
+        assert!(contract.source().is_some_and(|source| source.is::<std::io::Error>()));
     }
 }

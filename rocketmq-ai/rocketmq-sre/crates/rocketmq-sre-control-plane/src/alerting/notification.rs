@@ -25,6 +25,31 @@ use crate::PostgresRepository;
 
 const MAX_NOTIFICATION_BODY_BYTES: usize = 8 * 1024;
 
+#[derive(Debug)]
+enum NotificationDeliveryFailure {
+    Rejected(&'static str),
+    Operational(ControlPlaneError),
+}
+
+impl NotificationDeliveryFailure {
+    const fn rejected(code: &'static str) -> Self {
+        Self::Rejected(code)
+    }
+
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Rejected(code) => code,
+            Self::Operational(error) => error.code(),
+        }
+    }
+}
+
+impl From<ControlPlaneError> for NotificationDeliveryFailure {
+    fn from(error: ControlPlaneError) -> Self {
+        Self::Operational(error)
+    }
+}
+
 /// Bounded transactional-outbox worker. It owns no detached tasks and is
 /// driven by the control plane's scheduled task group.
 #[derive(Clone)]
@@ -40,7 +65,7 @@ impl NotificationOutboxWorker {
             .timeout(Duration::from_secs(8))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| ControlPlaneError::configuration("notification HTTP client cannot be built"))?;
+            .map_err(ControlPlaneError::configuration_source)?;
         Ok(Self { repository, client })
     }
 
@@ -54,7 +79,11 @@ impl NotificationOutboxWorker {
         };
         for claim in claims {
             let result = self.deliver(&claim).await;
-            if let Err(_error) = self.repository.finish_notification(&claim, result).await {
+            if let Err(_error) = self
+                .repository
+                .finish_notification(&claim, result.map_err(|failure| failure.code()))
+                .await
+            {
                 tracing::warn!(
                     delivery_id = %claim.delivery_id,
                     error_class = "source_unavailable",
@@ -64,19 +93,23 @@ impl NotificationOutboxWorker {
         }
     }
 
-    async fn deliver(&self, claim: &NotificationClaim) -> Result<(), &'static str> {
+    async fn deliver(&self, claim: &NotificationClaim) -> Result<(), NotificationDeliveryFailure> {
         match claim.channel {
             NotificationChannel::SignedWebhook => self.deliver_signed_webhook(claim).await,
             NotificationChannel::Email | NotificationChannel::Pager => Ok(()),
         }
     }
 
-    async fn deliver_signed_webhook(&self, claim: &NotificationClaim) -> Result<(), &'static str> {
-        let endpoint = url::Url::parse(&claim.endpoint).map_err(|_| "invalid_endpoint")?;
+    async fn deliver_signed_webhook(&self, claim: &NotificationClaim) -> Result<(), NotificationDeliveryFailure> {
+        let endpoint =
+            url::Url::parse(&claim.endpoint).map_err(|_| NotificationDeliveryFailure::rejected("invalid_endpoint"))?;
         if !allowed_webhook_endpoint(&endpoint) {
-            return Err("endpoint_not_allowed");
+            return Err(NotificationDeliveryFailure::rejected("endpoint_not_allowed"));
         }
-        let secret_reference = claim.secret_reference.as_deref().ok_or("secret_reference_missing")?;
+        let secret_reference = claim
+            .secret_reference
+            .as_deref()
+            .ok_or_else(|| NotificationDeliveryFailure::rejected("secret_reference_missing"))?;
         let secret = resolve_secret_reference(secret_reference)?;
         let payload = NotificationPayload {
             schema_version: "rocketmq-sre.notification.v1",
@@ -85,9 +118,10 @@ impl NotificationOutboxWorker {
             summary: &claim.sanitized_summary,
             deep_link: &claim.deep_link,
         };
-        let body = serde_json::to_vec(&payload).map_err(|_| "payload_encoding_failed")?;
+        let body = serde_json::to_vec(&payload)
+            .map_err(|source| ControlPlaneError::validation_source("payload_encoding_failed", source))?;
         if body.len() > MAX_NOTIFICATION_BODY_BYTES {
-            return Err("payload_too_large");
+            return Err(NotificationDeliveryFailure::rejected("payload_too_large"));
         }
         let signature = hmac_sha256(secret.as_bytes(), &body);
         self.client
@@ -98,9 +132,9 @@ impl NotificationOutboxWorker {
             .body(body)
             .send()
             .await
-            .map_err(|_| "transport_unavailable")?
+            .map_err(|source| ControlPlaneError::validation_source("transport_unavailable", source))?
             .error_for_status()
-            .map_err(|_| "remote_rejected")?;
+            .map_err(|source| ControlPlaneError::validation_source("remote_rejected", source))?;
         Ok(())
     }
 }
@@ -127,20 +161,23 @@ fn allowed_webhook_endpoint(endpoint: &url::Url) -> bool {
             .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"))
 }
 
-fn resolve_secret_reference(reference: &str) -> Result<String, &'static str> {
-    let name = reference.strip_prefix("env:").ok_or("unsupported_secret_reference")?;
+fn resolve_secret_reference(reference: &str) -> Result<String, NotificationDeliveryFailure> {
+    let name = reference
+        .strip_prefix("env:")
+        .ok_or_else(|| NotificationDeliveryFailure::rejected("unsupported_secret_reference"))?;
     if name.is_empty()
         || name.len() > 128
         || !name
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
     {
-        return Err("invalid_secret_reference");
+        return Err(NotificationDeliveryFailure::rejected("invalid_secret_reference"));
     }
     std::env::var(name)
-        .ok()
+        .map_err(|source| ControlPlaneError::validation_source("secret_unavailable", source))
+        .map(Some)?
         .filter(|secret| !secret.is_empty() && secret.len() <= 4_096)
-        .ok_or("secret_unavailable")
+        .ok_or_else(|| NotificationDeliveryFailure::rejected("secret_unavailable"))
 }
 
 fn hmac_sha256(key: &[u8], message: &[u8]) -> String {

@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::fmt::Debug;
+use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fs;
 use std::path::PathBuf;
@@ -29,9 +31,22 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderOperationalFailure as OperationalFailure;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 
 const MAX_DEV_SECRET_BYTES: u64 = 64 * 1024;
+
+#[derive(Debug)]
+struct SecretCacheUnavailable;
+
+impl Display for SecretCacheUnavailable {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("secret cache is unavailable")
+    }
+}
+
+impl Error for SecretCacheUnavailable {}
 
 /// Supported secret-reference ownership and lookup schemes.
 #[derive(Clone, Copy, Debug, Eq, Hash, JsonSchema, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -69,20 +84,14 @@ impl SecretReference {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderErrorCode::ProfileInvalid`] for an unknown scheme,
+    /// Returns [`ProviderRejection::ProfileInvalid`] for an unknown scheme,
     /// an empty locator, or an embedded control character.
-    pub fn parse(value: &str) -> Result<Self, ProviderError> {
-        let (scheme, locator) = value.split_once("://").ok_or_else(|| {
-            ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "credential_ref must use an approved reference scheme",
-            )
-        })?;
+    pub fn parse(value: &str) -> Result<Self, ProviderStatusOutcome> {
+        let (scheme, locator) = value
+            .split_once("://")
+            .ok_or_else(|| ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid))?;
         if locator.is_empty() || locator.chars().any(char::is_control) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "credential_ref locator is invalid",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         let kind = match scheme {
             "env" => SecretReferenceKind::Environment,
@@ -90,10 +99,7 @@ impl SecretReference {
             "external" => SecretReferenceKind::External,
             "adapter" => SecretReferenceKind::Adapter,
             _ => {
-                return Err(ProviderError::new(
-                    ProviderErrorCode::ProfileInvalid,
-                    "credential_ref scheme is not allowed",
-                ));
+                return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
             }
         };
         Ok(Self {
@@ -106,8 +112,8 @@ impl SecretReference {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderErrorCode::ProfileInvalid`] when the locator is empty.
-    pub fn external(locator: impl Into<String>) -> Result<Self, ProviderError> {
+    /// Returns [`ProviderRejection::ProfileInvalid`] when the locator is empty.
+    pub fn external(locator: impl Into<String>) -> Result<Self, ProviderStatusOutcome> {
         let locator = locator.into();
         Self::parse(&format!("external://{locator}"))
     }
@@ -206,7 +212,7 @@ pub trait SecretProvider: Send + Sync {
     ///
     /// Returns a redacted [`ProviderError`] when lookup is disabled, denied,
     /// unavailable, or the reference kind is not owned by this provider.
-    fn resolve(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderError>;
+    fn resolve(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderStatusOutcome>;
 
     /// Forces a refresh after rotation without restarting the gateway.
     ///
@@ -214,7 +220,7 @@ pub trait SecretProvider: Send + Sync {
     ///
     /// Returns a redacted [`ProviderError`] under the same conditions as
     /// [`SecretProvider::resolve`].
-    fn refresh(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderError>;
+    fn refresh(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderStatusOutcome>;
 }
 
 /// Explicitly enabled development-only environment/file adapter.
@@ -235,49 +241,31 @@ impl DevSecretProvider {
         }
     }
 
-    fn resolve_file(&self, locator: &str) -> Result<SecretMaterial, ProviderError> {
-        let configured_root = self.allowed_file_root.as_ref().ok_or_else(|| {
-            ProviderError::new(
-                ProviderErrorCode::SecretAccessDenied,
-                "file secret access is not configured",
-            )
-        })?;
-        let root = configured_root.canonicalize().map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
-                "configured secret root is unavailable",
-            )
-        })?;
-        let candidate = PathBuf::from(locator).canonicalize().map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
-                "referenced secret file is unavailable",
-            )
-        })?;
+    fn resolve_file(&self, locator: &str) -> Result<SecretMaterial, ProviderStatusOutcome> {
+        let configured_root = self
+            .allowed_file_root
+            .as_ref()
+            .ok_or_else(|| ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied))?;
+        let root = configured_root
+            .canonicalize()
+            .map_err(|source| ProviderError::from_source(OperationalFailure::SecretUnavailable, source))?;
+        let candidate = PathBuf::from(locator)
+            .canonicalize()
+            .map_err(|source| ProviderError::from_source(OperationalFailure::SecretUnavailable, source))?;
         if !candidate.starts_with(&root) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::SecretAccessDenied,
-                "secret file is outside the configured root",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied));
         }
-        let metadata = fs::metadata(&candidate).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
-                "referenced secret file metadata is unavailable",
-            )
-        })?;
+        let metadata = fs::metadata(&candidate)
+            .map_err(|source| ProviderError::from_source(OperationalFailure::SecretUnavailable, source))?;
         if metadata.len() > MAX_DEV_SECRET_BYTES {
             return Err(ProviderError::new(
-                ProviderErrorCode::OutputTooLarge,
+                OperationalFailure::OutputTooLarge,
                 "referenced secret file exceeds the development limit",
-            ));
-        }
-        let value = fs::read_to_string(&candidate).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
-                "referenced secret file cannot be read",
             )
-        })?;
+            .into());
+        }
+        let value = fs::read_to_string(&candidate)
+            .map_err(|source| ProviderError::from_source(OperationalFailure::SecretUnavailable, source))?;
         let modified = metadata
             .modified()
             .ok()
@@ -290,42 +278,31 @@ impl DevSecretProvider {
         ))
     }
 
-    fn resolve_env(&self, locator: &str) -> Result<SecretMaterial, ProviderError> {
+    fn resolve_env(&self, locator: &str) -> Result<SecretMaterial, ProviderStatusOutcome> {
         if !locator.starts_with(&self.allowed_env_prefix) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::SecretAccessDenied,
-                "environment secret is outside the configured prefix",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied));
         }
-        let value = std::env::var(locator).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
-                "referenced environment secret is unavailable",
-            )
-        })?;
+        let value = std::env::var(locator)
+            .map_err(|source| ProviderError::from_source(OperationalFailure::SecretUnavailable, source))?;
         Ok(SecretMaterial::new(value, format!("env:{locator}"), None))
     }
 }
 
 impl SecretProvider for DevSecretProvider {
-    fn resolve(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderError> {
+    fn resolve(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderStatusOutcome> {
         if !self.enabled {
-            return Err(ProviderError::new(
-                ProviderErrorCode::SecretAccessDenied,
-                "development secret adapter is disabled",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied));
         }
         match reference.kind {
             SecretReferenceKind::Environment => self.resolve_env(reference.locator()),
             SecretReferenceKind::File => self.resolve_file(reference.locator()),
-            SecretReferenceKind::External | SecretReferenceKind::Adapter => Err(ProviderError::new(
-                ProviderErrorCode::SecretAccessDenied,
-                "secret reference is not owned by the development adapter",
-            )),
+            SecretReferenceKind::External | SecretReferenceKind::Adapter => {
+                Err(ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied))
+            }
         }
     }
 
-    fn refresh(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderError> {
+    fn refresh(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderStatusOutcome> {
         self.resolve(reference)
     }
 }
@@ -348,7 +325,7 @@ pub trait ExternalSecretClient: Send + Sync {
     ///
     /// Returns a redacted gateway error. Implementations must not include
     /// secret values in error messages.
-    fn read_secret(&self, locator: &str) -> Result<ExternalSecretValue, ProviderError>;
+    fn read_secret(&self, locator: &str) -> Result<ExternalSecretValue, ProviderStatusOutcome>;
 }
 
 struct CachedSecret {
@@ -383,12 +360,12 @@ impl ExternalSecretManagerProvider {
     ///
     /// Returns a redacted access or availability error if the watched
     /// reference is outside this adapter's namespace or cannot be refreshed.
-    pub fn on_watch_event(&self, reference: &SecretReference) -> Result<String, ProviderError> {
+    pub fn on_watch_event(&self, reference: &SecretReference) -> Result<String, ProviderStatusOutcome> {
         self.refresh(reference)
             .map(|material| material.version_fingerprint().to_owned())
     }
 
-    fn ensure_owned<'a>(&self, reference: &'a SecretReference) -> Result<&'a str, ProviderError> {
+    fn ensure_owned<'a>(&self, reference: &'a SecretReference) -> Result<&'a str, ProviderStatusOutcome> {
         let locator = reference.locator();
         let namespace_owned = if self.allowed_namespace.ends_with('/') {
             locator.starts_with(&self.allowed_namespace)
@@ -399,15 +376,12 @@ impl ExternalSecretManagerProvider {
                     .is_some_and(|remainder| remainder.starts_with('/'))
         };
         if reference.kind != SecretReferenceKind::External || self.allowed_namespace.is_empty() || !namespace_owned {
-            return Err(ProviderError::new(
-                ProviderErrorCode::SecretAccessDenied,
-                "secret reference is outside the adapter namespace",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::SecretAccessDenied));
         }
         Ok(locator)
     }
 
-    fn read_and_cache(&self, locator: &str) -> Result<SecretMaterial, ProviderError> {
+    fn read_and_cache(&self, locator: &str) -> Result<SecretMaterial, ProviderStatusOutcome> {
         let value = self.client.read_secret(locator)?;
         let material = SecretMaterial::new(
             value.value,
@@ -417,7 +391,7 @@ impl ExternalSecretManagerProvider {
         let mut cache = self
             .cache
             .lock()
-            .map_err(|_| ProviderError::new(ProviderErrorCode::SecretUnavailable, "secret cache is unavailable"))?;
+            .map_err(|_| ProviderError::from_source(OperationalFailure::SecretUnavailable, SecretCacheUnavailable))?;
         cache.insert(
             locator.to_owned(),
             CachedSecret {
@@ -430,13 +404,12 @@ impl ExternalSecretManagerProvider {
 }
 
 impl SecretProvider for ExternalSecretManagerProvider {
-    fn resolve(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderError> {
+    fn resolve(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderStatusOutcome> {
         let locator = self.ensure_owned(reference)?;
         {
-            let cache = self
-                .cache
-                .lock()
-                .map_err(|_| ProviderError::new(ProviderErrorCode::SecretUnavailable, "secret cache is unavailable"))?;
+            let cache = self.cache.lock().map_err(|_| {
+                ProviderError::from_source(OperationalFailure::SecretUnavailable, SecretCacheUnavailable)
+            })?;
             if let Some(cached) = cache.get(locator)
                 && Instant::now() < cached.refresh_after
             {
@@ -446,7 +419,7 @@ impl SecretProvider for ExternalSecretManagerProvider {
         self.read_and_cache(locator)
     }
 
-    fn refresh(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderError> {
+    fn refresh(&self, reference: &SecretReference) -> Result<SecretMaterial, ProviderStatusOutcome> {
         let locator = self.ensure_owned(reference)?;
         self.read_and_cache(locator)
     }
@@ -469,7 +442,7 @@ mod tests {
     }
 
     impl ExternalSecretClient for RotatingClient {
-        fn read_secret(&self, _locator: &str) -> Result<ExternalSecretValue, ProviderError> {
+        fn read_secret(&self, _locator: &str) -> Result<ExternalSecretValue, ProviderStatusOutcome> {
             let current = self.current.lock().expect("rotation lock");
             Ok(ExternalSecretValue {
                 value: current.0.to_owned(),
@@ -509,12 +482,15 @@ mod tests {
         let adapter_owned = SecretReference::parse("adapter://private-provider").expect("adapter reference");
 
         assert_eq!(
-            provider.resolve(&foreign).expect_err("cross namespace").code,
-            ProviderErrorCode::SecretAccessDenied
+            provider.resolve(&foreign).expect_err("cross namespace").failure(),
+            crate::error::ProviderFailure::SecretAccessDenied
         );
         assert_eq!(
-            provider.resolve(&adapter_owned).expect_err("adapter ownership").code,
-            ProviderErrorCode::SecretAccessDenied
+            provider
+                .resolve(&adapter_owned)
+                .expect_err("adapter ownership")
+                .failure(),
+            crate::error::ProviderFailure::SecretAccessDenied
         );
     }
 
@@ -532,8 +508,8 @@ mod tests {
             "secret"
         );
         assert_eq!(
-            provider.resolve(&lookalike).expect_err("namespace lookalike").code,
-            ProviderErrorCode::SecretAccessDenied
+            provider.resolve(&lookalike).expect_err("namespace lookalike").failure(),
+            crate::error::ProviderFailure::SecretAccessDenied
         );
     }
 
@@ -542,8 +518,8 @@ mod tests {
         let provider = DevSecretProvider::new(false, "ROCKETMQ_SRE_MODEL_", None);
         let reference = SecretReference::parse("env://ROCKETMQ_SRE_MODEL_TEST").expect("reference");
         assert_eq!(
-            provider.resolve(&reference).expect_err("disabled").code,
-            ProviderErrorCode::SecretAccessDenied
+            provider.resolve(&reference).expect_err("disabled").failure(),
+            crate::error::ProviderFailure::SecretAccessDenied
         );
     }
 

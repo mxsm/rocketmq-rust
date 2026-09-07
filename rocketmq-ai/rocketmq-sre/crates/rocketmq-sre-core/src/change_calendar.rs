@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
 use std::fmt;
 
 use rocketmq_sre_contracts::ChangeConflict;
@@ -24,24 +23,23 @@ use rocketmq_sre_contracts::ChangeWindowKind;
 use rocketmq_sre_contracts::SreTimestamp;
 
 /// Fail-closed calendar or scheduler transition error.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ChangeCalendarError {
+#[derive(Clone, Eq, PartialEq)]
+pub enum ChangeCalendarRejection {
     InvalidWindow,
     InvalidSchedule,
     InvalidTransition,
 }
 
-impl fmt::Display for ChangeCalendarError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidWindow => formatter.write_str("change window is invalid"),
-            Self::InvalidSchedule => formatter.write_str("change schedule is invalid"),
-            Self::InvalidTransition => formatter.write_str("change schedule transition is invalid"),
-        }
+impl fmt::Display for ChangeCalendarRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SRE operation was rejected")
     }
 }
-
-impl Error for ChangeCalendarError {}
+impl fmt::Debug for ChangeCalendarRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
 
 /// Deterministic maintenance-window and overlap evaluator.
 pub struct ChangeCalendar;
@@ -53,7 +51,7 @@ impl ChangeCalendar {
     ///
     /// Rejects incompatible schemas, invalid ranges, empty resources, or
     /// malformed identity metadata.
-    pub fn validate_schedule(schedule: &ChangeSchedule) -> Result<(), ChangeCalendarError> {
+    pub fn validate_schedule(schedule: &ChangeSchedule) -> Result<(), ChangeCalendarRejection> {
         validate_schedule(schedule)
     }
 
@@ -63,7 +61,7 @@ impl ChangeCalendar {
     ///
     /// Rejects invalid ranges, timezone identifiers, parallelism, names,
     /// resource keys, or reason metadata.
-    pub fn validate_window(window: &ChangeWindow) -> Result<(), ChangeCalendarError> {
+    pub fn validate_window(window: &ChangeWindow) -> Result<(), ChangeCalendarRejection> {
         if window.schema_version != ChangeWindow::SCHEMA_VERSION
             || window.id.as_uuid().is_nil()
             || window.tenant_id.as_uuid().is_nil()
@@ -78,7 +76,7 @@ impl ChangeCalendar {
             || window.created_by.trim().is_empty()
             || window.resource_keys.iter().any(|resource| invalid_resource(resource))
         {
-            return Err(ChangeCalendarError::InvalidWindow);
+            return Err(ChangeCalendarRejection::InvalidWindow);
         }
         Ok(())
     }
@@ -96,10 +94,10 @@ impl ChangeCalendar {
         runbook_max_parallelism: u16,
         windows: &[ChangeWindow],
         existing: &[ChangeSchedule],
-    ) -> Result<Vec<ChangeConflict>, ChangeCalendarError> {
+    ) -> Result<Vec<ChangeConflict>, ChangeCalendarRejection> {
         Self::validate_schedule(schedule)?;
         if !(1..=16).contains(&runbook_max_parallelism) {
-            return Err(ChangeCalendarError::InvalidSchedule);
+            return Err(ChangeCalendarRejection::InvalidSchedule);
         }
         for window in windows {
             Self::validate_window(window)?;
@@ -213,12 +211,12 @@ impl ChangeCalendar {
     /// # Errors
     ///
     /// Rejects terminal or already stopping schedules.
-    pub fn pause(schedule: &mut ChangeSchedule, now: SreTimestamp) -> Result<(), ChangeCalendarError> {
+    pub fn pause(schedule: &mut ChangeSchedule, now: SreTimestamp) -> Result<(), ChangeCalendarRejection> {
         if !matches!(
             schedule.status,
             ChangeScheduleStatus::Scheduled | ChangeScheduleStatus::Running | ChangeScheduleStatus::AwaitingManualGate
         ) {
-            return Err(ChangeCalendarError::InvalidTransition);
+            return Err(ChangeCalendarRejection::InvalidTransition);
         }
         schedule.status = ChangeScheduleStatus::Paused;
         schedule.pause_requested_at = Some(now);
@@ -231,9 +229,9 @@ impl ChangeCalendar {
     /// # Errors
     ///
     /// Rejects schedules that are not paused.
-    pub fn resume(schedule: &mut ChangeSchedule, now: SreTimestamp) -> Result<(), ChangeCalendarError> {
+    pub fn resume(schedule: &mut ChangeSchedule, now: SreTimestamp) -> Result<(), ChangeCalendarRejection> {
         if schedule.status != ChangeScheduleStatus::Paused {
-            return Err(ChangeCalendarError::InvalidTransition);
+            return Err(ChangeCalendarRejection::InvalidTransition);
         }
         schedule.status = if schedule.waiting_manual_gate.is_some() {
             ChangeScheduleStatus::AwaitingManualGate
@@ -252,14 +250,14 @@ impl ChangeCalendar {
     /// # Errors
     ///
     /// Rejects terminal and already stopping schedules.
-    pub fn cancel(schedule: &mut ChangeSchedule, now: SreTimestamp) -> Result<(), ChangeCalendarError> {
+    pub fn cancel(schedule: &mut ChangeSchedule, now: SreTimestamp) -> Result<(), ChangeCalendarRejection> {
         if is_terminal(schedule.status)
             || matches!(
                 schedule.status,
                 ChangeScheduleStatus::SafeStopping | ChangeScheduleStatus::Reconciling
             )
         {
-            return Err(ChangeCalendarError::InvalidTransition);
+            return Err(ChangeCalendarRejection::InvalidTransition);
         }
         schedule.cancel_requested_at = Some(now);
         schedule.status = if schedule.intent_persisted {
@@ -276,9 +274,9 @@ impl ChangeCalendar {
     /// # Errors
     ///
     /// Rejects every state except `safe_stopping`.
-    pub fn begin_reconcile(schedule: &mut ChangeSchedule, now: SreTimestamp) -> Result<(), ChangeCalendarError> {
+    pub fn begin_reconcile(schedule: &mut ChangeSchedule, now: SreTimestamp) -> Result<(), ChangeCalendarRejection> {
         if schedule.status != ChangeScheduleStatus::SafeStopping || !schedule.intent_persisted {
-            return Err(ChangeCalendarError::InvalidTransition);
+            return Err(ChangeCalendarRejection::InvalidTransition);
         }
         schedule.status = ChangeScheduleStatus::Reconciling;
         schedule.updated_at = now;
@@ -286,7 +284,7 @@ impl ChangeCalendar {
     }
 }
 
-fn validate_schedule(schedule: &ChangeSchedule) -> Result<(), ChangeCalendarError> {
+fn validate_schedule(schedule: &ChangeSchedule) -> Result<(), ChangeCalendarRejection> {
     if schedule.schema_version != ChangeSchedule::SCHEMA_VERSION
         || schedule.id.as_uuid().is_nil()
         || schedule.tenant_id.as_uuid().is_nil()
@@ -299,7 +297,7 @@ fn validate_schedule(schedule: &ChangeSchedule) -> Result<(), ChangeCalendarErro
         || schedule.resource_keys.iter().any(|resource| invalid_resource(resource))
         || schedule.created_by.trim().is_empty()
     {
-        return Err(ChangeCalendarError::InvalidSchedule);
+        return Err(ChangeCalendarRejection::InvalidSchedule);
     }
     Ok(())
 }

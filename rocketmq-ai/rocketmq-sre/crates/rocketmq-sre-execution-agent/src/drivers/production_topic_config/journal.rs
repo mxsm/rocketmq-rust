@@ -29,7 +29,8 @@ use uuid::Uuid;
 
 use super::TopicConfigPatch;
 use super::TopicConfigPatchApplyOutcome;
-use crate::AgentStoreError;
+use crate::error::AgentStoreError;
+use crate::error::AgentStoreFailure;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub(super) struct TopicBeforeBroker {
@@ -78,7 +79,7 @@ impl TopicConfigJournal {
         plan_step_id: PlanStepId,
         before: &TopicBeforeState,
         created_at: DateTime<Utc>,
-    ) -> Result<TopicBeforeState, AgentStoreError> {
+    ) -> Result<TopicBeforeState, AgentStoreFailure> {
         let broker_states = serde_json::to_value(&before.brokers).map_err(AgentStoreError::SnapshotEncoding)?;
         let forward_patch = serde_json::to_value(&before.forward_patch).map_err(AgentStoreError::SnapshotEncoding)?;
         sqlx::query(
@@ -105,7 +106,7 @@ impl TopicConfigJournal {
         if persisted == *before {
             Ok(persisted)
         } else {
-            Err(AgentStoreError::IdempotencyConflict)
+            Err(AgentStoreFailure::idempotency_conflict())
         }
     }
 
@@ -113,7 +114,7 @@ impl TopicConfigJournal {
         &self,
         execution_id: ExecutionId,
         plan_step_id: PlanStepId,
-    ) -> Result<TopicBeforeState, AgentStoreError> {
+    ) -> Result<TopicBeforeState, AgentStoreFailure> {
         let row = sqlx::query(
             "SELECT topic, operation_id, expected_version,
                     broker_states_snapshot, forward_patch_snapshot
@@ -124,9 +125,9 @@ impl TopicConfigJournal {
         .bind(plan_step_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(AgentStoreError::NotFound)?;
+        .ok_or(AgentStoreFailure::not_found())?;
         let expected_version = u64::try_from(row.try_get::<i64, _>("expected_version")?)
-            .map_err(|_| AgentStoreError::InvalidInput("stored Topic version is invalid".to_owned()))?;
+            .map_err(|_| AgentStoreFailure::invalid_input("stored Topic version is invalid".to_owned()))?;
         Ok(TopicBeforeState {
             topic: row.try_get("topic")?,
             operation_id: row.try_get("operation_id")?,
@@ -153,7 +154,7 @@ impl TopicConfigJournal {
         expected_version: u64,
         outcome: TopicConfigPatchApplyOutcome,
         recorded_at: DateTime<Utc>,
-    ) -> Result<(), AgentStoreError> {
+    ) -> Result<(), AgentStoreFailure> {
         let (outcome_code, observed_version, result_snapshot) = match outcome {
             TopicConfigPatchApplyOutcome::Applied {
                 previous_version,
@@ -231,7 +232,7 @@ impl TopicConfigJournal {
         if identical {
             Ok(())
         } else {
-            Err(AgentStoreError::IdempotencyConflict)
+            Err(AgentStoreFailure::idempotency_conflict())
         }
     }
 
@@ -240,7 +241,7 @@ impl TopicConfigJournal {
         topic: &str,
         version: u64,
         broker_addrs: &BTreeSet<String>,
-    ) -> Result<Option<String>, AgentStoreError> {
+    ) -> Result<Option<String>, AgentStoreFailure> {
         let rows = sqlx::query(
             "SELECT operation_id, broker_addr
              FROM execution_agent_topic_config_results
@@ -274,7 +275,7 @@ impl TopicConfigJournal {
     }
 }
 
-fn version_i64(version: u64) -> Result<i64, AgentStoreError> {
+fn version_i64(version: u64) -> Result<i64, AgentStoreFailure> {
     i64::try_from(version)
-        .map_err(|_| AgentStoreError::InvalidInput("Topic version exceeds PostgreSQL BIGINT".to_owned()))
+        .map_err(|_| AgentStoreFailure::invalid_input("Topic version exceeds PostgreSQL BIGINT".to_owned()))
 }

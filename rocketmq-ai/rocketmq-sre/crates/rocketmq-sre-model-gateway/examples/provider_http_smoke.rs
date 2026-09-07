@@ -23,8 +23,8 @@ use rocketmq_sre_model_gateway::HttpTransportConfig;
 use rocketmq_sre_model_gateway::InvocationContext;
 use rocketmq_sre_model_gateway::ModelMessage;
 use rocketmq_sre_model_gateway::ModelRole;
-use rocketmq_sre_model_gateway::ProviderError;
-use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::ProviderRejection;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::SecretMaterial;
 use rocketmq_sre_model_gateway::builtin_provider_profiles;
 use rocketmq_sre_model_gateway::current_unix_ms;
@@ -66,7 +66,7 @@ enum SmokeOutcome {
     },
 }
 
-async fn run() -> Result<SmokeOutcome, ProviderError> {
+async fn run() -> Result<SmokeOutcome, ProviderStatusOutcome> {
     let Some(raw_credential) = non_empty_env(CREDENTIAL_ENV) else {
         return Ok(SmokeOutcome::Skipped(
             "ROCKETMQ_SRE_MODEL_SMOKE_CREDENTIAL is not set; no network request was made",
@@ -81,12 +81,7 @@ async fn run() -> Result<SmokeOutcome, ProviderError> {
     let mut profile = builtin_provider_profiles()
         .into_iter()
         .find(|candidate| candidate.id == profile_id)
-        .ok_or_else(|| {
-            ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "requested smoke provider profile does not exist",
-            )
-        })?;
+        .ok_or_else(|| ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid))?;
     if profile.credential_ref.is_none() {
         return Ok(SmokeOutcome::Skipped(
             "the selected profile is unauthenticated; this smoke only invokes explicitly credentialed providers",

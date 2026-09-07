@@ -45,8 +45,9 @@ use rocketmq_sre_model_gateway::ModelRole;
 use rocketmq_sre_model_gateway::ModelStreamEvent;
 use rocketmq_sre_model_gateway::ModelTool;
 use rocketmq_sre_model_gateway::ProviderDialect;
-use rocketmq_sre_model_gateway::ProviderError;
-use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::ProviderFailure;
+use rocketmq_sre_model_gateway::ProviderRejection;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::SecretMaterial;
 use rocketmq_sre_model_gateway::SecretReference;
 use rocketmq_sre_model_gateway::StreamBounds;
@@ -137,11 +138,7 @@ impl InspectingTransport {
 impl AsyncModelTransport for InspectingTransport {
     fn invoke(&self, request: TransportRequest) -> TransportFuture<'_> {
         if !Self::request_is_allowed(&request, true) {
-            return Box::pin(async {
-                Err(ProviderError::policy_denied(
-                    "live diagnosis request violated the read-only qualification boundary",
-                ))
-            });
+            return Box::pin(async { Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied)) });
         }
         if request.body.get("tools").is_some() {
             self.read_only_tool_requests.fetch_add(1, Ordering::SeqCst);
@@ -159,11 +156,7 @@ impl AsyncModelTransport for InspectingTransport {
         if !Self::request_is_allowed(&request, false)
             || request.body.get("stream").and_then(serde_json::Value::as_bool) != Some(true)
         {
-            return Box::pin(async {
-                Err(ProviderError::policy_denied(
-                    "live stream request violated the read-only qualification boundary",
-                ))
-            });
+            return Box::pin(async { Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied)) });
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.stream_calls.fetch_add(1, Ordering::SeqCst);
@@ -630,8 +623,8 @@ async fn qualify_streaming(client: &AsyncBuiltinProviderClient, credential: Secr
         .recv()
         .await
         .expect_err("cancelled stream must stop")
-        .code
-        == ProviderErrorCode::Cancelled;
+        .failure()
+        == ProviderFailure::Cancelled;
     assert!(cancellation_verified);
     StreamProof {
         event_count,

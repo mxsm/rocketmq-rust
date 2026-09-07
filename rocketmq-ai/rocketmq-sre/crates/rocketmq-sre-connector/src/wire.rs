@@ -21,7 +21,7 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::MCP_BUSINESS_SCHEMA;
 
 const MAX_PAGE_LIMIT: u32 = 200;
@@ -179,7 +179,7 @@ impl EvidenceOperation {
         };
         let Value::Object(arguments) = value else {
             return Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
+                ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "tool arguments did not encode as a JSON object",
             ));
@@ -216,33 +216,25 @@ pub fn validate_wire_envelope(
     expected_cluster: &str,
 ) -> Result<WireEvidenceEnvelope, ConnectorError> {
     let schema = Value::Object(output_schema.clone());
-    let validator = jsonschema::validator_for(&schema).map_err(|_| {
-        ConnectorError::capability(
-            ConnectorErrorCode::SchemaDigestMismatch,
-            "verified MCP output schema cannot be compiled",
-        )
-    })?;
+    let validator = jsonschema::validator_for(&schema)
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::SchemaDigestMismatch, false, source))?;
     if validator.iter_errors(&value).next().is_some() {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::SchemaDigestMismatch,
+            ConnectorFailure::SchemaDigestMismatch,
             "MCP result does not conform to its verified output schema",
         ));
     }
     if contains_sensitive_field(&value) {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "MCP result contains a forbidden sensitive field",
         ));
     }
-    let envelope: WireEvidenceEnvelope = serde_json::from_value(value).map_err(|_| {
-        ConnectorError::capability(
-            ConnectorErrorCode::UnsupportedSchemaMajor,
-            "MCP result is not a rocketmq-mcp.v2 evidence envelope",
-        )
-    })?;
+    let envelope: WireEvidenceEnvelope = serde_json::from_value(value)
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::UnsupportedSchemaMajor, false, source))?;
     if envelope.schema_version != MCP_BUSINESS_SCHEMA {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::UnsupportedSchemaMajor,
+            ConnectorFailure::UnsupportedSchemaMajor,
             format!(
                 "wire schema `{}` does not equal `{MCP_BUSINESS_SCHEMA}`",
                 envelope.schema_version
@@ -251,13 +243,13 @@ pub fn validate_wire_envelope(
     }
     if envelope.cluster != expected_cluster {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::ClusterNotAllowed,
+            ConnectorFailure::ClusterNotAllowed,
             "MCP result cluster differs from the requested cluster",
         ));
     }
     if envelope.request_id.trim().is_empty() {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "MCP result has an empty request identifier",
         ));
     }
@@ -291,7 +283,7 @@ fn validate_identifier(name: &str, value: &str) -> Result<(), ConnectorError> {
 }
 
 fn invalid_query(detail: impl Into<String>) -> ConnectorError {
-    ConnectorError::new(ConnectorErrorCode::InvalidEvidenceQuery, false, detail)
+    ConnectorError::new(ConnectorFailure::InvalidEvidenceQuery, false, detail)
 }
 
 fn contains_sensitive_field(value: &Value) -> bool {
@@ -404,8 +396,8 @@ mod tests {
         assert_eq!(
             validate_wire_envelope(&envelope_schema(), invalid, "local")
                 .expect_err("schema mismatch")
-                .code,
-            ConnectorErrorCode::SchemaDigestMismatch
+                .failure(),
+            ConnectorFailure::SchemaDigestMismatch
         );
     }
 
@@ -417,8 +409,8 @@ mod tests {
             "local",
         );
         assert_eq!(
-            result.expect_err("sensitive field").code,
-            ConnectorErrorCode::CapabilityMismatch
+            result.expect_err("sensitive field").failure(),
+            ConnectorFailure::CapabilityMismatch
         );
     }
 
@@ -445,8 +437,8 @@ mod tests {
                 "local",
             );
             assert_eq!(
-                result.expect_err(key).code,
-                ConnectorErrorCode::CapabilityMismatch,
+                result.expect_err(key).failure(),
+                ConnectorFailure::CapabilityMismatch,
                 "{key}"
             );
         }

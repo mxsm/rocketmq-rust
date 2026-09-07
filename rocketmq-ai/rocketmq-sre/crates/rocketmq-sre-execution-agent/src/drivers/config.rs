@@ -21,7 +21,7 @@ use rocketmq_sre_contracts::ExecutionId;
 use rocketmq_sre_contracts::PlanStepId;
 
 use super::DriverFuture;
-use crate::ExecutionAgentError;
+use crate::ExecutionAgentRequestFailure;
 
 /// Sanitized logger state used by precheck and effect reconciliation.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -59,7 +59,7 @@ pub trait ConfigWriteClient: Send + Sync {
     fn set_logger_level_ttl<'a>(
         &'a self,
         request: &'a LoggerLevelTtlWrite,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentRequestFailure>> + Send + 'a>>;
 }
 
 /// Read/restore companion for the bounded logger-level writer.
@@ -79,7 +79,7 @@ pub trait LoggerLevelControlClient: ConfigWriteClient {
     fn restore_logger_level<'a>(
         &'a self,
         request: &'a LoggerLevelTtlRestore,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentRequestFailure>> + Send + 'a>>;
 }
 
 /// Sanitized lifecycle state for one credential set.

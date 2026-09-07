@@ -25,6 +25,7 @@ use rocketmq_sre_contracts::ReconcileEffectState;
 use serde_json::json;
 
 use super::*;
+use crate::ExecutionAgentRequestFailure;
 use crate::drivers::test_support;
 
 struct FakeCollectorClient {
@@ -70,7 +71,7 @@ impl TelemetryCollectorRestartClient for FakeCollectorClient {
         Box::pin(async move {
             let mut state = self.state.lock().expect("collector state lock");
             if state.pod_uid != request.expected_uid {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(ExecutionAgentRequestFailure::DriverFailed);
             }
             state.pod_uid = "collector-uid-after".to_owned();
             state.active_pod = "otel-collector-after".to_owned();

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::super::DiagnosticContext;
-use super::super::DiagnosticError;
 use super::super::DiagnosticPack;
 use super::super::EvidenceRequirement;
 use super::super::FindingOutcome;
@@ -22,6 +21,7 @@ use super::super::PackVersion;
 use super::super::RuleMatch;
 use super::super::Severity;
 use super::common;
+use rocketmq_sre_contracts::SreContractError;
 
 const REQUIRED: &[EvidenceRequirement] = &[EvidenceRequirement {
     key: "broker-metrics",
@@ -102,7 +102,7 @@ impl DiagnosticPack for BrokerHealthV1 {
         FOLLOW_UP
     }
 
-    fn evaluate(&self, context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, DiagnosticError> {
+    fn evaluate(&self, context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, SreContractError> {
         if !context.is_available("broker-metrics") {
             return Ok(Vec::new());
         }

@@ -23,7 +23,6 @@ use crate::ActionPlan;
 use crate::ApprovalGrant;
 use crate::AutonomyGrant;
 use crate::ClusterId;
-use crate::ContractError;
 use crate::CorrelationId;
 use crate::DynamicSafetyDecision;
 use crate::ExecutionAction;
@@ -32,6 +31,7 @@ use crate::ExecutionStepId;
 use crate::LeaseFenceGrant;
 use crate::PlanStatus;
 use crate::PlanStep;
+use crate::SreContractError;
 use crate::TenantId;
 use crate::VerificationResult;
 use crate::is_sha256_digest;
@@ -91,12 +91,11 @@ impl ExecutionTransition {
     /// # Errors
     ///
     /// Rejects transitions not represented by the Phase 3 state machine.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         if !self.from.can_transition_to(self.to) {
-            return Err(ContractError::InvalidStateTransition {
-                from: format!("{:?}", self.from),
-                to: format!("{:?}", self.to),
-            });
+            return Err(crate::SreContractError::new(
+                crate::PublicErrorCode::InvalidStateTransition,
+            ));
         }
         Ok(())
     }
@@ -138,12 +137,11 @@ impl ExecutionRequest {
     /// Rejects incompatible schemas, invalid validity windows, modified plans,
     /// ambiguous authorization, audience drift, and authorization bindings
     /// that do not match the exact plan snapshot.
-    pub fn validate_at(&self, now: DateTime<Utc>, expected_audience: &str) -> Result<(), ContractError> {
+    pub fn validate_at(&self, now: DateTime<Utc>, expected_audience: &str) -> Result<(), SreContractError> {
         if self.schema_version != Self::SCHEMA_VERSION {
-            return Err(ContractError::UnsupportedSchemaFamily {
-                actual: self.schema_version.clone(),
-                supported: Self::SCHEMA_VERSION.to_owned(),
-            });
+            return Err(crate::SreContractError::new(
+                crate::PublicErrorCode::UnsupportedSchemaFamily,
+            ));
         }
         if self.requested_by.trim().is_empty()
             || self.idempotency_key.trim().is_empty()
@@ -155,9 +153,7 @@ impl ExecutionRequest {
             || self.expires_at <= now
             || self.expires_at <= self.issued_at
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "execution request identity, audience, and validity window are invalid".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         self.plan.verify_plan_hash()?;
         let human_authorized = !self.approvals.is_empty();
@@ -174,9 +170,7 @@ impl ExecutionRequest {
             || self.plan.cluster_id != self.cluster_id
             || self.plan.expires_at <= now
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "execution request requires exactly one current, same-scope authorization".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         let precondition_hash = self.plan.compute_precondition_hash()?;
         if self.approvals.iter().any(|approval| {
@@ -195,9 +189,7 @@ impl ExecutionRequest {
                 || approval.expires_at <= now
                 || approval.expires_at <= approval.issued_at
         }) {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "approval grant does not bind the current plan and precondition hash".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         if let Some(grant) = &self.autonomy_grant
             && (grant.issuer.trim().is_empty()
@@ -224,9 +216,7 @@ impl ExecutionRequest {
                     .iter()
                     .any(|step| step.action != grant.action || step.descriptor_version != grant.action_version))
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "autonomy grant does not bind the current R1 plan scope".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }

@@ -18,7 +18,7 @@ use rocketmq_sre_contracts::OperationsFinding;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 
 pub(super) const MAX_SECTION_ITEMS: usize = 64;
@@ -32,10 +32,10 @@ pub(super) struct ReportSection {
 pub(super) fn scoped_clusters(
     auth: &AuthContext,
     requested: Option<ClusterId>,
-) -> Result<Vec<Uuid>, ControlPlaneError> {
+) -> Result<Vec<Uuid>, ControlPlaneRequestFailure> {
     if let Some(cluster_id) = requested {
         if !auth.clusters.contains(&cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "requested cluster is outside the authenticated scope",
             ));
@@ -49,9 +49,9 @@ pub(super) fn bounded_rows<F>(
     rows: Vec<PgRow>,
     _section: &'static str,
     mut map: F,
-) -> Result<ReportSection, ControlPlaneError>
+) -> Result<ReportSection, ControlPlaneRequestFailure>
 where
-    F: FnMut(&PgRow) -> Result<OperationsFinding, ControlPlaneError>,
+    F: FnMut(&PgRow) -> Result<OperationsFinding, ControlPlaneRequestFailure>,
 {
     let truncated = rows.len() > MAX_SECTION_ITEMS;
     let items = rows

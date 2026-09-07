@@ -100,7 +100,7 @@ async fn logger_journal_is_append_only_and_idempotent() {
     conflict.requested_level = "INFO".to_owned();
     assert!(matches!(
         journal.persist_before(&conflict).await,
-        Err(AgentStoreError::IdempotencyConflict)
+        Err(failure) if failure.code() == crate::AgentStoreFailureCode::IdempotencyConflict
     ));
 
     let observed = LoggerLevelState {

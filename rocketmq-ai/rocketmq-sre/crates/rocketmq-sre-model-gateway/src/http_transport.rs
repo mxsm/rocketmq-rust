@@ -35,7 +35,9 @@ use url::Url;
 use crate::adapters::parse_responses_usage;
 use crate::aws_sigv4::sign_bedrock_request;
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderOperationalFailure as OperationalFailure;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::error::map_provider_status;
 use crate::ir::FinishReason;
 use crate::ir::ModelStreamEvent;
@@ -73,12 +75,9 @@ impl TlsClientIdentity {
     ///
     /// Returns a profile error for empty input. Certificate parsing is
     /// completed when [`HttpModelTransport`] builds the TLS client.
-    pub fn from_pem(certificate_chain_pem: &[u8], private_key_pem: &[u8]) -> Result<Self, ProviderError> {
+    pub fn from_pem(certificate_chain_pem: &[u8], private_key_pem: &[u8]) -> Result<Self, ProviderStatusOutcome> {
         if certificate_chain_pem.is_empty() || private_key_pem.is_empty() {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "TLS client identity requires a certificate chain and private key",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::MutualTlsFailed));
         }
         let mut combined_pem = Vec::with_capacity(certificate_chain_pem.len() + private_key_pem.len() + 1);
         combined_pem.extend_from_slice(certificate_chain_pem);
@@ -225,24 +224,15 @@ impl HttpTransportConfig {
         self
     }
 
-    fn validate(&self) -> Result<(), ProviderError> {
+    fn validate(&self) -> Result<(), ProviderStatusOutcome> {
         if self.connect_timeout.is_zero() || self.request_timeout.is_zero() {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "model HTTP timeouts must be non-zero",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         if self.max_request_bytes == 0 || self.max_response_bytes == 0 {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "model HTTP body limits must be non-zero",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         if self.tls.only_custom_roots && self.tls.root_certificate_pem_bundles.is_empty() {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "custom-only TLS trust requires at least one root certificate",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         Ok(())
     }
@@ -286,7 +276,7 @@ impl HttpModelTransport {
     ///
     /// Returns a redacted profile error for invalid bounds, certificates,
     /// client identity, or HTTP client configuration.
-    pub fn new(config: HttpTransportConfig) -> Result<Self, ProviderError> {
+    pub fn new(config: HttpTransportConfig) -> Result<Self, ProviderStatusOutcome> {
         config.validate()?;
         let mut builder = Client::builder()
             .redirect(Policy::none())
@@ -300,17 +290,10 @@ impl HttpModelTransport {
 
         let mut certificates = Vec::new();
         for pem_bundle in &config.tls.root_certificate_pem_bundles {
-            let parsed = Certificate::from_pem_bundle(pem_bundle).map_err(|_| {
-                ProviderError::new(
-                    ProviderErrorCode::ProfileInvalid,
-                    "model TLS root certificate bundle is invalid",
-                )
-            })?;
+            let parsed = Certificate::from_pem_bundle(pem_bundle)
+                .map_err(|source| ProviderError::from_source(OperationalFailure::TransportFailed, source))?;
             if parsed.is_empty() {
-                return Err(ProviderError::new(
-                    ProviderErrorCode::ProfileInvalid,
-                    "model TLS root certificate bundle is empty",
-                ));
+                return Err(ProviderStatusOutcome::rejected(ProviderRejection::MutualTlsFailed));
             }
             certificates.extend(parsed);
         }
@@ -322,20 +305,13 @@ impl HttpModelTransport {
             }
         }
         if let Some(identity) = config.tls.client_identity {
-            let identity = Identity::from_pem(&identity.combined_pem).map_err(|_| {
-                ProviderError::new(
-                    ProviderErrorCode::ProfileInvalid,
-                    "model TLS client identity is invalid",
-                )
-            })?;
+            let identity = Identity::from_pem(&identity.combined_pem)
+                .map_err(|source| ProviderError::from_source(OperationalFailure::TransportFailed, source))?;
             builder = builder.identity(identity);
         }
-        let client = builder.build().map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "model HTTP client configuration is invalid",
-            )
-        })?;
+        let client = builder
+            .build()
+            .map_err(|source| ProviderError::from_source(OperationalFailure::TransportFailed, source))?;
         Ok(Self {
             client,
             request_timeout: config.request_timeout,
@@ -346,27 +322,21 @@ impl HttpModelTransport {
         })
     }
 
-    async fn invoke_http(&self, request: TransportRequest) -> Result<TransportResponse, ProviderError> {
+    async fn invoke_http(&self, request: TransportRequest) -> Result<TransportResponse, ProviderStatusOutcome> {
         let timeout = effective_timeout(request.deadline_unix_ms, self.request_timeout)?;
         let url = self.provider_url(&request.endpoint, &request.path)?;
-        let body = serde_json::to_vec(&request.body).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "model request JSON could not be encoded",
-            )
-        })?;
+        let body = serde_json::to_vec(&request.body)
+            .map_err(|source| ProviderError::from_source(OperationalFailure::ProtocolError, source))?;
         if body.len() > self.max_request_bytes {
             return Err(ProviderError::new(
-                ProviderErrorCode::OutputTooLarge,
+                OperationalFailure::OutputTooLarge,
                 "model request exceeded the configured transport bound",
-            ));
+            )
+            .into());
         }
         let response_bound = request.max_response_bytes.min(self.max_response_bytes);
         if response_bound == 0 {
-            return Err(ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "model response bound must be non-zero",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::InvalidRequest));
         }
 
         validate_credential_expiry(request.credential.as_ref())?;
@@ -382,7 +352,7 @@ impl HttpModelTransport {
 
         match tokio::time::timeout(timeout, receive_bounded_json(builder, response_bound)).await {
             Ok(result) => result,
-            Err(_) => Err(ProviderError::timeout("model provider request exceeded its deadline")),
+            Err(source) => Err(ProviderError::from_source(OperationalFailure::Timeout, source).into()),
         }
     }
 
@@ -391,38 +361,29 @@ impl HttpModelTransport {
         request: TransportRequest,
         bounds: StreamBounds,
         cancellation: CancellationToken,
-    ) -> Result<AsyncBoundedModelStream, ProviderError> {
+    ) -> Result<AsyncBoundedModelStream, ProviderStatusOutcome> {
         if request.dialect != ProviderDialect::DeepSeekResponses {
-            return Err(ProviderError::capability_unsupported(
-                "HTTP streaming is not implemented for this provider dialect",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::CapabilityUnsupported,
             ));
         }
         if cancellation.is_cancelled() {
-            return Err(ProviderError::new(
-                ProviderErrorCode::Cancelled,
-                "model stream was cancelled",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::Cancelled));
         }
         let timeout = effective_timeout(request.deadline_unix_ms, self.request_timeout)?;
         let url = self.provider_url(&request.endpoint, &request.path)?;
-        let body = serde_json::to_vec(&request.body).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "model request JSON could not be encoded",
-            )
-        })?;
+        let body = serde_json::to_vec(&request.body)
+            .map_err(|source| ProviderError::from_source(OperationalFailure::ProtocolError, source))?;
         if body.len() > self.max_request_bytes {
             return Err(ProviderError::new(
-                ProviderErrorCode::OutputTooLarge,
+                OperationalFailure::OutputTooLarge,
                 "model request exceeded the configured transport bound",
-            ));
+            )
+            .into());
         }
         let response_bound = request.max_response_bytes.min(self.max_response_bytes);
         if response_bound == 0 {
-            return Err(ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "model response bound must be non-zero",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::InvalidRequest));
         }
         validate_credential_expiry(request.credential.as_ref())?;
         let mut builder = self
@@ -436,12 +397,14 @@ impl HttpModelTransport {
         builder = apply_provider_auth(builder, &url, request.dialect, request.credential.as_ref(), &body)?;
         let response = tokio::time::timeout(timeout, builder.send())
             .await
-            .map_err(|_| ProviderError::timeout("model provider stream handshake exceeded its deadline"))?
+            .map_err(|source| ProviderError::from_source(OperationalFailure::Timeout, source))?
             .map_err(map_reqwest_error)?;
         let status = response.status();
         if status.is_redirection() {
-            return Err(ProviderError::policy_denied("model provider redirects are disabled")
-                .with_provider_status(status.as_u16()));
+            return Err(ProviderStatusOutcome::Rejected {
+                rejection: ProviderRejection::PolicyDenied,
+                provider_status: Some(status.as_u16()),
+            });
         }
         if !status.is_success() {
             return Err(map_provider_status(status.as_u16()));
@@ -451,10 +414,11 @@ impl HttpModelTransport {
             .is_some_and(|length| length > response_bound as u64)
         {
             return Err(ProviderError::new(
-                ProviderErrorCode::OutputTooLarge,
+                OperationalFailure::OutputTooLarge,
                 "model provider stream exceeded the configured transport bound",
             )
-            .with_provider_status(status.as_u16()));
+            .with_provider_status(status.as_u16())
+            .into());
         }
         let content_type = response
             .headers()
@@ -467,10 +431,11 @@ impl HttpModelTransport {
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
         {
             return Err(ProviderError::new(
-                ProviderErrorCode::ProtocolError,
+                OperationalFailure::ProtocolError,
                 "model provider stream returned an unexpected content type",
             )
-            .with_provider_status(status.as_u16()));
+            .with_provider_status(status.as_u16())
+            .into());
         }
         AsyncBoundedModelStream::new(
             Box::new(DeepSeekResponsesSseSource::new(response, response_bound)),
@@ -479,8 +444,9 @@ impl HttpModelTransport {
         )
     }
 
-    fn provider_url(&self, endpoint: &str, path: &str) -> Result<Url, ProviderError> {
-        let base = Url::parse(endpoint).map_err(|_| invalid_endpoint())?;
+    fn provider_url(&self, endpoint: &str, path: &str) -> Result<Url, ProviderStatusOutcome> {
+        let base = Url::parse(endpoint)
+            .map_err(|source| ProviderError::from_source(OperationalFailure::ProtocolError, source))?;
         if !base.username().is_empty()
             || base.password().is_some()
             || base.query().is_some()
@@ -494,22 +460,17 @@ impl HttpModelTransport {
             "http" if is_loopback(&base) && self.allow_loopback_http => {}
             "http" if self.allow_insecure_non_loopback_http => {}
             "http" => {
-                return Err(ProviderError::policy_denied(
-                    "plaintext non-loopback model endpoints are disabled",
-                ));
+                return Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied));
             }
             _ => return Err(invalid_endpoint()),
         }
         if !path.starts_with('/') || path.starts_with("//") || path.contains('#') || path.chars().any(char::is_control)
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::InvalidRequest,
-                "model provider path is invalid",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::InvalidRequest));
         }
 
-        let full =
-            Url::parse(&format!("{}{}", endpoint.trim_end_matches('/'), path)).map_err(|_| invalid_endpoint())?;
+        let full = Url::parse(&format!("{}{}", endpoint.trim_end_matches('/'), path))
+            .map_err(|source| ProviderError::from_source(OperationalFailure::ProtocolError, source))?;
         if base.scheme() != full.scheme()
             || base.host() != full.host()
             || base.port_or_known_default() != full.port_or_known_default()
@@ -517,9 +478,7 @@ impl HttpModelTransport {
             || full.password().is_some()
             || full.fragment().is_some()
         {
-            return Err(ProviderError::policy_denied(
-                "model provider path attempted to change endpoint authority",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied));
         }
         let base_path = base.path().trim_end_matches('/');
         if !base_path.is_empty()
@@ -527,9 +486,7 @@ impl HttpModelTransport {
             && full.path() != base_path
             && !full.path().starts_with(&format!("{base_path}/"))
         {
-            return Err(ProviderError::policy_denied(
-                "model provider path escaped its configured base path",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied));
         }
         Ok(full)
     }
@@ -606,13 +563,13 @@ impl DeepSeekResponsesSseSource {
                     return Ok(None);
                 }
                 return Err(ProviderError::new(
-                    ProviderErrorCode::ProtocolError,
+                    OperationalFailure::ProtocolError,
                     "model provider stream ended with an incomplete SSE frame",
                 ));
             };
             if chunk.len() > self.max_response_bytes.saturating_sub(self.received_bytes) {
                 return Err(ProviderError::new(
-                    ProviderErrorCode::OutputTooLarge,
+                    OperationalFailure::OutputTooLarge,
                     "model provider stream exceeded the configured transport bound",
                 ));
             }
@@ -622,12 +579,8 @@ impl DeepSeekResponsesSseSource {
     }
 
     fn decode_frame(&mut self, frame: &[u8]) -> Result<(), ProviderError> {
-        let frame = std::str::from_utf8(frame).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::ProtocolError,
-                "model provider stream returned invalid UTF-8",
-            )
-        })?;
+        let frame = std::str::from_utf8(frame)
+            .map_err(|source| ProviderError::from_source(OperationalFailure::ProtocolError, source))?;
         let mut event_field = None;
         let mut data = String::new();
         for line in frame.lines() {
@@ -652,16 +605,12 @@ impl DeepSeekResponsesSseSource {
         }
         if data == "[DONE]" {
             return Err(ProviderError::new(
-                ProviderErrorCode::ProtocolError,
+                OperationalFailure::ProtocolError,
                 "DeepSeek Responses stream used a non-semantic terminal marker",
             ));
         }
-        let payload: Value = serde_json::from_str(&data).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::ProtocolError,
-                "model provider stream returned invalid event JSON",
-            )
-        })?;
+        let payload: Value = serde_json::from_str(&data)
+            .map_err(|source| ProviderError::from_source(OperationalFailure::ProtocolError, source))?;
         let payload_event = payload
             .get("event")
             .or_else(|| payload.get("type"))
@@ -670,19 +619,19 @@ impl DeepSeekResponsesSseSource {
             && sse_event != json_event
         {
             return Err(ProviderError::new(
-                ProviderErrorCode::ProtocolError,
+                OperationalFailure::ProtocolError,
                 "model provider stream event type was inconsistent",
             ));
         }
         let event = payload_event.or(event_field).ok_or_else(|| {
             ProviderError::new(
-                ProviderErrorCode::ProtocolError,
+                OperationalFailure::ProtocolError,
                 "model provider stream event type was missing",
             )
         })?;
         let sequence_number = payload.get("sequence_number").and_then(Value::as_u64).ok_or_else(|| {
             ProviderError::new(
-                ProviderErrorCode::ProtocolError,
+                OperationalFailure::ProtocolError,
                 "model provider stream sequence number was missing",
             )
         })?;
@@ -691,7 +640,7 @@ impl DeepSeekResponsesSseSource {
             .is_some_and(|last_sequence_number| sequence_number <= last_sequence_number)
         {
             return Err(ProviderError::new(
-                ProviderErrorCode::ProtocolError,
+                OperationalFailure::ProtocolError,
                 "model provider stream sequence number was not increasing",
             ));
         }
@@ -801,7 +750,7 @@ fn find_sse_frame(buffer: &[u8]) -> Option<(usize, usize)> {
 fn required_string<'a>(payload: &'a Value, field: &str) -> Result<&'a str, ProviderError> {
     payload.get(field).and_then(Value::as_str).ok_or_else(|| {
         ProviderError::new(
-            ProviderErrorCode::ProtocolError,
+            OperationalFailure::ProtocolError,
             "model provider stream event field was invalid",
         )
     })
@@ -818,23 +767,25 @@ fn optional_u32(payload: &Value, field: &str) -> u32 {
 async fn receive_bounded_json(
     builder: RequestBuilder,
     max_response_bytes: usize,
-) -> Result<TransportResponse, ProviderError> {
+) -> Result<TransportResponse, ProviderStatusOutcome> {
     let mut response = builder.send().await.map_err(map_reqwest_error)?;
     let status = response.status();
     if status.is_redirection() {
-        return Err(
-            ProviderError::policy_denied("model provider redirects are disabled").with_provider_status(status.as_u16())
-        );
+        return Err(ProviderStatusOutcome::Rejected {
+            rejection: ProviderRejection::PolicyDenied,
+            provider_status: Some(status.as_u16()),
+        });
     }
     if response
         .content_length()
         .is_some_and(|length| length > max_response_bytes as u64)
     {
         return Err(ProviderError::new(
-            ProviderErrorCode::OutputTooLarge,
+            OperationalFailure::OutputTooLarge,
             "model provider response exceeded the configured bound",
         )
-        .with_provider_status(status.as_u16()));
+        .with_provider_status(status.as_u16())
+        .into());
     }
 
     let mut body = Vec::with_capacity(
@@ -846,16 +797,16 @@ async fn receive_bounded_json(
     while let Some(chunk) = response.chunk().await.map_err(map_reqwest_error)? {
         if chunk.len() > max_response_bytes.saturating_sub(body.len()) {
             return Err(ProviderError::new(
-                ProviderErrorCode::OutputTooLarge,
+                OperationalFailure::OutputTooLarge,
                 "model provider response exceeded the configured bound",
             )
-            .with_provider_status(status.as_u16()));
+            .with_provider_status(status.as_u16())
+            .into());
         }
         body.extend_from_slice(&chunk);
     }
-    let body: Value = serde_json::from_slice(&body).map_err(|_| {
-        ProviderError::new(ProviderErrorCode::ProtocolError, "model provider returned invalid JSON")
-            .with_provider_status(status.as_u16())
+    let body: Value = serde_json::from_slice(&body).map_err(|source| {
+        ProviderError::from_source(OperationalFailure::ProtocolError, source).with_provider_status(status.as_u16())
     })?;
     Ok(TransportResponse {
         status: status.as_u16(),
@@ -869,15 +820,12 @@ fn apply_provider_auth(
     dialect: ProviderDialect,
     credential: Option<&SecretMaterial>,
     body: &[u8],
-) -> Result<RequestBuilder, ProviderError> {
+) -> Result<RequestBuilder, ProviderStatusOutcome> {
     let required = credential_required(dialect);
     let credential = match credential {
         Some(credential) => Some(credential),
         None if required => {
-            return Err(ProviderError::new(
-                ProviderErrorCode::AuthenticationFailed,
-                "model provider credential is unavailable",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::AuthenticationFailed));
         }
         None => None,
     };
@@ -906,8 +854,8 @@ fn apply_provider_auth(
             value.set_sensitive(true);
             Ok(builder.header("authorization", value))
         }
-        ProviderDialect::ProprietarySpi => Err(ProviderError::capability_unsupported(
-            "provider SPI does not use the built-in HTTP transport",
+        ProviderDialect::ProprietarySpi => Err(ProviderStatusOutcome::rejected(
+            ProviderRejection::CapabilityUnsupported,
         )),
     }
 }
@@ -935,7 +883,7 @@ fn validate_credential_expiry(credential: Option<&SecretMaterial>) -> Result<(),
         .is_some_and(|expires_at| expires_at <= current_unix_ms())
     {
         return Err(ProviderError::new(
-            ProviderErrorCode::SecretUnavailable,
+            OperationalFailure::SecretUnavailable,
             "model provider credential has expired",
         ));
     }
@@ -963,26 +911,23 @@ fn is_loopback(url: &Url) -> bool {
 }
 
 fn secret_header(value: &str) -> Result<HeaderValue, ProviderError> {
-    let mut header = HeaderValue::from_str(value).map_err(|_| {
-        ProviderError::new(
-            ProviderErrorCode::AuthenticationFailed,
-            "provider credential contains invalid header material",
-        )
-    })?;
+    let mut header = HeaderValue::from_str(value)
+        .map_err(|source| ProviderError::from_source(OperationalFailure::SecretUnavailable, source))?;
     header.set_sensitive(true);
     Ok(header)
 }
 
-fn invalid_endpoint() -> ProviderError {
-    ProviderError::new(ProviderErrorCode::ProfileInvalid, "model provider endpoint is invalid")
+fn invalid_endpoint() -> ProviderStatusOutcome {
+    ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid)
 }
 
 fn map_reqwest_error(error: reqwest::Error) -> ProviderError {
-    if error.is_timeout() {
-        ProviderError::timeout("model provider request timed out")
+    let failure = if error.is_timeout() {
+        OperationalFailure::Timeout
     } else if error.is_connect() {
-        ProviderError::service_unavailable("model provider connection failed")
+        OperationalFailure::ServiceUnavailable
     } else {
-        ProviderError::new(ProviderErrorCode::TransportFailed, "model provider transport failed")
-    }
+        OperationalFailure::TransportFailed
+    };
+    ProviderError::from_source(failure, error)
 }

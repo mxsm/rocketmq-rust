@@ -29,15 +29,18 @@ use rocketmq_sre_model_gateway::ModelInvocationOutcome;
 use rocketmq_sre_model_gateway::ProviderCapabilities;
 use rocketmq_sre_model_gateway::ProviderError;
 use rocketmq_sre_model_gateway::ProviderHealth;
+use rocketmq_sre_model_gateway::ProviderOperationalFailure;
 use rocketmq_sre_model_gateway::ProviderRegistry;
 use rocketmq_sre_model_gateway::ProviderRouter;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::RoutingPolicy;
 use rocketmq_sre_model_gateway::RoutingRequirements;
+use rocketmq_sre_model_gateway::RulesOnlyResult;
 use rocketmq_sre_model_gateway::builtin_provider_profiles;
 use serde::Deserialize;
 use serde::Serialize;
 
-use super::ShadowEvalError;
+use super::ShadowEvalFailure;
 
 /// Provider behavior exercised by the offline shadow suite.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -62,17 +65,25 @@ impl Display for ProviderMode {
 }
 
 impl FromStr for ProviderMode {
-    type Err = ShadowEvalError;
+    type Err = ProviderModeRejection;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "mock" => Ok(Self::Mock),
             "rules-only" | "rules_only" => Ok(Self::RulesOnly),
             "outage" => Ok(Self::Outage),
-            other => Err(ShadowEvalError::InvalidManifest(format!(
-                "unknown provider mode `{other}`"
-            ))),
+            _ => Err(ProviderModeRejection),
         }
+    }
+}
+
+/// Closed rejection for an unsupported provider-mode value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderModeRejection;
+
+impl Display for ProviderModeRejection {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("provider mode is unsupported")
     }
 }
 
@@ -105,7 +116,7 @@ impl ChatModelProvider for ShadowMockProvider {
         &self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         context.ensure_active()?;
         self.capabilities.ensure_request_supported(request)?;
         match &self.behavior {
@@ -115,9 +126,9 @@ impl ChatModelProvider for ShadowMockProvider {
                 content,
                 FinishReason::Stop,
             )),
-            MockBehavior::Outage => Err(ProviderError::service_unavailable(
-                "shadow provider fixture is unavailable",
-            )),
+            MockBehavior::Outage => {
+                Err(ProviderError::from_operational_failure(ProviderOperationalFailure::ServiceUnavailable).into())
+            }
         }
     }
 }
@@ -126,20 +137,20 @@ pub(super) fn invoke_provider(
     mode: ProviderMode,
     request: &CanonicalModelRequest,
     response_content: String,
-) -> Result<ModelInvocationOutcome, ShadowEvalError> {
+) -> Result<ModelInvocationOutcome, ShadowEvalFailure> {
     let mut registry = ProviderRegistry::new();
     if mode != ProviderMode::RulesOnly {
         let profile = builtin_provider_profiles()
             .into_iter()
             .find(|candidate| candidate.id == "vllm")
             .ok_or_else(|| {
-                ShadowEvalError::InvalidManifest("built-in vllm profile is required by shadow evaluation".to_owned())
+                ShadowEvalFailure::InvalidManifest("built-in vllm profile is required by shadow evaluation".to_owned())
             })?;
         let behavior = match mode {
             ProviderMode::Mock => MockBehavior::Respond(response_content),
             ProviderMode::Outage => MockBehavior::Outage,
             ProviderMode::RulesOnly => {
-                return Err(ShadowEvalError::InvalidManifest(
+                return Err(ShadowEvalFailure::InvalidManifest(
                     "rules-only mode cannot register a provider".to_owned(),
                 ));
             }
@@ -149,7 +160,17 @@ pub(super) fn invoke_provider(
             capabilities: profile.capabilities.clone(),
             behavior,
         });
-        registry.register(profile, provider)?;
+        match registry.register(profile, provider) {
+            Ok(()) => {}
+            Err(ProviderStatusOutcome::Rejected { .. }) => {
+                return Err(ShadowEvalFailure::InvalidManifest(
+                    "shadow provider registration was rejected".to_owned(),
+                ));
+            }
+            Err(ProviderStatusOutcome::Operational(source)) => {
+                return Err(ShadowEvalFailure::Provider(source));
+            }
+        }
     }
 
     let router = ProviderRouter::new(registry, RoutingPolicy { max_fallbacks: 1 });
@@ -162,7 +183,50 @@ pub(super) fn invoke_provider(
         mark_primary: false,
         ..InvocationMetadata::default()
     };
-    router
-        .invoke(request, &requirements, &metadata)
-        .map_err(ShadowEvalError::from)
+    match router.invoke(request, &requirements, &metadata) {
+        Ok(outcome) => Ok(outcome),
+        Err(ProviderStatusOutcome::Operational(error)) => Err(ShadowEvalFailure::Provider(error)),
+        Err(rejection @ ProviderStatusOutcome::Rejected { .. }) => {
+            Ok(ModelInvocationOutcome::RulesOnly(RulesOnlyResult {
+                primary_model_invocation_id: None,
+                execution_eligible: false,
+                correlation_id: rocketmq_sre_contracts::CorrelationId::new(),
+                fallback_chain: Vec::new(),
+                reason: rejection.message().to_owned(),
+            }))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_sre_contracts::CorrelationId;
+    use rocketmq_sre_model_gateway::ModelMessage;
+    use rocketmq_sre_model_gateway::ModelRole;
+    use rocketmq_sre_model_gateway::ProviderFailure;
+
+    use super::*;
+
+    #[test]
+    fn outage_remains_an_operational_provider_error() {
+        let provider = ShadowMockProvider {
+            profile_id: "offline-outage".to_owned(),
+            capabilities: ProviderCapabilities::chat_default(),
+            behavior: MockBehavior::Outage,
+        };
+        let correlation_id = CorrelationId::new();
+        let request = CanonicalModelRequest::new(
+            correlation_id,
+            "offline-model",
+            vec![ModelMessage::text(ModelRole::User, "bounded request")],
+        );
+
+        let outcome = provider
+            .invoke(&InvocationContext::new(correlation_id), &request)
+            .expect_err("outage must fail operationally");
+
+        assert!(outcome.rejection().is_none());
+        let error = outcome.operational_error().expect("operational provider error");
+        assert_eq!(error.failure(), ProviderFailure::ServiceUnavailable);
+    }
 }

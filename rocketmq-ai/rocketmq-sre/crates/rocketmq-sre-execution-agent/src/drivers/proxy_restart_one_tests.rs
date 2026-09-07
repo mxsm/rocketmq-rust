@@ -41,6 +41,7 @@ use rocketmq_sre_contracts::VerificationSpec;
 use serde_json::json;
 
 use super::*;
+use crate::ExecutionAgentRequestFailure;
 
 struct FakeRestartClient {
     state: Mutex<ProxyRestartState>,
@@ -78,7 +79,7 @@ impl ProxyRestartClient for FakeRestartClient {
         Box::pin(async move {
             let mut state = self.state.lock().expect("fake state lock");
             if !state.drain_supported || state.pod_uid != request.expected_uid {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(ExecutionAgentRequestFailure::DriverFailed);
             }
             state.pod_uid = "uid-after".to_owned();
             state.pod_ready = true;

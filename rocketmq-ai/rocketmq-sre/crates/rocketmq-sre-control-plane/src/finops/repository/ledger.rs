@@ -21,12 +21,15 @@ use super::FinOpsRepository;
 use super::support::cost_entry_from_row;
 use super::support::cost_source_name;
 use super::support::workload_name;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::finops::model::FinOpsLedgerQuery;
 use crate::finops::model::bounded_limit;
 
 impl FinOpsRepository {
-    pub(in crate::finops) async fn scope_exists(&self, entry: &FinOpsCostEntry) -> Result<bool, ControlPlaneError> {
+    pub(in crate::finops) async fn scope_exists(
+        &self,
+        entry: &FinOpsCostEntry,
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT EXISTS (
                 SELECT 1
@@ -50,7 +53,7 @@ impl FinOpsRepository {
     pub(in crate::finops) async fn record_cost(
         &self,
         entry: &FinOpsCostEntry,
-    ) -> Result<FinOpsCostEntry, ControlPlaneError> {
+    ) -> Result<FinOpsCostEntry, ControlPlaneRequestFailure> {
         let inserted = sqlx::query(
             "INSERT INTO finops_cost_ledger (
                 id, idempotency_key, fleet_id, tenant_id, region_id, cluster_id,
@@ -106,7 +109,7 @@ impl FinOpsRepository {
         if same_cost_identity(&existing, entry) {
             Ok(existing)
         } else {
-            Err(ControlPlaneError::conflict_code(
+            Err(ControlPlaneRequestFailure::conflict_code(
                 "finops_idempotency_conflict",
                 "FinOps idempotency key is bound to different cost dimensions or values",
             ))
@@ -117,7 +120,7 @@ impl FinOpsRepository {
         &self,
         tenant_id: TenantId,
         query: &FinOpsLedgerQuery,
-    ) -> Result<(Vec<FinOpsCostEntry>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<FinOpsCostEntry>, bool), ControlPlaneRequestFailure> {
         let limit = bounded_limit(query.limit);
         let source = query.source.map(cost_source_name);
         let rows = sqlx::query(
@@ -171,9 +174,9 @@ fn same_cost_identity(left: &FinOpsCostEntry, right: &FinOpsCostEntry) -> bool {
         && left.occurred_at.timestamp_micros() == right.occurred_at.timestamp_micros()
 }
 
-fn stored(value: u64, field: &str) -> Result<i64, ControlPlaneError> {
+fn stored(value: u64, field: &str) -> Result<i64, ControlPlaneRequestFailure> {
     i64::try_from(value).map_err(|_| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "invalid_finops_cost",
             format!("FinOps {field} exceeds the supported storage range"),
         )

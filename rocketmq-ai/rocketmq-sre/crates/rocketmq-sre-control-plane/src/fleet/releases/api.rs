@@ -33,7 +33,7 @@ use super::model::FleetReleaseView;
 use super::model::RecordFleetTargetOutcomeRequest;
 use super::model::RecordFleetTargetReadinessRequest;
 use super::model::StartFleetReleaseBatchRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 
 const FLEET_RELEASE_BODY_LIMIT: usize = 256 * 1024;
@@ -78,7 +78,7 @@ async fn create_release(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateFleetReleaseRequest>,
-) -> Result<Json<FleetReleaseView>, ControlPlaneError> {
+) -> Result<Json<FleetReleaseView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.fleet.create_fleet_release(&auth, &request).await.map(Json)
 }
@@ -87,7 +87,7 @@ async fn releases(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<FleetReleaseQuery>,
-) -> Result<Json<FleetReleasePage>, ControlPlaneError> {
+) -> Result<Json<FleetReleasePage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.fleet.fleet_releases(&auth, &query).await.map(Json)
 }
@@ -96,7 +96,7 @@ async fn release(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<FleetReleaseView>, ControlPlaneError> {
+) -> Result<Json<FleetReleaseView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.fleet.fleet_release(&auth, parse_release_id(&id)?).await.map(Json)
 }
@@ -105,7 +105,7 @@ async fn begin_readiness(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<FleetReleaseView>, ControlPlaneError> {
+) -> Result<Json<FleetReleaseView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .fleet
@@ -119,7 +119,7 @@ async fn record_readiness(
     headers: HeaderMap,
     Path((id, cluster_id)): Path<(String, String)>,
     Json(request): Json<RecordFleetTargetReadinessRequest>,
-) -> Result<Json<FleetReleaseView>, ControlPlaneError> {
+) -> Result<Json<FleetReleaseView>, ControlPlaneRequestFailure> {
     let cluster_id = parse_cluster_id(&cluster_id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     state
@@ -134,9 +134,9 @@ async fn start_batch(
     headers: HeaderMap,
     Path((id, sequence)): Path<(String, u32)>,
     Json(request): Json<StartFleetReleaseBatchRequest>,
-) -> Result<Json<FleetReleaseView>, ControlPlaneError> {
+) -> Result<Json<FleetReleaseView>, ControlPlaneRequestFailure> {
     if request.expected_sequence != sequence {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "Fleet release batch sequence does not match the path",
         ));
@@ -154,7 +154,7 @@ async fn record_outcome(
     headers: HeaderMap,
     Path((id, cluster_id)): Path<(String, String)>,
     Json(request): Json<RecordFleetTargetOutcomeRequest>,
-) -> Result<Json<FleetReleaseView>, ControlPlaneError> {
+) -> Result<Json<FleetReleaseView>, ControlPlaneRequestFailure> {
     let cluster_id = parse_cluster_id(&cluster_id)?;
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     state
@@ -169,7 +169,7 @@ async fn pause(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<FleetReleaseReasonRequest>,
-) -> Result<Json<FleetReleaseView>, ControlPlaneError> {
+) -> Result<Json<FleetReleaseView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .fleet
@@ -183,7 +183,7 @@ async fn resume(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<FleetReleaseReasonRequest>,
-) -> Result<Json<FleetReleaseView>, ControlPlaneError> {
+) -> Result<Json<FleetReleaseView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .fleet
@@ -196,7 +196,7 @@ async fn report(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<FleetReleaseReport>, ControlPlaneError> {
+) -> Result<Json<FleetReleaseReport>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .fleet
@@ -205,14 +205,14 @@ async fn report(
         .map(Json)
 }
 
-fn parse_release_id(value: &str) -> Result<FleetReleaseId, ControlPlaneError> {
+fn parse_release_id(value: &str) -> Result<FleetReleaseId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_fleet_release_id", "Fleet release ID must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_fleet_release_id", "fleet release id is invalid"))
 }
 
-fn parse_cluster_id(value: &str) -> Result<ClusterId, ControlPlaneError> {
+fn parse_cluster_id(value: &str) -> Result<ClusterId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_cluster_id", "cluster ID must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_cluster_id", "cluster id is invalid"))
 }

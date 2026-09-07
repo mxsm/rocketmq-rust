@@ -27,6 +27,7 @@ use sqlx::PgPool;
 use sqlx::Row;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 #[derive(Clone, Debug)]
 pub(crate) struct LeaseAuthorityRepository {
@@ -46,7 +47,7 @@ impl LeaseAuthorityRepository {
         pending_nonce: &str,
         acquired_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
-    ) -> Result<ExecutorLease, ControlPlaneError> {
+    ) -> Result<ExecutorLease, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(cluster_id.to_string())
@@ -66,7 +67,7 @@ impl LeaseAuthorityRepository {
         .fetch_one(&mut *transaction)
         .await?;
         if !cluster_matches {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "lease scope does not identify an active tenant cluster",
             ));
@@ -91,7 +92,7 @@ impl LeaseAuthorityRepository {
         .fetch_one(&mut *transaction)
         .await?;
         let epoch = previous_epoch.checked_add(1).ok_or_else(|| {
-            ControlPlaneError::conflict_code("lease_epoch_exhausted", "executor lease epoch is exhausted")
+            ControlPlaneRequestFailure::conflict_code("lease_epoch_exhausted", "executor lease epoch is exhausted")
         })?;
         let id = LeaseId::new();
         sqlx::query(
@@ -130,7 +131,7 @@ impl LeaseAuthorityRepository {
         })
     }
 
-    pub(super) async fn lease(&self, lease_id: LeaseId) -> Result<ExecutorLease, ControlPlaneError> {
+    pub(super) async fn lease(&self, lease_id: LeaseId) -> Result<ExecutorLease, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, epoch, owner, state,
                     pending_nonce, acquired_at, activated_at, expires_at
@@ -140,7 +141,7 @@ impl LeaseAuthorityRepository {
         .bind(lease_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         lease_from_row(&row)
     }
 
@@ -148,9 +149,8 @@ impl LeaseAuthorityRepository {
         &self,
         lease: &ExecutorLease,
         ack: &FenceAck,
-    ) -> Result<ExecutorLease, ControlPlaneError> {
-        let snapshot = serde_json::to_value(ack)
-            .map_err(|error| ControlPlaneError::configuration(format!("FenceAck cannot be encoded: {error}")))?;
+    ) -> Result<ExecutorLease, ControlPlaneRequestFailure> {
+        let snapshot = serde_json::to_value(ack).map_err(ControlPlaneError::configuration_source)?;
         let result = sqlx::query(
             "UPDATE executor_leases
              SET state = 'active',
@@ -184,7 +184,7 @@ impl LeaseAuthorityRepository {
         .execute(&self.pool)
         .await?;
         if result.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "fence_ack_rejected",
                 "pending lease could not be activated from the supplied FenceAck",
             ));
@@ -200,7 +200,7 @@ impl LeaseAuthorityRepository {
         tenant_id: TenantId,
         grant: &rocketmq_sre_contracts::ReconcileGrant,
         now: DateTime<Utc>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let valid: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -227,7 +227,7 @@ impl LeaseAuthorityRepository {
         if valid {
             Ok(())
         } else {
-            Err(ControlPlaneError::forbidden(
+            Err(ControlPlaneRequestFailure::forbidden(
                 "lease_not_pending",
                 "reconcile grant no longer identifies the current pending lease",
             ))
@@ -239,7 +239,7 @@ impl LeaseAuthorityRepository {
         tenant_id: TenantId,
         grant: &rocketmq_sre_contracts::LeaseFenceGrant,
         now: DateTime<Utc>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let valid: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -274,7 +274,7 @@ impl LeaseAuthorityRepository {
         if valid {
             Ok(())
         } else {
-            Err(ControlPlaneError::forbidden(
+            Err(ControlPlaneRequestFailure::forbidden(
                 "stale_lease_epoch",
                 "dispatch grant no longer identifies the active lease and execution",
             ))
@@ -285,7 +285,7 @@ impl LeaseAuthorityRepository {
         &self,
         execution: &rocketmq_sre_contracts::ExecutionRequest,
         now: DateTime<Utc>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let plan_current: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -320,7 +320,7 @@ impl LeaseAuthorityRepository {
         .fetch_one(&self.pool)
         .await?;
         if !plan_current {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "execution_request_stale",
                 "execution plan is no longer approved, current, or onboarded",
             ));
@@ -344,7 +344,7 @@ impl LeaseAuthorityRepository {
             .fetch_one(&self.pool)
             .await?;
             if quarantined {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "resource_quarantined",
                     "execution target is under persistent quarantine",
                 ));
@@ -356,7 +356,7 @@ impl LeaseAuthorityRepository {
     pub(crate) async fn autonomy_grant_is_current(
         &self,
         grant: &rocketmq_sre_contracts::AutonomyGrant,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let valid: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -404,16 +404,13 @@ impl LeaseAuthorityRepository {
         .bind(grant.action.id())
         .bind(&grant.action_version)
         .bind(grant.policy_id.as_uuid())
-        .bind(
-            i64::try_from(grant.policy_definition_version)
-                .map_err(|_| ControlPlaneError::validation("invalid_autonomy_grant", "policy version is too large"))?,
-        )
+        .bind(i64::try_from(grant.policy_definition_version).map_err(|_| {
+            ControlPlaneRequestFailure::validation("invalid_autonomy_grant", "policy definition version is too large")
+        })?)
         .bind(grant.autonomous_cohort_id.as_uuid())
-        .bind(
-            i64::try_from(grant.lifecycle_revision).map_err(|_| {
-                ControlPlaneError::validation("invalid_autonomy_grant", "lifecycle revision is too large")
-            })?,
-        )
+        .bind(i64::try_from(grant.lifecycle_revision).map_err(|_| {
+            ControlPlaneRequestFailure::validation("invalid_autonomy_grant", "lifecycle revision is too large")
+        })?)
         .bind(grant.critic_review_id.as_uuid())
         .bind(grant.primary_model_invocation_id.as_uuid())
         .bind(grant.critic_model_invocation_id.as_uuid())
@@ -423,7 +420,7 @@ impl LeaseAuthorityRepository {
         if valid {
             Ok(())
         } else {
-            Err(ControlPlaneError::forbidden(
+            Err(ControlPlaneRequestFailure::forbidden(
                 "autonomy_grant_stale",
                 "autonomy grant no longer binds the current R1 policy, lifecycle, cohort, and Critic review",
             ))
@@ -433,7 +430,7 @@ impl LeaseAuthorityRepository {
     pub(super) async fn validate_fence_grant_binding(
         &self,
         grant: &rocketmq_sre_contracts::LeaseFenceGrant,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT request_snapshot, state
              FROM executions
@@ -448,19 +445,18 @@ impl LeaseAuthorityRepository {
         .bind(grant.cluster_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?;
-        let row = row.ok_or(ControlPlaneError::NotFound)?;
+        let row = row.ok_or(ControlPlaneRequestFailure::not_found())?;
         let snapshot: Value = row.try_get("request_snapshot")?;
         let state: String = row.try_get("state")?;
-        let request: rocketmq_sre_contracts::ExecutionRequest = serde_json::from_value(snapshot).map_err(|_| {
-            ControlPlaneError::conflict_code("execution_snapshot_invalid", "execution snapshot is invalid")
-        })?;
+        let request: rocketmq_sre_contracts::ExecutionRequest = serde_json::from_value(snapshot)
+            .map_err(|source| ControlPlaneRequestFailure::conflict_source("execution_snapshot_invalid", source))?;
         let matches = request.plan.steps.iter().any(|step| {
             step.id == grant.plan_step_id && step.action == grant.action && step.resource == grant.resource
         }) && valid_effect_direction(&state, grant.compensation);
         if matches {
             Ok(())
         } else {
-            Err(ControlPlaneError::forbidden(
+            Err(ControlPlaneRequestFailure::forbidden(
                 "grant_binding_mismatch",
                 "dispatch grant does not bind an approved execution step",
             ))
@@ -474,7 +470,7 @@ impl LeaseAuthorityRepository {
         execution_id: ExecutionId,
         plan_step_id: rocketmq_sre_contracts::PlanStepId,
         compensation: bool,
-    ) -> Result<(rocketmq_sre_contracts::ExecutionAction, String), ControlPlaneError> {
+    ) -> Result<(rocketmq_sre_contracts::ExecutionAction, String), ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT request_snapshot, state
              FROM executions
@@ -485,14 +481,13 @@ impl LeaseAuthorityRepository {
         .bind(cluster_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let execution: rocketmq_sre_contracts::ExecutionRequest =
-            serde_json::from_value(row.try_get("request_snapshot")?).map_err(|_| {
-                ControlPlaneError::conflict_code("execution_snapshot_invalid", "execution snapshot is invalid")
-            })?;
+            serde_json::from_value(row.try_get("request_snapshot")?)
+                .map_err(|source| ControlPlaneRequestFailure::conflict_source("execution_snapshot_invalid", source))?;
         let state: String = row.try_get("state")?;
         if !valid_effect_direction(&state, compensation) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "effect_direction_mismatch",
                 "dispatch direction does not match the durable execution state",
             ));
@@ -504,7 +499,7 @@ impl LeaseAuthorityRepository {
             .find(|step| step.id == plan_step_id)
             .map(|step| (step.action, step.resource))
             .ok_or_else(|| {
-                ControlPlaneError::forbidden(
+                ControlPlaneRequestFailure::forbidden(
                     "grant_binding_mismatch",
                     "requested step is not present in the approved execution snapshot",
                 )
@@ -515,7 +510,7 @@ impl LeaseAuthorityRepository {
         &self,
         cluster_id: ClusterId,
         pending_epoch: LeaseEpoch,
-    ) -> Result<i64, ControlPlaneError> {
+    ) -> Result<i64, ControlPlaneRequestFailure> {
         let count = sqlx::query_scalar(
             "SELECT COUNT(*)
              FROM execution_agent_effects
@@ -539,7 +534,7 @@ fn valid_effect_direction(state: &str, compensation: bool) -> bool {
     }
 }
 
-fn lease_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutorLease, ControlPlaneError> {
+fn lease_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutorLease, ControlPlaneRequestFailure> {
     let epoch: i64 = row.try_get("epoch")?;
     let state: String = row.try_get("state")?;
     Ok(ExecutorLease {
@@ -553,7 +548,7 @@ fn lease_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutorLease, ControlP
             "active" => LeaseState::Active,
             "expired" => LeaseState::Expired,
             _ => {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "lease_state_invalid",
                     "stored lease state is unsupported",
                 ));
@@ -566,13 +561,13 @@ fn lease_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutorLease, ControlP
     })
 }
 
-fn parse_epoch(value: i64) -> Result<LeaseEpoch, ControlPlaneError> {
+fn parse_epoch(value: i64) -> Result<LeaseEpoch, ControlPlaneRequestFailure> {
     u64::try_from(value)
         .map(LeaseEpoch)
-        .map_err(|_| ControlPlaneError::conflict_code("lease_epoch_invalid", "stored lease epoch is invalid"))
+        .map_err(|_| ControlPlaneRequestFailure::conflict_code("lease_epoch_invalid", "stored lease epoch is invalid"))
 }
 
-fn epoch_i64(epoch: LeaseEpoch) -> Result<i64, ControlPlaneError> {
+fn epoch_i64(epoch: LeaseEpoch) -> Result<i64, ControlPlaneRequestFailure> {
     i64::try_from(epoch.0)
-        .map_err(|_| ControlPlaneError::validation("lease_epoch_invalid", "lease epoch exceeds BIGINT"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("lease_epoch_invalid", "lease epoch is too large"))
 }
